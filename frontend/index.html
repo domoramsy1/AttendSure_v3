@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AttendSure</title>
+
+    <!-- TV Debugger: Shows JavaScript crashes directly on screen -->
+    <script>
+      window.onerror = function (msg, url, lineNo, columnNo, error) {
+        var box = document.getElementById('tv-error-box');
+        if (!box) {
+          box = document.createElement('div');
+          box.id = 'tv-error-box';
+          box.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;background:#fee2e2;color:#b91c1c;padding:16px;border:2px solid #ef4444;font-family:monospace;font-size:14px;z-index:99999;word-break:break-all;';
+          document.body.appendChild(box);
+        }
+        box.innerHTML = '<strong>TV Script Error:</strong> ' + msg + '<br/><small>' + url + ':' + lineNo + '</small>';
+        return false;
+      };
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

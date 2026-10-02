@@ -1,0 +1,11 @@
+export { GateLogsTab } from './GateLogsTab';
+export { SF1ReportTab } from './SF1ReportTab';
+export { StudentsTab } from './StudentsTab';
+export { TeachersTab } from './TeachersTab';
+export { DTRTab } from './DTRTab';
+export { ScannersTab } from './ScannersTab';
+export { GatePassesTab } from './GatePassesTab';
+export { SchedulesTab } from './SchedulesTab';
+export { GeofenceTab } from './GeofenceTab';
+export { UsersTab } from './UsersTab';
+export * from './SettingsTab';
