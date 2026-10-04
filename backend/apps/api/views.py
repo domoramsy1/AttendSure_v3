@@ -1,6 +1,7 @@
+import calendar
 import hmac
 import logging
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 
 from django.conf import settings
 from django.contrib.auth import authenticate
@@ -52,9 +53,9 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
-# ==========================================
-# ZERO-TRUST PERMISSION POLICIES (RA 10173 & RBAC)
-# ==========================================
+# ============================================================================
+# ZERO-TRUST PERMISSION POLICIES (ROLE-BASED ACCESS CONTROL)
+# ============================================================================
 
 class IsSystemAdminRole(permissions.BasePermission):
     """
@@ -71,8 +72,7 @@ class IsSystemAdminRole(permissions.BasePermission):
 
 class IsAdviserOrAdmin(permissions.BasePermission):
     """
-    RA 10173 Minor PII Enforcement:
-    Restricts access to sensitive learner demographic data and DepEd SF1 registers.
+    Restricts access to learner demographic data and official class registers.
     Only administrators and the designated section adviser may inspect these records.
     """
     def has_permission(self, request, view):
@@ -107,9 +107,9 @@ class ReadOnlyOrAdminWrite(permissions.BasePermission):
         return bool(profile and profile.role == 'ADMIN')
 
 
-# ==========================================
-# HARDWARE & LOGIN RATE THROTTLES
-# ==========================================
+# ============================================================================
+# RATE THROTTLES
+# ============================================================================
 
 class AuthLoginRateThrottle(AnonRateThrottle):
     rate = '10/minute'
@@ -119,9 +119,9 @@ class HardwareGateScanRateThrottle(AnonRateThrottle):
     rate = '180/minute'
 
 
-# ==========================================
+# ============================================================================
 # AUTHENTICATION & OVERVIEW
-# ==========================================
+# ============================================================================
 
 class LoginAPIView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -160,7 +160,7 @@ class LoginAPIView(APIView):
 
 class SectionListAPIView(APIView):
     """
-    Returns active sections. Requires authentication to prevent unauthorized reconnaissance.
+    Returns active class sections.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -183,7 +183,7 @@ class SectionListAPIView(APIView):
                 'grade_level': s.grade_level.name if s.grade_level else '',
                 'academic_year': s.academic_year.code if s.academic_year else '',
                 'adviser_name': f"{s.adviser.first_name} {s.adviser.last_name}".strip() if s.adviser else "Unassigned",
-                'display_label': f"{s.grade_level.name if s.grade_level else 'Grade'} - {s.name}".strip()
+                'display_label': f"{s.grade_level.name if s.grade_level else 'Level'} - {s.name}".strip()
             }
             for s in sections
         ]
@@ -201,7 +201,7 @@ class DashboardOverviewAPIView(APIView):
         today = now.date()
 
         active_sy = AcademicYear.objects.filter(is_active=True).first()
-        sy_label = f"S.Y. {active_sy.code}" if active_sy else f"S.Y. {now.year} - {now.year + 1}"
+        sy_label = active_sy.code if active_sy else f"{now.year}-{now.year + 1}"
 
         active_kiosks = IoTKiosk.objects.filter(is_active=True)
         recent_pings = active_kiosks.filter(last_ping__gte=now - timedelta(minutes=5))
@@ -224,7 +224,7 @@ class DashboardOverviewAPIView(APIView):
 
         total_faculty = StaffProfile.objects.filter(is_active=True).count()
         faculty_tapped_today = StaffGateLog.objects.filter(scan_time__date=today, direction='IN').values('staff_id').distinct().count()
-        faculty_dtr_percentage = round((faculty_tapped_today / total_faculty * 100), 1) if total_faculty > 0 else 0
+        faculty_dtr_percentage = round((faculty_tapped_today / total_faculty * 100), 1) if total_faculty > 0 else 0.0
 
         influx_distribution = []
         for hour in range(6, 18):
@@ -253,7 +253,7 @@ class DashboardOverviewAPIView(APIView):
                     pct = round((sec_present / sec_enrolled) * 100, 1)
                     section_attendance.append({
                         'section_id': sec.id,
-                        'section_name': f"{sec.grade_level.name} - {sec.name}",
+                        'section_name': f"{sec.grade_level.name if sec.grade_level else ''} - {sec.name}".strip(' - '),
                         'enrolled': sec_enrolled,
                         'present': sec_present,
                         'rate': pct
@@ -277,15 +277,14 @@ class DashboardOverviewAPIView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-# ==========================================
+# ============================================================================
 # HARDWARE GATE & CLASSROOM SCANNERS
-# ==========================================
+# ============================================================================
 
 class GateScanAPIView(APIView):
     """
     Ingests physical RFID taps and QR code scans from IoT kiosks.
-    Enforces hardware secret verification via constant-time comparison
-    and rate throttling against UID enumeration attacks.
+    Verifies terminal secret key and applies rate throttling.
     """
     permission_classes = [permissions.AllowAny]
     throttle_classes = [HardwareGateScanRateThrottle]
@@ -302,7 +301,6 @@ class GateScanAPIView(APIView):
         secret_key = data['secret_key']
         debounce_minutes = getattr(settings, 'GATE_DEBOUNCE_MINUTES', 3)
 
-        # Constant-time hardware secret verification
         try:
             kiosk = IoTKiosk.objects.get(kiosk_code=kiosk_code, is_active=True)
         except IoTKiosk.DoesNotExist:
@@ -387,11 +385,25 @@ class GateScanAPIView(APIView):
                 raw_identifier=raw_id
             )
 
+            # Update daily summary on tap-in
+            if direction == 'IN':
+                student_enrollment = student.enrollments.filter(academic_year__is_active=True).first()
+                if student_enrollment:
+                    DailyAttendanceSummary.objects.update_or_create(
+                        student=student,
+                        attendance_date=now.date(),
+                        defaults={
+                            'section': student_enrollment.section,
+                            'status': 'PRESENT',
+                            'remarks': 'GATE_TAP_IN'
+                        }
+                    )
+
             if student.parent_contact:
                 action_text = "entered campus" if direction == "IN" else "left campus"
                 terminal_label = kiosk.terminal_name or kiosk.kiosk_code
                 sms_body = (
-                    f"AttendSure: Your child {student.first_name} {student.last_name} has {action_text} "
+                    f"Notice: Your child {student.first_name} {student.last_name} has {action_text} "
                     f"at {now.strftime('%I:%M %p')} via {terminal_label}."
                 )
                 SmsOutbox.objects.create(
@@ -420,7 +432,6 @@ class GateScanAPIView(APIView):
 class GateLogsAPIView(APIView):
     """
     Returns unified, chronological gate transactions for Students and Staff.
-    Requires authentication to safeguard access logs.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -448,8 +459,8 @@ class GateLogsAPIView(APIView):
                     'name': name,
                     'direction': log.direction,
                     'scan_method': log.scan_method,
-                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate Scanner',
-                    'kiosk_code': log.kiosk.kiosk_code if log.kiosk else 'SCANNER-01',
+                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate Terminal',
+                    'kiosk_code': log.kiosk.kiosk_code if log.kiosk else 'GATE-01',
                     'scan_time': log.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
                     'raw_time': log.scan_time.isoformat(),
                 })
@@ -471,8 +482,8 @@ class GateLogsAPIView(APIView):
                     'name': name,
                     'direction': log.direction,
                     'scan_method': log.scan_method,
-                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate Scanner',
-                    'kiosk_code': log.kiosk.kiosk_code if log.kiosk else 'SCANNER-01',
+                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate Terminal',
+                    'kiosk_code': log.kiosk.kiosk_code if log.kiosk else 'GATE-01',
                     'scan_time': log.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
                     'raw_time': log.scan_time.isoformat(),
                 })
@@ -484,7 +495,6 @@ class GateLogsAPIView(APIView):
 class ClassroomBatchScanAPIView(APIView):
     """
     Records batch classroom QR/RFID scans.
-    Verifies that the caller is assigned to the schedule or holds administrative rank.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -545,7 +555,7 @@ class ClassroomBatchScanAPIView(APIView):
                 if student.parent_contact:
                     subject_label = getattr(schedule.subject, 'title', getattr(schedule.subject, 'code', 'Class'))
                     sms_text = (
-                        f"AttendSure: {student.first_name} was marked {scan_status} "
+                        f"Notice: {student.first_name} was marked {scan_status} "
                         f"in {subject_label} at {timezone.now().strftime('%I:%M %p')}."
                     )
                     SmsOutbox.objects.create(
@@ -573,7 +583,7 @@ class ClassroomBatchScanAPIView(APIView):
 
 class TelemetryHeartbeatAPIView(APIView):
     """
-    Records geofence GPS telemetry from verified faculty mobile clients.
+    Records geofence GPS telemetry from verified staff clients.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -621,22 +631,22 @@ class TelemetryHeartbeatAPIView(APIView):
                     LoafingIncident.objects.get_or_create(
                         staff=staff,
                         incident_date=now.date(),
-                        trigger_reason='Faculty outside geofence boundary without active Gate Pass',
+                        trigger_reason='Staff outside geofence boundary without active Gate Pass',
                         defaults={'status': 'PENDING_REVIEW'}
                     )
 
         return Response({'status': 'Telemetry heartbeat recorded'}, status=status.HTTP_200_OK)
 
 
-# ==========================================
+# ============================================================================
 # INSTITUTIONAL SETTINGS & SCHOOL PROFILE
-# ==========================================
+# ============================================================================
 
 class SchoolSettingsAPIView(APIView):
     """
-    Pure dynamic settings API for institutional parameters and custom report logos.
+    Settings API for institutional parameters and custom report logos.
     GET: Authenticated staff can inspect configuration.
-    PUT/PATCH: Restricted strictly to Administrators under Security by Design (SbD).
+    PUT/PATCH: Restricted strictly to Administrators.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -668,14 +678,14 @@ class SchoolSettingsAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-# ==========================================
-# DEPED REPORTS, DTR & GEOFENCE
-# ==========================================
+# ============================================================================
+# ACADEMIC REPORTS (SF1 & SF2), DTR & GEOFENCE
+# ============================================================================
 
 class DepEdSF1DataAPIView(APIView):
     """
-    Protected DepEd SF1 access: returns purely dynamic records for institutional headers,
-    custom logos, adviser/principal signatures, and enrolled learners under RA 10173.
+    Returns dynamic records for official School Form 1 (School Register).
+    Verifies student enrollment status for the section's Academic Year.
     """
     permission_classes = [permissions.IsAuthenticated, IsAdviserOrAdmin]
 
@@ -685,18 +695,556 @@ class DepEdSF1DataAPIView(APIView):
             self.check_object_permissions(request, section)
 
             data = get_sf1_data(section_id)
+            acad_year_code = str(getattr(section.academic_year, 'code', '') if getattr(section, 'academic_year', None) else '').strip()
+
+            raw_students = data.get('students') or data.get('learners') or []
+            has_enrolled = len(raw_students) > 0
+
+            data['has_enrolled_students'] = has_enrolled
+            if not has_enrolled:
+                data['notice'] = f"Notice: There are no students enrolled in Section {section.name} for School Year {acad_year_code}."
+            else:
+                data['notice'] = ""
+
             return Response(data, status=status.HTTP_200_OK)
         except Section.DoesNotExist:
             return Response({'error': f'Section with ID {section_id} does not exist.'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             logger.error("SF1 Generation failure for section %s: %s", section_id, str(e), exc_info=True)
-            return Response({'error': 'Failed to compile official DepEd SF1 report'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Failed to compile official School Form 1 report'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DepEdSF2DataAPIView(APIView):
+    """
+    School Form 2 (SF2) Daily Attendance Report of Learners.
+    1. Validates that learners are actively enrolled in the selected Academic Year.
+    2. Validates learners were enrolled on or before the filtered date window.
+    3. Hides learners who were not yet enrolled or already exited during that month.
+    4. Shows a notice when no students are enrolled in that section for that period.
+    5. Dynamically resolves the School Head's printed name from the database.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdviserOrAdmin]
+
+    def get(self, request, section_id):
+        try:
+            section = Section.objects.select_related(
+                'grade_level', 'academic_year', 'adviser'
+            ).get(id=section_id)
+            self.check_object_permissions(request, section)
+        except Section.DoesNotExist:
+            return Response(
+                {'error': f'Section with ID {section_id} does not exist.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        now = timezone.now()
+        today_date = now.date()
+
+        # 1. Resolve Target Month, Year, and Academic Year
+        acad_year_obj = getattr(section, 'academic_year', None)
+        year_param = request.GET.get('year', '').strip()
+        month_param = request.GET.get('month', '').strip().capitalize()
+
+        if year_param.isdigit():
+            year = int(year_param)
+        elif acad_year_obj and hasattr(acad_year_obj, 'start_date') and acad_year_obj.start_date:
+            year = acad_year_obj.start_date.year
+        else:
+            year = today_date.year
+
+        month_names = list(calendar.month_name)
+        if month_param.isdigit():
+            m_val = int(month_param)
+            if 1 <= m_val <= 12:
+                month_num = m_val
+                month_name = month_names[month_num]
+            else:
+                month_num = today_date.month
+                month_name = month_names[month_num]
+        elif month_param in month_names and month_param:
+            month_num = month_names.index(month_param)
+            month_name = month_param
+        else:
+            month_num = today_date.month
+            month_name = month_names[month_num]
+
+        acad_year_val = str(getattr(acad_year_obj, 'code', '') if acad_year_obj else f"{year}-{year+1}").strip()
+
+        # 2. Dynamic Calendar Days for Month (Monday through Friday)
+        num_calendar_days = calendar.monthrange(year, month_num)[1]
+        weekday_map = {0: 'M', 1: 'T', 2: 'W', 3: 'TH', 4: 'F'}
+
+        school_days = []
+        for d in range(1, num_calendar_days + 1):
+            cur_date = date(year, month_num, d)
+            if cur_date.weekday() < 5:  # Monday to Friday only
+                school_days.append({
+                    'dateNumber': d,
+                    'dayOfWeek': weekday_map[cur_date.weekday()],
+                    'fullDate': cur_date.strftime('%Y-%m-%d')
+                })
+
+        start_month_date = date(year, month_num, 1)
+        end_month_date = date(year, month_num, num_calendar_days)
+
+        # 3. Check Academic Year Calendar Boundaries
+        # If the requested month/year falls outside the section's Academic Year, no students are in session
+        outside_academic_year = False
+        if acad_year_obj and acad_year_obj.start_date and acad_year_obj.end_date:
+            if end_month_date < acad_year_obj.start_date or start_month_date > acad_year_obj.end_date:
+                outside_academic_year = True
+
+        # 4. Filter Active Enrollments by Date Window
+        valid_enrollments = []
+        enrollment_map = {}
+
+        if not outside_academic_year:
+            enrollments_qs = Enrollment.objects.filter(section=section).select_related('student', 'academic_year')
+            if acad_year_obj:
+                enrollments_qs = enrollments_qs.filter(academic_year=acad_year_obj)
+
+            for enr in enrollments_qs:
+                enr_date = (
+                    getattr(enr, 'enrollment_date', None)
+                    or getattr(enr, 'date_enrolled', None)
+                    or getattr(enr, 'created_at', None)
+                )
+                if enr_date and isinstance(enr_date, datetime):
+                    enr_date = enr_date.date()
+
+                # If student enrolled after this month ended, they were not enrolled for this report
+                if enr_date and enr_date > end_month_date:
+                    continue
+
+                status_val = str(getattr(enr, 'status', '') or '').upper()
+                exit_date = (
+                    getattr(enr, 'status_date', None)
+                    or getattr(enr, 'exit_date', None)
+                    or getattr(enr, 'date_dropped', None)
+                    or getattr(enr, 'date_transferred', None)
+                )
+                if exit_date and isinstance(exit_date, datetime):
+                    exit_date = exit_date.date()
+
+                # If student dropped or transferred before this month started, exclude them
+                if status_val in ('DROPPED', 'TRANSFERRED_OUT') and exit_date and exit_date < start_month_date:
+                    continue
+
+                valid_enrollments.append(enr)
+                if getattr(enr, 'student_id', None):
+                    enrollment_map[enr.student_id] = enr
+
+        students = [e.student for e in valid_enrollments if getattr(e, 'student', None)]
+
+        # 5. Check If Enrolled Learners Exist
+        has_enrolled_students = len(students) > 0
+        notice_message = ""
+        if not has_enrolled_students:
+            notice_message = (
+                f"Notice: There are no students enrolled in Section {section.name} "
+                f"for the selected period ({month_name} {year}, School Year {acad_year_val})."
+            )
+
+        # 6. Query Attendance, Gate Taps, and Subject Logs
+        summary_map = {}
+        gate_in_set = set()
+        subject_map = {}
+
+        if has_enrolled_students:
+            daily_summaries = DailyAttendanceSummary.objects.filter(
+                section=section,
+                student__in=students,
+                attendance_date__gte=start_month_date,
+                attendance_date__lte=end_month_date
+            )
+            summary_map = {(ds.student_id, ds.attendance_date): ds.status for ds in daily_summaries}
+
+            gate_logs = StudentGateLog.objects.filter(
+                student__in=students,
+                direction='IN',
+                scan_time__date__gte=start_month_date,
+                scan_time__date__lte=end_month_date
+            ).values('student_id', 'scan_time__date')
+            gate_in_set = {(gl['student_id'], gl['scan_time__date']) for gl in gate_logs}
+
+            subject_logs = SubjectAttendanceLog.objects.filter(
+                schedule__section=section,
+                student__in=students,
+                attendance_date__gte=start_month_date,
+                attendance_date__lte=end_month_date
+            ).values('student_id', 'attendance_date', 'status')
+            subject_map = {(sl['student_id'], sl['attendance_date']): sl['status'] for sl in subject_logs}
+
+        # 7. Build Learner Attendance Payloads Grouped by Sex
+        males_data = []
+        females_data = []
+
+        consecutive_5_absences_m = 0
+        consecutive_5_absences_f = 0
+
+        for s in students:
+            enr_for_student = enrollment_map.get(s.id)
+
+            s_enr_date = (
+                getattr(enr_for_student, 'enrollment_date', None)
+                or getattr(enr_for_student, 'date_enrolled', None)
+                or getattr(s, 'created_at', None)
+            )
+            if s_enr_date and isinstance(s_enr_date, datetime):
+                s_enr_date = s_enr_date.date()
+
+            s_exit_date = (
+                getattr(enr_for_student, 'status_date', None)
+                or getattr(enr_for_student, 'exit_date', None)
+                or getattr(enr_for_student, 'date_dropped', None)
+                or getattr(enr_for_student, 'date_transferred', None)
+            )
+            if s_exit_date and isinstance(s_exit_date, datetime):
+                s_exit_date = s_exit_date.date()
+
+            raw_sex = str(getattr(s, 'sex', '') or getattr(s, 'gender', '') or '').strip().upper()
+            s_sex = 'M' if raw_sex.startswith('M') else 'F'
+
+            last = (getattr(s, 'last_name', '') or '').strip().upper()
+            first = (getattr(s, 'first_name', '') or '').strip().upper()
+            middle = (getattr(s, 'middle_name', '') or '').strip().upper()
+            name_parts = [f"{last}, {first}".strip()]
+            if middle:
+                name_parts.append(middle)
+            s_name = " ".join(name_parts)
+
+            daily_attendance_map = {}
+            total_absent = 0
+            total_tardy = 0
+
+            consecutive_absent_count = 0
+            has_5_consecutive = False
+
+            for s_day in school_days:
+                d_num = s_day['dateNumber']
+                d_obj = date(year, month_num, d_num)
+
+                # Days prior to enrollment or after exit are left blank
+                if s_enr_date and d_obj < s_enr_date:
+                    daily_attendance_map[d_num] = ''
+                    continue
+                if s_exit_date and d_obj > s_exit_date:
+                    daily_attendance_map[d_num] = ''
+                    continue
+
+                status_str = ''
+                key = (s.id, d_obj)
+
+                if key in summary_map:
+                    st = (summary_map[key] or '').strip().upper()
+                    if st in ('PRESENT', 'P'):
+                        status_str = 'present'
+                    elif st in ('ABSENT', 'A'):
+                        status_str = 'absent'
+                    elif st in ('TARDY', 'LATE', 'T'):
+                        status_str = 'tardy'
+                    elif st in ('CUTTING', 'CUT', 'CC'):
+                        status_str = 'cutting'
+                elif key in gate_in_set:
+                    status_str = 'present'
+                elif key in subject_map:
+                    st = (subject_map[key] or '').strip().upper()
+                    if st in ('PRESENT', 'P'):
+                        status_str = 'present'
+                    elif st in ('TARDY', 'LATE', 'T'):
+                        status_str = 'tardy'
+                    elif st in ('CUTTING', 'CUT', 'CC'):
+                        status_str = 'cutting'
+                    else:
+                        status_str = 'absent'
+                else:
+                    if d_obj <= today_date:
+                        status_str = 'absent'
+                    else:
+                        status_str = ''
+
+                daily_attendance_map[d_num] = status_str
+
+                if status_str == 'absent':
+                    total_absent += 1
+                    if d_obj <= today_date:
+                        consecutive_absent_count += 1
+                        if consecutive_absent_count >= 5:
+                            has_5_consecutive = True
+                elif status_str in ('present', 'tardy', 'cutting'):
+                    consecutive_absent_count = 0
+
+                if status_str == 'tardy':
+                    total_tardy += 1
+
+            if has_5_consecutive:
+                if s_sex == 'M':
+                    consecutive_5_absences_m += 1
+                else:
+                    consecutive_5_absences_f += 1
+
+            remarks_val = (
+                getattr(s, 'remarks', None)
+                or getattr(s, 'status_remarks', None)
+                or getattr(enr_for_student, 'remarks', None)
+                or ''
+            )
+
+            payload = {
+                'id': s.id,
+                'lrn': str(getattr(s, 'lrn', '') or getattr(s, 'student_id', '') or '').strip(),
+                'name': s_name,
+                'sex': s_sex,
+                'attendance': daily_attendance_map,
+                'total_absent': total_absent,
+                'total_tardy': total_tardy,
+                'remarks': str(remarks_val).strip()
+            }
+
+            if s_sex == 'M':
+                males_data.append(payload)
+            else:
+                females_data.append(payload)
+
+        males_data.sort(key=lambda x: x['name'])
+        females_data.sort(key=lambda x: x['name'])
+
+        # 8. Calculate Attendance Metrics
+        num_m = len(males_data)
+        num_f = len(females_data)
+        total_registered = num_m + num_f
+        num_school_days = len(school_days) or 1
+
+        total_m_daily_attendance = 0
+        total_f_daily_attendance = 0
+
+        for s_day in school_days:
+            d_num = s_day['dateNumber']
+            m_present = sum(1 for m in males_data if m['attendance'].get(d_num) in ('present', 'tardy', 'cutting'))
+            f_present = sum(1 for f in females_data if f['attendance'].get(d_num) in ('present', 'tardy', 'cutting'))
+            total_m_daily_attendance += m_present
+            total_f_daily_attendance += f_present
+
+        ada_m = total_m_daily_attendance / num_school_days if num_school_days else 0.0
+        ada_f = total_f_daily_attendance / num_school_days if num_school_days else 0.0
+        ada_total = ada_m + ada_f
+
+        pct_att_m = (ada_m / num_m * 100) if num_m > 0 else 0.0
+        pct_att_f = (ada_f / num_f * 100) if num_f > 0 else 0.0
+        pct_att_total = (ada_total / total_registered * 100) if total_registered > 0 else 0.0
+
+        # Calculate Cut-off Baseline Enrollment Date
+        baseline_cutoff_date = None
+        if acad_year_obj and getattr(acad_year_obj, 'first_friday_june', None):
+            baseline_cutoff_date = acad_year_obj.first_friday_june
+        else:
+            june_1 = date(year, 6, 1)
+            baseline_cutoff_date = date(year, 6, 1 + ((4 - june_1.weekday()) % 7))
+
+        late_enrollees_m = 0
+        late_enrollees_f = 0
+        drop_outs_m = 0
+        drop_outs_f = 0
+        trans_out_m = 0
+        trans_out_f = 0
+        trans_in_m = 0
+        trans_in_f = 0
+
+        for s in students:
+            g = 'M' if str(getattr(s, 'sex', '') or getattr(s, 'gender', '') or '').upper().startswith('M') else 'F'
+            enr_record = enrollment_map.get(s.id)
+
+            enr_date = (
+                getattr(enr_record, 'enrollment_date', None)
+                or getattr(enr_record, 'date_enrolled', None)
+                or getattr(enr_record, 'created_at', None)
+            )
+            if enr_date and isinstance(enr_date, datetime):
+                enr_date = enr_date.date()
+
+            if enr_date and baseline_cutoff_date and enr_date > baseline_cutoff_date and enr_date.month == month_num and enr_date.year == year:
+                if g == 'M':
+                    late_enrollees_m += 1
+                else:
+                    late_enrollees_f += 1
+
+            status_val = str(
+                getattr(enr_record, 'status', '')
+                or getattr(s, 'status', '')
+                or getattr(s, 'status_remarks', '')
+                or getattr(s, 'remarks', '')
+                or ''
+            ).upper()
+
+            if 'DROP' in status_val or 'DRP' in status_val:
+                if g == 'M': drop_outs_m += 1
+                else: drop_outs_f += 1
+            if 'TRANSFERRED OUT' in status_val or 'T/O' in status_val or status_val == 'TRANSFERRED_OUT':
+                if g == 'M': trans_out_m += 1
+                else: trans_out_f += 1
+            if 'TRANSFERRED IN' in status_val or 'T/I' in status_val or status_val == 'TRANSFERRED_IN':
+                if g == 'M': trans_in_m += 1
+                else: trans_in_f += 1
+
+        june_enrol_m = max(num_m - late_enrollees_m, 0)
+        june_enrol_f = max(num_f - late_enrollees_f, 0)
+        june_enrol_total = june_enrol_m + june_enrol_f
+
+        pct_enrol_m = (num_m / june_enrol_m * 100) if june_enrol_m > 0 else (100.0 if num_m > 0 else 0.0)
+        pct_enrol_f = (num_f / june_enrol_f * 100) if june_enrol_f > 0 else (100.0 if num_f > 0 else 0.0)
+        pct_enrol_total = (total_registered / june_enrol_total * 100) if june_enrol_total > 0 else (100.0 if total_registered > 0 else 0.0)
+
+        # 9. Dynamic School Profile & Signatory Resolution (Database-Driven)
+        school = SchoolProfile.objects.first()
+        school_id_val = str(getattr(school, 'school_id', '') or '').strip()
+        school_name_val = str(getattr(school, 'school_name', '') or '').strip()
+        division_val = str(getattr(school, 'division', '') or '').strip()
+        district_val = str(getattr(school, 'district', '') or '').strip()
+
+        # Resolve School Head Name from Database
+        school_head_val = ''
+        if school:
+            for attr in ['principal_name', 'school_head_name', 'principal', 'school_head']:
+                val = getattr(school, attr, None)
+                if val:
+                    if hasattr(val, 'get_full_name'):
+                        school_head_val = val.get_full_name()
+                    elif hasattr(val, 'first_name') and hasattr(val, 'last_name'):
+                        school_head_val = f"{val.first_name} {val.last_name}".strip()
+                    elif isinstance(val, str) and val.strip():
+                        school_head_val = val.strip()
+                    if school_head_val:
+                        break
+
+        # Fallback: Query active Staff with Administrative rank
+        if not school_head_val:
+            admin_staff = StaffProfile.objects.filter(
+                models.Q(position__icontains='Principal') |
+                models.Q(position__icontains='School Head') |
+                models.Q(position__icontains='Head Teacher') |
+                models.Q(position__icontains='Administrator')
+            ).filter(is_active=True).first()
+
+            if admin_staff:
+                parts = [admin_staff.first_name]
+                if admin_staff.middle_name:
+                    parts.append(admin_staff.middle_name)
+                parts.append(admin_staff.last_name)
+                school_head_val = " ".join(parts).strip()
+
+        # Fallback: Check SF1 service dictionary
+        if not school_head_val or not school_name_val:
+            try:
+                sf1_meta = get_sf1_data(section_id)
+                if isinstance(sf1_meta, dict):
+                    if not school_head_val:
+                        school_head_val = (
+                            sf1_meta.get('school_head')
+                            or sf1_meta.get('principal_name')
+                            or sf1_meta.get('school_head_name')
+                            or sf1_meta.get('certified_correct')
+                            or ''
+                        )
+                    if not school_id_val:
+                        school_id_val = str(sf1_meta.get('school_id', '')).strip()
+                    if not school_name_val:
+                        school_name_val = str(sf1_meta.get('school_name', '')).strip()
+                    if not division_val:
+                        division_val = str(sf1_meta.get('division', '')).strip()
+                    if not district_val:
+                        district_val = str(sf1_meta.get('district', '')).strip()
+            except Exception as e:
+                logger.warning("SF1 metadata fallback failed: %s", e)
+
+        raw_grade = section.grade_level.name if getattr(section, 'grade_level', None) else ''
+        grade_level_val = raw_grade
+
+        adviser_val = (
+            f"{section.adviser.first_name} {section.adviser.last_name}".strip()
+            if getattr(section, 'adviser', None) else ''
+        )
+
+        response_data = {
+            'school_id': school_id_val,
+            'school_name': school_name_val,
+            'division': division_val,
+            'district': district_val,
+            'academic_year': acad_year_val,
+            'grade_level': grade_level_val,
+            'section_name': str(getattr(section, 'name', '') or '').strip(),
+            'month': month_name,
+            'year': year,
+            'adviser_name': adviser_val.upper(),
+            'school_head': school_head_val.upper(),
+            'school_days': school_days,
+            'has_enrolled_students': has_enrolled_students,
+            'notice': notice_message,
+            'males': males_data,
+            'females': females_data,
+            'metrics': {
+                'enrolment_june': {
+                    'm': june_enrol_m,
+                    'f': june_enrol_f,
+                    'total': june_enrol_total
+                },
+                'late_enrolment': {
+                    'm': late_enrollees_m,
+                    'f': late_enrollees_f,
+                    'total': late_enrollees_m + late_enrollees_f
+                },
+                'registered_end': {
+                    'm': num_m,
+                    'f': num_f,
+                    'total': total_registered
+                },
+                'percentage_enrolment': {
+                    'm': round(pct_enrol_m, 1),
+                    'f': round(pct_enrol_f, 1),
+                    'total': round(pct_enrol_total, 1)
+                },
+                'average_daily_attendance': {
+                    'm': round(ada_m, 2),
+                    'f': round(ada_f, 2),
+                    'total': round(ada_total, 2)
+                },
+                'percentage_attendance': {
+                    'm': round(pct_att_m, 1),
+                    'f': round(pct_att_f, 1),
+                    'total': round(pct_att_total, 1)
+                },
+                'consecutive_5_absent_count': {
+                    'm': consecutive_5_absences_m,
+                    'f': consecutive_5_absences_f,
+                    'total': consecutive_5_absences_m + consecutive_5_absences_f
+                },
+                'drop_out': {
+                    'm': drop_outs_m,
+                    'f': drop_outs_f,
+                    'total': drop_outs_m + drop_outs_f
+                },
+                'transferred_out': {
+                    'm': trans_out_m,
+                    'f': trans_out_f,
+                    'total': trans_out_m + trans_out_f
+                },
+                'transferred_in': {
+                    'm': trans_in_m,
+                    'f': trans_in_f,
+                    'total': trans_in_m + trans_in_f
+                },
+            }
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+SF2ReportAPIView = DepEdSF2DataAPIView
 
 
 class DTRListAPIView(APIView):
     """
-    Civil Service Form 48 Daily Time Records.
-    Zero-Trust enforcement: Staff can only inspect their own DTR unless holding Admin rank.
+    Daily Time Records (Staff Work Attendance).
+    Staff can only inspect their own records unless holding Admin rank.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -759,7 +1307,7 @@ class GeofenceAPIView(APIView):
         data = [
             {
                 'zone_id': 'ZONE-CAMPUS-MAIN',
-                'name': f"{school.school_name} Geofence Boundary" if (school and school.school_name) else "Campus Geofence Boundary",
+                'name': f"{school.school_name} Boundary" if (school and school.school_name) else "Campus Boundary",
                 'latitude': lat,
                 'longitude': lng,
                 'radius': f"{radius} meters" if radius is not None else "Not configured",
@@ -769,15 +1317,11 @@ class GeofenceAPIView(APIView):
         return Response(data, status=status.HTTP_200_OK)
 
 
-# ==========================================
-# FULL CRUD VIEWSETS (ROLE-GUARDED FOR REACT ADMIN)
-# ==========================================
+# ============================================================================
+# FULL CRUD VIEWSETS
+# ============================================================================
 
 class StudentViewSet(viewsets.ModelViewSet):
-    """
-    Protects minor learner records: read-accessible to authenticated staff,
-    write/delete strictly governed by system administrators.
-    """
     queryset = Student.objects.all().order_by('-id')
     serializer_class = StudentSerializer
     permission_classes = [ReadOnlyOrAdminWrite]
@@ -794,9 +1338,6 @@ class TeacherViewSet(viewsets.ModelViewSet):
 
 
 class ScannerViewSet(viewsets.ModelViewSet):
-    """
-    Guarded terminal secrets: only system administrators may view or configure hardware kiosks.
-    """
     queryset = IoTKiosk.objects.all().order_by('kiosk_code')
     serializer_class = IoTKioskSerializer
     permission_classes = [IsSystemAdminRole]
@@ -829,9 +1370,6 @@ class SubjectViewSet(viewsets.ModelViewSet):
 
 
 class UserManagementViewSet(viewsets.ModelViewSet):
-    """
-    Superuser-level user directory administration.
-    """
     queryset = User.objects.select_related('profile').all().order_by('-id')
     serializer_class = UserManagementSerializer
     permission_classes = [permissions.IsAdminUser]

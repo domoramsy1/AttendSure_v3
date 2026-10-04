@@ -9,6 +9,7 @@ import type { UserSession } from './types/section';
 import {
   GateLogsTab,
   SF1ReportTab,
+  SF2ReportTab,
   StudentsTab,
   TeachersTab,
   DTRTab,
@@ -17,8 +18,8 @@ import {
   SchedulesTab,
   GeofenceTab,
   UsersTab,
+  SettingsTab,
 } from './components/tabs';
-import { SettingsTab } from './components/tabs/SettingsTab';
 
 export const App: React.FC = () => {
   // Session State
@@ -37,12 +38,13 @@ export const App: React.FC = () => {
       : null;
   });
 
-  // Navigation & Shell State
+  // Navigation State
   const [activeTab, setActiveTab] = useState<NavItemKey>('dashboard');
+  const [selectedReport, setSelectedReport] = useState<'sf1' | 'sf2'>('sf1');
   const [isGateOnline, setIsGateOnline] = useState<boolean>(true);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
 
-  // Listen for backend token invalidation
+  // Listen for Session Expiration
   useEffect(() => {
     const handleAuthExpired = () => {
       localStorage.removeItem('attendsure_token');
@@ -72,31 +74,33 @@ export const App: React.FC = () => {
   const getPageTitle = (): string => {
     switch (activeTab) {
       case 'dashboard':
-        return 'Dashboard';
+        return 'Dashboard Overview';
       case 'gate-logs':
         return 'Gate Access Logs';
       case 'students':
-        return 'Students';
+        return 'Students Directory';
       case 'teachers':
-        return 'Teachers';
+        return 'Faculty & Staff';
       case 'users':
         return 'User Accounts';
       case 'gate-passes':
-        return 'Pass Slips';
+        return 'Gate Passes & Permits';
       case 'schedules':
-        return 'Classes & Sections';
+        return 'Class Schedules & Sections';
       case 'dtr':
-        return 'Teacher DTR (Form 48)';
+        return 'Staff Daily Time Records';
       case 'geofence':
-        return 'Campus Boundary';
+        return 'Campus Perimeter Boundary';
       case 'scanners':
-        return 'Gate Scanners';
+        return 'Gate Scanners & Terminals';
       case 'reports':
-        return 'DepEd Reports (SF1)';
+        return selectedReport === 'sf1'
+          ? 'School Register (Form 1)'
+          : 'Daily Attendance Register (Form 2)';
       case 'settings':
-        return 'System & School Settings';
+        return 'School & System Settings';
       default:
-        return 'AttendSure';
+        return 'AttendSure Management System';
     }
   };
 
@@ -107,7 +111,29 @@ export const App: React.FC = () => {
       case 'gate-logs':
         return <GateLogsTab />;
       case 'reports':
-        return <SF1ReportTab />;
+        return (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              height: '100%',
+              width: '100%',
+              overflow: 'hidden',
+            }}
+          >
+            {selectedReport === 'sf1' ? (
+              <SF1ReportTab
+                activeReportId={selectedReport}
+                onSelectReport={(id) => setSelectedReport(id as 'sf1' | 'sf2')}
+              />
+            ) : (
+              <SF2ReportTab
+                activeReportId={selectedReport}
+                onSelectReport={(id) => setSelectedReport(id as 'sf1' | 'sf2')}
+              />
+            )}
+          </div>
+        );
       case 'students':
         return <StudentsTab />;
       case 'teachers':
@@ -173,7 +199,7 @@ export const App: React.FC = () => {
             flex: 1,
             minWidth: 0,
             height: 'calc(100vh - 48px)',
-            overflowY: activeTab === 'dashboard' ? 'hidden' : 'auto',
+            overflowY: activeTab === 'dashboard' || activeTab === 'reports' ? 'hidden' : 'auto',
             overflowX: 'hidden',
             position: 'relative',
           }}

@@ -27,7 +27,7 @@ export const Navbar: React.FC<NavbarProps> = ({ session, onLogout }) => (
         AttendSure V3
       </span>
       <span style={{ fontSize: '0.8rem', color: theme.colors.textSecondary, borderLeft: `1px solid ${theme.colors.border}`, paddingLeft: 10 }}>
-        Lapasan National High School
+        LNHS
       </span>
     </div>
 

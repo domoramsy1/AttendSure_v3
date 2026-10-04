@@ -39,7 +39,7 @@ def get_sf1_data(section_id):
     females = []
 
     for s in students:
-        raw_sex = str(getattr(s, 'sex', getattr(s, 'gender', '')) or '').strip().upper()
+        raw_sex = str(getattr(s, 'sex', getattr(s, 'sex', '')) or '').strip().upper()
         is_male = raw_sex in ['M', 'MALE']
 
         learner_dict = {

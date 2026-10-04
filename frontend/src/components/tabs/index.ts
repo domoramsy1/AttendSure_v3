@@ -1,11 +1,21 @@
-export { GateLogsTab } from './GateLogsTab';
-export { SF1ReportTab } from './SF1ReportTab';
-export { StudentsTab } from './StudentsTab';
-export { TeachersTab } from './TeachersTab';
-export { DTRTab } from './DTRTab';
-export { ScannersTab } from './ScannersTab';
-export { GatePassesTab } from './GatePassesTab';
-export { SchedulesTab } from './SchedulesTab';
-export { GeofenceTab } from './GeofenceTab';
-export { UsersTab } from './UsersTab';
+// Official Reports
+export * from './SF1ReportTab';
+export * from './SF2ReportTab';
+
+// Gate Access & Hardware Scanners
+export * from './GateLogsTab';
+export * from './ScannersTab';
+export * from './GatePassesTab';
+
+// People & Accounts
+export * from './StudentsTab';
+export * from './TeachersTab';
+export * from './UsersTab';
+
+// Academics, Attendance & Schedules
+export * from './DTRTab';
+export * from './SchedulesTab';
+
+// Campus Boundary & System Configuration
+export * from './GeofenceTab';
 export * from './SettingsTab';

@@ -4,7 +4,10 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from apps.academics.models import (
+    AuditLog,
+    Enrollment,
     GatePass,
+    GradeLevel,
     IoTKiosk,
     Schedule,
     SchoolProfile,
@@ -24,6 +27,7 @@ class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(required=True)
     password = serializers.CharField(required=True, write_only=True)
 
+
 class SchoolProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = SchoolProfile
@@ -38,12 +42,15 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
             'principal_title',
             'left_logo',
             'right_logo',
+            'school_seal_photo',
             'latitude',
             'longitude',
             'geofence_radius_meters',
+            'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
 
 class GateScanSerializer(serializers.Serializer):
     kiosk_code = serializers.CharField(required=True)
@@ -76,24 +83,60 @@ class TelemetryHeartbeatSerializer(serializers.Serializer):
 class StudentSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField(read_only=True)
     current_section = serializers.SerializerMethodField(read_only=True)
+    photo_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Student
         fields = [
-            'id', 'lrn', 'first_name', 'middle_name', 'last_name',
-            'full_name', 'sex', 'birthdate', 'parent_contact',
-            'rfid_uid', 'qr_token', 'is_active', 'current_section'
+            'id',
+            'lrn',
+            'first_name',
+            'middle_name',
+            'last_name',
+            'suffix',
+            'full_name',
+            'sex',
+            'birthdate',
+            'mother_tongue',
+            'ethnic_group',
+            'religion',
+            'house_street_sitio',
+            'barangay',
+            'municipality_city',
+            'province',
+            'father_name',
+            'mother_maiden_name',
+            'guardian_name',
+            'guardian_relationship',
+            'parent_contact',
+            'photo',
+            'photo_thumbnail',
+            'photo_url',
+            'photo_updated_at',
+            'rfid_uid',
+            'qr_token',
+            'is_active',
+            'current_section',
+            'created_at',
+            'updated_at',
         ]
+        read_only_fields = ['id', 'qr_token', 'created_at', 'updated_at']
         extra_kwargs = {
             'birthdate': {'required': False, 'allow_null': True},
             'middle_name': {'required': False, 'allow_blank': True},
+            'suffix': {'required': False, 'allow_blank': True},
             'parent_contact': {'required': False, 'allow_blank': True},
             'rfid_uid': {'required': False, 'allow_blank': True, 'allow_null': True},
-            'qr_token': {'required': False, 'allow_blank': True, 'allow_null': True},
+            'photo': {'required': False, 'allow_null': True},
         }
 
     def get_full_name(self, obj):
-        return f"{obj.last_name}, {obj.first_name} {obj.middle_name or ''}".strip()
+        parts = [obj.last_name, f"{obj.first_name}"]
+        if obj.middle_name:
+            parts.append(obj.middle_name)
+        if obj.suffix:
+            parts.append(obj.suffix)
+        return f"{obj.last_name}, {' '.join(filter(None, [obj.first_name, obj.middle_name, obj.suffix]))}".strip()
 
     def get_current_section(self, obj):
         enrollment = obj.enrollments.filter(academic_year__is_active=True).first()
@@ -102,25 +145,107 @@ class StudentSerializer(serializers.ModelSerializer):
             return f"{grade} - {enrollment.section.name}".strip(" - ")
         return "Unassigned"
 
+    def get_photo_url(self, obj):
+        if obj.photo:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.photo.url)
+            return obj.photo.url
+        return None
+
 
 class StaffProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField(read_only=True)
+    photo_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = StaffProfile
         fields = [
-            'id', 'employee_id', 'first_name', 'last_name', 'full_name',
-            'position', 'department', 'contact_number', 'rfid_uid',
-            'qr_token', 'is_active'
+            'id',
+            'employee_id',
+            'first_name',
+            'middle_name',
+            'last_name',
+            'suffix',
+            'full_name',
+            'position',
+            'department',
+            'contact_number',
+            'email',
+            'photo',
+            'photo_url',
+            'photo_updated_at',
+            'rfid_uid',
+            'qr_token',
+            'is_active',
+            'created_at',
+            'updated_at',
         ]
+        read_only_fields = ['id', 'qr_token', 'created_at', 'updated_at']
         extra_kwargs = {
+            'middle_name': {'required': False, 'allow_blank': True},
+            'suffix': {'required': False, 'allow_blank': True},
             'contact_number': {'required': False, 'allow_blank': True},
+            'email': {'required': False, 'allow_blank': True},
             'rfid_uid': {'required': False, 'allow_blank': True, 'allow_null': True},
-            'qr_token': {'required': False, 'allow_blank': True, 'allow_null': True},
+            'photo': {'required': False, 'allow_null': True},
         }
 
     def get_full_name(self, obj):
-        return f"{obj.first_name} {obj.last_name}".strip()
+        name_parts = [obj.first_name]
+        if obj.middle_name:
+            name_parts.append(obj.middle_name)
+        name_parts.append(obj.last_name)
+        if obj.suffix:
+            name_parts.append(obj.suffix)
+        return " ".join(filter(None, name_parts)).strip()
+
+    def get_photo_url(self, obj):
+        if obj.photo:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.photo.url)
+            return obj.photo.url
+        return None
+
+
+class EnrollmentSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField(read_only=True)
+    student_lrn = serializers.CharField(source='student.lrn', read_only=True)
+    section_name = serializers.CharField(source='section.name', read_only=True)
+    academic_year_code = serializers.CharField(source='academic_year.code', read_only=True)
+
+    class Meta:
+        model = Enrollment
+        fields = [
+            'id',
+            'student',
+            'student_name',
+            'student_lrn',
+            'section',
+            'section_name',
+            'academic_year',
+            'academic_year_code',
+            'enrollment_date',
+            'enrollment_type',
+            'status',
+            'status_date',
+            'status_reason_code',
+            'transferred_school',
+            'is_cct_recipient',
+            'cct_id_number',
+            'disability_detail',
+            'accelerated_detail',
+            'remarks',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_student_name(self, obj):
+        if obj.student:
+            return f"{obj.student.last_name}, {obj.student.first_name}".strip()
+        return "Unknown"
 
 
 class IoTKioskSerializer(serializers.ModelSerializer):
@@ -129,8 +254,14 @@ class IoTKioskSerializer(serializers.ModelSerializer):
     class Meta:
         model = IoTKiosk
         fields = [
-            'id', 'kiosk_code', 'terminal_name', 'secret_hash',
-            'location', 'is_active', 'last_ping', 'is_online'
+            'id',
+            'kiosk_code',
+            'terminal_name',
+            'secret_hash',
+            'location',
+            'is_active',
+            'last_ping',
+            'is_online',
         ]
         extra_kwargs = {
             'secret_hash': {'write_only': True, 'required': False}
@@ -148,9 +279,20 @@ class GatePassSerializer(serializers.ModelSerializer):
     class Meta:
         model = GatePass
         fields = [
-            'id', 'staff', 'student', 'bearer_name', 'reason',
-            'valid_from', 'valid_to', 'status'
+            'id',
+            'pass_number',
+            'staff',
+            'student',
+            'bearer_name',
+            'pass_type',
+            'reason',
+            'valid_from',
+            'valid_to',
+            'status',
+            'created_at',
+            'updated_at',
         ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_bearer_name(self, obj):
         if obj.staff:
@@ -165,7 +307,15 @@ class SubjectSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Subject
-        fields = ['id', 'code', 'title', 'tier', 'subject_type', 'units', 'display_title']
+        fields = [
+            'id',
+            'code',
+            'title',
+            'tier',
+            'subject_type',
+            'units',
+            'display_title',
+        ]
 
     def get_display_title(self, obj):
         return f"{obj.code} - {obj.title}"
@@ -183,10 +333,20 @@ class ScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Schedule
         fields = [
-            'id', 'schedule_id', 'section', 'section_name', 'grade_level_name',
-            'subject', 'subject_code', 'subject_title',
-            'teacher', 'teacher_name', 'room_number',
-            'start_time', 'end_time', 'time_slot'
+            'id',
+            'schedule_id',
+            'section',
+            'section_name',
+            'grade_level_name',
+            'subject',
+            'subject_code',
+            'subject_title',
+            'teacher',
+            'teacher_name',
+            'room_number',
+            'start_time',
+            'end_time',
+            'time_slot',
         ]
         extra_kwargs = {
             'room_number': {'required': False, 'allow_blank': True},
@@ -208,18 +368,27 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
 
 class UserManagementSerializer(serializers.ModelSerializer):
-    role = serializers.CharField(source='profile.role', default='STAFF')
+    role = serializers.CharField(source='profile.role', default='TEACHER')
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_active', 'role', 'password']
+        fields = [
+            'id',
+            'username',
+            'email',
+            'first_name',
+            'last_name',
+            'is_active',
+            'role',
+            'password',
+        ]
         extra_kwargs = {
             'password': {'write_only': True, 'required': False}
         }
 
     def create(self, validated_data):
         profile_data = validated_data.pop('profile', {})
-        role = profile_data.get('role', 'STAFF')
+        role = profile_data.get('role', 'TEACHER')
         password = validated_data.pop('password', None)
         user = User.objects.create(**validated_data)
         if password:
@@ -243,3 +412,68 @@ class UserManagementSerializer(serializers.ModelSerializer):
         if role:
             UserProfile.objects.update_or_create(user=instance, defaults={'role': role})
         return instance
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    performed_by_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = AuditLog
+        fields = [
+            'id',
+            'table_name',
+            'record_id',
+            'action',
+            'old_data',
+            'new_data',
+            'changed_fields',
+            'performed_by',
+            'performed_by_name',
+            'client_ip',
+            'user_agent',
+            'created_at',
+        ]
+        read_only_fields = [
+            'id',
+            'table_name',
+            'record_id',
+            'action',
+            'old_data',
+            'new_data',
+            'changed_fields',
+            'performed_by',
+            'performed_by_name',
+            'client_ip',
+            'user_agent',
+            'created_at',
+        ]
+
+    def get_performed_by_name(self, obj):
+        if obj.performed_by:
+            return obj.performed_by.get_full_name() or obj.performed_by.username
+        return "System / Device Kiosk"
+
+
+class SF2StudentSerializer(serializers.ModelSerializer):
+    """
+    Serializer providing safely resolved enrollment boundaries
+    without triggering direct attribute lookups on reverse relations.
+    """
+    full_name = serializers.SerializerMethodField(read_only=True)
+    date_enrolled = serializers.SerializerMethodField(read_only=True)
+    date_dropped = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Student
+        fields = ['id', 'lrn', 'full_name', 'sex', 'date_enrolled', 'date_dropped']
+
+    def get_full_name(self, obj):
+        return f"{obj.last_name}, {obj.first_name} {obj.middle_name or ''}".strip()
+
+    def get_date_enrolled(self, obj):
+        active_enr = obj.enrollments.filter(academic_year__is_active=True).first()
+        return active_enr.enrollment_date if active_enr else None
+
+    def get_date_dropped(self, obj):
+        active_enr = obj.enrollments.filter(academic_year__is_active=True).first()
+        return active_enr.status_date if (active_enr and active_enr.status == 'DROPPED') else None
