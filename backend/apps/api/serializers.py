@@ -1,5 +1,8 @@
-from datetime import timedelta
+import base64
+import uuid
+from datetime import date, timedelta
 from django.contrib.auth.models import User
+from django.core.files.base import ContentFile
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -19,9 +22,40 @@ from apps.academics.models import (
 )
 
 
-# ==========================================
+# ============================================================================
+# SAFE IMAGE FIELD (BASE64 & MEDIA URL HANDLER)
+# ============================================================================
+
+class Base64ImageField(serializers.ImageField):
+    """
+    Accepts base64 image strings from frontend modals.
+    If the frontend sends an existing file path or URL,
+    it keeps the current image without failing validation.
+    """
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            if data.startswith('data:image'):
+                try:
+                    header, base64_str = data.split(';base64,')
+                    ext = header.split('/')[-1]
+                    if ext == 'jpeg':
+                        ext = 'jpg'
+                    file_name = f"{uuid.uuid4().hex[:10]}.{ext}"
+                    data = ContentFile(base64.b64decode(base64_str), name=file_name)
+                except Exception:
+                    raise serializers.ValidationError("Invalid image format.")
+            elif data.startswith('http') or data.startswith('/media') or '/' in data:
+                return getattr(self.parent.instance, self.field_name, None)
+            elif data.strip() == '':
+                return None
+        elif not data:
+            return None
+        return super().to_internal_value(data)
+
+
+# ============================================================================
 # AUTHENTICATION & HARDWARE SERIALIZERS
-# ==========================================
+# ============================================================================
 
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(required=True)
@@ -29,7 +63,6 @@ class LoginSerializer(serializers.Serializer):
 
 
 class SchoolProfileSerializer(serializers.ModelSerializer):
-    # Alias to ensure backwards-compatibility with any legacy code referencing school_seal_photo
     school_seal_photo = serializers.CharField(
         source='school_logo',
         required=False,
@@ -62,7 +95,6 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
         ]
 
 
-
 class GateScanSerializer(serializers.Serializer):
     kiosk_code = serializers.CharField(required=True)
     secret_key = serializers.CharField(required=True)
@@ -84,17 +116,20 @@ class TelemetryHeartbeatSerializer(serializers.Serializer):
     latitude = serializers.FloatField(required=True)
     longitude = serializers.FloatField(required=True)
     battery_level = serializers.IntegerField(required=False, default=100)
-    is_inside_geofence = serializers.BooleanField(required=True)
+    is_mock_location = serializers.BooleanField(required=False, default=False)
+    wifi_bssid = serializers.CharField(required=False, allow_blank=True, default='')
+    client_device_id = serializers.CharField(required=False, allow_blank=True, default='')
 
-
-# ==========================================
+# ============================================================================
 # FULL CRUD MODEL SERIALIZERS
-# ==========================================
+# ============================================================================
 
 class StudentSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField(read_only=True)
     current_section = serializers.SerializerMethodField(read_only=True)
     photo_url = serializers.SerializerMethodField(read_only=True)
+    photo = Base64ImageField(required=False, allow_null=True)
+    sex = serializers.CharField(required=False)
 
     class Meta:
         model = Student
@@ -164,10 +199,46 @@ class StudentSerializer(serializers.ModelSerializer):
             return obj.photo.url
         return None
 
+    def validate_sex(self, value):
+        # Strictly accept only Male or Female
+        if value in ['Male', 'M', 'm', 'male']:
+            return 'Male'
+        if value in ['Female', 'F', 'f', 'female']:
+            return 'Female'
+        raise serializers.ValidationError("Sex must be either Male or Female.")
+
+    def validate_rfid_uid(self, value):
+        if not value or str(value).strip() == '':
+            return None
+        clean_value = str(value).strip()
+        instance = getattr(self, 'instance', None)
+        qs = Student.objects.filter(rfid_uid=clean_value)
+        if instance:
+            qs = qs.exclude(id=instance.id)
+        if qs.exists():
+            raise serializers.ValidationError("This RFID card is already assigned to another student.")
+        return clean_value
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # If the photo is the default avatar file that does not exist, return None
+        if ret.get('photo') and 'default_avatar.png' in str(ret['photo']):
+            ret['photo'] = None
+        return ret
+
+    def create(self, validated_data):
+        if 'birthdate' not in validated_data or not validated_data['birthdate']:
+            validated_data['birthdate'] = date(2010, 1, 1)
+
+        if 'qr_token' not in validated_data or not validated_data['qr_token']:
+            validated_data['qr_token'] = f"STU-{uuid.uuid4().hex}"
+
+        return super().create(validated_data)
 
 class StaffProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField(read_only=True)
     photo_url = serializers.SerializerMethodField(read_only=True)
+    photo = Base64ImageField(required=False, allow_null=True)
 
     class Meta:
         model = StaffProfile
@@ -218,6 +289,23 @@ class StaffProfileSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(obj.photo.url)
             return obj.photo.url
         return None
+
+    def validate_rfid_uid(self, value):
+        if not value or str(value).strip() == '':
+            return None
+        clean_value = str(value).strip()
+        instance = getattr(self, 'instance', None)
+        qs = StaffProfile.objects.filter(rfid_uid=clean_value)
+        if instance:
+            qs = qs.exclude(id=instance.id)
+        if qs.exists():
+            raise serializers.ValidationError("This RFID card is already assigned to another staff member.")
+        return clean_value
+
+    def create(self, validated_data):
+        if 'qr_token' not in validated_data or not validated_data['qr_token']:
+            validated_data['qr_token'] = f"STF-{uuid.uuid4().hex}"
+        return super().create(validated_data)
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):
@@ -466,10 +554,6 @@ class AuditLogSerializer(serializers.ModelSerializer):
 
 
 class SF2StudentSerializer(serializers.ModelSerializer):
-    """
-    Serializer providing safely resolved enrollment boundaries
-    without triggering direct attribute lookups on reverse relations.
-    """
     full_name = serializers.SerializerMethodField(read_only=True)
     date_enrolled = serializers.SerializerMethodField(read_only=True)
     date_dropped = serializers.SerializerMethodField(read_only=True)

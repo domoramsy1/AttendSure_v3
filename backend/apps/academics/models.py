@@ -21,7 +21,6 @@ SUFFIX_CHOICES = [
 SEX_CHOICES = [
     ('Male', 'Male'),
     ('Female', 'Female'),
-    ('Other', 'Other'),
 ]
 
 SCAN_METHOD_CHOICES = [
@@ -58,9 +57,7 @@ ENROLLMENT_TYPE_CHOICES = [
 
 USER_ROLE_CHOICES = [
     ('ADMIN', 'System Administrator'),
-    ('REGISTRAR', 'Registrar / Academic Staff'),
     ('TEACHER', 'Teacher / Faculty Adviser'),
-    ('STAFF', 'School Staff'),
 ]
 
 GATE_PASS_STATUS_CHOICES = [
@@ -237,6 +234,24 @@ class StaffProfile(models.Model):
     qr_token = models.CharField(max_length=128, unique=True, null=True, blank=True, help_text="Cryptographic QR token")
     is_active = models.BooleanField(default=True)
 
+    bound_device_id = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        unique=True,
+        help_text="Unique hardware UUID of the staff phone."
+    )
+    device_model = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Phone model name."
+    )
+    device_bound_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="Timestamp when paired."
+    )
     # Forensic Audit & Modification Tracking
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)

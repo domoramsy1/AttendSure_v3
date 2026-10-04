@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from apps.api.views import (
     ClassroomBatchScanAPIView,
+    CurrentUserProfileView,
     DashboardOverviewAPIView,
     DepEdSF1DataAPIView,
     DepEdSF2DataAPIView,
@@ -23,6 +24,7 @@ from apps.api.views import (
     TeacherViewSet,
     TelemetryHeartbeatAPIView,
     UserManagementViewSet,
+    ResetStaffDeviceBindingAPIView,
 )
 
 # 1. Register Core Entity ViewSets
@@ -40,8 +42,14 @@ urlpatterns = [
     # Router endpoints (CRUD for students, teachers, scanners, passes, etc.)
     path('', include(router.urls)),
 
-    # Authentication & Dashboard
+
+    path('teachers/<int:staff_id>/reset-device/', ResetStaffDeviceBindingAPIView.as_view(), name='api-reset-device-binding'),
+    # Authentication & User Profile Management
     path('auth/login/', LoginAPIView.as_view(), name='api-login'),
+    path('me/', CurrentUserProfileView.as_view(), name='current-user-profile'),
+    path('auth/me/', CurrentUserProfileView.as_view(), name='api-auth-me'),
+
+    # Dashboard & Sections
     path('dashboard/overview/', DashboardOverviewAPIView.as_view(), name='api-dashboard-overview'),
     path('sections/', SectionListAPIView.as_view(), name='api-sections'),
 
