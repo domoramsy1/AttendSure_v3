@@ -108,6 +108,7 @@ export interface ReportNavBarProps {
 const DEFAULT_REPORTS: ReportTabItem[] = [
   { id: 'sf1', label: 'Form 1 (School Register)', icon: FileText },
   { id: 'sf2', label: 'Form 2 (Daily Attendance)', icon: CalendarCheck },
+  { id: 'sf4', label: 'Form 4 (Monthly Movement)', icon: FileSpreadsheet },
 ];
 
 const DEFAULT_MONTHS = [

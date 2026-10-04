@@ -6,12 +6,14 @@ from apps.api.views import (
     DashboardOverviewAPIView,
     DepEdSF1DataAPIView,
     DepEdSF2DataAPIView,
+    DepEdSF4DataAPIView,
     DTRListAPIView,
     GateLogsAPIView,
     GatePassViewSet,
     GateScanAPIView,
     GeofenceAPIView,
     LoginAPIView,
+    ReportAuditLogAPIView,
     ScannerViewSet,
     ScheduleViewSet,
     SchoolSettingsAPIView,
@@ -61,10 +63,14 @@ urlpatterns = [
     path('geofence/', GeofenceAPIView.as_view(), name='api-geofence'),
     path('campus/geofence/', GeofenceAPIView.as_view(), name='api-campus-geofence-alias'),
 
-    # Official Attendance & Enrollment Reports
-    # Standard & DepEd Forms 1 & 2
+    # Official DepEd Attendance & Enrollment Reports
     path('reports/sf1/<int:section_id>/', DepEdSF1DataAPIView.as_view(), name='api-sf1-report'),
     path('reports/sf2/<int:section_id>/', DepEdSF2DataAPIView.as_view(), name='api-sf2-report'),
+    path('reports/sf4/', DepEdSF4DataAPIView.as_view(), name='api-sf4-report'),
     path('reports/school-register/<int:section_id>/', DepEdSF1DataAPIView.as_view(), name='api-school-register-alias'),
     path('reports/daily-attendance/<int:section_id>/', DepEdSF2DataAPIView.as_view(), name='api-daily-attendance-alias'),
+    path('reports/monthly-movement/', DepEdSF4DataAPIView.as_view(), name='api-monthly-movement-alias'),
+
+    # Audit Logging & Transparency Records
+    path('reports/audit-logs/', ReportAuditLogAPIView.as_view(), name='api-report-audit-logs'),
 ]

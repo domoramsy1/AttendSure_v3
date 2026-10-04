@@ -12,6 +12,9 @@ import {
   AlertCircle,
   Loader2,
   ShieldCheck,
+  Mail,
+  Phone,
+  Compass,
 } from 'lucide-react';
 
 interface SchoolSettingsData {
@@ -20,14 +23,22 @@ interface SchoolSettingsData {
   region: string;
   division: string;
   district: string;
+  address: string;
+  contact_number: string;
+  email: string;
   principal_name: string;
   principal_title: string;
-  left_logo: string | null;
-  right_logo: string | null;
+  kagawaran_logo: string | null;
+  deped_logo: string | null;
+  school_logo: string | null;
+  left_logo?: string | null;
+  right_logo?: string | null;
   latitude: number | null;
   longitude: number | null;
   geofence_radius_meters: number | null;
 }
+
+type LogoType = 'kagawaran' | 'deped' | 'school';
 
 export const SettingsTab: React.FC = () => {
   const [formData, setFormData] = useState<SchoolSettingsData>({
@@ -36,17 +47,21 @@ export const SettingsTab: React.FC = () => {
     region: '',
     division: '',
     district: '',
+    address: '',
+    contact_number: '',
+    email: '',
     principal_name: '',
     principal_title: '',
-    left_logo: null,
-    right_logo: null,
+    kagawaran_logo: null,
+    deped_logo: null,
+    school_logo: null,
     latitude: null,
     longitude: null,
     geofence_radius_meters: null,
   });
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [saving, setSaving] = useState<boolean>(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -65,46 +80,68 @@ export const SettingsTab: React.FC = () => {
         region: res.data.region || '',
         division: res.data.division || '',
         district: res.data.district || '',
+        address: res.data.address || '',
+        contact_number: res.data.contact_number || '',
+        email: res.data.email || '',
         principal_name: res.data.principal_name || '',
         principal_title: res.data.principal_title || '',
-        left_logo: res.data.left_logo || null,
-        right_logo: res.data.right_logo || null,
+        kagawaran_logo: res.data.kagawaran_logo || res.data.left_logo || null,
+        deped_logo: res.data.deped_logo || res.data.right_logo || null,
+        school_logo: res.data.school_logo || null,
         latitude: res.data.latitude ?? null,
         longitude: res.data.longitude ?? null,
         geofence_radius_meters: res.data.geofence_radius_meters ?? null,
       });
-    } catch (err: any) {
-      setErrorMsg('Failed to load school settings.');
+    } catch {
+      setErrorMsg('Failed to load institution settings from the database.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, position: 'left' | 'right') => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, target: LogoType) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     if (file.size > 2 * 1024 * 1024) {
-      alert('Selected image exceeds maximum allowed size (2MB).');
+      alert('Selected image exceeds the maximum allowed size (2MB).');
       return;
     }
 
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64String = reader.result as string;
-      setFormData((prev) => ({
-        ...prev,
-        [position === 'left' ? 'left_logo' : 'right_logo']: base64String,
-      }));
+      setFormData((prev) => {
+        const updated = { ...prev };
+        if (target === 'kagawaran') {
+          updated.kagawaran_logo = base64String;
+          updated.left_logo = base64String;
+        } else if (target === 'deped') {
+          updated.deped_logo = base64String;
+          updated.right_logo = base64String;
+        } else if (target === 'school') {
+          updated.school_logo = base64String;
+        }
+        return updated;
+      });
     };
     reader.readAsDataURL(file);
   };
 
-  const handleClearLogo = (position: 'left' | 'right') => {
-    setFormData((prev) => ({
-      ...prev,
-      [position === 'left' ? 'left_logo' : 'right_logo']: null,
-    }));
+  const handleClearLogo = (target: LogoType) => {
+    setFormData((prev) => {
+      const updated = { ...prev };
+      if (target === 'kagawaran') {
+        updated.kagawaran_logo = null;
+        updated.left_logo = null;
+      } else if (target === 'deped') {
+        updated.deped_logo = null;
+        updated.right_logo = null;
+      } else if (target === 'school') {
+        updated.school_logo = null;
+      }
+      return updated;
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -114,12 +151,38 @@ export const SettingsTab: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      const res = await apiClient.put<SchoolSettingsData>('/settings/school/', formData);
-      setFormData(res.data);
-      setSuccessMsg('Settings successfully updated!');
+      const payload = {
+        ...formData,
+        left_logo: formData.kagawaran_logo,
+        right_logo: formData.deped_logo,
+      };
+      const res = await apiClient.put<SchoolSettingsData>('/settings/school/', payload);
+      setFormData({
+        school_id: res.data.school_id || '',
+        school_name: res.data.school_name || '',
+        region: res.data.region || '',
+        division: res.data.division || '',
+        district: res.data.district || '',
+        address: res.data.address || '',
+        contact_number: res.data.contact_number || '',
+        email: res.data.email || '',
+        principal_name: res.data.principal_name || '',
+        principal_title: res.data.principal_title || '',
+        kagawaran_logo: res.data.kagawaran_logo || res.data.left_logo || null,
+        deped_logo: res.data.deped_logo || res.data.right_logo || null,
+        school_logo: res.data.school_logo || null,
+        latitude: res.data.latitude ?? null,
+        longitude: res.data.longitude ?? null,
+        geofence_radius_meters: res.data.geofence_radius_meters ?? null,
+      });
+
+      // Broadcast update event so AdminSidebar and UI re-sync in real time
+      window.dispatchEvent(new CustomEvent('attendsure:school-settings-updated'));
+
+      setSuccessMsg('Institutional settings and official emblems successfully saved!');
       setTimeout(() => setSuccessMsg(null), 5000);
     } catch (err: any) {
-      setErrorMsg(err.response?.data?.error || 'Failed to save configuration.');
+      setErrorMsg(err.response?.data?.error || 'Failed to save configuration to database.');
     } finally {
       setSaving(false);
     }
@@ -129,14 +192,14 @@ export const SettingsTab: React.FC = () => {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 }}>
         <Loader2 className="animate-spin" size={32} color="#0284c7" />
-        <span style={{ fontSize: '0.9rem', color: '#64748b', fontWeight: 600 }}>Loading settings...</span>
+        <span style={{ fontSize: '0.9rem', color: '#64748b', fontWeight: 600 }}>Loading school settings...</span>
       </div>
     );
   }
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', backgroundColor: '#f8fafc', padding: '24px 32px' }}>
-      <div style={{ maxWidth: 1050, margin: '0 auto' }}>
+      <div style={{ maxWidth: 1080, margin: '0 auto' }}>
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ padding: 8, borderRadius: 8, backgroundColor: '#e0f2fe', color: '#0284c7' }}>
@@ -144,10 +207,10 @@ export const SettingsTab: React.FC = () => {
             </div>
             <div>
               <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                System & School Institutional Settings
+                Institutional Profile &amp; Dynamic Identity Settings
               </h1>
               <p style={{ fontSize: '0.82rem', color: '#64748b', margin: '4px 0 0 0' }}>
-                Pure dynamic configuration: Configure your institution's profile, official report logos, and geofence perimeter.
+                All reports (SF1, SF2, SF4), headers, contacts, and footers query directly from this configuration.
               </p>
             </div>
           </div>
@@ -173,31 +236,33 @@ export const SettingsTab: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <ShieldCheck size={18} color="#0284c7" />
                 <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>
-                  Institutional Identity & Official Form Header
+                  Institutional Identity &amp; Governance
                 </h2>
               </div>
             </div>
 
-            <div style={gridTwoCols}>
+            <div style={gridThreeCols}>
               <div>
                 <label style={labelStyle}>DepEd School ID</label>
                 <input
                   type="text"
-                  placeholder="Enter School ID"
+                  placeholder="e.g. 304033"
                   value={formData.school_id}
                   onChange={(e) => setFormData({ ...formData, school_id: e.target.value })}
                   style={inputStyle}
+                  required
                 />
               </div>
 
-              <div>
+              <div style={{ gridColumn: 'span 2' }}>
                 <label style={labelStyle}>Official School Name</label>
                 <input
                   type="text"
-                  placeholder="Enter Official School Name"
+                  placeholder="e.g. Lapasan National High School"
                   value={formData.school_name}
                   onChange={(e) => setFormData({ ...formData, school_name: e.target.value })}
                   style={inputStyle}
+                  required
                 />
               </div>
 
@@ -205,10 +270,11 @@ export const SettingsTab: React.FC = () => {
                 <label style={labelStyle}>Region</label>
                 <input
                   type="text"
-                  placeholder="Enter Region (e.g. Region X)"
+                  placeholder="e.g. Region X - Northern Mindanao"
                   value={formData.region}
                   onChange={(e) => setFormData({ ...formData, region: e.target.value })}
                   style={inputStyle}
+                  required
                 />
               </div>
 
@@ -216,10 +282,11 @@ export const SettingsTab: React.FC = () => {
                 <label style={labelStyle}>Schools Division</label>
                 <input
                   type="text"
-                  placeholder="Enter Division"
+                  placeholder="e.g. Division of Cagayan de Oro City"
                   value={formData.division}
                   onChange={(e) => setFormData({ ...formData, division: e.target.value })}
                   style={inputStyle}
+                  required
                 />
               </div>
 
@@ -227,10 +294,11 @@ export const SettingsTab: React.FC = () => {
                 <label style={labelStyle}>District</label>
                 <input
                   type="text"
-                  placeholder="Enter District"
+                  placeholder="e.g. District II"
                   value={formData.district}
                   onChange={(e) => setFormData({ ...formData, district: e.target.value })}
                   style={inputStyle}
+                  required
                 />
               </div>
 
@@ -238,108 +306,219 @@ export const SettingsTab: React.FC = () => {
                 <label style={labelStyle}>Principal / School Head Name</label>
                 <input
                   type="text"
-                  placeholder="Enter Full Name of School Head"
+                  placeholder="e.g. JACQUELINE GALUPO"
                   value={formData.principal_name}
                   onChange={(e) => setFormData({ ...formData, principal_name: e.target.value })}
+                  style={inputStyle}
+                  required
+                />
+              </div>
+
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={labelStyle}>Designation / Title</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Secondary School Principal II"
+                  value={formData.principal_title}
+                  onChange={(e) => setFormData({ ...formData, principal_title: e.target.value })}
                   style={inputStyle}
                 />
               </div>
             </div>
           </div>
 
-          {/* Report Logos */}
+          {/* Contact, Location & Footer Information */}
           <div style={cardStyle}>
             <div style={cardHeaderStyle}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <ImageIcon size={18} color="#0284c7" />
+                <Compass size={18} color="#0284c7" />
                 <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>
-                  Report Header Logos
+                  Office Details &amp; Report Footer Contacts (DO 31, s. 2019)
                 </h2>
               </div>
             </div>
 
             <div style={gridTwoCols}>
-              {/* Left Logo */}
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={labelStyle}>School Address (Appears on report footers)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Claro M. Recto Avenue, Lapasan, Cagayan de Oro City, 9000 Misamis Oriental"
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  style={inputStyle}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Contact Numbers</label>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <Phone size={14} color="#64748b" style={{ position: 'absolute', left: 10 }} />
+                  <input
+                    type="text"
+                    placeholder="e.g. (088) 856-1234 / 0917-123-4567"
+                    value={formData.contact_number}
+                    onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
+                    style={{ ...inputStyle, paddingLeft: 30 }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Official Email Address</label>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <Mail size={14} color="#64748b" style={{ position: 'absolute', left: 10 }} />
+                  <input
+                    type="email"
+                    placeholder="e.g. 304033@deped.gov.ph"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    style={{ ...inputStyle, paddingLeft: 30 }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Dynamic Report Emblems & Logos */}
+          <div style={cardStyle}>
+            <div style={cardHeaderStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ImageIcon size={18} color="#0284c7" />
+                <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>
+                  Official Emblems &amp; Document Seals (Auto-injected into SF1, SF2, SF4)
+                </h2>
+              </div>
+            </div>
+
+            <div style={gridThreeCols}>
+              {/* Kagawaran Logo */}
               <div style={logoUploadBoxStyle}>
-                <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#334155', marginBottom: 6 }}>
-                  Header Left Logo (DepEd / Division Seal)
+                <div style={logoBoxTitleStyle}>
+                  1. Kagawaran ng Edukasyon Logo
+                </div>
+                <div style={logoBoxSubtitleStyle}>
+                  Republic Seal / Left Masthead
                 </div>
                 <div style={logoPreviewContainer}>
-                  {formData.left_logo ? (
+                  {formData.kagawaran_logo ? (
                     <img
-                      src={formData.left_logo}
-                      alt="Left Seal Preview"
-                      style={{ maxWidth: 84, maxHeight: 84, objectFit: 'contain' }}
+                      src={formData.kagawaran_logo}
+                      alt="Kagawaran Seal"
+                      style={{ maxWidth: 80, maxHeight: 80, objectFit: 'contain' }}
                     />
                   ) : (
-                    <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic' }}>
-                      No logo uploaded
-                    </span>
+                    <span style={emptyLogoTextStyle}>Default Vector Used</span>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                <div style={{ display: 'flex', gap: 6 }}>
                   <label style={uploadBtnLabelStyle}>
-                    <Upload size={13} />
-                    <span>Upload Image</span>
+                    <Upload size={12} />
+                    <span>Upload</span>
                     <input
                       type="file"
                       accept="image/*"
-                      onChange={(e) => handleFileUpload(e, 'left')}
+                      onChange={(e) => handleFileUpload(e, 'kagawaran')}
                       style={{ display: 'none' }}
                     />
                   </label>
-                  {formData.left_logo && (
+                  {formData.kagawaran_logo && (
                     <button
                       type="button"
-                      onClick={() => handleClearLogo('left')}
+                      onClick={() => handleClearLogo('kagawaran')}
                       style={resetBtnStyle}
                       title="Clear logo"
                     >
-                      <RotateCcw size={13} />
-                      <span>Clear</span>
+                      <RotateCcw size={12} />
+                      <span>Reset</span>
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Right Logo */}
+              {/* DepEd Logo */}
               <div style={logoUploadBoxStyle}>
-                <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#334155', marginBottom: 6 }}>
-                  Header Right Logo (School Institutional Crest)
+                <div style={logoBoxTitleStyle}>
+                  2. DepEd Official Logo
+                </div>
+                <div style={logoBoxSubtitleStyle}>
+                  Agency Ribbon / Right Masthead
                 </div>
                 <div style={logoPreviewContainer}>
-                  {formData.right_logo ? (
+                  {formData.deped_logo ? (
                     <img
-                      src={formData.right_logo}
-                      alt="Right Seal Preview"
-                      style={{ maxWidth: 84, maxHeight: 84, objectFit: 'contain' }}
+                      src={formData.deped_logo}
+                      alt="DepEd Ribbon"
+                      style={{ maxWidth: 80, maxHeight: 80, objectFit: 'contain' }}
                     />
                   ) : (
-                    <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic' }}>
-                      No logo uploaded
-                    </span>
+                    <span style={emptyLogoTextStyle}>Default Vector Used</span>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                <div style={{ display: 'flex', gap: 6 }}>
                   <label style={uploadBtnLabelStyle}>
-                    <Upload size={13} />
-                    <span>Upload Image</span>
+                    <Upload size={12} />
+                    <span>Upload</span>
                     <input
                       type="file"
                       accept="image/*"
-                      onChange={(e) => handleFileUpload(e, 'right')}
+                      onChange={(e) => handleFileUpload(e, 'deped')}
                       style={{ display: 'none' }}
                     />
                   </label>
-                  {formData.right_logo && (
+                  {formData.deped_logo && (
                     <button
                       type="button"
-                      onClick={() => handleClearLogo('right')}
+                      onClick={() => handleClearLogo('deped')}
                       style={resetBtnStyle}
                       title="Clear logo"
                     >
-                      <RotateCcw size={13} />
-                      <span>Clear</span>
+                      <RotateCcw size={12} />
+                      <span>Reset</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* School Crest */}
+              <div style={logoUploadBoxStyle}>
+                <div style={logoBoxTitleStyle}>
+                  3. School Crest / Institutional Seal
+                </div>
+                <div style={logoBoxSubtitleStyle}>
+                  Document Footer / Certification Seal
+                </div>
+                <div style={logoPreviewContainer}>
+                  {formData.school_logo ? (
+                    <img
+                      src={formData.school_logo}
+                      alt="School Crest"
+                      style={{ maxWidth: 80, maxHeight: 80, objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <span style={emptyLogoTextStyle}>No School Seal Set</span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <label style={uploadBtnLabelStyle}>
+                    <Upload size={12} />
+                    <span>Upload</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleFileUpload(e, 'school')}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                  {formData.school_logo && (
+                    <button
+                      type="button"
+                      onClick={() => handleClearLogo('school')}
+                      style={resetBtnStyle}
+                      title="Clear logo"
+                    >
+                      <RotateCcw size={12} />
+                      <span>Reset</span>
                     </button>
                   )}
                 </div>
@@ -358,7 +537,7 @@ export const SettingsTab: React.FC = () => {
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+            <div style={gridThreeCols}>
               <div>
                 <label style={labelStyle}>Latitude</label>
                 <input
@@ -412,6 +591,9 @@ export const SettingsTab: React.FC = () => {
   );
 };
 
+// ==========================================
+// STYLES
+// ==========================================
 const cardStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
@@ -433,6 +615,12 @@ const cardHeaderStyle: React.CSSProperties = {
 const gridTwoCols: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
+  gap: 16,
+};
+
+const gridThreeCols: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, 1fr)',
   gap: 16,
 };
 
@@ -459,34 +647,55 @@ const inputStyle: React.CSSProperties = {
 const logoUploadBoxStyle: React.CSSProperties = {
   border: '1px dashed #cbd5e1',
   borderRadius: 8,
-  padding: 16,
+  padding: 14,
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
   backgroundColor: '#f8fafc',
+  textAlign: 'center',
+};
+
+const logoBoxTitleStyle: React.CSSProperties = {
+  fontWeight: 700,
+  fontSize: '0.80rem',
+  color: '#1e293b',
+  lineHeight: 1.2,
+};
+
+const logoBoxSubtitleStyle: React.CSSProperties = {
+  fontSize: '0.68rem',
+  color: '#64748b',
+  marginBottom: 8,
 };
 
 const logoPreviewContainer: React.CSSProperties = {
-  width: 96,
-  height: 96,
+  width: 90,
+  height: 90,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   backgroundColor: '#ffffff',
   borderRadius: 8,
   border: '1px solid #e2e8f0',
-  marginBottom: 8,
+  marginBottom: 10,
+};
+
+const emptyLogoTextStyle: React.CSSProperties = {
+  fontSize: '0.68rem',
+  color: '#94a3b8',
+  fontStyle: 'italic',
+  padding: '0 4px',
 };
 
 const uploadBtnLabelStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 5,
-  padding: '6px 12px',
+  gap: 4,
+  padding: '5px 10px',
   backgroundColor: '#0284c7',
   color: '#ffffff',
   borderRadius: 6,
-  fontSize: '0.76rem',
+  fontSize: '0.74rem',
   fontWeight: 700,
   cursor: 'pointer',
 };
@@ -495,12 +704,12 @@ const resetBtnStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
-  padding: '6px 10px',
+  padding: '5px 8px',
   backgroundColor: '#ffffff',
   color: '#dc2626',
   border: '1px solid #fecaca',
   borderRadius: 6,
-  fontSize: '0.76rem',
+  fontSize: '0.74rem',
   fontWeight: 600,
   cursor: 'pointer',
 };
@@ -532,3 +741,5 @@ const errorAlertStyle: React.CSSProperties = {
   fontSize: '0.84rem',
   fontWeight: 600,
 };
+
+export default SettingsTab;

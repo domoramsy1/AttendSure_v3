@@ -29,27 +29,38 @@ class LoginSerializer(serializers.Serializer):
 
 
 class SchoolProfileSerializer(serializers.ModelSerializer):
+    # Alias to ensure backwards-compatibility with any legacy code referencing school_seal_photo
+    school_seal_photo = serializers.CharField(
+        source='school_logo',
+        required=False,
+        allow_null=True,
+        allow_blank=True
+    )
+
     class Meta:
         model = SchoolProfile
         fields = [
-            'id',
             'school_id',
             'school_name',
             'region',
             'division',
             'district',
+            'address',
+            'contact_number',
+            'email',
             'principal_name',
             'principal_title',
+            'kagawaran_logo',
+            'deped_logo',
+            'school_logo',
             'left_logo',
             'right_logo',
             'school_seal_photo',
             'latitude',
             'longitude',
             'geofence_radius_meters',
-            'created_at',
-            'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+
 
 
 class GateScanSerializer(serializers.Serializer):

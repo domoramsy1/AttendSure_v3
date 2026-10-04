@@ -225,10 +225,10 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       pageHeightInches - (activePageConfig.margins.top || 0.25) - (activePageConfig.margins.bottom || 0.25)
     );
 
-    const fullHeaderH = 1.15;
+    const fullHeaderH = 1.35;
     const theadH = 0.40;
     const trackingH = 0.22;
-    const footerH = 1.75;
+    const footerH = 1.95;
     const rowH = 0.175;
 
     // Check if entire section fits on 1 page
@@ -439,7 +439,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
       const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
       await saveFileWithPicker(pdfBlob, `${getBaseFilename()}.pdf`, 'application/pdf', 'pdf', 'PDF Document (*.pdf)');
-    } catch (err) {
+    } catch {
       alert('Unable to generate PDF directly. Please use the Print button and choose "Save as PDF".');
     } finally {
       setExportingPdf(false);
@@ -556,20 +556,43 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     await saveFileWithPicker(blob, `${getBaseFilename()}.json`, 'application/json', 'json', 'JSON Document (*.json)');
   };
 
-  // Full Official Top Header Box
+  // Full Official Top Header Box (DepEd Manual of Style Fonts and Sizes)
   const renderHeader = () => (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
-      <div style={{ flexShrink: 0, width: 75, display: 'flex', justifyContent: 'center' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
+      {/* Seal – 0.76 Inch */}
+      <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center' }}>
         {reportData?.left_logo ? (
-          <img src={reportData.left_logo} alt="School Seal" style={{ width: 68, height: 68, objectFit: 'contain' }} />
+          <img src={reportData.left_logo} alt="Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
         ) : (
-          <KagawaranNgEdukasyonLogo size={68} />
+          <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <KagawaranNgEdukasyonLogo size={70} />
+          </div>
         )}
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ textAlign: 'center', marginBottom: 6 }}>
-          <div style={{ fontSize: '9pt', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: 0, color: '#000000' }}>
+          {/* Republic of the Philippines – Old English Text MT (12 point size, bold) */}
+          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '12pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.15 }}>
+            Republic of the Philippines
+          </div>
+          {/* Department of Education – Old English Text MT (18 point size, bold) */}
+          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '18pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
+            Department of Education
+          </div>
+          {/* Name of Regional Office – Tahoma (10 point size, bold) */}
+          {reportData?.region && (
+            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2, marginTop: 1 }}>
+              {reportData.region}
+            </div>
+          )}
+          {/* Name of Office – Tahoma (10 point size, bold) */}
+          {reportData?.division && (
+            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
+              {reportData.division}
+            </div>
+          )}
+          <div style={{ fontSize: '9pt', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '4px 0 0 0', color: '#000000' }}>
             School Form 1 (SF 1) School Register
           </div>
           <div style={{ fontSize: '6.2pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
@@ -584,8 +607,9 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
               <div style={{ ...fieldBoxStyle, width: 100 }}>{reportData?.school_id}</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', width: '28%', paddingRight: 12 }}>
-              <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 54, flexShrink: 0, color: '#000000' }}>Division</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{reportData?.division}</div>
+              {/* Name of Office (Division) – Tahoma (10 point size, bold) */}
+              <span style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', width: 64, flexShrink: 0, color: '#000000' }}>Division</span>
+              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>{reportData?.division}</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', width: '47%' }}>
               <div style={{ display: 'flex', alignItems: 'center', width: '74%' }}>
@@ -598,8 +622,9 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-              <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 68, flexShrink: 0, color: '#000000' }}>School Name</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 8 }}>{reportData?.school_name}</div>
+              {/* Name of Office (School Name) – Tahoma (10 point size, bold) */}
+              <span style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', width: 88, flexShrink: 0, color: '#000000' }}>School Name</span>
+              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 8, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>{reportData?.school_name}</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', width: '28%', paddingRight: 12 }}>
               <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 68, flexShrink: 0, color: '#000000' }}>School Year</span>
@@ -614,6 +639,12 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
           </div>
         </div>
       </div>
+
+      {reportData?.right_logo && (
+        <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <img src={reportData.right_logo} alt="DepEd Logo" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+        </div>
+      )}
     </div>
   );
 
@@ -815,7 +846,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         {loading ? (
           <div style={loadingStateStyle}>
             <Loader2 className="animate-spin" size={28} color="#0284c7" />
-            <span>Loing...</span>
+            <span>Loading...</span>
           </div>
         ) : error ? (
           <div style={errorStateStyle}>
@@ -875,6 +906,25 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
                 {/* Summary Footer: Only rendered on the final page of data */}
                 {page.showFooter && renderSummaryFooter()}
+
+                {/* FOOTER: Division Seal/School Seal – 0.76 Inch & Office Details – Calibri 10pt */}
+                <div style={officialFooterStyle}>
+                  <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                    {reportData?.right_logo ? (
+                      <img src={reportData.right_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+                    ) : reportData?.left_logo ? (
+                      <img src={reportData.left_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+                    ) : (
+                      <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <KagawaranNgEdukasyonLogo size={70} />
+                      </div>
+                    )}
+                  </div>
+                  <div style={officeDetailsTextStyle}>
+                    <div><strong>{reportData?.school_name || 'Department of Education'}</strong> &bull; {reportData?.division || ''} &bull; {reportData?.district || ''}</div>
+                    <div>Address: {reportData?.district || ''}, {reportData?.division || ''}, {reportData?.region || ''} &bull; Contact Numbers: Official Records &bull; Email Address: deped.gov.ph</div>
+                  </div>
+                </div>
 
                 {/* Tracking ID & Printed Date/Time - Pure Black */}
                 <div style={auditFooterContainerStyle}>
@@ -1178,6 +1228,25 @@ const datesRowStyle: React.CSSProperties = {
   fontSize: '4.8pt',
   marginTop: 4,
   color: '#000000',
+};
+
+const officialFooterStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  marginTop: 8,
+  paddingTop: 4,
+  borderTop: '1px solid #000000',
+  width: '100%',
+  boxSizing: 'border-box',
+};
+
+const officeDetailsTextStyle: React.CSSProperties = {
+  fontFamily: 'Calibri, sans-serif',
+  fontSize: '10pt',
+  color: '#000000',
+  lineHeight: 1.25,
+  textAlign: 'left',
 };
 
 const auditFooterContainerStyle: React.CSSProperties = {

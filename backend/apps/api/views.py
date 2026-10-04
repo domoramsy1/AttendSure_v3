@@ -35,6 +35,7 @@ from apps.academics.models import (
     UserProfile,
 )
 from apps.academics.services.sf1_service import get_sf1_data
+from apps.academics.services.sf4_service import generate_sf4_data
 from .serializers import (
     ClassroomBatchScanSerializer,
     GatePassSerializer,
@@ -679,7 +680,7 @@ class SchoolSettingsAPIView(APIView):
 
 
 # ============================================================================
-# ACADEMIC REPORTS (SF1 & SF2), DTR & GEOFENCE
+# ACADEMIC REPORTS (SF1, SF2, SF4, AUDIT LOGS), DTR & GEOFENCE
 # ============================================================================
 
 class DepEdSF1DataAPIView(APIView):
@@ -712,6 +713,9 @@ class DepEdSF1DataAPIView(APIView):
         except Exception as e:
             logger.error("SF1 Generation failure for section %s: %s", section_id, str(e), exc_info=True)
             return Response({'error': 'Failed to compile official School Form 1 report'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+SF1ReportAPIView = DepEdSF1DataAPIView
 
 
 class DepEdSF2DataAPIView(APIView):
@@ -788,7 +792,6 @@ class DepEdSF2DataAPIView(APIView):
         end_month_date = date(year, month_num, num_calendar_days)
 
         # 3. Check Academic Year Calendar Boundaries
-        # If the requested month/year falls outside the section's Academic Year, no students are in session
         outside_academic_year = False
         if acad_year_obj and acad_year_obj.start_date and acad_year_obj.end_date:
             if end_month_date < acad_year_obj.start_date or start_month_date > acad_year_obj.end_date:
@@ -812,7 +815,6 @@ class DepEdSF2DataAPIView(APIView):
                 if enr_date and isinstance(enr_date, datetime):
                     enr_date = enr_date.date()
 
-                # If student enrolled after this month ended, they were not enrolled for this report
                 if enr_date and enr_date > end_month_date:
                     continue
 
@@ -826,7 +828,6 @@ class DepEdSF2DataAPIView(APIView):
                 if exit_date and isinstance(exit_date, datetime):
                     exit_date = exit_date.date()
 
-                # If student dropped or transferred before this month started, exclude them
                 if status_val in ('DROPPED', 'TRANSFERRED_OUT') and exit_date and exit_date < start_month_date:
                     continue
 
@@ -924,7 +925,6 @@ class DepEdSF2DataAPIView(APIView):
                 d_num = s_day['dateNumber']
                 d_obj = date(year, month_num, d_num)
 
-                # Days prior to enrollment or after exit are left blank
                 if s_enr_date and d_obj < s_enr_date:
                     daily_attendance_map[d_num] = ''
                     continue
@@ -1033,7 +1033,7 @@ class DepEdSF2DataAPIView(APIView):
         pct_att_f = (ada_f / num_f * 100) if num_f > 0 else 0.0
         pct_att_total = (ada_total / total_registered * 100) if total_registered > 0 else 0.0
 
-        # Calculate Cut-off Baseline Enrollment Date
+        # Cut-off Baseline Enrollment Date
         baseline_cutoff_date = None
         if acad_year_obj and getattr(acad_year_obj, 'first_friday_june', None):
             baseline_cutoff_date = acad_year_obj.first_friday_june
@@ -1094,14 +1094,13 @@ class DepEdSF2DataAPIView(APIView):
         pct_enrol_f = (num_f / june_enrol_f * 100) if june_enrol_f > 0 else (100.0 if num_f > 0 else 0.0)
         pct_enrol_total = (total_registered / june_enrol_total * 100) if june_enrol_total > 0 else (100.0 if total_registered > 0 else 0.0)
 
-        # 9. Dynamic School Profile & Signatory Resolution (Database-Driven)
+        # 9. Dynamic School Profile Resolution
         school = SchoolProfile.objects.first()
         school_id_val = str(getattr(school, 'school_id', '') or '').strip()
         school_name_val = str(getattr(school, 'school_name', '') or '').strip()
         division_val = str(getattr(school, 'division', '') or '').strip()
         district_val = str(getattr(school, 'district', '') or '').strip()
 
-        # Resolve School Head Name from Database
         school_head_val = ''
         if school:
             for attr in ['principal_name', 'school_head_name', 'principal', 'school_head']:
@@ -1116,7 +1115,6 @@ class DepEdSF2DataAPIView(APIView):
                     if school_head_val:
                         break
 
-        # Fallback: Query active Staff with Administrative rank
         if not school_head_val:
             admin_staff = StaffProfile.objects.filter(
                 models.Q(position__icontains='Principal') |
@@ -1132,7 +1130,6 @@ class DepEdSF2DataAPIView(APIView):
                 parts.append(admin_staff.last_name)
                 school_head_val = " ".join(parts).strip()
 
-        # Fallback: Check SF1 service dictionary
         if not school_head_val or not school_name_val:
             try:
                 sf1_meta = get_sf1_data(section_id)
@@ -1239,6 +1236,65 @@ class DepEdSF2DataAPIView(APIView):
 
 
 SF2ReportAPIView = DepEdSF2DataAPIView
+
+
+class DepEdSF4DataAPIView(APIView):
+    """
+    School Form 4 (SF4) Monthly Learner's Movement and Attendance.
+    Consolidates school-wide grade levels and advisory sections directly
+    from real database records.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        month = request.GET.get('month', 'October').strip().capitalize()
+        year = request.GET.get('year', str(timezone.now().year)).strip()
+        school_year = request.GET.get('school_year', '').strip()
+
+        try:
+            year_val = int(year) if year.isdigit() else timezone.now().year
+            data = generate_sf4_data(month_name=month, year=year_val, school_year=school_year)
+            return Response(data, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error("SF4 Generation failure: %s", str(e), exc_info=True)
+            return Response(
+                {'error': f'Failed to compile official School Form 4 report: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+SF4ReportAPIView = DepEdSF4DataAPIView
+SF4ReportView = DepEdSF4DataAPIView
+
+
+class ReportAuditLogAPIView(APIView):
+    """
+    Ingests and records audit events (VIEW, PRINT, PDF, EXCEL, etc.)
+    for official DepEd report generation and verification transparency.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        data = request.data
+        report_name = data.get('report_name', 'DepEd Report')
+        tracking_id = data.get('document_tracking_id', 'N/A')
+        action = data.get('action', 'VIEW')
+        printed_at = data.get('printed_at', timezone.now().strftime('%Y-%m-%d %H:%M:%S'))
+        username = request.user.username if request.user else 'Authorized Staff'
+
+        logger.info(
+            "[REPORT AUDIT] User=%s | Action=%s | Report=%s | TrackingID=%s | Timestamp=%s",
+            username, action, report_name, tracking_id, printed_at
+        )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Report generation audit event recorded successfully.',
+                'tracking_id': tracking_id
+            },
+            status=status.HTTP_201_CREATED
+        )
 
 
 class DTRListAPIView(APIView):

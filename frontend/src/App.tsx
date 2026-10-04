@@ -3,6 +3,7 @@ import { LoginView } from './components/auth/LoginView';
 import { AdminSidebar, type NavItemKey } from './components/layout/AdminSidebar';
 import { AdminHeader } from './components/layout/AdminHeader';
 import { DashboardView } from './components/dashboard/DashboardView';
+import { SchoolProvider, useSchoolProfile } from './context/SchoolContext';
 import type { UserSession } from './types/section';
 
 // Modular Tab Views
@@ -10,6 +11,7 @@ import {
   GateLogsTab,
   SF1ReportTab,
   SF2ReportTab,
+  SF4ReportTab,
   StudentsTab,
   TeachersTab,
   DTRTab,
@@ -21,7 +23,9 @@ import {
   SettingsTab,
 } from './components/tabs';
 
-export const App: React.FC = () => {
+const AppContent: React.FC = () => {
+  const { profile } = useSchoolProfile();
+
   // Session State
   const [session, setSession] = useState<UserSession | null>(() => {
     const token = localStorage.getItem('attendsure_token');
@@ -40,11 +44,10 @@ export const App: React.FC = () => {
 
   // Navigation State
   const [activeTab, setActiveTab] = useState<NavItemKey>('dashboard');
-  const [selectedReport, setSelectedReport] = useState<'sf1' | 'sf2'>('sf1');
+  const [selectedReport, setSelectedReport] = useState<'sf1' | 'sf2' | 'sf4'>('sf1');
   const [isGateOnline, setIsGateOnline] = useState<boolean>(true);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
 
-  // Listen for Session Expiration
   useEffect(() => {
     const handleAuthExpired = () => {
       localStorage.removeItem('attendsure_token');
@@ -74,7 +77,7 @@ export const App: React.FC = () => {
   const getPageTitle = (): string => {
     switch (activeTab) {
       case 'dashboard':
-        return 'Dashboard Overview';
+        return `${profile.school_name || 'School'} Dashboard Overview`;
       case 'gate-logs':
         return 'Gate Access Logs';
       case 'students':
@@ -94,13 +97,13 @@ export const App: React.FC = () => {
       case 'scanners':
         return 'Gate Scanners & Terminals';
       case 'reports':
-        return selectedReport === 'sf1'
-          ? 'School Register (Form 1)'
-          : 'Daily Attendance Register (Form 2)';
+        if (selectedReport === 'sf1') return 'School Register (Form 1)';
+        if (selectedReport === 'sf2') return 'Daily Attendance Register (Form 2)';
+        return "Monthly Learner's Movement and Attendance (Form 4)";
       case 'settings':
-        return 'School & System Settings';
+        return 'School & Institutional Settings';
       default:
-        return 'AttendSure Management System';
+        return `${profile.school_name || 'AttendSure'} Management System`;
     }
   };
 
@@ -121,15 +124,22 @@ export const App: React.FC = () => {
               overflow: 'hidden',
             }}
           >
-            {selectedReport === 'sf1' ? (
+            {selectedReport === 'sf1' && (
               <SF1ReportTab
                 activeReportId={selectedReport}
-                onSelectReport={(id) => setSelectedReport(id as 'sf1' | 'sf2')}
+                onSelectReport={(id: string) => setSelectedReport(id as 'sf1' | 'sf2' | 'sf4')}
               />
-            ) : (
+            )}
+            {selectedReport === 'sf2' && (
               <SF2ReportTab
                 activeReportId={selectedReport}
-                onSelectReport={(id) => setSelectedReport(id as 'sf1' | 'sf2')}
+                onSelectReport={(id: string) => setSelectedReport(id as 'sf1' | 'sf2' | 'sf4')}
+              />
+            )}
+            {selectedReport === 'sf4' && (
+              <SF4ReportTab
+                activeReportId={selectedReport}
+                onSelectReport={(id: string) => setSelectedReport(id as 'sf1' | 'sf2' | 'sf4')}
               />
             )}
           </div>
@@ -198,7 +208,7 @@ export const App: React.FC = () => {
           style={{
             flex: 1,
             minWidth: 0,
-            height: 'calc(100vh - 48px)',
+            height: 'calc(100vh - 84px)',
             overflowY: activeTab === 'dashboard' || activeTab === 'reports' ? 'hidden' : 'auto',
             overflowX: 'hidden',
             position: 'relative',
@@ -206,9 +216,44 @@ export const App: React.FC = () => {
         >
           {renderActiveTabContent()}
         </main>
+
+        {/* Global Developer Copyright Footer */}
+        <footer
+          style={{
+            height: 36,
+            minHeight: 36,
+            backgroundColor: '#ffffff',
+            borderTop: '1px solid #e2e8f0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 20px',
+            fontSize: '0.75rem',
+            color: '#64748b',
+            boxSizing: 'border-box',
+            userSelect: 'none',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontWeight: 600, color: '#334155' }}>{profile.school_name}</span>
+            <span>&bull;</span>
+            <span>ID: {profile.school_id}</span>
+            <span>&bull;</span>
+            <span style={{ color: '#94a3b8' }}>{profile.division}</span>
+          </div>
+          <div>
+            &copy; 2026 AttendSure V3. Developed by <strong style={{ color: '#0284c7' }}>TechBlazer</strong>. All rights reserved.
+          </div>
+        </footer>
       </div>
     </div>
   );
 };
+
+export const App: React.FC = () => (
+  <SchoolProvider>
+    <AppContent />
+  </SchoolProvider>
+);
 
 export default App;

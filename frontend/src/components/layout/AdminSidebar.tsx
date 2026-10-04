@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import apiClient from '../../api/client';
 import appLogoSrc from '../../assets/AppLogo.svg';
 import type { UserSession } from '../../types/section';
 import { 
@@ -40,6 +41,12 @@ interface AdminSidebarProps {
   onToggleCollapse?: () => void;
 }
 
+interface DynamicSchoolInfo {
+  school_name: string;
+  school_id: string;
+  school_logo: string | null;
+}
+
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ 
   activeTab, 
   onSelectTab, 
@@ -47,6 +54,45 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   isCollapsed = false,
   onToggleCollapse
 }) => {
+  const [schoolInfo, setSchoolInfo] = useState<DynamicSchoolInfo>({
+    school_name: 'Lapasan NHS',
+    school_id: '304033',
+    school_logo: null,
+  });
+
+  // Dynamically load institutional identity from the database
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchSchoolSettings = async () => {
+      try {
+        const res = await apiClient.get('/settings/school/');
+        if (res.data && isMounted) {
+          setSchoolInfo({
+            school_name: res.data.school_name || 'Lapasan NHS',
+            school_id: res.data.school_id || '304033',
+            school_logo: res.data.school_logo || res.data.right_logo || null,
+          });
+        }
+      } catch {
+        // Keeps fallback values if database or network is initializing
+      }
+    };
+
+    fetchSchoolSettings();
+
+    // Listen for real-time changes saved from the Settings tab
+    const handleSettingsUpdated = () => {
+      fetchSchoolSettings();
+    };
+
+    window.addEventListener('attendsure:school-settings-updated', handleSettingsUpdated);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('attendsure:school-settings-updated', handleSettingsUpdated);
+    };
+  }, []);
+
   const navItems: { key: NavItemKey; label: string; icon: React.ReactNode }[] = [
     { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={17} /> },
     { key: 'gate-logs', label: 'Gate Access Logs', icon: <Activity size={17} /> },
@@ -63,7 +109,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   ];
 
   const userInitial = session?.username ? session.username.charAt(0).toUpperCase() : 'A';
-  const sidebarWidth = isCollapsed ? '64px' : '220px';
+  const sidebarWidth = isCollapsed ? '64px' : '224px';
 
   return (
     <aside
@@ -84,21 +130,73 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
-        {/* Brand Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: isCollapsed ? 'center' : 'space-between', padding: '2px 4px 10px 4px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <img src={appLogoSrc} alt="AttendSure Logo" width={30} height={30} style={{ objectFit: 'contain', flexShrink: 0 }} />
+        {/* Dynamic Institutional Header */}
+        <div 
+          style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: isCollapsed ? 'center' : 'space-between', 
+            padding: '2px 4px 10px 4px', 
+            flexShrink: 0,
+            borderBottom: '1px solid #f1f5f9',
+            marginBottom: 6,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
+            <div 
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 6,
+                backgroundColor: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+                flexShrink: 0,
+              }}
+            >
+              {schoolInfo.school_logo ? (
+                <img 
+                  src={schoolInfo.school_logo} 
+                  alt="School Crest" 
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+                />
+              ) : (
+                <img 
+                  src={appLogoSrc} 
+                  alt="AttendSure Logo" 
+                  width={24} 
+                  height={24} 
+                  style={{ objectFit: 'contain' }} 
+                />
+              )}
+            </div>
+
             {!isCollapsed && (
-              <div>
-                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1 }}>
-                  AttendSure
+              <div style={{ overflow: 'hidden', minWidth: 0 }}>
+                <div 
+                  style={{ 
+                    fontSize: '0.84rem', 
+                    fontWeight: 800, 
+                    color: '#0f172a', 
+                    lineHeight: 1.15,
+                    whiteSpace: 'nowrap',
+                    textOverflow: 'ellipsis',
+                    overflow: 'hidden',
+                  }}
+                  title={schoolInfo.school_name}
+                >
+                  {schoolInfo.school_name}
                 </div>
-                <div style={{ fontSize: '0.58rem', fontWeight: 700, color: '#0284c7', letterSpacing: '0.4px' }}>
-                  ADMIN
+                <div style={{ fontSize: '0.62rem', fontWeight: 600, color: '#0284c7', letterSpacing: '0.3px', marginTop: 1 }}>
+                  ID: {schoolInfo.school_id} &bull; AttendSure
                 </div>
               </div>
             )}
           </div>
+
           {onToggleCollapse && !isCollapsed && (
             <button
               onClick={onToggleCollapse}
@@ -113,6 +211,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                flexShrink: 0,
               }}
             >
               <ChevronLeft size={15} />
@@ -169,7 +268,9 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
                   width: '100%',
                 }}
               >
-                <span style={{ color: isActive ? '#0284c7' : '#64748b', display: 'flex', alignItems: 'center' }}>{item.icon}</span>
+                <span style={{ color: isActive ? '#0284c7' : '#64748b', display: 'flex', alignItems: 'center' }}>
+                  {item.icon}
+                </span>
                 {!isCollapsed && <span>{item.label}</span>}
               </button>
             );
@@ -177,46 +278,101 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
         </nav>
       </div>
 
-      {/* Footer Profile */}
+      {/* Footer Area: User Profile & Developer Copyright */}
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: isCollapsed ? 'center' : 'flex-start',
-          gap: 8,
-          padding: '8px 4px',
+          flexDirection: 'column',
           borderTop: '1px solid #f1f5f9',
+          paddingTop: 8,
           flexShrink: 0,
         }}
       >
+        {/* User Account Info */}
         <div
           style={{
-            width: 30,
-            height: 30,
-            borderRadius: '50%',
-            backgroundColor: '#0284c7',
-            color: '#ffffff',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            fontWeight: 700,
-            fontSize: '0.78rem',
-            flexShrink: 0,
+            justifyContent: isCollapsed ? 'center' : 'flex-start',
+            gap: 8,
+            padding: '2px 4px',
           }}
         >
-          {userInitial}
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              backgroundColor: '#0284c7',
+              color: '#ffffff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 700,
+              fontSize: '0.76rem',
+              flexShrink: 0,
+            }}
+          >
+            {userInitial}
+          </div>
+          {!isCollapsed && (
+            <div style={{ overflow: 'hidden' }}>
+              <div 
+                style={{ 
+                  fontSize: '0.76rem', 
+                  fontWeight: 700, 
+                  color: '#0f172a', 
+                  whiteSpace: 'nowrap', 
+                  textOverflow: 'ellipsis' 
+                }}
+              >
+                {session?.staff_name || session?.username || 'Administrator'}
+              </div>
+              <div style={{ fontSize: '0.62rem', color: '#94a3b8' }}>
+                {session?.role || 'System Administrator'}
+              </div>
+            </div>
+          )}
         </div>
-        {!isCollapsed && (
-          <div style={{ overflow: 'hidden' }}>
-            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-              {session?.staff_name || session?.username || 'Administrator'}
+
+        {/* Developer Attribution & Copyright */}
+        {!isCollapsed ? (
+          <div
+            style={{
+              marginTop: 8,
+              paddingTop: 6,
+              borderTop: '1px dashed #e2e8f0',
+              fontSize: '0.60rem',
+              color: '#94a3b8',
+              lineHeight: 1.3,
+              textAlign: 'center',
+            }}
+          >
+            <div>AttendSure V3 &bull; DepEd Compliant</div>
+            <div>
+              &copy; 2026 Developed by{' '}
+              <strong style={{ color: '#0284c7', fontWeight: 700 }}>TechBlazer</strong>
             </div>
-            <div style={{ fontSize: '0.64rem', color: '#94a3b8' }}>
-              {session?.role || 'System Administrator'}
-            </div>
+          </div>
+        ) : (
+          <div
+            title="Developed by TechBlazer"
+            style={{
+              marginTop: 6,
+              paddingTop: 4,
+              borderTop: '1px dashed #e2e8f0',
+              fontSize: '0.54rem',
+              color: '#94a3b8',
+              textAlign: 'center',
+              fontWeight: 700,
+            }}
+          >
+            TB
           </div>
         )}
       </div>
     </aside>
   );
 };
+
+export default AdminSidebar;

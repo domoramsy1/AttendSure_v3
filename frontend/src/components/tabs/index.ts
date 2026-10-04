@@ -1,6 +1,10 @@
 // Official Reports
 export * from './SF1ReportTab';
 export * from './SF2ReportTab';
+export * from './SF4ReportTab';
+
+// Explicit re-export from SF4ReportTab where MetricTriplet is declared
+export type { MetricTriplet } from './SF4ReportTab';
 
 // Gate Access & Hardware Scanners
 export * from './GateLogsTab';

@@ -107,43 +107,61 @@ class AcademicYear(models.Model):
 
 
 class SchoolProfile(models.Model):
-    id = models.BigAutoField(primary_key=True)
     school_id = models.CharField(max_length=50, blank=True, default='')
     school_name = models.CharField(max_length=255, blank=True, default='')
-    region = models.CharField(max_length=100, blank=True, default='', help_text="Region, State, or Province")
-    division = models.CharField(max_length=150, blank=True, default='', help_text="School Division or District Authority")
-    district = models.CharField(max_length=150, blank=True, default='', help_text="Local School District or Sub-division")
-    principal_name = models.CharField(max_length=200, blank=True, default='', help_text="Head of School / Principal")
-    principal_title = models.CharField(max_length=150, blank=True, default='', help_text="Official Title, e.g., Principal IV")
+    region = models.CharField(max_length=100, blank=True, default='')
+    division = models.CharField(max_length=100, blank=True, default='')
+    district = models.CharField(max_length=100, blank=True, default='')
+    
+    # Contact & Location Details (DepEd DO 31, s. 2019)
+    address = models.TextField(blank=True, default='', help_text="Official School Physical Address")
+    contact_number = models.CharField(max_length=100, blank=True, default='', help_text="Telephone / Mobile Contact")
+    email = models.EmailField(blank=True, default='', help_text="Official DepEd Institutional Email")
 
-    # Institutional Logos & Official Seal
-    left_logo = models.TextField(blank=True, null=True, help_text="Left Logo URL or Base64 Data")
-    right_logo = models.TextField(blank=True, null=True, help_text="Right Logo URL or Base64 Data")
-    school_seal_photo = models.ImageField(upload_to='schools/', default='schools/default_seal.png', blank=True)
+    # Administration / Head
+    principal_name = models.CharField(max_length=150, blank=True, default='')
+    principal_title = models.CharField(max_length=100, blank=True, default='Principal / School Head')
 
-    # Campus Geolocation Settings
-    latitude = models.FloatField(null=True, blank=True)
-    longitude = models.FloatField(null=True, blank=True)
-    geofence_radius_meters = models.IntegerField(null=True, blank=True, default=150)
-
-    # Forensic Audit & Timestamp Tracking
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
-    updated_by = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='updated_school_profiles'
+    # Official DepEd & School Logos (stored as base64 string or image URI)
+    kagawaran_logo = models.TextField(
+        blank=True, null=True, 
+        help_text="National Seal / Kagawaran ng Edukasyon Logo"
     )
+    deped_logo = models.TextField(
+        blank=True, null=True, 
+        help_text="Official Department of Education Ribbon Emblem"
+    )
+    school_logo = models.TextField(
+        blank=True, null=True, 
+        help_text="Official School Institutional Crest / Seal"
+    )
+
+    # Legacy Report Aliases (kept in sync automatically)
+    left_logo = models.TextField(blank=True, null=True)
+    right_logo = models.TextField(blank=True, null=True)
+
+    # Campus Geofence
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    geofence_radius_meters = models.PositiveIntegerField(null=True, blank=True, default=250)
+
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'school_profile'
-        verbose_name = 'School Profile & Settings'
-        verbose_name_plural = 'School Profiles & Settings'
+        verbose_name = 'School Profile'
+        verbose_name_plural = 'School Profiles'
+
+    def save(self, *args, **kwargs):
+        # Auto-sync legacy aliases so existing SF1/SF2/SF4 services never break
+        if self.kagawaran_logo and not self.left_logo:
+            self.left_logo = self.kagawaran_logo
+        if self.deped_logo and not self.right_logo:
+            self.right_logo = self.deped_logo
+        super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.school_name or "Unconfigured School"
+        return f"{self.school_id} - {self.school_name}" if self.school_id else (self.school_name or "School Profile")
 
 
 class ClassSchedule(models.Model):

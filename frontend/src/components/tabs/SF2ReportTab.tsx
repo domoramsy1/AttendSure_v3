@@ -55,6 +55,7 @@ interface SF2Metrics {
 interface SF2ReportData {
   school_id: string;
   school_name: string;
+  region?: string;
   division: string;
   district: string;
   academic_year: string;
@@ -348,8 +349,8 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     const printableHeight =
       pageHeightInches - (activePageConfig.margins.top || 0.25) - (activePageConfig.margins.bottom || 0.25);
 
-    // Overhead: Full Header (1.15) + thead (0.40) + section banners/totals (0.85) + Summary footer (3.15) + tracking (0.22)
-    const singlePageOverhead = 5.77;
+    // Overhead: Full Header (1.35) + thead (0.40) + section banners/totals (0.85) + Summary footer (3.15) + tracking (0.22)
+    const singlePageOverhead = 5.97;
     const rowHeight = 0.17;
     const totalRows = (males.length || 0) + (females.length || 0);
     const totalHeightNeeded = singlePageOverhead + totalRows * rowHeight;
@@ -567,22 +568,46 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     reportData.has_enrolled_students === false ||
     ((!reportData.males || reportData.males.length === 0) && (!reportData.females || reportData.females.length === 0));
 
+  // HEADER – DepEd Manual of Style Fonts and Sizes
   const renderHeader = () => (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 6, width: '100%', boxSizing: 'border-box' }}>
-      <div style={{ flexShrink: 0, width: 75, display: 'flex', justifyContent: 'center' }}>
+      {/* Seal – 0.76 Inch */}
+      <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center' }}>
         {reportData?.left_logo ? (
-          <img src={reportData.left_logo} alt="School Seal" style={{ width: 66, height: 66, objectFit: 'contain' }} />
+          <img src={reportData.left_logo} alt="School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
         ) : (
-          <KagawaranNgEdukasyonLogo size={66} />
+          <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <KagawaranNgEdukasyonLogo size={70} />
+          </div>
         )}
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ textAlign: 'center', marginBottom: 4 }}>
-          <div style={{ fontSize: '8.8pt', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.4px', margin: 0, color: '#000000' }}>
+        <div style={{ textAlign: 'center', marginBottom: 6 }}>
+          {/* Republic of the Philippines – Old English Text MT (12 point size, bold) */}
+          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '12pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.15 }}>
+            Republic of the Philippines
+          </div>
+          {/* Department of Education – Old English Text MT (18 point size, bold) */}
+          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '18pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
+            Department of Education
+          </div>
+          {/* Name of Regional Office – Tahoma (10 point size, bold) */}
+          {reportData?.region && (
+            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2, marginTop: 1 }}>
+              {reportData.region}
+            </div>
+          )}
+          {/* Name of Office – Tahoma (10 point size, bold) */}
+          {reportData?.division && (
+            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
+              {reportData.division}
+            </div>
+          )}
+          <div style={{ fontSize: '8.8pt', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '4px 0 0 0', color: '#000000' }}>
             School Form 2 (SF2) Daily Attendance Report of Learners
           </div>
-          <div style={{ fontSize: '6.2pt', fontStyle: 'italic', color: '#000000' }}>
+          <div style={{ fontSize: '6.2pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
             (This replaced Form 1, Form 2 &amp; STS Form 4 - Absenteeism and Dropout Profile)
           </div>
         </div>
@@ -607,8 +632,9 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', width: '50%' }}>
-              <span style={{ fontWeight: 700, fontSize: '6.8pt', width: 90, color: '#000000' }}>Name of School</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 12 }}>
+              {/* Name of Office – Tahoma (10 point size, bold) */}
+              <span style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', width: 110, color: '#000000' }}>Name of School</span>
+              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 12, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>
                 {reportData?.school_name || '—'}
               </div>
             </div>
@@ -626,11 +652,14 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
         </div>
       </div>
 
-      <div style={{ flexShrink: 0, width: 85, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+      {/* Seal – 0.76 Inch */}
+      <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
         {reportData?.right_logo ? (
-          <img src={reportData.right_logo} alt="DepEd Logo" style={{ width: 80, height: 50, objectFit: 'contain' }} />
+          <img src={reportData.right_logo} alt="DepEd Logo" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
         ) : (
-          <DepEdLogoComp className="h-12 w-auto" style={{ maxHeight: 48, maxWidth: 80 }} />
+          <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <DepEdLogoComp className="h-14 w-auto" style={{ maxHeight: '0.76in', maxWidth: '0.76in' }} />
+          </div>
         )}
       </div>
     </div>
@@ -992,6 +1021,25 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
                 {renderSummaryFooter()}
 
+                {/* FOOTER: Division Seal/School Seal – 0.76 Inch & Office Details – Calibri 10pt */}
+                <div style={officialFooterStyle}>
+                  <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                    {reportData?.right_logo ? (
+                      <img src={reportData.right_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+                    ) : reportData?.left_logo ? (
+                      <img src={reportData.left_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+                    ) : (
+                      <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <KagawaranNgEdukasyonLogo size={70} />
+                      </div>
+                    )}
+                  </div>
+                  <div style={officeDetailsTextStyle}>
+                    <div><strong>{reportData?.school_name || 'Department of Education'}</strong> &bull; {reportData?.division || ''} &bull; {reportData?.district || ''}</div>
+                    <div>Address: {reportData?.district || ''}, {reportData?.division || ''}, {reportData?.region || ''} &bull; Contact Numbers: Official Records &bull; Email Address: deped.gov.ph</div>
+                  </div>
+                </div>
+
                 <div style={auditFooterContainerStyle}>
                   <div>
                     <span>Document Tracking ID: <strong>{auditMeta.trackingId}</strong></span>
@@ -1150,6 +1198,25 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                   </table>
 
                   {renderSummaryFooter()}
+
+                  {/* FOOTER: Division Seal/School Seal – 0.76 Inch & Office Details – Calibri 10pt */}
+                  <div style={officialFooterStyle}>
+                    <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                      {reportData?.right_logo ? (
+                        <img src={reportData.right_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+                      ) : reportData?.left_logo ? (
+                        <img src={reportData.left_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+                      ) : (
+                        <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <KagawaranNgEdukasyonLogo size={70} />
+                        </div>
+                      )}
+                    </div>
+                    <div style={officeDetailsTextStyle}>
+                      <div><strong>{reportData?.school_name || 'Department of Education'}</strong> &bull; {reportData?.division || ''} &bull; {reportData?.district || ''}</div>
+                      <div>Address: {reportData?.district || ''}, {reportData?.division || ''}, {reportData?.region || ''} &bull; Contact Numbers: Official Records &bull; Email Address: deped.gov.ph</div>
+                    </div>
+                  </div>
 
                   <div style={auditFooterContainerStyle}>
                     <div>
@@ -1490,6 +1557,25 @@ const sigLineStyle: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   color: '#000000',
+};
+
+const officialFooterStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  marginTop: 8,
+  paddingTop: 4,
+  borderTop: '1px solid #000000',
+  width: '100%',
+  boxSizing: 'border-box',
+};
+
+const officeDetailsTextStyle: React.CSSProperties = {
+  fontFamily: 'Calibri, sans-serif',
+  fontSize: '10pt',
+  color: '#000000',
+  lineHeight: 1.25,
+  textAlign: 'left',
 };
 
 const auditFooterContainerStyle: React.CSSProperties = {
