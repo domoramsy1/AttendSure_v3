@@ -27,22 +27,22 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.RemoveIndex(
-            model_name='staffgatelog',
-            name='idx_staff_scan_time',
+            model_name='facultygatelog',
+            name='idx_faculty_scan_time',
         ),
         migrations.AddField(
-            model_name='staffgatelog',
+            model_name='facultygatelog',
             name='raw_identifier',
             field=models.CharField(default=1, max_length=128),
             preserve_default=False,
         ),
         migrations.AddField(
-            model_name='staffgatelog',
+            model_name='facultygatelog',
             name='scan_method',
             field=models.CharField(choices=[('RFID', 'RFID Tap (Primary)'), ('QR', 'QR Code Scan (Backup)')], default='RFID', max_length=10),
         ),
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='qr_token',
             field=models.CharField(blank=True, help_text='Backup QR code printed on PVC card', max_length=128, null=True, unique=True),
         ),
@@ -52,7 +52,7 @@ class Migration(migrations.Migration):
             field=models.CharField(blank=True, help_text='Primary RFID card serial number', max_length=64, null=True, unique=True),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='rfid_uid',
             field=models.CharField(blank=True, help_text='Unique RFID card serial number', max_length=64, null=True, unique=True),
         ),
@@ -76,7 +76,7 @@ class Migration(migrations.Migration):
             field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='gate_logs', to='academics.student'),
         ),
         migrations.RemoveField(
-            model_name='staffgatelog',
+            model_name='facultygatelog',
             name='card_uid',
         ),
         migrations.AddIndex(

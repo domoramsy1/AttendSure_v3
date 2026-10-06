@@ -1,6 +1,6 @@
 from datetime import date
 from django.utils import timezone
-from apps.academics.models import Section, Enrollment, SchoolProfile, Student, StaffProfile
+from apps.academics.models import Section, Enrollment, SchoolProfile, Student, FacultyProfile
 
 def calculate_age(birthdate, ref_date=None):
     if not birthdate:

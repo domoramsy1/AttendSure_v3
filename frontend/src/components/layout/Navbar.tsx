@@ -34,7 +34,7 @@ export const Navbar: React.FC<NavbarProps> = ({ session, onLogout }) => (
     {session ? (
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <div style={{ textAlign: 'right', fontSize: '0.85rem' }}>
-          <div style={{ fontWeight: 700, color: theme.colors.textPrimary }}>{session.staff_name}</div>
+          <div style={{ fontWeight: 700, color: theme.colors.textPrimary }}>{session.faculty_name}</div>
           <span style={{ fontSize: '0.75rem', color: theme.colors.textSecondary }}>{session.role}</span>
         </div>
         <Button variant="danger" size="sm" onClick={onLogout} icon={<LogOut size={14} />}>

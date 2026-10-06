@@ -59,13 +59,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
       const session: UserSession = {
         token: res.data.token,
         username: res.data.username,
-        staff_name: res.data.staff_name,
+        faculty_name: res.data.faculty_name,
         role: res.data.role,
       };
 
       localStorage.setItem('attendsure_token', session.token);
       localStorage.setItem('attendsure_username', session.username);
-      localStorage.setItem('attendsure_staff_name', session.staff_name);
+      localStorage.setItem('attendsure_faculty_name', session.faculty_name);
       localStorage.setItem('attendsure_role', session.role);
 
       onAuthSuccess(session);
@@ -95,7 +95,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
 
     try {
       await apiClient.post('/auth/register/', regForm);
-      setSuccessMsg('Staff account successfully created! Please sign in with your credentials.');
+      setSuccessMsg('Faculty account successfully created! Please sign in with your credentials.');
       setActiveTab('LOGIN');
       setLoginForm({ username: regForm.username, password: '' });
       setRegForm({
@@ -195,7 +195,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
               AttendSure <span style={{ color: '#7dd3fc' }}>V3</span>
             </h1>
             <p style={{ margin: 0, fontSize: '0.95rem', color: '#e0f2fe', lineHeight: 1.5, maxWidth: 380 }}>
-              Institutional Management Portal & Headless Attendance System for DepEd Compliance.
+              School Management Portal &  Attendance System for DepEd Compliance.
             </p>
 
             <div style={{ marginTop: 36, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -294,7 +294,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                 transition: 'all 0.15s ease',
               }}
             >
-              <UserPlus size={16} /> Register Staff
+              <UserPlus size={16} /> Register Faculty
             </button>
           </div>
 
@@ -451,7 +451,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
               />
 
               <TextInput
-                label="DepEd / Institutional Email"
+                label="DepEd / School Email"
                 type="email"
                 required
                 placeholder="juan.delacruz@deped.gov.ph"
@@ -485,7 +485,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                 icon={<UserPlus size={16} />}
                 style={{ width: '100%', marginTop: 8, padding: '10px 0' }}
               >
-                Register Staff Account
+                Register Faculty Account
               </Button>
             </form>
           )}

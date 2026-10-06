@@ -28,13 +28,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       const session: UserSession = {
         token: res.data.token,
         username: res.data.username,
-        staff_name: res.data.staff_name,
+        faculty_name: res.data.faculty_name,
         role: res.data.role,
       };
 
       localStorage.setItem('attendsure_token', session.token);
       localStorage.setItem('attendsure_username', session.username);
-      localStorage.setItem('attendsure_staff_name', session.staff_name);
+      localStorage.setItem('attendsure_faculty_name', session.faculty_name);
       localStorage.setItem('attendsure_role', session.role);
 
       onLoginSuccess(session);

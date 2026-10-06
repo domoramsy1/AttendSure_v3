@@ -92,7 +92,7 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.CreateModel(
-            name='StaffProfile',
+            name='FacultyProfile',
             fields=[
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
                 ('employee_id', models.CharField(max_length=50, unique=True)),
@@ -104,12 +104,12 @@ class Migration(migrations.Migration):
                 ('department', models.CharField(default='Junior High School', max_length=100)),
                 ('contact_number', models.CharField(blank=True, default='', max_length=50)),
                 ('email', models.EmailField(blank=True, default='', max_length=150)),
-                ('photo', models.ImageField(blank=True, default='staff/default_avatar.png', upload_to='staff/')),
+                ('photo', models.ImageField(blank=True, default='faculty/default_avatar.png', upload_to='faculty/')),
                 ('rfid_uid', models.CharField(help_text='Unique RFID card serial number', max_length=64, unique=True)),
                 ('is_active', models.BooleanField(default=True)),
             ],
             options={
-                'db_table': 'staff_profiles',
+                'db_table': 'faculty_profiles',
                 'ordering': ['last_name', 'first_name'],
             },
         ),
@@ -138,7 +138,7 @@ class Migration(migrations.Migration):
                 ('capacity', models.IntegerField(default=40)),
                 ('academic_year', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='sections', to='academics.academicyear')),
                 ('grade_level', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='sections', to='academics.gradelevel')),
-                ('adviser', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='advising_sections', to='academics.staffprofile')),
+                ('adviser', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='advising_sections', to='academics.facultyprofile')),
             ],
             options={
                 'db_table': 'sections',
@@ -178,7 +178,7 @@ class Migration(migrations.Migration):
                 ('logo', models.ImageField(blank=True, default='schools/default_logo.png', upload_to='schools/')),
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('current_academic_year', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='schools', to='academics.academicyear')),
-                ('principal', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='headed_schools', to='academics.staffprofile')),
+                ('principal', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='headed_schools', to='academics.facultyprofile')),
             ],
             options={
                 'db_table': 'school_profile',
@@ -193,7 +193,7 @@ class Migration(migrations.Migration):
                 ('status', models.CharField(choices=[('PENDING_REVIEW', 'Pending Review'), ('EXCUSED', 'Excused'), ('CONFIRMED', 'Confirmed Violation')], default='PENDING_REVIEW', max_length=20)),
                 ('remarks', models.TextField(blank=True, default='')),
                 ('created_at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('staff', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='loafing_logs', to='academics.staffprofile')),
+                ('faculty', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='loafing_logs', to='academics.facultyprofile')),
             ],
             options={
                 'db_table': 'loafing_incidents',
@@ -243,8 +243,8 @@ class Migration(migrations.Migration):
                 ('valid_from', models.DateTimeField()),
                 ('valid_to', models.DateTimeField()),
                 ('status', models.CharField(choices=[('ACTIVE', 'Active'), ('USED', 'Used'), ('EXPIRED', 'Expired'), ('REVOKED', 'Revoked')], default='ACTIVE', max_length=20)),
-                ('issued_by', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='issued_passes', to='academics.staffprofile')),
-                ('staff', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='academics.staffprofile')),
+                ('issued_by', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='issued_passes', to='academics.facultyprofile')),
+                ('faculty', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='academics.facultyprofile')),
                 ('student', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='academics.student')),
             ],
             options={
@@ -259,7 +259,7 @@ class Migration(migrations.Migration):
                 ('end_time', models.TimeField()),
                 ('room_number', models.CharField(default='Room 101', max_length=50)),
                 ('section', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='schedules', to='academics.section')),
-                ('teacher', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='assigned_schedules', to='academics.staffprofile')),
+                ('teacher', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='assigned_schedules', to='academics.facultyprofile')),
                 ('subject', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='schedules', to='academics.subject')),
             ],
             options={
@@ -275,7 +275,7 @@ class Migration(migrations.Migration):
                 ('avatar', models.ImageField(blank=True, default='avatars/default_user.png', upload_to='avatars/')),
                 ('failed_attempts', models.IntegerField(default=0)),
                 ('locked_until', models.DateTimeField(blank=True, null=True)),
-                ('staff', models.OneToOneField(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='account', to='academics.staffprofile')),
+                ('faculty', models.OneToOneField(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='account', to='academics.facultyprofile')),
                 ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='profile', to=settings.AUTH_USER_MODEL)),
             ],
             options={
@@ -295,19 +295,19 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.CreateModel(
-            name='StaffGateLog',
+            name='FacultyGateLog',
             fields=[
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
                 ('scan_time', models.DateTimeField(default=django.utils.timezone.now)),
                 ('direction', models.CharField(choices=[('IN', 'In'), ('OUT', 'Out')], max_length=10)),
                 ('card_uid', models.CharField(max_length=64)),
                 ('kiosk', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='academics.iotkiosk')),
-                ('staff', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='gate_logs', to='academics.staffprofile')),
+                ('faculty', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='gate_logs', to='academics.facultyprofile')),
             ],
             options={
-                'db_table': 'staff_gate_logs',
+                'db_table': 'faculty_gate_logs',
                 'ordering': ['-scan_time'],
-                'indexes': [models.Index(fields=['staff', 'scan_time'], name='idx_staff_scan_time')],
+                'indexes': [models.Index(fields=['faculty', 'scan_time'], name='idx_faculty_scan_time')],
             },
         ),
         migrations.CreateModel(
@@ -319,12 +319,12 @@ class Migration(migrations.Migration):
                 ('battery_level', models.IntegerField(default=100)),
                 ('is_inside_geofence', models.BooleanField(default=True)),
                 ('recorded_at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('staff', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='heartbeats', to='academics.staffprofile')),
+                ('faculty', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='heartbeats', to='academics.facultyprofile')),
             ],
             options={
                 'db_table': 'faculty_heartbeats',
                 'ordering': ['-recorded_at'],
-                'indexes': [models.Index(fields=['staff', 'recorded_at'], name='idx_heartbeat_time')],
+                'indexes': [models.Index(fields=['faculty', 'recorded_at'], name='idx_heartbeat_time')],
             },
         ),
         migrations.CreateModel(
@@ -377,7 +377,7 @@ class Migration(migrations.Migration):
                 ('status', models.CharField(choices=[('PRESENT', 'Present'), ('LATE', 'Late'), ('CUTTING', 'Cutting Classes'), ('ABSENT', 'Absent')], default='PRESENT', max_length=10)),
                 ('schedule', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='attendance_records', to='academics.schedule')),
                 ('student', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='subject_attendance', to='academics.student')),
-                ('teacher', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='submitted_attendance', to='academics.staffprofile')),
+                ('teacher', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='submitted_attendance', to='academics.facultyprofile')),
             ],
             options={
                 'db_table': 'subject_attendance_logs',

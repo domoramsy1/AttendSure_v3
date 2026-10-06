@@ -1,7 +1,18 @@
 import axios from 'axios';
 
+// Automatically detect the server IP from the current browser address.
+// On PC (localhost), this becomes: http://localhost:8000/api
+// On Mobile (10.149.144.49), this becomes: http://10.149.144.49:8000/api
+const getBaseURL = (): string => {
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  return `http://${host}:8000/api`;
+};
+
 const apiClient = axios.create({
-  baseURL: 'http://localhost:8000/api',
+  baseURL: getBaseURL(),
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -40,7 +51,7 @@ apiClient.interceptors.response.use(
     const status = error.response?.status || 'NET_ERR';
     const errorMsg = error.response?.data?.detail || error.response?.data?.error || error.message;
 
-    // Red badge for Errors & Bugs
+    // Red badge for Errors
     console.error(
       `%c[✗ ERROR ${status}] ${method} ${url} -> ${errorMsg}`,
       'color: #dc2626; font-weight: bold; background: #fef2f2; padding: 2px 6px; border-radius: 4px; border: 1px solid #fecaca;'

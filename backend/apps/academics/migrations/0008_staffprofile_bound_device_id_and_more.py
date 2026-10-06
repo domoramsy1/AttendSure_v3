@@ -11,17 +11,17 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='bound_device_id',
-            field=models.CharField(blank=True, help_text='Unique hardware UUID of the staff phone.', max_length=128, null=True, unique=True),
+            field=models.CharField(blank=True, help_text='Unique hardware UUID of the faculty phone.', max_length=128, null=True, unique=True),
         ),
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='device_bound_at',
             field=models.DateTimeField(blank=True, help_text='Timestamp when paired.', null=True),
         ),
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='device_model',
             field=models.CharField(blank=True, help_text='Phone model name.', max_length=100, null=True),
         ),

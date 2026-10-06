@@ -4,7 +4,7 @@ import { ModuleTableLayout } from './ModuleTableLayout';
 
 interface DTRRecord {
   record_id: string;
-  staff_name: string;
+  faculty_name: string;
   date: string;
   time_in: string;
   time_out: string;
@@ -34,7 +34,7 @@ export const DTRTab: React.FC = () => {
   };
 
   const filtered = dtrLogs.filter((d) => 
-    d.staff_name.toLowerCase().includes(search.toLowerCase()) || 
+    d.faculty_name.toLowerCase().includes(search.toLowerCase()) || 
     d.date.includes(search)
   );
 
@@ -51,7 +51,7 @@ export const DTRTab: React.FC = () => {
       keyExtractor={(d) => d.record_id}
       columns={[
         { header: 'Date', render: (d) => <span style={{ fontWeight: 600 }}>{d.date}</span> },
-        { header: 'Faculty Name', render: (d) => d.staff_name },
+        { header: 'Faculty Name', render: (d) => d.faculty_name },
         { header: 'Time In', render: (d) => <span style={{ color: '#059669', fontWeight: 600 }}>{d.time_in}</span> },
         { header: 'Time Out', render: (d) => <span style={{ color: '#0284c7', fontWeight: 600 }}>{d.time_out}</span> },
         {

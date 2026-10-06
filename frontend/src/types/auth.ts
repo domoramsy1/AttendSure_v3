@@ -19,7 +19,7 @@ export interface AuthResponse {
   user_id: number;
   username: string;
   role: string;
-  staff_id: string | null;
-  staff_name: string;
+  faculty_id: string | null;
+  faculty_name: string;
   is_superuser: boolean;
 }

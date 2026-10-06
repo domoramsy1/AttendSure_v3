@@ -9,7 +9,7 @@ from apps.academics.models import (
     Enrollment,
     SchoolProfile,
     Section,
-    StaffProfile,
+    FacultyProfile,
     Student,
     StudentGateLog,
 )
@@ -98,18 +98,18 @@ def get_school_metadata():
                     break
 
     if not school_head:
-        admin_staff = StaffProfile.objects.filter(
+        admin_faculty = FacultyProfile.objects.filter(
             Q(position__icontains='Principal') |
             Q(position__icontains='School Head') |
             Q(position__icontains='Head Teacher') |
             Q(position__icontains='Administrator')
         ).filter(is_active=True).first()
 
-        if admin_staff:
-            parts = [admin_staff.first_name]
-            if admin_staff.middle_name:
-                parts.append(admin_staff.middle_name)
-            parts.append(admin_staff.last_name)
+        if admin_faculty:
+            parts = [admin_faculty.first_name]
+            if admin_faculty.middle_name:
+                parts.append(admin_faculty.middle_name)
+            parts.append(admin_faculty.last_name)
             school_head = " ".join(parts).strip()
 
     left_logo = resolve_logo(getattr(school, 'left_logo', None)) if school else None

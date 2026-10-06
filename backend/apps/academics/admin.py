@@ -18,8 +18,8 @@ from .models import (
     SchoolProfile,
     Section,
     SmsOutbox,
-    StaffGateLog,
-    StaffProfile,
+    FacultyGateLog,
+    FacultyProfile,
     Student,
     StudentGateLog,
     Subject,
@@ -110,7 +110,7 @@ class ScheduleAdmin(admin.ModelAdmin):
 
 
 # ==========================================
-# PROFILES & ENROLLMENT (STUDENTS & STAFF)
+# PROFILES & ENROLLMENT (STUDENTS & Faculty)
 # ==========================================
 
 @admin.register(Student)
@@ -121,8 +121,8 @@ class StudentAdmin(admin.ModelAdmin):
     ordering = ('last_name', 'first_name')
 
 
-@admin.register(StaffProfile)
-class StaffProfileAdmin(admin.ModelAdmin):
+@admin.register(FacultyProfile)
+class FacultyProfileAdmin(admin.ModelAdmin):
     list_display = ('employee_id', 'last_name', 'first_name', 'position', 'department', 'rfid_uid', 'qr_token', 'is_active')
     search_fields = ('employee_id', 'last_name', 'first_name', 'rfid_uid', 'qr_token', 'position', 'department')
     list_filter = ('department', 'is_active')
@@ -158,12 +158,12 @@ class StudentGateLogAdmin(admin.ModelAdmin):
     date_hierarchy = 'scan_time'
 
 
-@admin.register(StaffGateLog)
-class StaffGateLogAdmin(admin.ModelAdmin):
-    list_display = ('staff', 'direction', 'scan_method', 'scan_time', 'kiosk')
+@admin.register(FacultyGateLog)
+class FacultyGateLogAdmin(admin.ModelAdmin):
+    list_display = ('faculty', 'direction', 'scan_method', 'scan_time', 'kiosk')
     list_filter = ('direction', 'scan_method', 'scan_time')
-    search_fields = ('staff__employee_id', 'staff__last_name', 'staff__first_name', 'raw_identifier', 'kiosk__kiosk_code')
-    autocomplete_fields = ('staff', 'kiosk')
+    search_fields = ('faculty__employee_id', 'faculty__last_name', 'faculty__first_name', 'raw_identifier', 'kiosk__kiosk_code')
+    autocomplete_fields = ('faculty', 'kiosk')
     date_hierarchy = 'scan_time'
 
 
@@ -195,28 +195,28 @@ class DailyAttendanceSummaryAdmin(admin.ModelAdmin):
 
 @admin.register(GatePass)
 class GatePassAdmin(admin.ModelAdmin):
-    list_display = ('id', 'staff', 'student', 'status', 'valid_from', 'valid_to')
+    list_display = ('id', 'faculty', 'student', 'status', 'valid_from', 'valid_to')
     list_filter = ('status',)
-    search_fields = ('staff__first_name', 'staff__last_name', 'student__first_name', 'student__last_name', 'reason')
-    autocomplete_fields = ('staff', 'student')
+    search_fields = ('faculty__first_name', 'faculty__last_name', 'student__first_name', 'student__last_name', 'reason')
+    autocomplete_fields = ('faculty', 'student')
     date_hierarchy = 'valid_from'
 
 
 @admin.register(FacultyHeartbeat)
 class FacultyHeartbeatAdmin(admin.ModelAdmin):
-    list_display = ('staff', 'latitude', 'longitude', 'is_inside_geofence', 'battery_level', 'recorded_at')
+    list_display = ('faculty', 'latitude', 'longitude', 'is_inside_geofence', 'battery_level', 'recorded_at')
     list_filter = ('is_inside_geofence',)
-    search_fields = ('staff__employee_id', 'staff__last_name', 'staff__first_name')
-    autocomplete_fields = ('staff',)
+    search_fields = ('faculty__employee_id', 'faculty__last_name', 'faculty__first_name')
+    autocomplete_fields = ('faculty',)
     date_hierarchy = 'recorded_at'
 
 
 @admin.register(LoafingIncident)
 class LoafingIncidentAdmin(admin.ModelAdmin):
-    list_display = ('staff', 'incident_date', 'status', 'trigger_reason', 'created_at')
+    list_display = ('faculty', 'incident_date', 'status', 'trigger_reason', 'created_at')
     list_filter = ('status', 'incident_date')
-    search_fields = ('staff__employee_id', 'staff__last_name', 'trigger_reason')
-    autocomplete_fields = ('staff',)
+    search_fields = ('faculty__employee_id', 'faculty__last_name', 'trigger_reason')
+    autocomplete_fields = ('faculty',)
     date_hierarchy = 'incident_date'
 
 
@@ -234,10 +234,10 @@ class SmsOutboxAdmin(admin.ModelAdmin):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'role', 'staff')
+    list_display = ('user', 'role', 'faculty')
     list_filter = ('role',)
-    search_fields = ('user__username', 'staff__first_name', 'staff__last_name')
-    autocomplete_fields = ('staff',)
+    search_fields = ('user__username', 'faculty__first_name', 'faculty__last_name')
+    autocomplete_fields = ('faculty',)
 
 
 class UserProfileInline(admin.StackedInline):
@@ -245,7 +245,7 @@ class UserProfileInline(admin.StackedInline):
     can_delete = False
     verbose_name_plural = 'AttendSure Profile Details'
     fk_name = 'user'
-    autocomplete_fields = ('staff',)
+    autocomplete_fields = ('faculty',)
 
 
 class UserAdmin(BaseUserAdmin):

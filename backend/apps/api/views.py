@@ -29,8 +29,8 @@ from apps.academics.models import (
     SchoolProfile,
     Section,
     SmsOutbox,
-    StaffGateLog,
-    StaffProfile,
+    FacultyGateLog,
+    FacultyProfile,
     Student,
     StudentGateLog,
     Subject,
@@ -47,7 +47,7 @@ from .serializers import (
     LoginSerializer,
     ScheduleSerializer,
     SchoolProfileSerializer,
-    StaffProfileSerializer,
+    FacultyProfileSerializer,
     StudentSerializer,
     SubjectSerializer,
     TelemetryHeartbeatSerializer,
@@ -102,8 +102,8 @@ class IsAdviserOrAdmin(permissions.BasePermission):
         if get_user_role(request.user) == 'ADMIN':
             return True
         profile = get_user_profile(request.user)
-        if profile and profile.role == 'TEACHER' and profile.staff:
-            return getattr(obj, 'adviser_id', None) == profile.staff.id
+        if profile and profile.role == 'TEACHER' and profile.faculty:
+            return getattr(obj, 'adviser_id', None) == profile.faculty.id
         return False
 
 
@@ -154,19 +154,19 @@ class LoginAPIView(APIView):
 
         token, _ = Token.objects.get_or_create(user=user)
         user_profile = get_user_profile(user)
-        staff = getattr(user_profile, 'staff', None) if user_profile else None
+        faculty = getattr(user_profile, 'faculty', None) if user_profile else None
 
         role = get_user_role(user)
-        staff_id = staff.employee_id if staff else None
-        staff_name = f"{staff.first_name} {staff.last_name}".strip() if staff else (user.get_full_name() or user.username)
+        faculty_id = faculty.employee_id if faculty else None
+        faculty_name = f"{faculty.first_name} {faculty.last_name}".strip() if faculty else (user.get_full_name() or user.username)
 
         return Response({
             'token': token.key,
             'user_id': user.id,
             'username': user.username,
             'role': role,
-            'staff_id': staff_id,
-            'staff_name': staff_name,
+            'faculty_id': faculty_id,
+            'faculty_name': faculty_name,
             'is_superuser': user.is_superuser
         }, status=status.HTTP_200_OK)
 
@@ -178,32 +178,32 @@ class CurrentUserProfileView(APIView):
     """
     permission_classes = [permissions.IsAuthenticated]
 
-    def _get_staff_profile(self, user):
-        staff = getattr(user, 'staffprofile', None)
-        if not staff:
+    def _get_faculty_profile(self, user):
+        faculty = getattr(user, 'facultyprofile', None)
+        if not faculty:
             user_prof = get_user_profile(user)
-            staff = getattr(user_prof, 'staff', None) if user_prof else None
-        if not staff and user.email:
-            staff = StaffProfile.objects.filter(email=user.email).first()
-        if not staff and user.first_name and user.last_name:
-            staff = StaffProfile.objects.filter(
+            faculty = getattr(user_prof, 'faculty', None) if user_prof else None
+        if not faculty and user.email:
+            faculty = FacultyProfile.objects.filter(email=user.email).first()
+        if not faculty and user.first_name and user.last_name:
+            faculty = FacultyProfile.objects.filter(
                 first_name__iexact=user.first_name,
                 last_name__iexact=user.last_name
             ).first()
-        return staff
+        return faculty
 
     def get(self, request):
         user = request.user
-        staff = self._get_staff_profile(user)
+        faculty = self._get_faculty_profile(user)
         role = get_user_role(user)
 
         photo_url = None
         contact_number = ""
-        if staff:
-            contact_number = staff.contact_number or ""
-            if staff.photo:
+        if faculty:
+            contact_number = faculty.contact_number or ""
+            if faculty.photo:
                 try:
-                    photo_url = request.build_absolute_uri(staff.photo.url)
+                    photo_url = request.build_absolute_uri(faculty.photo.url)
                 except Exception:
                     photo_url = None
 
@@ -222,7 +222,7 @@ class CurrentUserProfileView(APIView):
     def put(self, request):
         user = request.user
         data = request.data
-        staff = self._get_staff_profile(user)
+        faculty = self._get_faculty_profile(user)
 
         # 1. Update basic user credentials
         if 'first_name' in data:
@@ -238,33 +238,33 @@ class CurrentUserProfileView(APIView):
 
         user.save()
 
-        # 2. Update linked Staff Profile (contact and photo)
+        # 2. Update linked Faculty Profile (contact and photo)
         raw_photo = data.get('photo')
-        if staff:
-            staff.first_name = user.first_name
-            staff.last_name = user.last_name
-            staff.email = user.email
+        if faculty:
+            faculty.first_name = user.first_name
+            faculty.last_name = user.last_name
+            faculty.email = user.email
             if 'contact_number' in data:
-                staff.contact_number = str(data.get('contact_number', '')).strip()
+                faculty.contact_number = str(data.get('contact_number', '')).strip()
 
             # Process photo deletion or replacement
             if raw_photo is None and 'photo' in data:
-                staff.photo = None
+                faculty.photo = None
             elif raw_photo and str(raw_photo).startswith('data:image'):
                 try:
                     format_part, img_str = raw_photo.split(';base64,')
                     ext = format_part.split('/')[-1]
                     file_name = f"profile_{user.id}_{int(timezone.now().timestamp())}.{ext}"
-                    staff.photo.save(file_name, ContentFile(base64.b64decode(img_str)), save=False)
+                    faculty.photo.save(file_name, ContentFile(base64.b64decode(img_str)), save=False)
                 except Exception as e:
                     logger.error("Failed to decode profile photo: %s", e)
 
-            staff.save()
+            faculty.save()
 
         photo_url = None
-        if staff and staff.photo:
+        if faculty and faculty.photo:
             try:
-                photo_url = request.build_absolute_uri(staff.photo.url)
+                photo_url = request.build_absolute_uri(faculty.photo.url)
             except Exception:
                 photo_url = None
 
@@ -276,7 +276,7 @@ class CurrentUserProfileView(APIView):
             "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
             "email": user.email,
             "role": get_user_role(user),
-            "contact_number": staff.contact_number if staff else "",
+            "contact_number": faculty.contact_number if faculty else "",
             "photo": photo_url,
             "message": "Profile updated successfully.",
         }, status=status.HTTP_200_OK)
@@ -337,16 +337,16 @@ class DashboardOverviewAPIView(APIView):
         attendance_rate = round((present_students / total_students * 100), 1) if total_students > 0 else 0
 
         # 2. Real Teacher Totals
-        total_teachers = StaffProfile.objects.filter(is_active=True).count()
-        present_teachers = StaffGateLog.objects.filter(
+        total_teachers = FacultyProfile.objects.filter(is_active=True).count()
+        present_teachers = FacultyGateLog.objects.filter(
             scan_time__date=today,
             direction='IN'
-        ).values_list('staff_id', flat=True).distinct().count()
+        ).values_list('faculty_id', flat=True).distinct().count()
 
         # 3. Real Gate Scans Today
         student_scans = StudentGateLog.objects.filter(scan_time__date=today).count()
-        staff_scans = StaffGateLog.objects.filter(scan_time__date=today).count()
-        total_gate_scans = student_scans + staff_scans
+        faculty_scans = FacultyGateLog.objects.filter(scan_time__date=today).count()
+        total_gate_scans = student_scans + faculty_scans
 
         # 4. Real Gate Passes and SMS Status
         active_gate_passes = GatePass.objects.filter(status='ACTIVE').count()
@@ -474,15 +474,15 @@ class GateScanAPIView(APIView):
 
         now = timezone.now()
 
-        # Check Staff Record
-        staff = StaffProfile.objects.filter(
+        # Check Faculty Record
+        faculty = FacultyProfile.objects.filter(
             models.Q(rfid_uid=raw_id) | models.Q(qr_token=raw_id),
             is_active=True
         ).first()
 
-        if staff:
-            recent_log = StaffGateLog.objects.filter(
-                staff=staff,
+        if faculty:
+            recent_log = FacultyGateLog.objects.filter(
+                faculty=faculty,
                 scan_time__date=now.date()
             ).order_by('-scan_time').first()
 
@@ -490,14 +490,14 @@ class GateScanAPIView(APIView):
                 return Response({
                     'notice': 'Tap ignored (debounce active)',
                     'person_type': 'STAFF',
-                    'name': f"{staff.first_name} {staff.last_name}".strip(),
+                    'name': f"{faculty.first_name} {faculty.last_name}".strip(),
                     'direction': recent_log.direction,
                     'scan_time': recent_log.scan_time.strftime('%I:%M:%S %p')
                 }, status=status.HTTP_200_OK)
 
             direction = 'OUT' if (recent_log and recent_log.direction == 'IN') else 'IN'
-            new_log = StaffGateLog.objects.create(
-                staff=staff,
+            new_log = FacultyGateLog.objects.create(
+                faculty=faculty,
                 kiosk=kiosk,
                 scan_time=now,
                 direction=direction,
@@ -510,8 +510,8 @@ class GateScanAPIView(APIView):
             return Response({
                 'success': True,
                 'person_type': 'STAFF',
-                'name': f"{staff.first_name} {staff.last_name}".strip(),
-                'position': staff.position or '',
+                'name': f"{faculty.first_name} {faculty.last_name}".strip(),
+                'position': faculty.position or '',
                 'direction': direction,
                 'scan_method': scan_method,
                 'scan_time': new_log.scan_time.strftime('%I:%M:%S %p'),
@@ -593,7 +593,7 @@ class GateScanAPIView(APIView):
 
 class GateLogsAPIView(APIView):
     """
-    Returns unified, chronological gate transactions for Students and Staff.
+    Returns unified, chronological gate transactions for Students and Faculty.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -628,12 +628,12 @@ class GateLogsAPIView(APIView):
                 })
 
         if person_type in ('ALL', 'STAFF'):
-            staff_qs = StaffGateLog.objects.select_related('staff', 'kiosk').order_by('-scan_time')[:150]
-            for log in staff_qs:
+            faculty_qs = FacultyGateLog.objects.select_related('faculty', 'kiosk').order_by('-scan_time')[:150]
+            for log in faculty_qs:
                 if direction != 'ALL' and log.direction != direction:
                     continue
-                name = f"{log.staff.first_name} {log.staff.last_name}".strip()
-                emp_id = log.staff.employee_id
+                name = f"{log.faculty.first_name} {log.faculty.last_name}".strip()
+                emp_id = log.faculty.employee_id
                 if search_query and (search_query not in name.lower() and search_query not in emp_id.lower()):
                     continue
 
@@ -674,7 +674,7 @@ class ClassroomBatchScanAPIView(APIView):
             return Response({'error': 'Target class schedule does not exist'}, status=status.HTTP_404_NOT_FOUND)
 
         user_profile = get_user_profile(request.user)
-        teacher = getattr(user_profile, 'staff', None) if user_profile else None
+        teacher = getattr(user_profile, 'faculty', None) if user_profile else None
         is_admin = get_user_role(request.user) == 'ADMIN'
 
         if not is_admin:
@@ -759,10 +759,10 @@ class TelemetryHeartbeatAPIView(APIView):
 
         data = serializer.validated_data
         user_profile = getattr(request.user, 'profile', None) or getattr(request.user, 'userprofile', None)
-        staff = getattr(user_profile, 'staff', None) if user_profile else None
+        faculty = getattr(user_profile, 'faculty', None) if user_profile else None
 
-        if not staff:
-            return Response({'error': 'No linked Staff Profile found for this account.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not faculty:
+            return Response({'error': 'No linked Faculty Profile found for this account.'}, status=status.HTTP_400_BAD_REQUEST)
 
         incoming_device_id = str(data.get('client_device_id', '')).strip()
 
@@ -776,29 +776,29 @@ class TelemetryHeartbeatAPIView(APIView):
             )
 
         # 1. Automatic first-time pairing if no device is registered yet
-        if not staff.bound_device_id:
+        if not faculty.bound_device_id:
             # Check if this phone is already bound to another teacher
-            device_in_use = StaffProfile.objects.filter(bound_device_id=incoming_device_id).exclude(id=staff.id).first()
+            device_in_use = FacultyProfile.objects.filter(bound_device_id=incoming_device_id).exclude(id=faculty.id).first()
             if device_in_use:
                 LoafingIncident.objects.create(
-                    staff=staff,
+                    faculty=faculty,
                     incident_date=timezone.localdate(),
                     trigger_reason=f"SECURITY ALERT: Attempted to use phone already registered to {device_in_use.first_name} {device_in_use.last_name}.",
                     status='FLAGGED_FRAUD'
                 )
                 return Response(
-                    {'error': 'This phone is already bound to another staff member. Multi-account phone sharing is prohibited.'},
+                    {'error': 'This phone is already bound to another faculty member. Multi-account phone sharing is prohibited.'},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            staff.bound_device_id = incoming_device_id
-            staff.device_bound_at = timezone.now()
-            staff.save(update_fields=['bound_device_id', 'device_bound_at'])
+            faculty.bound_device_id = incoming_device_id
+            faculty.device_bound_at = timezone.now()
+            faculty.save(update_fields=['bound_device_id', 'device_bound_at'])
 
         # 2. Rejection if device ID does not match the bound phone
-        elif staff.bound_device_id != incoming_device_id:
+        elif faculty.bound_device_id != incoming_device_id:
             LoafingIncident.objects.create(
-                staff=staff,
+                faculty=faculty,
                 incident_date=timezone.localdate(),
                 trigger_reason="SECURITY ALERT: Telemetry sent from an unauthorized / secondary mobile device.",
                 status='FLAGGED_FRAUD'
@@ -816,7 +816,7 @@ class TelemetryHeartbeatAPIView(APIView):
         # ====================================================================
         if data.get('is_mock_location', False):
             LoafingIncident.objects.create(
-                staff=staff,
+                faculty=faculty,
                 incident_date=timezone.localdate(),
                 trigger_reason='SECURITY VIOLATION: Mock Location / Fake GPS app detected.',
                 status='FLAGGED_FRAUD'
@@ -843,15 +843,15 @@ class TelemetryHeartbeatAPIView(APIView):
         distance_to_center = haversine_distance_meters(client_lat, client_lng, campus_lat, campus_lng)
         is_inside_perimeter = distance_to_center <= allowed_radius
 
-        latest_gate_log = StaffGateLog.objects.filter(
-            staff=staff,
+        latest_gate_log = FacultyGateLog.objects.filter(
+            faculty=faculty,
             scan_time__date=today
         ).order_by('-scan_time').first()
 
         physically_tapped_out = bool(latest_gate_log and latest_gate_log.direction == 'OUT')
 
         FacultyHeartbeat.objects.create(
-            staff=staff,
+            faculty=faculty,
             latitude=client_lat,
             longitude=client_lng,
             battery_level=battery,
@@ -860,7 +860,7 @@ class TelemetryHeartbeatAPIView(APIView):
         )
 
         has_active_pass = GatePass.objects.filter(
-            staff=staff,
+            faculty=faculty,
             status='ACTIVE',
             valid_from__lte=server_now,
             valid_to__gte=server_now
@@ -868,21 +868,21 @@ class TelemetryHeartbeatAPIView(APIView):
 
         if physically_tapped_out and not has_active_pass:
             LoafingIncident.objects.get_or_create(
-                staff=staff,
+                faculty=faculty,
                 incident_date=today,
-                trigger_reason="Staff physically tapped OUT at gate terminal without active Gate Pass.",
+                trigger_reason="Faculty physically tapped OUT at gate terminal without active Gate Pass.",
                 defaults={'status': 'PENDING_REVIEW'}
             )
         elif not is_inside_perimeter and not has_active_pass:
             outside_count = FacultyHeartbeat.objects.filter(
-                staff=staff,
+                faculty=faculty,
                 is_inside_geofence=False,
                 recorded_at__gte=server_now - timedelta(minutes=5)
             ).count()
 
             if outside_count >= 2:
                 LoafingIncident.objects.get_or_create(
-                    staff=staff,
+                    faculty=faculty,
                     incident_date=today,
                     trigger_reason=f"Exceeded perimeter boundary ({int(distance_to_center)}m from campus center) without active Gate Pass.",
                     defaults={'status': 'PENDING_REVIEW'}
@@ -917,28 +917,28 @@ def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float
 
 
 
-class ResetStaffDeviceBindingAPIView(APIView):
+class ResetFacultyDeviceBindingAPIView(APIView):
     """
     Allows Administrators to unbind a teacher's lost or replaced phone.
     """
     permission_classes = [IsSystemAdminRole]
 
-    def post(self, request, staff_id):
+    def post(self, request, faculty_id):
         try:
-            staff = StaffProfile.objects.get(id=staff_id)
-            old_device = staff.bound_device_id
-            staff.bound_device_id = None
-            staff.device_model = None
-            staff.device_bound_at = None
-            staff.save()
+            faculty = FacultyProfile.objects.get(id=faculty_id)
+            old_device = faculty.bound_device_id
+            faculty.bound_device_id = None
+            faculty.device_model = None
+            faculty.device_bound_at = None
+            faculty.save()
 
             return Response({
                 'success': True,
-                'message': f"Device binding for {staff.first_name} {staff.last_name} has been reset. They can now pair a new phone on next login.",
+                'message': f"Device binding for {faculty.first_name} {faculty.last_name} has been reset. They can now pair a new phone on next login.",
                 'released_device_id': old_device
             }, status=status.HTTP_200_OK)
-        except StaffProfile.DoesNotExist:
-            return Response({'error': 'Staff member not found.'}, status=status.HTTP_404_NOT_FOUND)
+        except FacultyProfile.DoesNotExist:
+            return Response({'error': 'Faculty member not found.'}, status=status.HTTP_404_NOT_FOUND)
 
 
 # ============================================================================
@@ -948,7 +948,7 @@ class ResetStaffDeviceBindingAPIView(APIView):
 class SchoolSettingsAPIView(APIView):
     """
     Settings API for institutional parameters and custom report logos.
-    GET: Authenticated staff can inspect configuration.
+    GET: Authenticated faculty can inspect configuration.
     PUT/PATCH: Restricted strictly to Administrators.
     """
     permission_classes = [permissions.IsAuthenticated]
@@ -1394,18 +1394,18 @@ class DepEdSF2DataAPIView(APIView):
                         break
 
         if not school_head_val:
-            admin_staff = StaffProfile.objects.filter(
+            admin_faculty = FacultyProfile.objects.filter(
                 models.Q(position__icontains='Principal') |
                 models.Q(position__icontains='School Head') |
                 models.Q(position__icontains='Head Teacher') |
                 models.Q(position__icontains='Administrator')
             ).filter(is_active=True).first()
 
-            if admin_staff:
-                parts = [admin_staff.first_name]
-                if admin_staff.middle_name:
-                    parts.append(admin_staff.middle_name)
-                parts.append(admin_staff.last_name)
+            if admin_faculty:
+                parts = [admin_faculty.first_name]
+                if admin_faculty.middle_name:
+                    parts.append(admin_faculty.middle_name)
+                parts.append(admin_faculty.last_name)
                 school_head_val = " ".join(parts).strip()
 
         if not school_head_val or not school_name_val:
@@ -1547,7 +1547,7 @@ class ReportAuditLogAPIView(APIView):
         tracking_id = data.get('document_tracking_id', 'N/A')
         action = data.get('action', 'VIEW')
         printed_at = data.get('printed_at', timezone.now().strftime('%Y-%m-%d %H:%M:%S'))
-        username = request.user.username if request.user else 'Authorized Staff'
+        username = request.user.username if request.user else 'Authorized Faculty'
 
         logger.info(
             "[REPORT AUDIT] User=%s | Action=%s | Report=%s | TrackingID=%s | Timestamp=%s",
@@ -1577,27 +1577,27 @@ class DTRListAPIView(APIView):
 
         is_admin = get_user_role(request.user) == 'ADMIN'
         user_profile = get_user_profile(request.user)
-        calling_staff = getattr(user_profile, 'staff', None) if user_profile else None
+        calling_faculty = getattr(user_profile, 'faculty', None) if user_profile else None
 
-        logs_qs = StaffGateLog.objects.filter(
+        logs_qs = FacultyGateLog.objects.filter(
             scan_time__year=year,
             scan_time__month=month_num
-        ).select_related('staff')
+        ).select_related('faculty')
 
         if not is_admin:
-            if not calling_staff:
+            if not calling_faculty:
                 return Response([], status=status.HTTP_200_OK)
-            logs_qs = logs_qs.filter(staff=calling_staff)
+            logs_qs = logs_qs.filter(faculty=calling_faculty)
 
         logs = logs_qs.order_by('-scan_time')
 
         daily_records = {}
         for l in logs:
-            key = (l.staff.employee_id, l.scan_time.date())
+            key = (l.faculty.employee_id, l.scan_time.date())
             if key not in daily_records:
                 daily_records[key] = {
-                    'record_id': f"DTR-{l.staff.employee_id}-{l.scan_time.strftime('%Y%m%d')}",
-                    'staff_name': f"{l.staff.first_name} {l.staff.last_name}",
+                    'record_id': f"DTR-{l.faculty.employee_id}-{l.scan_time.strftime('%Y%m%d')}",
+                    'faculty_name': f"{l.faculty.first_name} {l.faculty.last_name}",
                     'date': l.scan_time.strftime('%Y-%m-%d'),
                     'time_in': '—',
                     'time_out': '—',
@@ -1629,25 +1629,25 @@ class GeofenceAPIView(APIView):
         ).count()
 
         cutoff_active = server_now - timedelta(minutes=15)
-        active_staff_qs = StaffProfile.objects.filter(is_active=True)
+        active_faculty_qs = FacultyProfile.objects.filter(is_active=True)
 
         roster = []
         verified_inside_count = 0
         missing_heartbeat_count = 0
 
-        for staff in active_staff_qs:
-            last_gate = StaffGateLog.objects.filter(
-                staff=staff,
+        for faculty in active_faculty_qs:
+            last_gate = FacultyGateLog.objects.filter(
+                faculty=faculty,
                 scan_time__date=today
             ).order_by('-scan_time').first()
 
             last_ping = FacultyHeartbeat.objects.filter(
-                staff=staff,
+                faculty=faculty,
                 recorded_at__date=today
             ).order_by('-recorded_at').first()
 
             has_pass = GatePass.objects.filter(
-                staff=staff,
+                faculty=faculty,
                 status='ACTIVE',
                 valid_from__lte=server_now,
                 valid_to__gte=server_now
@@ -1679,25 +1679,25 @@ class GeofenceAPIView(APIView):
                 distance_str = f"{int(dist)}m"
 
             roster.append({
-                'id': staff.id,
-                'staff_name': f"{staff.first_name} {staff.last_name}".strip(),
-                'employee_id': staff.employee_id,
-                'position': staff.position or "Faculty",
+                'id': faculty.id,
+                'faculty_name': f"{faculty.first_name} {faculty.last_name}".strip(),
+                'employee_id': faculty.employee_id,
+                'position': faculty.position or "Faculty",
                 'status': status_label,
                 'distance': distance_str,
                 'battery': f"{last_ping.battery_level}%" if last_ping else "—",
                 'last_seen': timezone.localtime(last_ping.recorded_at).strftime('%I:%M %p') if last_ping else "No Ping",
                 # Device Binding Information
-                'device_model': staff.device_model or ("Registered Phone" if staff.bound_device_id else None),
-                'bound_device_id': staff.bound_device_id,
-                'device_bound_at': timezone.localtime(staff.device_bound_at).strftime('%b %d, %Y') if staff.device_bound_at else None,
+                'device_model': faculty.device_model or ("Registered Phone" if faculty.bound_device_id else None),
+                'bound_device_id': faculty.bound_device_id,
+                'device_bound_at': timezone.localtime(faculty.device_bound_at).strftime('%b %d, %Y') if faculty.device_bound_at else None,
             })
 
-        recent_breaches = LoafingIncident.objects.filter(incident_date=today).select_related('staff').order_by('-id')[:5]
+        recent_breaches = LoafingIncident.objects.filter(incident_date=today).select_related('faculty').order_by('-id')[:5]
         breach_logs = [
             {
                 'id': b.id,
-                'staff_name': f"{b.staff.first_name} {b.staff.last_name}".strip() if b.staff else "Unknown Staff",
+                'faculty_name': f"{b.faculty.first_name} {b.faculty.last_name}".strip() if b.faculty else "Unknown Faculty",
                 'reason': b.trigger_reason,
                 'status': b.status,
                 'time': timezone.localtime(b.created_at).strftime('%I:%M %p') if hasattr(b, 'created_at') else "Today",
@@ -1716,37 +1716,37 @@ class GeofenceAPIView(APIView):
             'missing_heartbeats': missing_heartbeat_count,
             'spoof_attempts_blocked': spoof_attempts_blocked,
             'incidents_today': incidents_today,
-            'staff_roster': roster,
+            'faculty_roster': roster,
             'recent_breaches': breach_logs,
         }, status=status.HTTP_200_OK)
 
 
-class ResetStaffDeviceBindingAPIView(APIView):
+class ResetFacultyDeviceBindingAPIView(APIView):
     """
     Unlocks a teacher's account when their phone is replaced or lost.
     """
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request, staff_id):
+    def post(self, request, faculty_id):
         user_role = getattr(getattr(request.user, 'profile', None), 'role', 'TEACHER')
         if user_role != 'ADMIN' and not request.user.is_superuser:
             return Response({'error': 'Unauthorized. Admin permissions required.'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
-            staff = StaffProfile.objects.get(id=staff_id)
-            old_device = staff.bound_device_id
-            staff.bound_device_id = None
-            staff.device_model = None
-            staff.device_bound_at = None
-            staff.save()
+            faculty = FacultyProfile.objects.get(id=faculty_id)
+            old_device = faculty.bound_device_id
+            faculty.bound_device_id = None
+            faculty.device_model = None
+            faculty.device_bound_at = None
+            faculty.save()
 
             return Response({
                 'success': True,
-                'message': f"Device lock for {staff.first_name} {staff.last_name} has been reset. They can now pair a new phone.",
+                'message': f"Device lock for {faculty.first_name} {faculty.last_name} has been reset. They can now pair a new phone.",
                 'released_device_id': old_device
             }, status=status.HTTP_200_OK)
-        except StaffProfile.DoesNotExist:
-            return Response({'error': 'Staff record not found.'}, status=status.HTTP_404_NOT_FOUND)
+        except FacultyProfile.DoesNotExist:
+            return Response({'error': 'Faculty record not found.'}, status=status.HTTP_404_NOT_FOUND)
 
 
 # ============================================================================
@@ -1770,8 +1770,8 @@ class TeacherViewSet(viewsets.ModelViewSet):
     ADMIN: Full CRUD (Add Faculty, Update Profiles, Deactivate).
     TEACHER: Read-Only (Faculty Directory inspection).
     """
-    queryset = StaffProfile.objects.all().order_by('-id')
-    serializer_class = StaffProfileSerializer
+    queryset = FacultyProfile.objects.all().order_by('-id')
+    serializer_class = FacultyProfileSerializer
     permission_classes = [ReadOnlyOrAdminWrite]
     filter_backends = [filters.SearchFilter]
     search_fields = ['employee_id', 'first_name', 'last_name', 'position']
@@ -1793,11 +1793,11 @@ class GatePassViewSet(viewsets.ModelViewSet):
     """
     ADMIN & TEACHER: Authenticated access to issue and verify exit passes.
     """
-    queryset = GatePass.objects.select_related('staff', 'student').order_by('-valid_from')
+    queryset = GatePass.objects.select_related('faculty', 'student').order_by('-valid_from')
     serializer_class = GatePassSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['reason', 'staff__first_name', 'staff__last_name']
+    search_fields = ['reason', 'faculty__first_name', 'faculty__last_name']
 
 
 class ScheduleViewSet(viewsets.ModelViewSet):

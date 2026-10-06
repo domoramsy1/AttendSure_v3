@@ -15,7 +15,7 @@ from apps.academics.models import (
     Schedule,
     SchoolProfile,
     Section,
-    StaffProfile,
+    FacultyProfile,
     Student,
     Subject,
     UserProfile,
@@ -235,13 +235,13 @@ class StudentSerializer(serializers.ModelSerializer):
 
         return super().create(validated_data)
 
-class StaffProfileSerializer(serializers.ModelSerializer):
+class FacultyProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField(read_only=True)
     photo_url = serializers.SerializerMethodField(read_only=True)
     photo = Base64ImageField(required=False, allow_null=True)
 
     class Meta:
-        model = StaffProfile
+        model = FacultyProfile
         fields = [
             'id',
             'employee_id',
@@ -295,11 +295,11 @@ class StaffProfileSerializer(serializers.ModelSerializer):
             return None
         clean_value = str(value).strip()
         instance = getattr(self, 'instance', None)
-        qs = StaffProfile.objects.filter(rfid_uid=clean_value)
+        qs = FacultyProfile.objects.filter(rfid_uid=clean_value)
         if instance:
             qs = qs.exclude(id=instance.id)
         if qs.exists():
-            raise serializers.ValidationError("This RFID card is already assigned to another staff member.")
+            raise serializers.ValidationError("This RFID card is already assigned to another faculty member.")
         return clean_value
 
     def create(self, validated_data):
@@ -380,7 +380,7 @@ class GatePassSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'pass_number',
-            'staff',
+            'faculty',
             'student',
             'bearer_name',
             'pass_type',
@@ -394,8 +394,8 @@ class GatePassSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_bearer_name(self, obj):
-        if obj.staff:
-            return f"{obj.staff.first_name} {obj.staff.last_name}".strip()
+        if obj.faculty:
+            return f"{obj.faculty.first_name} {obj.faculty.last_name}".strip()
         if obj.student:
             return f"{obj.student.first_name} {obj.student.last_name}".strip()
         return "Unassigned"

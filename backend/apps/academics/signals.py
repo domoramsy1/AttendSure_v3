@@ -12,7 +12,7 @@ def auto_sync_superuser_to_attendsure_admin(sender, instance, created, **kwargs)
     an AttendSure UserProfile with role='ADMIN'.
     """
     if created:
-        target_role = 'ADMIN' if (instance.is_superuser or instance.is_staff) else 'TEACHER'
+        target_role = 'ADMIN' if (instance.is_superuser or instance.is_faculty) else 'TEACHER'
         UserProfile.objects.create(
             user=instance,
             role=target_role

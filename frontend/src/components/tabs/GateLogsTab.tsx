@@ -110,7 +110,7 @@ export const GateLogsTab: React.FC = () => {
               onClick={() => setPersonFilter('STAFF')}
               style={filterTabStyle(personFilter === 'STAFF')}
             >
-              Faculty & Staff
+              Faculty
             </button>
           </div>
 

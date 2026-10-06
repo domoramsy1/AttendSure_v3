@@ -111,22 +111,22 @@ class Migration(migrations.Migration):
             field=models.CharField(choices=[('CLASS_TAP', 'Classroom Attendance Tap'), ('GATE_TAP', 'Gate Kiosk RFID Tap'), ('GATE_PASS', 'Gate Pass Issuance'), ('LOAFING_ALERT', 'Campus Perimeter Breach Alert'), ('SARDO_WARNING', 'SARDO (5-Day Consecutive Absence) Alert'), ('MANUAL_ANNOUNCEMENT', 'Institutional School Broadcast')], default='CLASS_TAP', max_length=50),
         ),
         migrations.AlterField(
-            model_name='staffgatelog',
+            model_name='facultygatelog',
             name='direction',
             field=models.CharField(choices=[('IN', 'Time In (Arrival)'), ('OUT', 'Time Out (Departure)')], max_length=10),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='department',
             field=models.CharField(choices=[('Junior High School', 'Junior High School Faculty'), ('Senior High School', 'Senior High School Faculty'), ('Alternative Learning System (ALS)', 'ALS Department'), ('Science Department', 'Science Department'), ('Mathematics Department', 'Mathematics Department'), ('English Department', 'English Department'), ('Filipino Department', 'Filipino Department'), ('Social Studies (AP) Department', 'Araling Panlipunan Department'), ('MAPEH Department', 'MAPEH Department'), ('TLE / TVL Department', 'TLE / TVL Department'), ('Values Education (EsP) Department', 'Edukasyon sa Pagpapakatao Department'), ('Administration & Registrar', 'Administrative & Registrar Office')], default='Junior High School', max_length=100),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='position',
             field=models.CharField(choices=[('Teacher I', 'Teacher I'), ('Teacher II', 'Teacher II'), ('Teacher III', 'Teacher III'), ('Master Teacher I', 'Master Teacher I'), ('Master Teacher II', 'Master Teacher II'), ('Head Teacher I', 'Head Teacher I'), ('Head Teacher II', 'Head Teacher II'), ('Head Teacher III', 'Head Teacher III'), ('Secondary School Principal I', 'Secondary School Principal I'), ('Secondary School Principal II', 'Secondary School Principal II'), ('Secondary School Principal III', 'Secondary School Principal III'), ('Secondary School Principal IV', 'Secondary School Principal IV'), ('Administrative Officer II', 'Administrative Officer II'), ('Administrative Assistant II', 'Administrative Assistant II'), ('Registrar I', 'Registrar I')], default='Teacher I', max_length=100),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='suffix',
             field=models.CharField(blank=True, choices=[('', 'None'), ('Jr.', 'Jr.'), ('Sr.', 'Sr.'), ('II', 'II'), ('III', 'III'), ('IV', 'IV'), ('V', 'V')], default='', max_length=20),
         ),

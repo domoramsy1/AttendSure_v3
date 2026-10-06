@@ -24,7 +24,7 @@ from apps.api.views import (
     TeacherViewSet,
     TelemetryHeartbeatAPIView,
     UserManagementViewSet,
-    ResetStaffDeviceBindingAPIView,
+    ResetFacultyDeviceBindingAPIView,
 )
 
 # 1. Register Core Entity ViewSets
@@ -43,7 +43,7 @@ urlpatterns = [
     path('', include(router.urls)),
 
 
-    path('teachers/<int:staff_id>/reset-device/', ResetStaffDeviceBindingAPIView.as_view(), name='api-reset-device-binding'),
+    path('teachers/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-reset-device-binding'),
     # Authentication & User Profile Management
     path('auth/login/', LoginAPIView.as_view(), name='api-login'),
     path('me/', CurrentUserProfileView.as_view(), name='current-user-profile'),
@@ -63,9 +63,9 @@ urlpatterns = [
     path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='api-classroom-batch-scan'),
     path('telemetry/heartbeat/', TelemetryHeartbeatAPIView.as_view(), name='api-telemetry-heartbeat'),
 
-    # Staff Daily Time Records (Work Attendance)
+    # Faculty Daily Time Records (Work Attendance)
     path('dtr/', DTRListAPIView.as_view(), name='api-dtr'),
-    path('staff/dtr/', DTRListAPIView.as_view(), name='api-staff-dtr-alias'),
+    path('faculty/dtr/', DTRListAPIView.as_view(), name='api-faculty-dtr-alias'),
 
     # Campus Geofence Boundary
     path('geofence/', GeofenceAPIView.as_view(), name='api-geofence'),

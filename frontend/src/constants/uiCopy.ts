@@ -2,7 +2,7 @@ export const UI_TEXT = {
   auth: {
     systemName: "AttendSure",
     tagline: "School Attendance & Gate System",
-    loginHeader: "Staff Sign In",
+    loginHeader: "Faculty Sign In",
     loginSubtext: "Sign in using your DepEd username or Employee ID",
     inputIdentifier: "Username or Employee ID",
     inputPassword: "Password",
@@ -46,7 +46,7 @@ export const UI_TEXT = {
     // Bottom Panels
     influxPanel: {
       title: "Arrivals by Hour",
-      subtitle: "Number of students and staff entering campus each hour",
+      subtitle: "Number of students and faculty entering campus each hour",
       legend: "Total Taps",
       emptyTitle: "No Gate Check-ins Yet Today",
       emptyDescription: "Numbers will update as soon as students tap their ID cards at the gate.",

@@ -1,31 +1,62 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useAlert } from '../../context/AlertContext';
 import apiClient from '../../api/client';
-import { 
-  CheckCircle2, 
-  AlertCircle, 
-  Radio, 
-  Clock, 
-  RefreshCw, 
-  Calendar, 
-  Users, 
-  BarChart3, 
-  Loader2 
+import {
+  UserCheck,
+  UserX,
+  Clock,
+  Send,
+  Radio,
+  RefreshCw,
+  Scan,
+  TrendingUp,
+  FileSpreadsheet,
+  BellRing,
+  Activity,
+  Layers,
+  Inbox,
 } from 'lucide-react';
 
-interface DashboardStats {
-  academic_year: string;
-  gate_node_online: boolean;
-  turnstiles_active: boolean;
-  telemetry_status: string;
-  present_learners: number;
-  total_enrolled: number;
-  unexcused_absences: number;
-  gate_throughput: number;
-  faculty_dtr_percentage: number;
+interface HourlyScanItem {
+  hour: string;
+  count: number;
+  height: number;
+  is_peak: boolean;
+}
+
+interface GradeBreakdown {
+  grade: string;
+  present: number;
+  total: number;
+  percentage: number;
+}
+
+interface RecentScan {
+  id: string | number;
+  person_name: string;
+  role_label: string;
+  grade_section: string;
+  direction: 'IN' | 'OUT';
+  scan_time: string;
+  scan_method: 'RFID' | 'QR';
+}
+
+interface DashboardMetrics {
+  total_students: number;
+  students_present: number;
+  students_absent: number;
+  attendance_rate: number;
+  faculty_on_duty: number;
   total_faculty: number;
-  faculty_tapped_today: number;
-  influx_distribution: { hour: string; count: number }[];
-  section_attendance: { section_id: number; section_name: string; enrolled: number; present: number; rate: number }[];
+  gate_scans_today: number;
+  active_gate_passes: number;
+  sms_sent_today: number;
+  sms_pending_count: number;
+  kiosks_online: number;
+  total_kiosks: number;
+  hourly_scans: HourlyScanItem[];
+  grade_levels: GradeBreakdown[];
+  recent_scans: RecentScan[];
 }
 
 interface DashboardViewProps {
@@ -33,456 +64,650 @@ interface DashboardViewProps {
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange }) => {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [sectionFilter, setSectionFilter] = useState<'SECTIONS' | 'TOP'>('SECTIONS');
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const { showAlert } = useAlert();
 
-  const fetchStats = useCallback(async (isManual = false) => {
-    if (isManual) setRefreshing(true);
+const handleIssueGatePass = () => {
+  showAlert({
+    title: 'Gate Pass Manager',
+    message: 'You can issue student and faculty gate passes, specify authorized departure reasons, and print departure slips from the Gate Passes section.',
+    type: 'info',
+    actionLabel: 'Open Gate Passes',
+    onAction: () => {
+      // Switch active tab or trigger gate pass modal
+      window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail: 'gate-passes' }));
+    },
+  });
+};
+
+  // Real database metrics with zero initial defaults
+  const [data, setData] = useState<DashboardMetrics>({
+    total_students: 0,
+    students_present: 0,
+    students_absent: 0,
+    attendance_rate: 0,
+    faculty_on_duty: 0,
+    total_faculty: 0,
+    gate_scans_today: 0,
+    active_gate_passes: 0,
+    sms_sent_today: 0,
+    sms_pending_count: 0,
+    kiosks_online: 0,
+    total_kiosks: 0,
+    hourly_scans: [],
+    grade_levels: [],
+    recent_scans: [],
+  });
+
+  const fetchDashboardData = async () => {
     try {
-      const res = await apiClient.get<DashboardStats>('/dashboard/overview/');
-      setStats(res.data);
-      if (onGateStatusChange) {
-        onGateStatusChange(res.data.gate_node_online);
+      setRefreshing(true);
+      const res = await apiClient.get<DashboardMetrics>('/dashboard/overview/');
+      if (res.data) {
+        setData({
+          total_students: res.data.total_students || 0,
+          students_present: res.data.students_present || 0,
+          students_absent: res.data.students_absent || 0,
+          attendance_rate: res.data.attendance_rate || 0,
+          faculty_on_duty: res.data.faculty_on_duty || 0,
+          total_faculty: res.data.total_faculty || 0,
+          gate_scans_today: res.data.gate_scans_today || 0,
+          active_gate_passes: res.data.active_gate_passes || 0,
+          sms_sent_today: res.data.sms_sent_today || 0,
+          sms_pending_count: res.data.sms_pending_count || 0,
+          kiosks_online: res.data.kiosks_online || 0,
+          total_kiosks: res.data.total_kiosks || 0,
+          hourly_scans: res.data.hourly_scans || [],
+          grade_levels: res.data.grade_levels || [],
+          recent_scans: res.data.recent_scans || [],
+        });
+
+        if (onGateStatusChange) {
+          onGateStatusChange((res.data.kiosks_online || 0) > 0);
+        }
       }
-    } catch (err) {
-      console.error('Failed to load dashboard metrics:', err);
+    } catch {
+      // In case of error, data remains as real empty state
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [onGateStatusChange]);
+  };
 
   useEffect(() => {
-    fetchStats();
-    const interval = setInterval(() => fetchStats(), 15000);
+    fetchDashboardData();
+    // Refresh every 20 seconds so real gate taps appear live
+    const interval = setInterval(fetchDashboardData, 20000);
     return () => clearInterval(interval);
-  }, [fetchStats]);
+  }, []);
+
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, color: '#64748b' }}>
-        <Loader2 className="animate-spin" size={24} color="#0284c7" />
-        <span style={{ fontWeight: 600 }}>Loading AttendSure overview metrics...</span>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 400, gap: 10 }}>
+        <RefreshCw className="animate-spin" size={26} color="#0284c7" />
+        <span style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>Loading school attendance data...</span>
       </div>
     );
   }
 
+  const hasHourlyScans = data.hourly_scans.some((h) => h.count > 0);
+
   return (
-    <div className="dashboard-viewport">
-      <style>{`
-        .dashboard-viewport {
-          height: 100%;
-          width: 100%;
-          display: flex;
-          flex-direction: column;
-          padding: 16px 24px;
-          box-sizing: border-box;
-          overflow: hidden;
-          text-align: left;
-        }
-
-        /* 4 Cards Grid - minmax(0, 1fr) prevents container blowout */
-        .metrics-grid {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 14px;
-          margin-bottom: 14px;
-          flex-shrink: 0;
-          width: 100%;
-        }
-
-        /* Bottom 2 Panels Grid */
-        .panels-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 14px;
-          flex: 1;
-          min-height: 0; /* Critical for flex container child sizing */
-          width: 100%;
-        }
-
-        @media (max-width: 1200px) {
-          .metrics-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-          .dashboard-viewport {
-            overflow-y: auto;
-          }
-          .panels-grid {
-            min-height: 240px;
-          }
-        }
-
-        @media (max-width: 640px) {
-          .metrics-grid {
-            grid-template-columns: 1fr;
-          }
-          .panels-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-      `}</style>
-
-      {/* Top Banner: Status & School Year */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexShrink: 0 }}>
-        <div
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '3px 12px',
-            backgroundColor: '#e0f2fe',
-            color: '#0369a1',
-            borderRadius: '20px',
-            fontSize: '0.72rem',
-            fontWeight: 700,
-            letterSpacing: '0.3px',
-          }}
-        >
-          <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#0284c7' }} />
-          {stats?.telemetry_status || 'WAITING FOR GATE TAPS'}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '4px 12px',
-              backgroundColor: '#ffffff',
-              border: '1px solid #e2e8f0',
-              borderRadius: '6px',
-              fontSize: '0.75rem',
-              fontWeight: 700,
-              color: '#334155',
-            }}
-          >
-            <Calendar size={13} color="#64748b" />
-            <span>{stats?.academic_year || 'S.Y. 2026 - 2027'}</span>
+    <div style={{ height: '100%', overflowY: 'auto', backgroundColor: '#f8fafc', padding: '20px 28px' }}>
+      <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+        
+        {/* Top Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h1 style={{ fontSize: '1.30rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                School Attendance Dashboard
+              </h1>
+              <span style={livePulseBadge}>
+                <span style={pulseDot} />
+                LIVE
+              </span>
+            </div>
+            <p style={{ fontSize: '0.80rem', color: '#64748b', margin: '4px 0 0 0' }}>
+              Real-time gate scans, classroom attendance, and parent SMS delivery from the database.
+            </p>
           </div>
 
           <button
-            onClick={() => fetchStats(true)}
+            onClick={fetchDashboardData}
             disabled={refreshing}
-            title="Refresh statistics"
-            style={{
-              padding: '4px 8px',
-              backgroundColor: '#ffffff',
-              border: '1px solid #e2e8f0',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              color: '#64748b',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+            title="Refresh Numbers"
+            style={refreshBtnStyle}
           >
-            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} color="#334155" />
+            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#334155' }}>Refresh</span>
           </button>
         </div>
-      </div>
 
-      {/* Main Left-Aligned Heading */}
-      <div style={{ marginBottom: 14, flexShrink: 0, textAlign: 'left' }}>
-        <h1 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
-          Attendance Overview
-        </h1>
-        <p style={{ margin: '3px 0 0 0', fontSize: '0.82rem', color: '#64748b' }}>
-          Live gate check-ins, classroom attendance, and staff time records.
-        </p>
-      </div>
-
-      {/* Responsive 4-Stat Cards Grid */}
-      <div className="metrics-grid">
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={metricLabelStyle}>STUDENTS IN SCHOOL</span>
-            <div style={{ backgroundColor: '#ecfdf5', padding: 3, borderRadius: '50%', color: '#10b981' }}>
-              <CheckCircle2 size={15} />
-            </div>
-          </div>
-          <div style={metricValueStyle}>{stats?.present_learners ?? 0}</div>
-          <div style={dividerStyle} />
-          <div style={metricSubtextStyle}>
-            {stats && stats.present_learners > 0
-              ? `${stats.present_learners} of ${stats.total_enrolled} enrolled active`
-              : 'Waiting for student gate transactions'}
-          </div>
-        </div>
-
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={metricLabelStyle}>ABSENT STUDENTS</span>
-            <div style={{ backgroundColor: '#fef2f2', padding: 3, borderRadius: '50%', color: '#ef4444' }}>
-              <AlertCircle size={15} />
-            </div>
-          </div>
-          <div style={metricValueStyle}>{stats?.unexcused_absences ?? 0}</div>
-          <div style={dividerStyle} />
-          <div style={metricSubtextStyle}>
-            {stats && stats.unexcused_absences > 0
-              ? `${stats.unexcused_absences} flagged in SMS outbox`
-              : 'Parent SMS notifications idle'}
-          </div>
-        </div>
-
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={metricLabelStyle}>TOTAL GATE SCANS</span>
-            <div style={{ backgroundColor: '#f0f9ff', padding: 3, borderRadius: '50%', color: '#0284c7' }}>
-              <Radio size={15} />
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, margin: '5px 0 6px 0' }}>
-            <span style={{ fontSize: '1.6rem', fontWeight: 800, color: '#0f172a' }}>
-              {stats?.gate_throughput ?? 0}
-            </span>
-            <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600 }}>scans today</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                padding: '2px 7px',
-                borderRadius: '10px',
-                fontSize: '0.65rem',
-                fontWeight: 600,
-                backgroundColor: stats?.turnstiles_active ? '#ecfdf5' : '#f1f5f9',
-                color: stats?.turnstiles_active ? '#059669' : '#64748b',
-              }}
-            >
-              <span
-                style={{
-                  width: 5,
-                  height: 5,
-                  borderRadius: '50%',
-                  backgroundColor: stats?.turnstiles_active ? '#10b981' : '#94a3b8',
-                }}
-              />
-              {stats?.turnstiles_active ? 'Gate Readers Online' : 'Gate Readers Offline'}
-            </span>
-          </div>
-          <div style={metricSubtextStyle}>Card taps and QR scans</div>
-        </div>
-
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={metricLabelStyle}>TEACHER DTR (FORM 48)</span>
-            <div style={{ backgroundColor: '#faf5ff', padding: 3, borderRadius: '50%', color: '#a855f7' }}>
-              <Clock size={15} />
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '5px 0 8px 0' }}>
-            <span style={{ fontSize: '1.6rem', fontWeight: 800, color: '#0f172a' }}>
-              {stats?.faculty_dtr_percentage ?? 0}%
-            </span>
-            <span
-              style={{
-                backgroundColor: '#f3e8ff',
-                color: '#7e22ce',
-                padding: '2px 6px',
-                borderRadius: '4px',
-                fontSize: '0.68rem',
-                fontWeight: 700,
-              }}
-            >
-              Form 48
-            </span>
-          </div>
-          <div style={dividerStyle} />
-          <div style={metricSubtextStyle}>
-            {stats && stats.total_faculty > 0
-              ? `${stats.faculty_tapped_today} of ${stats.total_faculty} faculty verified`
-              : 'No faculty registered'}
-          </div>
-        </div>
-      </div>
-
-      {/* Bottom Panels - Fills Remaining Vertical Space */}
-      <div className="panels-grid">
-        {/* Panel 1: Influx Distribution */}
-        <div style={panelCardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, flexShrink: 0 }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '0.92rem', fontWeight: 800, color: '#0f172a' }}>
-                Arrivals by Hour
-              </h3>
-              <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 1 }}>
-                Arrival volume recorded across turnstiles today
+        {/* 1. Main Number Cards */}
+        <div style={kpiGrid}>
+          {/* Students in School */}
+          <div style={kpiCard}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <span style={kpiLabel}>STUDENTS IN SCHOOL</span>
+                <div style={kpiValue}>{data.students_present.toLocaleString()}</div>
+              </div>
+              <div style={{ ...kpiIconBox, backgroundColor: '#ecfdf5', color: '#059669' }}>
+                <UserCheck size={20} />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.68rem', color: '#475569', fontWeight: 600 }}>
-              <span style={{ width: 8, height: 8, backgroundColor: '#0284c7', borderRadius: 2 }} />
-              <span>Total Taps</span>
+            <div style={kpiFooter}>
+              <span style={{ color: '#059669', fontWeight: 700 }}>
+                {data.attendance_rate}%
+              </span>
+              <span style={kpiSubtext}>of {data.total_students.toLocaleString()} enrolled</span>
             </div>
           </div>
 
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {stats && stats.influx_distribution.length > 0 ? (
-              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', gap: 6, padding: '4px 0' }}>
-                {stats.influx_distribution.map((item, i) => (
-                  <div key={i} style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+          {/* Absent Students */}
+          <div style={kpiCard}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <span style={kpiLabel}>ABSENT STUDENTS</span>
+                <div style={{ ...kpiValue, color: data.students_absent > 0 ? '#e11d48' : '#0f172a' }}>
+                  {data.students_absent.toLocaleString()}
+                </div>
+              </div>
+              <div style={{ ...kpiIconBox, backgroundColor: '#fff1f2', color: '#e11d48' }}>
+                <UserX size={20} />
+              </div>
+            </div>
+            <div style={kpiFooter}>
+              <span style={kpiSubtext}>No entrance gate scan recorded today</span>
+            </div>
+          </div>
+
+          {/* Teachers on Duty */}
+          <div style={kpiCard}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <span style={kpiLabel}>TEACHERS PRESENT</span>
+                <div style={kpiValue}>
+                  {data.faculty_on_duty}
+                  <span style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 500 }}>/{data.total_faculty}</span>
+                </div>
+              </div>
+              <div style={{ ...kpiIconBox, backgroundColor: '#f0fdf4', color: '#16a34a' }}>
+                <Clock size={20} />
+              </div>
+            </div>
+            <div style={kpiFooter}>
+              <span style={kpiSubtext}>Faculty Daily Time Record</span>
+            </div>
+          </div>
+
+          {/* Gate Scans Today */}
+          <div style={kpiCard}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <span style={kpiLabel}>TOTAL GATE SCANS</span>
+                <div style={kpiValue}>{data.gate_scans_today.toLocaleString()}</div>
+              </div>
+              <div style={{ ...kpiIconBox, backgroundColor: '#eff6ff', color: '#0284c7' }}>
+                <Scan size={20} />
+              </div>
+            </div>
+            <div style={kpiFooter}>
+              <span style={{ color: '#0284c7', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Radio size={12} /> {data.kiosks_online}/{data.total_kiosks} Scanners Online
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Middle Row: Hourly Arrivals + Real Recent Gate Scans */}
+        <div style={twoColGrid}>
+          
+          {/* Hourly Arrivals Chart */}
+          <div style={sectionCard}>
+            <div style={sectionCardHeader}>
+              <div>
+                <h3 style={sectionTitle}>Arrivals by Hour</h3>
+                <span style={sectionSubtitle}>Number of gate taps recorded throughout the day</span>
+              </div>
+              <div style={badgeStyle}>
+                <TrendingUp size={12} color="#0284c7" />
+                <span>Today's Log</span>
+              </div>
+            </div>
+
+            {hasHourlyScans ? (
+              <div style={{ height: 200, display: 'flex', alignItems: 'flex-end', gap: 10, padding: '14px 4px 6px 4px' }}>
+                {data.hourly_scans.map((item, idx) => (
+                  <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
+                    <span style={{ fontSize: '0.64rem', fontWeight: 700, color: item.is_peak ? '#0284c7' : '#64748b', marginBottom: 4 }}>
+                      {item.count > 0 ? item.count : ''}
+                    </span>
                     <div
                       style={{
                         width: '100%',
-                        backgroundColor: '#0284c7',
-                        borderRadius: '3px 3px 0 0',
-                        height: `${Math.min(item.count * 15, 100)}%`,
-                        minHeight: '6px',
+                        maxWidth: 32,
+                        height: `${Math.max(item.height, item.count > 0 ? 8 : 2)}%`,
+                        backgroundColor: item.is_peak ? '#0284c7' : (item.count > 0 ? '#93c5fd' : '#e2e8f0'),
+                        borderRadius: '4px 4px 0 0',
                       }}
                     />
-                    <span style={{ fontSize: '0.62rem', color: '#64748b' }}>{item.hour}</span>
+                    <span style={{ fontSize: '0.62rem', fontWeight: 600, color: '#64748b', marginTop: 6 }}>
+                      {item.hour}
+                    </span>
                   </div>
                 ))}
               </div>
             ) : (
-              <div style={emptyStateContainerStyle}>
-                <BarChart3 size={32} color="#cbd5e1" />
-                <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#1e293b', marginTop: 6 }}>
+              <div style={emptyBox}>
+                <Inbox size={26} color="#94a3b8" />
+                <span style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 6, fontWeight: 600 }}>
                   No Gate Check-ins Yet Today
-                </div>
-                <div style={{ fontSize: '0.72rem', color: '#94a3b8', maxWidth: 300, marginTop: 2 }}>
-                  Numbers update automatically as students tap at the entrance.
-                </div>
+                </span>
+                <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
+                  Numbers update automatically as students tap their card or QR code at the entrance gate.
+                </span>
               </div>
             )}
           </div>
-        </div>
 
-        {/* Panel 2: Section Attendance */}
-        <div style={panelCardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, flexShrink: 0 }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '0.92rem', fontWeight: 800, color: '#0f172a' }}>
-                Class Attendance
-              </h3>
-              <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 1 }}>
-                Based on teacher classroom scans today
+          {/* Recent Gate Activity */}
+          <div style={sectionCard}>
+            <div style={sectionCardHeader}>
+              <div>
+                <h3 style={sectionTitle}>Latest Gate Scans</h3>
+                <span style={sectionSubtitle}>Live check-ins from the school gate scanners</span>
               </div>
             </div>
 
-            <div style={{ display: 'flex', backgroundColor: '#f1f5f9', padding: 2, borderRadius: 5 }}>
-              <button
-                onClick={() => setSectionFilter('SECTIONS')}
-                style={{
-                  border: 'none',
-                  padding: '3px 8px',
-                  borderRadius: 4,
-                  fontSize: '0.7rem',
-                  fontWeight: 600,
-                  backgroundColor: sectionFilter === 'SECTIONS' ? '#ffffff' : 'transparent',
-                  color: sectionFilter === 'SECTIONS' ? '#0f172a' : '#64748b',
-                  cursor: 'pointer',
-                }}
-              >
-                All Classes
-              </button>
-              <button
-                onClick={() => setSectionFilter('TOP')}
-                style={{
-                  border: 'none',
-                  padding: '3px 8px',
-                  borderRadius: 4,
-                  fontSize: '0.7rem',
-                  fontWeight: 600,
-                  backgroundColor: sectionFilter === 'TOP' ? '#ffffff' : 'transparent',
-                  color: sectionFilter === 'TOP' ? '#0f172a' : '#64748b',
-                  cursor: 'pointer',
-                }}
-              >
-                Highest
-              </button>
-            </div>
-          </div>
+            {data.recent_scans.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                {data.recent_scans.map((scan) => (
+                  <div key={scan.id} style={scanRow}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div
+                        style={{
+                          ...directionBadge,
+                          backgroundColor: scan.direction === 'IN' ? '#ecfdf5' : '#fef2f2',
+                          color: scan.direction === 'IN' ? '#059669' : '#dc2626',
+                        }}
+                      >
+                        {scan.direction}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a' }}>
+                          {scan.person_name}
+                        </div>
+                        <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
+                          {scan.grade_section} &bull; {scan.scan_method} Tap
+                        </div>
+                      </div>
+                    </div>
 
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-            {stats && stats.section_attendance.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {stats.section_attendance.map((sec) => (
-                  <div key={sec.section_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #f1f5f9' }}>
-                    <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155' }}>{sec.section_name}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: '0.72rem', color: '#64748b' }}>{sec.present}/{sec.enrolled}</span>
-                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: sec.rate > 80 ? '#16a34a' : '#0284c7' }}>{sec.rate}%</span>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#1e293b' }}>
+                        {scan.scan_time}
+                      </div>
+                      <span style={{ fontSize: '0.62rem', color: '#059669', fontWeight: 600 }}>Recorded</span>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div style={emptyStateContainerStyle}>
-                <Users size={32} color="#cbd5e1" />
-                <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#1e293b', marginTop: 6 }}>
-                  No Class Attendance Yet
-                </div>
-                <div style={{ fontSize: '0.72rem', color: '#94a3b8', maxWidth: 300, marginTop: 2 }}>
-                  Class attendance will show here once teachers scan their students.
-                </div>
+              <div style={emptyBox}>
+                <Inbox size={26} color="#94a3b8" />
+                <span style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 6, fontWeight: 600 }}>
+                  No Gate Scans Recorded Today
+                </span>
+                <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
+                  Waiting for student or teacher gate check-ins.
+                </span>
               </div>
             )}
           </div>
         </div>
+
+        {/* 3. Bottom Row: Real Grade Level Attendance + Fast Actions */}
+        <div style={bottomGrid}>
+          
+          {/* Real Grade Level Breakdown */}
+          <div style={sectionCard}>
+            <div style={sectionCardHeader}>
+              <div>
+                <h3 style={sectionTitle}>Class Attendance by Grade Level</h3>
+                <span style={sectionSubtitle}>Today's student turnout across all grade levels</span>
+              </div>
+              <Layers size={16} color="#64748b" />
+            </div>
+
+            {data.grade_levels.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 4 }}>
+                {data.grade_levels.map((lvl, index) => (
+                  <div key={index} style={gradeCard}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#1e293b' }}>{lvl.grade}</span>
+                      <span style={{ fontSize: '0.76rem', fontWeight: 800, color: lvl.percentage >= 80 ? '#059669' : '#d97706' }}>
+                        {lvl.percentage}%
+                      </span>
+                    </div>
+                    <div style={progressBarTrack}>
+                      <div
+                        style={{
+                          ...progressBarFill,
+                          width: `${lvl.percentage}%`,
+                          backgroundColor: lvl.percentage >= 80 ? '#10b981' : '#f59e0b',
+                        }}
+                      />
+                    </div>
+                    <div style={{ fontSize: '0.66rem', color: '#64748b', marginTop: 4 }}>
+                      {lvl.present} present out of {lvl.total}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={emptyBox}>
+                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                  No grade levels or enrolled students found in database.
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Quick Actions & Parent SMS Gateway */}
+          <div style={sectionCard}>
+            <div style={sectionCardHeader}>
+              <div>
+                <h3 style={sectionTitle}>Parent SMS &amp; Quick Actions</h3>
+                <span style={sectionSubtitle}>Status of automated text notifications</span>
+              </div>
+              <Send size={15} color="#0284c7" />
+            </div>
+
+            {/* Real SMS Delivery Box */}
+            <div style={smsStatusBox}>
+              <div>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a' }}>
+                  {data.sms_sent_today.toLocaleString()} Parent SMS Sent Today
+                </div>
+                <div style={{ fontSize: '0.66rem', color: '#64748b' }}>
+                  {data.sms_pending_count} pending messages in queue
+                </div>
+              </div>
+              <span style={activeBadge}>SMS ACTIVE</span>
+            </div>
+
+            {/* Quick Action Buttons */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+              <button
+                style={actionBtnStyle}
+                onClick={() => alert('Feature: Issue Student Gate Pass modal.')}
+              >
+                <Activity size={14} color="#0284c7" />
+                <span>Issue Student Gate Pass / Exit Permit</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleIssueGatePass}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '7px 12px',
+                  backgroundColor: '#0284c7',
+                  color: '#ffffff',
+                  borderRadius: 6,
+                  border: 'none',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Issue Gate Pass
+              </button>
+
+              <button
+                style={actionBtnStyle}
+                onClick={() => alert('Feature: Export Daily Attendance Register.')}
+              >
+                <FileSpreadsheet size={14} color="#059669" />
+                <span>Open Daily Attendance Register (SF2)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );
 };
 
-const cardStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: '10px',
-  border: '1px solid #f1f5f9',
-  padding: '12px 16px',
-  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)',
-  minWidth: 0,
-  textAlign: 'left',
+// ============================================================================
+// STYLES
+// ============================================================================
+
+const livePulseBadge: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '2px 8px',
+  borderRadius: 12,
+  backgroundColor: '#ecfdf5',
+  color: '#059669',
+  fontSize: '0.64rem',
+  fontWeight: 800,
+  letterSpacing: '0.5px',
+  border: '1px solid #a7f3d0',
 };
 
-const panelCardStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: '10px',
-  border: '1px solid #f1f5f9',
-  padding: '14px 18px',
-  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)',
+const pulseDot: React.CSSProperties = {
+  width: 6,
+  height: 6,
+  borderRadius: '50%',
+  backgroundColor: '#10b981',
+};
+
+const refreshBtnStyle: React.CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
-  minWidth: 0,
-  textAlign: 'left',
+  alignItems: 'center',
+  gap: 6,
+  padding: '6px 12px',
+  backgroundColor: '#ffffff',
+  border: '1px solid #cbd5e1',
+  borderRadius: 8,
+  cursor: 'pointer',
 };
 
-const metricLabelStyle: React.CSSProperties = {
-  fontSize: '0.65rem',
+const kpiGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
+  gap: 16,
+  marginBottom: 20,
+};
+
+const kpiCard: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  borderRadius: 10,
+  border: '1px solid #e2e8f0',
+  padding: '16px 18px',
+  boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+};
+
+const kpiLabel: React.CSSProperties = {
+  display: 'block',
+  fontSize: '0.68rem',
   fontWeight: 700,
   color: '#64748b',
-  letterSpacing: '0.3px',
+  marginBottom: 4,
 };
 
-const metricValueStyle: React.CSSProperties = {
-  fontSize: '1.5rem',
+const kpiValue: React.CSSProperties = {
+  fontSize: '1.60rem',
   fontWeight: 800,
   color: '#0f172a',
-  margin: '5px 0 6px 0',
+  lineHeight: 1.1,
 };
 
-const dividerStyle: React.CSSProperties = {
-  height: '1px',
-  backgroundColor: '#f8fafc',
-  marginBottom: '6px',
+const kpiIconBox: React.CSSProperties = {
+  width: 38,
+  height: 38,
+  borderRadius: 8,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 };
 
-const metricSubtextStyle: React.CSSProperties = {
-  fontSize: '0.7rem',
+const kpiFooter: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  marginTop: 10,
+  paddingTop: 8,
+  borderTop: '1px solid #f8fafc',
+  fontSize: '0.72rem',
+};
+
+const kpiSubtext: React.CSSProperties = {
   color: '#94a3b8',
 };
 
-const emptyStateContainerStyle: React.CSSProperties = {
+const twoColGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1.3fr 1fr',
+  gap: 16,
+  marginBottom: 20,
+};
+
+const bottomGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1.2fr 1fr',
+  gap: 16,
+};
+
+const sectionCard: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  borderRadius: 10,
+  border: '1px solid #e2e8f0',
+  padding: '16px 18px',
+  boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+};
+
+const sectionCardHeader: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  marginBottom: 12,
+};
+
+const sectionTitle: React.CSSProperties = {
+  fontSize: '0.90rem',
+  fontWeight: 800,
+  color: '#0f172a',
+  margin: 0,
+};
+
+const sectionSubtitle: React.CSSProperties = {
+  fontSize: '0.70rem',
+  color: '#64748b',
+  marginTop: 2,
+  display: 'block',
+};
+
+const badgeStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '3px 8px',
+  borderRadius: 6,
+  backgroundColor: '#f0f9ff',
+  color: '#0284c7',
+  fontSize: '0.68rem',
+  fontWeight: 700,
+};
+
+const scanRow: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '8px 10px',
+  backgroundColor: '#f8fafc',
+  borderRadius: 6,
+  border: '1px solid #f1f5f9',
+};
+
+const directionBadge: React.CSSProperties = {
+  padding: '2px 6px',
+  borderRadius: 4,
+  fontSize: '0.66rem',
+  fontWeight: 800,
+};
+
+const gradeCard: React.CSSProperties = {
+  padding: '8px 12px',
+  backgroundColor: '#f8fafc',
+  borderRadius: 6,
+  border: '1px solid #f1f5f9',
+};
+
+const progressBarTrack: React.CSSProperties = {
+  width: '100%',
+  height: 6,
+  backgroundColor: '#e2e8f0',
+  borderRadius: 99,
+  overflow: 'hidden',
+};
+
+const progressBarFill: React.CSSProperties = {
+  height: '100%',
+  borderRadius: 99,
+};
+
+const smsStatusBox: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '10px 14px',
+  backgroundColor: '#f0f9ff',
+  borderRadius: 6,
+  border: '1px solid #e0f2fe',
+};
+
+const activeBadge: React.CSSProperties = {
+  padding: '2px 6px',
+  borderRadius: 4,
+  backgroundColor: '#0284c7',
+  color: '#ffffff',
+  fontSize: '0.60rem',
+  fontWeight: 800,
+};
+
+const actionBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  width: '100%',
+  padding: '9px 12px',
+  backgroundColor: '#ffffff',
+  border: '1px solid #e2e8f0',
+  borderRadius: 6,
+  fontSize: '0.76rem',
+  fontWeight: 700,
+  color: '#1e293b',
+  cursor: 'pointer',
+  textAlign: 'left',
+};
+
+const emptyBox: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'center',
-  height: '100%',
+  padding: '30px 16px',
   textAlign: 'center',
 };
+
+export default DashboardView;

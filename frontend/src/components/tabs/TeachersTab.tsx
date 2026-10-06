@@ -117,7 +117,7 @@ export const TeachersTab: React.FC = () => {
     <>
       <ModuleTableLayout
         title="Faculty Directory"
-        subtitle="Full CRUD management over teaching faculty and staff."
+        subtitle="Full CRUD management over teaching faculty and faculty."
         searchPlaceholder="Search by Employee ID or Name..."
         searchValue={search}
         onSearchChange={setSearch}

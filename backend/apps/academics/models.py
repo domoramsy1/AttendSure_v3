@@ -113,7 +113,7 @@ class SchoolProfile(models.Model):
     # Contact & Location Details (DepEd DO 31, s. 2019)
     address = models.TextField(blank=True, default='', help_text="Official School Physical Address")
     contact_number = models.CharField(max_length=100, blank=True, default='', help_text="Telephone / Mobile Contact")
-    email = models.EmailField(blank=True, default='', help_text="Official DepEd Institutional Email")
+    email = models.EmailField(blank=True, default='', help_text="Official DepEd School Email")
 
     # Administration / Head
     principal_name = models.CharField(max_length=150, blank=True, default='')
@@ -212,10 +212,10 @@ class IoTKiosk(models.Model):
 
 
 # ============================================================================
-# 2. PEOPLE & AUTHENTICATION (STAFF, STUDENTS, USER PROFILES)
+# 2. PEOPLE & AUTHENTICATION (Faculty, STUDENTS, USER PROFILES)
 # ============================================================================
 
-class StaffProfile(models.Model):
+class FacultyProfile(models.Model):
     id = models.BigAutoField(primary_key=True)
     employee_id = models.CharField(max_length=50, unique=True, help_text="Unique Employee Number")
     first_name = models.CharField(max_length=100)
@@ -228,7 +228,7 @@ class StaffProfile(models.Model):
     email = models.EmailField(max_length=150, blank=True, default='')
     
     # Visual Identification & Physical Scanner Tokens
-    photo = models.ImageField(upload_to='staff/', default='staff/default_avatar.png', blank=True)
+    photo = models.ImageField(upload_to='faculty/', default='faculty/default_avatar.png', blank=True)
     photo_updated_at = models.DateTimeField(null=True, blank=True)
     rfid_uid = models.CharField(max_length=64, unique=True, null=True, blank=True, help_text="RFID card UID")
     qr_token = models.CharField(max_length=128, unique=True, null=True, blank=True, help_text="Cryptographic QR token")
@@ -239,7 +239,7 @@ class StaffProfile(models.Model):
         blank=True,
         null=True,
         unique=True,
-        help_text="Unique hardware UUID of the staff phone."
+        help_text="Unique hardware UUID of the faculty phone."
     )
     device_model = models.CharField(
         max_length=100,
@@ -260,18 +260,18 @@ class StaffProfile(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='created_staff_profiles'
+        related_name='created_faculty_profiles'
     )
     updated_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='updated_staff_profiles'
+        related_name='updated_faculty_profiles'
     )
 
     class Meta:
-        db_table = 'staff_profiles'
+        db_table = 'faculty_profiles'
         ordering = ['last_name', 'first_name']
 
     def __str__(self):
@@ -281,8 +281,8 @@ class StaffProfile(models.Model):
 class UserProfile(models.Model):
     id = models.BigAutoField(primary_key=True)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
-    staff = models.OneToOneField(
-        StaffProfile,
+    faculty = models.OneToOneField(
+        FacultyProfile,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -391,7 +391,7 @@ class Section(models.Model):
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='sections')
     grade_level = models.ForeignKey(GradeLevel, on_delete=models.CASCADE, related_name='sections')
     adviser = models.ForeignKey(
-        StaffProfile,
+        FacultyProfile,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -480,7 +480,7 @@ class Schedule(models.Model):
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='schedules')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='schedules')
     teacher = models.ForeignKey(
-        StaffProfile,
+        FacultyProfile,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -515,9 +515,9 @@ class ScheduleDay(models.Model):
 # 4. HIGH-THROUGHPUT LOGS, GATE TELEMETRY & ATTENDANCE
 # ============================================================================
 
-class StaffGateLog(models.Model):
+class FacultyGateLog(models.Model):
     id = models.BigAutoField(primary_key=True)
-    staff = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='gate_logs')
+    faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='gate_logs')
     kiosk = models.ForeignKey(IoTKiosk, on_delete=models.SET_NULL, null=True, blank=True)
     scan_time = models.DateTimeField(default=timezone.now)
     direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES)
@@ -525,7 +525,7 @@ class StaffGateLog(models.Model):
     raw_identifier = models.CharField(max_length=128)
 
     class Meta:
-        db_table = 'staff_gate_logs'
+        db_table = 'faculty_gate_logs'
         ordering = ['-scan_time']
 
 
@@ -560,7 +560,7 @@ class SubjectAttendanceLog(models.Model):
     id = models.BigAutoField(primary_key=True)
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='subject_attendance')
     schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name='attendance_records')
-    teacher = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='submitted_attendance')
+    teacher = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='submitted_attendance')
     attendance_date = models.DateField(default=timezone.now)
     scanned_at = models.DateTimeField(default=timezone.now)
     status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default='PRESENT')
@@ -608,7 +608,7 @@ class DailyAttendanceSummary(models.Model):
 
 class FacultyHeartbeat(models.Model):
     id = models.BigAutoField(primary_key=True)
-    staff = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='heartbeats')
+    faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='heartbeats')
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     battery_level = models.IntegerField(default=100)
@@ -619,7 +619,7 @@ class FacultyHeartbeat(models.Model):
         db_table = 'faculty_heartbeats'
         ordering = ['-recorded_at']
         indexes = [
-            models.Index(fields=['staff', 'recorded_at'], name='idx_heartbeat_time'),
+            models.Index(fields=['faculty', 'recorded_at'], name='idx_heartbeat_time'),
         ]
 
 
@@ -631,7 +631,7 @@ class LoafingIncident(models.Model):
     ]
 
     id = models.BigAutoField(primary_key=True)
-    staff = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='loafing_logs')
+    faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='loafing_logs')
     incident_date = models.DateField(default=timezone.now)
     trigger_reason = models.CharField(max_length=255)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING_REVIEW')
@@ -646,9 +646,9 @@ class LoafingIncident(models.Model):
 class GatePass(models.Model):
     id = models.BigAutoField(primary_key=True)
     pass_number = models.CharField(max_length=50, unique=True)
-    staff = models.ForeignKey(StaffProfile, on_delete=models.SET_NULL, null=True, blank=True)
+    faculty = models.ForeignKey(FacultyProfile, on_delete=models.SET_NULL, null=True, blank=True)
     student = models.ForeignKey(Student, on_delete=models.SET_NULL, null=True, blank=True)
-    issued_by = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='issued_passes')
+    issued_by = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='issued_passes')
     pass_type = models.CharField(max_length=50, default='Official Exit Permit')
     reason = models.TextField()
     valid_from = models.DateTimeField()

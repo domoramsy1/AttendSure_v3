@@ -119,29 +119,29 @@ class Migration(migrations.Migration):
             field=models.TextField(blank=True, help_text='Official School Institutional Crest / Seal', null=True),
         ),
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='created_at',
             field=models.DateTimeField(default=django.utils.timezone.now),
         ),
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='created_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='created_staff_profiles', to=settings.AUTH_USER_MODEL),
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='created_faculty_profiles', to=settings.AUTH_USER_MODEL),
         ),
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='photo_updated_at',
             field=models.DateTimeField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='updated_at',
             field=models.DateTimeField(auto_now=True),
         ),
         migrations.AddField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='updated_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='updated_staff_profiles', to=settings.AUTH_USER_MODEL),
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='updated_faculty_profiles', to=settings.AUTH_USER_MODEL),
         ),
         migrations.AddField(
             model_name='student',
@@ -359,37 +359,37 @@ class Migration(migrations.Migration):
             field=models.CharField(choices=[('CLASS_TAP', 'Classroom Attendance Tap'), ('GATE_TAP', 'Gate Kiosk Tap'), ('GATE_PASS', 'Gate Pass Issuance'), ('LOAFING_ALERT', 'Geofence Perimeter Alert'), ('ABSENCE_WARNING', 'Consecutive Absence Alert'), ('BROADCAST', 'School Announcement')], default='CLASS_TAP', max_length=50),
         ),
         migrations.AlterField(
-            model_name='staffgatelog',
+            model_name='facultygatelog',
             name='direction',
             field=models.CharField(choices=[('IN', 'Entry / Arrival'), ('OUT', 'Exit / Departure')], max_length=10),
         ),
         migrations.AlterField(
-            model_name='staffgatelog',
+            model_name='facultygatelog',
             name='scan_method',
             field=models.CharField(choices=[('RFID', 'RFID Card Tap'), ('QR', 'QR Code Scan')], default='RFID', max_length=10),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='department',
             field=models.CharField(blank=True, default='Faculty', max_length=100),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='employee_id',
             field=models.CharField(help_text='Unique Employee Number', max_length=50, unique=True),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='position',
             field=models.CharField(blank=True, default='Teacher', max_length=100),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='qr_token',
             field=models.CharField(blank=True, help_text='Cryptographic QR token', max_length=128, null=True, unique=True),
         ),
         migrations.AlterField(
-            model_name='staffprofile',
+            model_name='facultyprofile',
             name='rfid_uid',
             field=models.CharField(blank=True, help_text='RFID card UID', max_length=64, null=True, unique=True),
         ),
@@ -486,7 +486,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('REGISTRAR', 'Registrar / Academic Staff'), ('TEACHER', 'Teacher / Faculty Adviser'), ('STAFF', 'School Staff')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('REGISTRAR', 'Registrar / Academic Faculty'), ('TEACHER', 'Teacher / Faculty Adviser'), ('STAFF', 'School Faculty')], default='TEACHER', max_length=20),
         ),
         migrations.AlterModelTable(
             name='schoolprofile',

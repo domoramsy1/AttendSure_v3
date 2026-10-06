@@ -28,9 +28,9 @@ class IsAdviserOrAdmin(permissions.BasePermission):
             return False
         if profile.role == 'ADMIN':
             return True
-        if profile.role == 'TEACHER' and profile.staff:
+        if profile.role == 'TEACHER' and profile.faculty:
             # Check if teacher is the registered adviser of the section
-            return getattr(obj, 'adviser_id', None) == profile.staff.id
+            return getattr(obj, 'adviser_id', None) == profile.faculty.id
         return False
 
 

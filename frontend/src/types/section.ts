@@ -9,10 +9,10 @@
 export interface UserSession {
   token: string;
   username: string;
-  staff_name: string;
+  faculty_name: string;
   role: string;
   user_id?: number;
-  staff_id?: string | null;
+  faculty_id?: string | null;
   is_superuser?: boolean;
 }
 
