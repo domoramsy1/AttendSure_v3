@@ -33,8 +33,14 @@ export const UsersTab: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await apiClient.get<SystemUser[]>('/users/');
-      setUsers(res.data);
+      const res = await apiClient.get<any>('/users/');
+      const raw = res.data;
+      const items: SystemUser[] = Array.isArray(raw)
+        ? raw
+        : raw?.results && Array.isArray(raw.results)
+        ? raw.results
+        : [];
+      setUsers(items);
     } catch (err: any) {
       setError('Failed to fetch user accounts. Admin access required.');
     } finally {
@@ -71,10 +77,10 @@ export const UsersTab: React.FC = () => {
 
       if (editingUser) {
         const res = await apiClient.put<SystemUser>(`/users/${editingUser.id}/`, payload);
-        setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? res.data : u)));
+        setUsers((prev) => (Array.isArray(prev) ? prev.map((u) => (u.id === editingUser.id ? res.data : u)) : [res.data]));
       } else {
         const res = await apiClient.post<SystemUser>('/users/', payload);
-        setUsers((prev) => [res.data, ...prev]);
+        setUsers((prev) => (Array.isArray(prev) ? [res.data, ...prev] : [res.data]));
       }
       setIsModalOpen(false);
     } catch (err: any) {
@@ -88,21 +94,22 @@ export const UsersTab: React.FC = () => {
     if (!window.confirm(`Delete user account "${user.username}"?`)) return;
     try {
       await apiClient.delete(`/users/${user.id}/`);
-      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      setUsers((prev) => (Array.isArray(prev) ? prev.filter((u) => u.id !== user.id) : []));
     } catch (err) {
       alert('Failed to delete user.');
     }
   };
 
-  const filtered = users.filter((u) =>
-    u.username.toLowerCase().includes(search.toLowerCase()) ||
-    u.email.toLowerCase().includes(search.toLowerCase())
+  const userList = Array.isArray(users) ? users : [];
+  const filtered = userList.filter((u) =>
+    (u.username || '').toLowerCase().includes(search.toLowerCase()) ||
+    (u.email || '').toLowerCase().includes(search.toLowerCase())
   );
 
   return (
     <>
       <ModuleTableLayout
-        title="System Users"
+        title="Users"
         subtitle="Manage access roles and credentials directly from the database."
         searchPlaceholder="Search username or email..."
         searchValue={search}
@@ -213,10 +220,10 @@ export const UsersTab: React.FC = () => {
               onChange={(e) => setFormData({ ...formData, role: e.target.value })}
               style={inputStyle}
             >
-              <option value="ADMIN">System Administrator</option>
-              <option value="REGISTRAR">School Registrar</option>
-              <option value="TEACHER">Faculty Teacher</option>
-              <option value="SECURITY">Gate Security Guard</option>
+              <option value="ADMIN">Administrator</option>
+              <option value="REGISTRAR">Registrar</option>
+              <option value="TEACHER">Faculty</option>
+              <option value="SECURITY">Guard</option>
             </select>
           </div>
 
@@ -239,7 +246,7 @@ export const UsersTab: React.FC = () => {
               Cancel
             </Button>
             <Button variant="primary" size="md" type="submit" disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" size={16} /> : null}
+              {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : null}
               {editingUser ? 'Update Account' : 'Create User'}
             </Button>
           </div>
@@ -258,3 +265,5 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
   boxSizing: 'border-box',
 };
+
+export default UsersTab;

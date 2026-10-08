@@ -286,7 +286,7 @@ export const GeofenceTab: React.FC = () => {
 
     setResettingId(facultyId);
     try {
-      const res = await apiClient.post(`/teachers/${facultyId}/reset-device/`);
+      const res = await apiClient.post(`/facultys/${facultyId}/reset-device/`);
       showAlert({
         title: 'Device Binding Unlocked',
         message: res.data.message || `Device binding for ${facultyName} has been cleared.`,

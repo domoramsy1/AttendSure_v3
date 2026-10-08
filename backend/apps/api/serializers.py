@@ -19,6 +19,8 @@ from apps.academics.models import (
     Student,
     Subject,
     UserProfile,
+    USER_ROLE_CHOICES,
+    
 )
 
 
@@ -465,53 +467,23 @@ class ScheduleSerializer(serializers.ModelSerializer):
             return f"{obj.start_time.strftime('%I:%M %p')} - {obj.end_time.strftime('%I:%M %p')}"
         return "TBD"
 
-
 class UserManagementSerializer(serializers.ModelSerializer):
-    role = serializers.CharField(source='profile.role', default='TEACHER')
+    role = serializers.ChoiceField(choices=USER_ROLE_CHOICES, write_only=True)
+    role_display = serializers.CharField(source='profile.get_role_display', read_only=True)
+    current_role = serializers.CharField(source='profile.role', read_only=True)
 
     class Meta:
         model = User
-        fields = [
-            'id',
-            'username',
-            'email',
-            'first_name',
-            'last_name',
-            'is_active',
-            'role',
-            'password',
-        ]
-        extra_kwargs = {
-            'password': {'write_only': True, 'required': False}
-        }
-
-    def create(self, validated_data):
-        profile_data = validated_data.pop('profile', {})
-        role = profile_data.get('role', 'TEACHER')
-        password = validated_data.pop('password', None)
-        user = User.objects.create(**validated_data)
-        if password:
-            user.set_password(password)
-            user.save()
-        UserProfile.objects.update_or_create(user=user, defaults={'role': role})
-        return user
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_active', 'role', 'role_display', 'current_role']
 
     def update(self, instance, validated_data):
-        profile_data = validated_data.pop('profile', {})
-        role = profile_data.get('role', None)
-        password = validated_data.pop('password', None)
-
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-
-        if password:
-            instance.set_password(password)
-        instance.save()
-
-        if role:
-            UserProfile.objects.update_or_create(user=instance, defaults={'role': role})
-        return instance
-
+        new_role = validated_data.pop('role', None)
+        user = super().update(instance, validated_data)
+        if new_role:
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.role = new_role
+            profile.save(update_fields=['role'])
+        return user
 
 class AuditLogSerializer(serializers.ModelSerializer):
     performed_by_name = serializers.SerializerMethodField(read_only=True)

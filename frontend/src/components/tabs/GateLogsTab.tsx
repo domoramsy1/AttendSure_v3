@@ -170,7 +170,7 @@ export const GateLogsTab: React.FC = () => {
 
       <div style={{ flex: 1, minHeight: 0 }}>
         <ModuleTableLayout
-          title="Gate Access Logs"
+          title="Gate Logs"
           subtitle="Real-time audit ledger of RFID taps and QR scans at campus gate scanner kiosks."
           searchPlaceholder="Search by name, LRN, or Employee ID..."
           searchValue={search}

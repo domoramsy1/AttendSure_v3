@@ -3,7 +3,7 @@ export * from './SF1ReportTab';
 export * from './SF2ReportTab';
 export * from './SF4ReportTab';
 export * from './StudentsTab';
-export * from './TeachersTab';
+export * from './FacultyTab';
 export * from './DTRTab';
 export * from './ScannersTab';
 export * from './GatePassesTab';

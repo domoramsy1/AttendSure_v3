@@ -225,7 +225,7 @@ const handleIssueGatePass = () => {
             </div>
           </div>
 
-          {/* Teachers on Duty */}
+          {/* Facultys on Duty */}
           <div style={kpiCard}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
@@ -363,7 +363,7 @@ const handleIssueGatePass = () => {
                   No Gate Scans Recorded Today
                 </span>
                 <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
-                  Waiting for student or teacher gate check-ins.
+                  Waiting for student or faculty gate check-ins.
                 </span>
               </div>
             )}

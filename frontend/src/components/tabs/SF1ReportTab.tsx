@@ -1,12 +1,20 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import apiClient from '../../api/client';
 import { KagawaranNgEdukasyonLogo } from '../ui/KagawaranNgEdukasyonLogo';
+import { DepEdLogo } from '../ui/DepEdLogo';
 import { ReportNavBar } from '../reports/ReportNavBar';
 import { PageSetupModal } from '../common/PageSetupModal';
 import { usePageSetup } from '../../hooks/usePageSetup';
 import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+
+const DepEdLogoComp = DepEdLogo as React.ComponentType<{
+  className?: string;
+  width?: number | string;
+  height?: number | string;
+  style?: React.CSSProperties;
+}>;
 
 interface Learner {
   id: number;
@@ -40,15 +48,20 @@ interface SF1Data {
   school_head: string;
   adviser_name: string;
   academic_year: string;
+  as_of_date?: string;
   section_name: string;
   grade_level: string;
-  left_logo: string | null;
-  right_logo: string | null;
+  left_logo?: string | null;
+  right_logo?: string | null;
+  has_enrolled_students?: boolean;
+  notice?: string;
   total_male: number;
   total_female: number;
   total_combined: number;
-  males: Learner[];
-  females: Learner[];
+  males?: Learner[];
+  females?: Learner[];
+  students?: Learner[];
+  learners?: Learner[];
 }
 
 interface SF1PageChunk {
@@ -77,14 +90,22 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   );
   const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('');
   const [selectedGradeLevel, setSelectedGradeLevel] = useState<string>('ALL');
+  const [selectedDate, setSelectedDate] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [reportData, setReportData] = useState<SF1Data | null>(null);
   const [loading, setLoading] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPageSetupOpen, setIsPageSetupOpen] = useState(false);
 
-  // Persistent Page Setup Hook
+  // Auto-Scale Engine
+  const [zoomScale, setZoomScale] = useState<number>(1);
+  const [fitToWidth, setFitToWidth] = useState<boolean>(true);
+  const viewportContainerRef = useRef<HTMLDivElement>(null);
+
   const { config: savedPageConfig, saveConfig: savePageConfig } = usePageSetup('sf1');
   const [activePageConfig, setActivePageConfig] = useState<PageSetupConfig>(savedPageConfig);
 
@@ -94,6 +115,18 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
   const reportRef = useRef<HTMLDivElement>(null);
 
+  // Synchronize print state with browser dialog
+  useEffect(() => {
+    const handleBeforePrint = () => setIsPrinting(true);
+    const handleAfterPrint = () => setIsPrinting(false);
+    window.addEventListener('beforeprint', handleBeforePrint);
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
+    };
+  }, []);
+
   useEffect(() => {
     if (sectionId) setSelectedSectionId(String(sectionId));
   }, [sectionId]);
@@ -102,9 +135,10 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     const fetchSections = async () => {
       try {
         const res = await apiClient.get('/sections/');
-        setSections(res.data);
-        if (!selectedSectionId && res.data.length > 0) {
-          setSelectedSectionId(String(res.data[0].id));
+        const data = Array.isArray(res.data) ? res.data : res.data.results || [];
+        setSections(data);
+        if (!selectedSectionId && data.length > 0) {
+          setSelectedSectionId(String(data[0].id));
         }
       } catch (err) {
         console.error('Failed to load sections:', err);
@@ -113,26 +147,78 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     fetchSections();
   }, [selectedSectionId]);
 
+  // Strict Date Filter Query
   const fetchSF1 = useCallback(async () => {
     if (!selectedSectionId) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await apiClient.get<SF1Data>(`/reports/sf1/${selectedSectionId}/`);
+      const res = await apiClient.get<SF1Data>(`/reports/sf1/${selectedSectionId}/`, {
+        params: {
+          as_of_date: selectedDate || '',
+          date: selectedDate || '',
+          academic_year: selectedAcademicYear || '',
+          school_year: selectedAcademicYear || '',
+        },
+      });
       setReportData(res.data);
-      if (res.data?.academic_year && !selectedAcademicYear) {
+      if (res.data?.academic_year) {
         setSelectedAcademicYear(res.data.academic_year);
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to generate official DepEd SF1 report.');
+      setError(err?.response?.data?.error || 'Failed to generate official DepEd SF1 report.');
     } finally {
       setLoading(false);
     }
-  }, [selectedSectionId, selectedAcademicYear]);
+  }, [selectedSectionId, selectedAcademicYear, selectedDate]);
 
   useEffect(() => {
     fetchSF1();
   }, [fetchSF1]);
+
+  const updateFitScale = useCallback(() => {
+    if (!viewportContainerRef.current) return;
+    const containerWidth = viewportContainerRef.current.clientWidth - 48;
+    const targetWidth = 13.5 * 96;
+    if (containerWidth > 0 && targetWidth > 0) {
+      const scale = containerWidth / targetWidth;
+      setZoomScale(Number(Math.min(1.05, Math.max(0.45, scale)).toFixed(3)));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (fitToWidth && !isPrinting && !exportingPdf) {
+      const timer = setTimeout(updateFitScale, 50);
+      window.addEventListener('resize', updateFitScale);
+      return () => {
+        clearTimeout(timer);
+        window.removeEventListener('resize', updateFitScale);
+      };
+    }
+  }, [fitToWidth, isPrinting, exportingPdf, updateFitScale, reportData]);
+
+  const fontSizes = useMemo(() => {
+    const raw = (activePageConfig as any)?.fontSize;
+    let base = 5.2;
+
+    if (typeof raw === 'number' && raw > 0) {
+      base = raw;
+    } else if (raw === 'small' || raw === 'compact') {
+      base = 4.6;
+    } else if (raw === 'large') {
+      base = 5.8;
+    } else if (raw === 'xlarge') {
+      base = 6.4;
+    }
+
+    return {
+      table: `${base}pt`,
+      header: `${(base * 0.96).toFixed(1)}pt`,
+      subHeader: `${(base * 0.8).toFixed(1)}pt`,
+      legend: `${(base * 0.88).toFixed(1)}pt`,
+      footer: `${(base * 0.9).toFixed(1)}pt`,
+    };
+  }, [activePageConfig]);
 
   const availableAcademicYears = useMemo(() => {
     const years = Array.from(
@@ -146,13 +232,11 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     return years.length > 0 ? years : ['2026-2027'];
   }, [reportData, sections]);
 
+  // Real Database Learners List
   const sortedLearners = useMemo(() => {
-    if (!reportData) return [];
-    const combined = [
-      ...(reportData.males || []),
-      ...(reportData.females || []),
-    ];
-    const sorted = combined.sort((a, b) => a.name.localeCompare(b.name));
+    if (!reportData || reportData.has_enrolled_students === false) return [];
+    const raw = reportData.students || reportData.learners || [];
+    const sorted = [...raw].sort((a, b) => a.name.localeCompare(b.name));
     if (!searchQuery.trim()) return sorted;
 
     const q = searchQuery.toLowerCase().trim();
@@ -161,7 +245,21 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     );
   }, [reportData, searchQuery]);
 
-  // Document Tracking ID and Printed Date/Time (Solid Black)
+  const maleCount = useMemo(
+    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_male ?? sortedLearners.filter((l) => l.sex === 'M').length),
+    [reportData, sortedLearners]
+  );
+  const femaleCount = useMemo(
+    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_female ?? sortedLearners.filter((l) => l.sex === 'F').length),
+    [reportData, sortedLearners]
+  );
+  const totalCount = useMemo(
+    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_combined ?? sortedLearners.length),
+    [reportData, sortedLearners]
+  );
+
+  const isRosterEmpty = sortedLearners.length === 0;
+
   const auditMeta = useMemo(() => {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -178,15 +276,14 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     });
     const printedAt = `${dateFormatted} at ${timeFormatted}`;
 
-    const schoolIdStr = reportData?.school_id || '304033';
+    const schoolIdStr = reportData?.school_id || '';
     const dateStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
     const timeCode = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
     const trackingId = `DOC-SF1-${schoolIdStr}-${dateStamp}-${timeCode}`;
 
     return { printedAt, trackingId };
-  }, [reportData, selectedSectionId]);
+  }, [reportData]);
 
-  // Database audit log dispatch
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
       await apiClient.post('/reports/audit-logs/', {
@@ -202,9 +299,8 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     }
   };
 
-  // Dynamic Pagination Engine: Only moves to next page when data cannot fit
   const paginatedPages = useMemo(() => {
-    if (activePageConfig.layoutMode === 'pageless') {
+    if (activePageConfig.layoutMode === 'pageless' || sortedLearners.length <= 25) {
       return [
         {
           pageNumber: 1,
@@ -231,7 +327,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     const footerH = 1.95;
     const rowH = 0.175;
 
-    // Check if entire section fits on 1 page
     const singlePageOverhead = fullHeaderH + theadH + footerH + trackingH;
     const singlePageCapacity = Math.floor((printableHeight - singlePageOverhead) / rowH);
 
@@ -248,7 +343,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       ];
     }
 
-    // When data exceeds 1 page, chunk dynamically
     const pages: SF1PageChunk[] = [];
     let currentIdx = 0;
     const totalLearners = sortedLearners.length;
@@ -287,7 +381,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       }
     }
 
-    // Safety check for summary footer placement
     if (pages.length > 0 && !pages[pages.length - 1].showFooter) {
       const pageNum: number = pages.length + 1;
       const showFullHeader = (activePageConfig.headerRepeat || 'all_pages') === 'all_pages';
@@ -323,31 +416,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     const cleanSection = (reportData?.section_name || 'Section').replace(/[^a-zA-Z0-9]/g, '_');
     return `SF1_Report_${cleanGrade}_${cleanSection}_${timestamp}`;
   };
-
-  const sheetDimensions = useMemo(() => {
-    const m = activePageConfig.margins;
-    const paddingStr = `${m.top}in ${m.right}in ${m.bottom}in ${m.left}in`;
-
-    if (activePageConfig.layoutMode === 'pageless') {
-      return {
-        width: '100%',
-        maxWidth: '100%',
-        boxShadow: 'none',
-        padding: paddingStr,
-      };
-    }
-
-    const paper = PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.legal;
-    const isLandscape = activePageConfig.orientation === 'landscape';
-    const widthInches = isLandscape ? paper.height : paper.width;
-
-    return {
-      width: '100%',
-      maxWidth: `${widthInches}in`,
-      boxShadow: '0 4px 24px rgba(0,0,0,0.12)',
-      padding: paddingStr,
-    };
-  }, [activePageConfig]);
 
   const handleToggleLayoutMode = (newMode: LayoutMode) => {
     const updated: PageSetupConfig = { ...activePageConfig, layoutMode: newMode };
@@ -386,9 +454,14 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  // Safe Browser Print flow: resets screen transforms before the print dialog opens
   const handlePrint = () => {
     logReportAudit('PRINT');
-    window.print();
+    setIsPrinting(true);
+    setTimeout(() => {
+      window.print();
+      setIsPrinting(false);
+    }, 120);
   };
 
   const handleDownloadPDF = async () => {
@@ -403,26 +476,11 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
           script.onload = () => resolve((window as any).html2pdf);
           script.onerror = reject;
+          document.head.appendChild(script);
         });
         html2pdfInstance = (window as any).html2pdf;
       }
 
-      const isLandscape = activePageConfig.orientation === 'landscape';
-      const isPageless = activePageConfig.layoutMode === 'pageless';
-      const isSingle = paginatedPages.length === 1;
-      const paper = PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.legal;
-      const widthInches = isLandscape ? paper.height : paper.width;
-
-      let jsPdfFormat: string | number[] =
-        activePageConfig.paperSize === 'folio' ? [8.5, 13] : activePageConfig.paperSize;
-
-      if (isPageless && reportRef.current) {
-        const scrollHeightPx = reportRef.current.scrollHeight;
-        const scrollWidthPx = reportRef.current.scrollWidth;
-        const approxHeightInches = Number((scrollHeightPx / 96).toFixed(2)) + 0.3;
-        const approxWidthInches = Number((scrollWidthPx / 96).toFixed(2)) || widthInches;
-        jsPdfFormat = [approxWidthInches, approxHeightInches];
-      }
 
       const opt = {
         margin: [0, 0, 0, 0],
@@ -431,16 +489,16 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         html2canvas: { scale: 2, useCORS: true, logging: false },
         jsPDF: {
           unit: 'in',
-          format: jsPdfFormat,
-          orientation: isLandscape ? 'landscape' : 'portrait',
+          format: activePageConfig.paperSize === 'folio' ? [8.5, 13] : activePageConfig.paperSize,
+          orientation: 'landscape',
         },
-        pagebreak: isSingle || isPageless ? { mode: [] } : { mode: ['css', 'legacy'] },
+        pagebreak: paginatedPages.length === 1 ? { mode: [] } : { mode: ['css'] },
       };
 
       const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
       await saveFileWithPicker(pdfBlob, `${getBaseFilename()}.pdf`, 'application/pdf', 'pdf', 'PDF Document (*.pdf)');
     } catch {
-      alert('Unable to generate PDF directly. Please use the Print button and choose "Save as PDF".');
+      handlePrint();
     } finally {
       setExportingPdf(false);
     }
@@ -468,11 +526,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     await saveFileWithPicker(blob, `${getBaseFilename()}.xls`, 'application/vnd.ms-excel', 'xls', 'Excel Worksheet (*.xls)');
   };
 
-  const handleExportGoogleSheets = () => {
-    handleExportExcel();
-    window.open('https://sheets.new', '_blank');
-  };
-
   const handleExportWord = async () => {
     if (!reportRef.current || !reportData) return;
     logReportAudit('WORD');
@@ -491,11 +544,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     `;
     const blob = new Blob([wordContent], { type: 'application/msword;charset=utf-8;' });
     await saveFileWithPicker(blob, `${getBaseFilename()}.doc`, 'application/msword', 'doc', 'Word Document (*.doc)');
-  };
-
-  const handleExportGoogleDocs = () => {
-    handleExportWord();
-    window.open('https://docs.new', '_blank');
   };
 
   const handleExportCSV = async () => {
@@ -534,12 +582,12 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       ];
     });
 
-    const auditMetaComments = [
+    const csvContent = '\uFEFF' + [
       `# DOCUMENT TRACKING ID: ${auditMeta.trackingId}`,
       `# DATE AND TIME PRINTED: ${auditMeta.printedAt}`,
-    ];
-
-    const csvContent = '\uFEFF' + [...auditMetaComments, headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+      headers.join(','),
+      ...rows.map((r) => r.join(','))
+    ].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     await saveFileWithPicker(blob, `${getBaseFilename()}.csv`, 'text/csv', 'csv', 'CSV Document (*.csv)');
   };
@@ -556,10 +604,8 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     await saveFileWithPicker(blob, `${getBaseFilename()}.json`, 'application/json', 'json', 'JSON Document (*.json)');
   };
 
-  // Full Official Top Header Box (DepEd Manual of Style Fonts and Sizes)
   const renderHeader = () => (
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
-      {/* Seal – 0.76 Inch */}
       <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center' }}>
         {reportData?.left_logo ? (
           <img src={reportData.left_logo} alt="Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
@@ -572,21 +618,17 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ textAlign: 'center', marginBottom: 6 }}>
-          {/* Republic of the Philippines – Old English Text MT (12 point size, bold) */}
           <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '12pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.15 }}>
             Republic of the Philippines
           </div>
-          {/* Department of Education – Old English Text MT (18 point size, bold) */}
           <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '18pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
             Department of Education
           </div>
-          {/* Name of Regional Office – Tahoma (10 point size, bold) */}
           {reportData?.region && (
             <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2, marginTop: 1 }}>
               {reportData.region}
             </div>
           )}
-          {/* Name of Office – Tahoma (10 point size, bold) */}
           {reportData?.division && (
             <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
               {reportData.division}
@@ -607,7 +649,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
               <div style={{ ...fieldBoxStyle, width: 100 }}>{reportData?.school_id}</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', width: '28%', paddingRight: 12 }}>
-              {/* Name of Office (Division) – Tahoma (10 point size, bold) */}
               <span style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', width: 64, flexShrink: 0, color: '#000000' }}>Division</span>
               <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>{reportData?.division}</div>
             </div>
@@ -622,7 +663,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-              {/* Name of Office (School Name) – Tahoma (10 point size, bold) */}
               <span style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', width: 88, flexShrink: 0, color: '#000000' }}>School Name</span>
               <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 8, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>{reportData?.school_name}</div>
             </div>
@@ -640,169 +680,177 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         </div>
       </div>
 
-      {reportData?.right_logo && (
-        <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+      <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+        {reportData?.right_logo ? (
           <img src={reportData.right_logo} alt="DepEd Logo" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-        </div>
-      )}
+        ) : (
+          <DepEdLogoComp className="h-14 w-auto" style={{ maxHeight: '0.76in', maxWidth: '0.76in' }} />
+        )}
+      </div>
     </div>
   );
 
-  // Table Column Headers (# through REMARKS)
   const renderTableHeader = () => (
     <thead>
       <tr>
-        <th rowSpan={2} style={{ width: '1.8%', ...headerCell }}>#</th>
-        <th rowSpan={2} style={{ width: '6.6%', ...headerCell }}>LRN</th>
-        <th rowSpan={2} style={{ width: '13.0%', ...headerCell }}>
+        <th rowSpan={2} style={{ width: '1.8%', ...headerCell, fontSize: fontSizes.header }}>#</th>
+        <th rowSpan={2} style={{ width: '6.6%', ...headerCell, fontSize: fontSizes.header }}>LRN</th>
+        <th rowSpan={2} style={{ width: '13.0%', ...headerCell, fontSize: fontSizes.header }}>
           NAME<br />
           <span style={subHeaderSpan}>(Last Name, First Name, Middle Name)</span>
         </th>
-        <th rowSpan={2} style={{ width: '2.4%', ...headerCell }}>Sex (M/F)</th>
-        <th rowSpan={2} style={{ width: '4.6%', ...headerCell }}>
+        <th rowSpan={2} style={{ width: '2.4%', ...headerCell, fontSize: fontSizes.header }}>Sex (M/F)</th>
+        <th rowSpan={2} style={{ width: '4.6%', ...headerCell, fontSize: fontSizes.header }}>
           BIRTH DATE<br />
           <span style={subHeaderSpan}>(mm/dd/yyyy)</span>
         </th>
-        <th rowSpan={2} style={{ width: '3.4%', ...headerCell }}>
+        <th rowSpan={2} style={{ width: '3.4%', ...headerCell, fontSize: fontSizes.header }}>
           AGE as of 1st<br />
           <span style={subHeaderSpan}>Friday June</span>
         </th>
-        <th rowSpan={2} style={{ width: '4.6%', ...headerCell }}>
+        <th rowSpan={2} style={{ width: '4.6%', ...headerCell, fontSize: fontSizes.header }}>
           BIRTH PLACE<br />
           <span style={subHeaderSpan}>(Province)</span>
         </th>
-        <th rowSpan={2} style={{ width: '4.2%', ...headerCell }}>MOTHER TONGUE</th>
-        <th rowSpan={2} style={{ width: '4.0%', ...headerCell }}>
+        <th rowSpan={2} style={{ width: '4.2%', ...headerCell, fontSize: fontSizes.header }}>MOTHER TONGUE</th>
+        <th rowSpan={2} style={{ width: '4.0%', ...headerCell, fontSize: fontSizes.header }}>
           IP<br />
           <span style={subHeaderSpan}>(Ethnic Group)</span>
         </th>
-        <th rowSpan={2} style={{ width: '4.2%', ...headerCell }}>RELIGION</th>
-        <th colSpan={4} style={{ textAlign: 'center', ...headerCell }}>ADDRESS</th>
-        <th colSpan={2} style={{ textAlign: 'center', ...headerCell }}>PARENTS</th>
-        <th colSpan={2} style={{ textAlign: 'center', ...headerCell }}>GUARDIAN (if not Parent)</th>
-        <th rowSpan={2} style={{ width: '6.0%', ...headerCell }}>
+        <th rowSpan={2} style={{ width: '4.2%', ...headerCell, fontSize: fontSizes.header }}>RELIGION</th>
+        <th colSpan={4} style={{ textAlign: 'center', ...headerCell, fontSize: fontSizes.header }}>ADDRESS</th>
+        <th colSpan={2} style={{ textAlign: 'center', ...headerCell, fontSize: fontSizes.header }}>PARENTS</th>
+        <th colSpan={2} style={{ textAlign: 'center', ...headerCell, fontSize: fontSizes.header }}>GUARDIAN (if not Parent)</th>
+        <th rowSpan={2} style={{ width: '6.0%', ...headerCell, fontSize: fontSizes.header }}>
           Contact Number of Parent or<br />Guardian
         </th>
-        <th style={{ width: '6.2%', ...headerCell }}>REMARKS</th>
+        <th style={{ width: '6.2%', ...headerCell, fontSize: fontSizes.header }}>REMARKS</th>
       </tr>
       <tr>
-        <th style={{ width: '4.8%', ...headerCell }}>House #/ Street/ Sitio/ Purok</th>
-        <th style={{ width: '4.0%', ...headerCell }}>Barangay</th>
-        <th style={{ width: '4.4%', ...headerCell }}>Municipality/ City</th>
-        <th style={{ width: '4.0%', ...headerCell }}>Province</th>
-        <th style={{ width: '6.8%', ...headerCell }}>Father's Name</th>
-        <th style={{ width: '6.8%', ...headerCell }}>Mother's Maiden Name</th>
-        <th style={{ width: '4.6%', ...headerCell }}>Name</th>
-        <th style={{ width: '3.6%', ...headerCell }}>Relation-ship</th>
-        <th style={{ width: '6.2%', ...headerCell, fontSize: '4.1pt', lineHeight: 1.05 }}>
+        <th style={{ width: '4.8%', ...headerCell, fontSize: fontSizes.subHeader }}>House #/ Street/ Sitio/ Purok</th>
+        <th style={{ width: '4.0%', ...headerCell, fontSize: fontSizes.subHeader }}>Barangay</th>
+        <th style={{ width: '4.4%', ...headerCell, fontSize: fontSizes.subHeader }}>Municipality/ City</th>
+        <th style={{ width: '4.0%', ...headerCell, fontSize: fontSizes.subHeader }}>Province</th>
+        <th style={{ width: '6.8%', ...headerCell, fontSize: fontSizes.subHeader }}>Father's Name</th>
+        <th style={{ width: '6.8%', ...headerCell, fontSize: fontSizes.subHeader }}>Mother's Maiden Name</th>
+        <th style={{ width: '4.6%', ...headerCell, fontSize: fontSizes.subHeader }}>Name</th>
+        <th style={{ width: '3.6%', ...headerCell, fontSize: fontSizes.subHeader }}>Relation-ship</th>
+        <th style={{ width: '6.2%', ...headerCell, fontSize: fontSizes.subHeader, lineHeight: 1.05 }}>
           (Please refer to the<br />legend on last page)
         </th>
       </tr>
     </thead>
   );
 
-  // Summary Footer (Remarks legend + BoSY/EoSY table + Signatures)
   const renderSummaryFooter = () => (
-    <div style={footerLayoutGridStyle}>
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <div style={{ fontWeight: 800, fontSize: '5.8pt', textAlign: 'center', marginBottom: 2, color: '#000000' }}>
-          List and Code of Indicators under REMARKS column
-        </div>
-        <table style={indicatorsTableStyle}>
-          <thead>
-            <tr>
-              <th style={{ width: '15%', ...indicatorHeaderCell }}>Indicator</th>
-              <th style={{ width: '5%', ...indicatorHeaderCell }}>Code</th>
-              <th style={{ width: '30%', ...indicatorHeaderCell }}>Required Information</th>
-              <th style={{ width: '15%', ...indicatorHeaderCell }}>Indicator</th>
-              <th style={{ width: '5%', ...indicatorHeaderCell }}>Code</th>
-              <th style={{ width: '30%', ...indicatorHeaderCell }}>Required Information</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={indicatorCellBold}>Transferred Out</td>
-              <td style={indicatorCellCenter}>T/O</td>
-              <td style={indicatorCellText}>Name of School &amp; Effectivity Date</td>
-              <td style={indicatorCellBold}>CCT Recipient</td>
-              <td style={indicatorCellCenter}>CCT</td>
-              <td style={indicatorCellText}>CCT Control number &amp; Effectivity Date</td>
-            </tr>
-            <tr>
-              <td style={indicatorCellBold}>Transferred IN</td>
-              <td style={indicatorCellCenter}>T/I</td>
-              <td style={indicatorCellText}>Name of School &amp; Effectivity Date</td>
-              <td style={indicatorCellBold}>Balik-Aral</td>
-              <td style={indicatorCellCenter}>B/A</td>
-              <td style={indicatorCellText}>Name of school last attended &amp; Year</td>
-            </tr>
-            <tr>
-              <td style={indicatorCellBold}>Dropped</td>
-              <td style={indicatorCellCenter}>DRP</td>
-              <td style={indicatorCellText}>Reason and Effectivity Date</td>
-              <td style={indicatorCellBold}>Learner With Disability</td>
-              <td style={indicatorCellCenter}>LWD</td>
-              <td style={indicatorCellText}>Specify</td>
-            </tr>
-            <tr>
-              <td style={indicatorCellBold}>Late Enrollment</td>
-              <td style={indicatorCellCenter}>LE</td>
-              <td style={indicatorCellText}>Reason (Enrollment beyond 1st Friday of June)</td>
-              <td style={indicatorCellBold}>Accelerated</td>
-              <td style={indicatorCellCenter}>ACL</td>
-              <td style={indicatorCellText}>Specify Level &amp; Effectivity Date</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+    <table style={{ width: '100%', borderCollapse: 'collapse', border: 'none', marginTop: 8 }}>
+      <tbody>
+        <tr style={{ verticalAlign: 'bottom' }}>
+          <td style={{ width: '56%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
+            <div style={{ fontWeight: 800, fontSize: '5.8pt', textAlign: 'center', marginBottom: 2, color: '#000000' }}>
+              List and Code of Indicators under REMARKS column
+            </div>
+            <table style={indicatorsTableStyle}>
+              <thead>
+                <tr>
+                  <th style={{ width: '15%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Indicator</th>
+                  <th style={{ width: '5%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Code</th>
+                  <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Required Information</th>
+                  <th style={{ width: '15%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Indicator</th>
+                  <th style={{ width: '5%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Code</th>
+                  <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Required Information</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Transferred Out</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>T/O</td>
+                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of School &amp; Effectivity Date</td>
+                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>CCT Recipient</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>CCT</td>
+                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>CCT Control number &amp; Effectivity Date</td>
+                </tr>
+                <tr>
+                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Transferred IN</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>T/I</td>
+                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of School &amp; Effectivity Date</td>
+                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Balik-Aral</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>B/A</td>
+                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of school last attended &amp; Year</td>
+                </tr>
+                <tr>
+                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Dropped</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>DRP</td>
+                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Reason and Effectivity Date</td>
+                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Learner With Disability</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>LWD</td>
+                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Specify</td>
+                </tr>
+                <tr>
+                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Late Enrollment</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>LE</td>
+                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Reason (Enrollment beyond 1st Friday of June)</td>
+                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Accelerated</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>ACL</td>
+                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Specify Level &amp; Effectivity Date</td>
+                </tr>
+              </tbody>
+            </table>
+          </td>
 
-      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
-        <table style={summaryTableStyle}>
-          <thead>
-            <tr>
-              <th style={{ width: '40%', ...indicatorHeaderCell, fontSize: '4.8pt' }}>REGISTERED</th>
-              <th style={{ width: '30%', ...indicatorHeaderCell }}>BoSY</th>
-              <th style={{ width: '30%', ...indicatorHeaderCell }}>EoSY</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: '4.8pt' }}>MALE</td>
-              <td style={indicatorCellCenter}>{reportData?.total_male}</td>
-              <td style={indicatorCellCenter}></td>
-            </tr>
-            <tr>
-              <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: '4.8pt' }}>FEMALE</td>
-              <td style={indicatorCellCenter}>{reportData?.total_female}</td>
-              <td style={indicatorCellCenter}></td>
-            </tr>
-            <tr>
-              <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: '4.8pt' }}>TOTAL</td>
-              <td style={{ ...indicatorCellCenter, fontWeight: 800 }}>{reportData?.total_combined}</td>
-              <td style={indicatorCellCenter}></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+          <td style={{ width: '14%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
+            <table style={summaryTableStyle}>
+              <thead>
+                <tr>
+                  <th style={{ width: '40%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>REGISTERED</th>
+                  <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>BoSY</th>
+                  <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>EoSY</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>MALE</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.footer }}>{maleCount}</td>
+                  <td style={indicatorCellCenter}></td>
+                </tr>
+                <tr>
+                  <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>FEMALE</td>
+                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.footer }}>{femaleCount}</td>
+                  <td style={indicatorCellCenter}></td>
+                </tr>
+                <tr>
+                  <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>TOTAL</td>
+                  <td style={{ ...indicatorCellCenter, fontWeight: 800, fontSize: fontSizes.footer }}>{totalCount}</td>
+                  <td style={indicatorCellCenter}></td>
+                </tr>
+              </tbody>
+            </table>
+          </td>
 
-      <div style={signatureBlockStyle}>
-        <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 12, color: '#000000' }}>Prepared by :</div>
-        <div style={signatureLineStyle}>{reportData?.adviser_name}</div>
-        <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 1, color: '#000000' }}>(Signature of Adviser over Printed Name)</div>
-        <div style={datesRowStyle}>
-          <span>BoSY Date:</span><span>EoSY Date:</span>
-        </div>
-      </div>
+          <td style={{ width: '15%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
+            <div style={signatureBlockStyle}>
+              <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 14, color: '#000000' }}>Prepared by :</div>
+              <div style={signatureLineStyle}>{reportData?.adviser_name}</div>
+              <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 2, color: '#000000' }}>(Signature of Adviser over Printed Name)</div>
+              <div style={datesRowStyle}>
+                <span>BoSY Date: ________</span><span>EoSY Date: ________</span>
+              </div>
+            </div>
+          </td>
 
-      <div style={signatureBlockStyle}>
-        <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 12, color: '#000000' }}>Certified Correct:</div>
-        <div style={signatureLineStyle}>{reportData?.school_head}</div>
-        <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 1, color: '#000000' }}>(Signature of School Head over Printed Name)</div>
-        <div style={datesRowStyle}>
-          <span>BoSY Date:</span><span>EoSY Date:</span>
-        </div>
-      </div>
-    </div>
+          <td style={{ width: '15%', verticalAlign: 'bottom', border: 'none' }}>
+            <div style={signatureBlockStyle}>
+              <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 14, color: '#000000' }}>Certified Correct:</div>
+              <div style={signatureLineStyle}>{reportData?.school_head}</div>
+              <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 2, color: '#000000' }}>(Signature of School Head over Printed Name)</div>
+              <div style={datesRowStyle}>
+                <span>BoSY Date: ________</span><span>EoSY Date: ________</span>
+              </div>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
   );
 
   return (
@@ -832,9 +880,13 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         exportHandlers={{
           onExportPdf: handleDownloadPDF,
           onExportExcel: handleExportExcel,
-          onExportGoogleSheets: handleExportGoogleSheets,
+          onExportGoogleSheets: () => {
+            window.open('https://sheets.new', '_blank');
+          },
           onExportWord: handleExportWord,
-          onExportGoogleDocs: handleExportGoogleDocs,
+          onExportGoogleDocs: () => {
+            window.open('https://docs.new', '_blank');
+          },
           onExportCsv: handleExportCSV,
           onExportJson: handleExportJSON,
         }}
@@ -842,7 +894,67 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         isExporting={exportingPdf}
       />
 
-      <div className="report-viewer-viewport" style={viewerScrollContainerStyle}>
+      {/* Control Strip for Date Filter and 100% Fit Screen Zoom (Hidden during printing) */}
+      <div className="no-print" style={controlStripStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <label style={{ fontWeight: 700, color: '#334155', fontSize: '0.80rem' }}>As of Date:</label>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            style={dateInputStyle}
+          />
+          <span style={{ fontSize: '0.74rem', color: '#64748b' }}>
+            (Displays learners enrolled on or before this date)
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            onClick={() => {
+              setFitToWidth(true);
+              updateFitScale();
+            }}
+            style={{
+              ...toggleBtnStyle,
+              backgroundColor: fitToWidth ? '#e0f2fe' : '#ffffff',
+              color: fitToWidth ? '#0284c7' : '#475569',
+            }}
+          >
+            <Maximize2 size={13} /> Fit Screen (100%)
+          </button>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <button
+              onClick={() => {
+                setFitToWidth(false);
+                setZoomScale((prev) => Math.max(0.4, Number((prev - 0.05).toFixed(2))));
+              }}
+              style={zoomBtnStyle}
+            >
+              <ZoomOut size={13} />
+            </button>
+            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem' }}>
+              {Math.round(zoomScale * 100)}%
+            </span>
+            <button
+              onClick={() => {
+                setFitToWidth(false);
+                setZoomScale((prev) => Math.min(1.4, Number((prev + 0.05).toFixed(2))));
+              }}
+              style={zoomBtnStyle}
+            >
+              <ZoomIn size={13} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Viewport Container */}
+      <div
+        ref={viewportContainerRef}
+        style={viewerScrollContainerStyle}
+      >
         {loading ? (
           <div style={loadingStateStyle}>
             <Loader2 className="animate-spin" size={28} color="#0284c7" />
@@ -854,90 +966,104 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
             <span>{error}</span>
           </div>
         ) : reportData ? (
-          <div id="sf1-print-document" ref={reportRef} style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            {paginatedPages.map((page) => (
-              <div
-                key={`sf1-page-${page.pageNumber}`}
-                className="sf1-page-sheet"
-                style={{
-                  ...sheetWrapperStyle,
-                  ...sheetDimensions,
-                  backgroundColor: activePageConfig.pageColor,
-                  pageBreakBefore: page.pageNumber > 1 ? 'always' : 'auto',
-                }}
-              >
-                {/* Full Header: Shown on Page 1 or if "Every Page" is selected */}
-                {page.showFullHeader && renderHeader()}
+          <div
+            style={{
+              width: isPrinting ? '100%' : `${13.5 * zoomScale}in`,
+              maxWidth: '100%',
+              margin: '0 auto',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}
+          >
+            <div
+              style={{
+                transform: isPrinting ? 'none' : `scale(${zoomScale})`,
+                transformOrigin: 'top center',
+                width: isPrinting ? '100%' : '13.5in',
+                minWidth: isPrinting ? '100%' : '13.5in',
+                transition: isPrinting ? 'none' : 'transform 0.15s ease-out',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+              }}
+            >
+              <div id="sf1-print-document" ref={reportRef} style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                {paginatedPages.map((page) => (
+                  <div
+                    key={`sf1-page-${page.pageNumber}`}
+                    className="sf1-page-sheet"
+                    style={{
+                      ...sheetWrapperStyle,
+                      width: isPrinting ? '100%' : '13.5in',
+                      minWidth: isPrinting ? '100%' : '13.5in',
+                      maxWidth: isPrinting ? '100%' : '13.5in',
+                      boxShadow: isPrinting ? 'none' : '0 4px 24px rgba(0,0,0,0.12)',
+                      padding: isPrinting ? '0.1in 0.15in' : '0.2in 0.25in',
+                      backgroundColor: activePageConfig.pageColor || '#ffffff',
+                      fontSize: fontSizes.table,
+                      pageBreakBefore: page.pageNumber > 1 ? 'always' : 'auto',
+                    }}
+                  >
+                    {page.showFullHeader && renderHeader()}
 
-                {/* Main Table: Always starts with standard column headers (# through REMARKS) */}
-                <table style={mainTableStyle}>
-                  {renderTableHeader()}
-                  <tbody>
-                    {page.learners.map((learner, idx) => {
-                      const absoluteIndex = page.startIndex + idx;
-                      const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
-                      return (
-                        <tr key={`learner-${learner.id}`} style={dataRowStyle}>
-                          <td style={centerCell}>{absoluteIndex + 1}</td>
-                          <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
-                          <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
-                          <td style={centerCell}>{learner.sex}</td>
-                          <td style={centerCell}>{learner.birthdate}</td>
-                          <td style={centerCell}>{learner.age}</td>
-                          <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
-                          <td style={centerCell}>{learner.mother_tongue}</td>
-                          <td style={centerCell}>{learner.ethnic_group}</td>
-                          <td style={centerCell}>{learner.religion}</td>
-                          <td style={leftCell}>{learner.house_street}</td>
-                          <td style={leftCell}>{learner.barangay}</td>
-                          <td style={leftCell}>{learner.municipality_city}</td>
-                          <td style={leftCell}>{learner.province}</td>
-                          <td style={leftCell}>{learner.father_name}</td>
-                          <td style={leftCell}>{learner.mother_maiden_name}</td>
-                          <td style={leftCell}>{gName}</td>
-                          <td style={centerCell}>{gRel}</td>
-                          <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
-                          <td style={centerCell}>{learner.remarks}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                    <table style={mainTableStyle}>
+                      {renderTableHeader()}
+                      <tbody>
+                        {isRosterEmpty ? (
+                          <tr>
+                            <td colSpan={20} style={{ textAlign: 'center', padding: '36px', fontWeight: 'bold', fontSize: '7.5pt' }}>
+                              {reportData.notice || `Notice: No students enrolled in Section ${reportData.section_name} as of ${selectedDate}.`}
+                            </td>
+                          </tr>
+                        ) : (
+                          page.learners.map((learner, idx) => {
+                            const absoluteIndex = page.startIndex + idx;
+                            const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+                            return (
+                              <tr key={`learner-${learner.id}`} style={dataRowStyle}>
+                                <td style={centerCell}>{absoluteIndex + 1}</td>
+                                <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
+                                <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
+                                <td style={centerCell}>{learner.sex}</td>
+                                <td style={centerCell}>{learner.birthdate}</td>
+                                <td style={centerCell}>{learner.age}</td>
+                                <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
+                                <td style={centerCell}>{learner.mother_tongue}</td>
+                                <td style={centerCell}>{learner.ethnic_group}</td>
+                                <td style={centerCell}>{learner.religion}</td>
+                                <td style={leftCell}>{learner.house_street}</td>
+                                <td style={leftCell}>{learner.barangay}</td>
+                                <td style={leftCell}>{learner.municipality_city}</td>
+                                <td style={leftCell}>{learner.province}</td>
+                                <td style={leftCell}>{learner.father_name}</td>
+                                <td style={leftCell}>{learner.mother_maiden_name}</td>
+                                <td style={leftCell}>{gName}</td>
+                                <td style={centerCell}>{gRel}</td>
+                                <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
+                                <td style={centerCell}>{learner.remarks}</td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
 
-                {/* Summary Footer: Only rendered on the final page of data */}
-                {page.showFooter && renderSummaryFooter()}
+                    {page.showFooter && renderSummaryFooter()}
 
-                {/* FOOTER: Division Seal/School Seal – 0.76 Inch & Office Details – Calibri 10pt */}
-                <div style={officialFooterStyle}>
-                  <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                    {reportData?.right_logo ? (
-                      <img src={reportData.right_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-                    ) : reportData?.left_logo ? (
-                      <img src={reportData.left_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-                    ) : (
-                      <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <KagawaranNgEdukasyonLogo size={70} />
+                    <div style={auditFooterContainerStyle}>
+                      <div>
+                        <span>Document Tracking ID: <strong>{auditMeta.trackingId}</strong></span>
                       </div>
-                    )}
+                      <div>
+                        <span>Date and Time Printed: <strong>{auditMeta.printedAt}</strong></span>
+                        <span> &bull; Page {page.pageNumber} of {page.totalPages}</span>
+                      </div>
+                    </div>
                   </div>
-                  <div style={officeDetailsTextStyle}>
-                    <div><strong>{reportData?.school_name || 'Department of Education'}</strong> &bull; {reportData?.division || ''} &bull; {reportData?.district || ''}</div>
-                    <div>Address: {reportData?.district || ''}, {reportData?.division || ''}, {reportData?.region || ''} &bull; Contact Numbers: Official Records &bull; Email Address: deped.gov.ph</div>
-                  </div>
-                </div>
-
-                {/* Tracking ID & Printed Date/Time - Pure Black */}
-                <div style={auditFooterContainerStyle}>
-                  <div>
-                    <span>Document Tracking ID: <strong>{auditMeta.trackingId}</strong></span>
-                  </div>
-                  <div>
-                    <span>Date and Time Printed: <strong>{auditMeta.printedAt}</strong></span>
-                    <span> &bull; Page {page.pageNumber} of {page.totalPages}</span>
-                  </div>
-                </div>
+                ))}
               </div>
-            ))}
+            </div>
           </div>
         ) : null}
       </div>
@@ -958,59 +1084,58 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         reportTitle="SF1 School Register"
       />
 
-      {/* Pure White Background Print CSS */}
+      {/* Global Print Engine CSS */}
       <style>{`
         @media print {
           @page {
-            size: ${activePageConfig.paperSize === 'folio' ? '8.5in 13in' : activePageConfig.paperSize} ${activePageConfig.orientation};
-            margin: ${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in;
+            size: landscape;
+            margin: 0.15in 0.20in !important;
           }
           
+          .no-print,
+          nav,
+          aside,
+          header,
+          footer,
+          button,
+          input,
+          select {
+            display: none !important;
+          }
+
           html,
           body,
           #root,
-          body > div,
-          body > div > div,
+          #root > div,
           main,
           .report-tab-root,
           .report-viewer-viewport {
             margin: 0 !important;
             padding: 0 !important;
+            width: 100% !important;
+            min-width: 100% !important;
+            max-width: 100% !important;
             height: auto !important;
-            min-height: 100% !important;
-            background-color: #ffffff !important;
+            min-height: 0 !important;
+            overflow: visible !important;
+            display: block !important;
             background: #ffffff !important;
-            box-shadow: none !important;
+            background-color: #ffffff !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
 
-          .no-print,
-          nav,
-          aside,
-          header {
-            display: none !important;
-          }
-
-          main {
-            margin: 0 !important;
-            padding: 0 !important;
-            overflow: visible !important;
-            height: auto !important;
-            display: block !important;
-            width: 100% !important;
-            background-color: #ffffff !important;
-            background: #ffffff !important;
-          }
-
-          div {
-            overflow: visible !important;
+          * {
+            -webkit-transform: none !important;
+            transform: none !important;
+            zoom: 1 !important;
           }
 
           #sf1-print-document {
             width: 100% !important;
             max-width: 100% !important;
-            margin: 0 !important;
+            min-width: 100% !important;
+            margin: 0 auto !important;
             padding: 0 !important;
             display: block !important;
           }
@@ -1018,12 +1143,14 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
           .sf1-page-sheet {
             width: 100% !important;
             max-width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
+            min-width: 100% !important;
+            box-sizing: border-box !important;
+            margin: 0 auto !important;
+            padding: 0.1in 0.15in !important;
             box-shadow: none !important;
             border: none !important;
-            background-color: #ffffff !important;
             background: #ffffff !important;
+            background-color: #ffffff !important;
             page-break-after: always !important;
             break-after: page !important;
           }
@@ -1034,6 +1161,9 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
           }
 
           table {
+            width: 100% !important;
+            max-width: 100% !important;
+            table-layout: fixed !important;
             page-break-inside: auto;
           }
 
@@ -1050,6 +1180,43 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 // ==========================================
 // STYLES
 // ==========================================
+const controlStripStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '8px 24px',
+  backgroundColor: '#ffffff',
+  borderBottom: '1px solid #e2e8f0',
+};
+
+const dateInputStyle: React.CSSProperties = {
+  padding: '4px 8px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  fontSize: '0.80rem',
+  color: '#0f172a',
+};
+
+const toggleBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '4px 10px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  cursor: 'pointer',
+  fontSize: '0.76rem',
+  fontWeight: 700,
+};
+
+const zoomBtnStyle: React.CSSProperties = {
+  padding: '4px 8px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  backgroundColor: '#ffffff',
+  cursor: 'pointer',
+};
+
 const fieldBoxStyle: React.CSSProperties = {
   minHeight: 18,
   lineHeight: '18px',
@@ -1069,7 +1236,7 @@ const fieldBoxStyle: React.CSSProperties = {
 const viewerScrollContainerStyle: React.CSSProperties = {
   flex: 1,
   overflowY: 'auto',
-  overflowX: 'hidden',
+  overflowX: 'auto',
   padding: '16px 20px',
   display: 'flex',
   flexDirection: 'column',
@@ -1137,17 +1304,6 @@ const leftCell: React.CSSProperties = {
   whiteSpace: 'normal',
   wordBreak: 'break-word',
   lineHeight: 1.1,
-};
-
-const footerLayoutGridStyle: React.CSSProperties = {
-  width: '100%',
-  display: 'grid',
-  gridTemplateColumns: '57.8fr 12.8fr 14.7fr 14.7fr',
-  gap: '8px',
-  marginTop: '6px',
-  alignItems: 'end',
-  boxSizing: 'border-box',
-  color: '#000000',
 };
 
 const indicatorsTableStyle: React.CSSProperties = {
@@ -1228,25 +1384,6 @@ const datesRowStyle: React.CSSProperties = {
   fontSize: '4.8pt',
   marginTop: 4,
   color: '#000000',
-};
-
-const officialFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  marginTop: 8,
-  paddingTop: 4,
-  borderTop: '1px solid #000000',
-  width: '100%',
-  boxSizing: 'border-box',
-};
-
-const officeDetailsTextStyle: React.CSSProperties = {
-  fontFamily: 'Calibri, sans-serif',
-  fontSize: '10pt',
-  color: '#000000',
-  lineHeight: 1.25,
-  textAlign: 'left',
 };
 
 const auditFooterContainerStyle: React.CSSProperties = {

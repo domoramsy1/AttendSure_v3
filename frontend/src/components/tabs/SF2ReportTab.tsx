@@ -425,10 +425,16 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     window.print();
   };
 
-  const handleDownloadPDF = async () => {
+const handleDownloadPDF = async () => {
     if (!reportRef.current || !reportData) return;
     setExportingPdf(true);
-    logReportAudit('PDF');
+
+    // 1. Reset scroll container so canvas origin starts at 0
+    const scrollContainer = reportRef.current.closest('.report-viewer-viewport') as HTMLElement | null;
+    if (scrollContainer) {
+      scrollContainer.scrollLeft = 0;
+    }
+
     try {
       let html2pdfInstance = (window as any).html2pdf;
       if (!html2pdfInstance) {
@@ -442,43 +448,47 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
         html2pdfInstance = (window as any).html2pdf;
       }
 
-      const isLandscape = activePageConfig.orientation === 'landscape';
-      const isPageless = activePageConfig.layoutMode === 'pageless';
-      const paper = PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.legal;
-      const widthInches = isLandscape ? paper.height : paper.width;
+      // 2. Resolve paper geometry directly from activePageConfig
+      const paper = (typeof PAPER_SIZES !== 'undefined' && PAPER_SIZES[activePageConfig?.paperSize])
+        ? PAPER_SIZES[activePageConfig.paperSize]
+        : { width: 8.5, height: 13 };
+      const isLandscape = activePageConfig?.orientation === 'landscape';
+      const widthInches = isLandscape ? Math.max(paper.width, paper.height) : Math.min(paper.width, paper.height);
+      const heightInches = isLandscape ? Math.min(paper.width, paper.height) : Math.max(paper.width, paper.height);
+      const exactWidthPx = Math.ceil(widthInches * 96);
 
-      let jsPdfFormat: string | number[] =
-        activePageConfig.paperSize === 'folio' ? [8.5, 13] : activePageConfig.paperSize;
-
-      if (isPageless && reportRef.current) {
-        const scrollHeightPx = reportRef.current.scrollHeight;
-        const scrollWidthPx = reportRef.current.scrollWidth;
-        const approxHeightInches = Number((scrollHeightPx / 96).toFixed(2)) + 0.3;
-        const approxWidthInches = Number((scrollWidthPx / 96).toFixed(2)) || widthInches;
-        jsPdfFormat = [approxWidthInches, approxHeightInches];
-      }
-
+      // 3. Prevent virtual canvas truncation
       const opt = {
         margin: [0, 0, 0, 0],
-        filename: `${getBaseFilename()}.pdf`,
+        filename: `SF2_${reportData.section_name || 'Section'}_${selectedAcademicYear || '2026-2027'}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: exactWidthPx + 150,
+          width: exactWidthPx,
+          x: 0,
+        },
         jsPDF: {
           unit: 'in',
-          format: jsPdfFormat,
+          format: [widthInches, heightInches],
           orientation: isLandscape ? 'landscape' : 'portrait',
         },
-        pagebreak: fitsOnSinglePage || isPageless ? { mode: [] } : { mode: ['css', 'legacy'] },
+        pagebreak: { mode: ['css', 'legacy'] },
       };
 
-      const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
-      await saveFileWithPicker(pdfBlob, `${getBaseFilename()}.pdf`, 'application/pdf', 'pdf', 'PDF Document (*.pdf)');
-    } catch (err) {
-      alert('Unable to generate PDF directly. Please use the Print option and choose "Save as PDF".');
+      await html2pdfInstance().from(reportRef.current).set(opt).save();
+    } catch {
+      handlePrint();
     } finally {
       setExportingPdf(false);
     }
   };
+
+
 
   const handleDownloadExcel = async () => {
     if (!reportRef.current || !reportData) return;
@@ -1021,25 +1031,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
                 {renderSummaryFooter()}
 
-                {/* FOOTER: Division Seal/School Seal – 0.76 Inch & Office Details – Calibri 10pt */}
-                <div style={officialFooterStyle}>
-                  <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                    {reportData?.right_logo ? (
-                      <img src={reportData.right_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-                    ) : reportData?.left_logo ? (
-                      <img src={reportData.left_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-                    ) : (
-                      <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <KagawaranNgEdukasyonLogo size={70} />
-                      </div>
-                    )}
-                  </div>
-                  <div style={officeDetailsTextStyle}>
-                    <div><strong>{reportData?.school_name || 'Department of Education'}</strong> &bull; {reportData?.division || ''} &bull; {reportData?.district || ''}</div>
-                    <div>Address: {reportData?.district || ''}, {reportData?.division || ''}, {reportData?.region || ''} &bull; Contact Numbers: Official Records &bull; Email Address: deped.gov.ph</div>
-                  </div>
-                </div>
-
+               
                 <div style={auditFooterContainerStyle}>
                   <div>
                     <span>Document Tracking ID: <strong>{auditMeta.trackingId}</strong></span>
@@ -1200,7 +1192,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                   {renderSummaryFooter()}
 
                   {/* FOOTER: Division Seal/School Seal – 0.76 Inch & Office Details – Calibri 10pt */}
-                  <div style={officialFooterStyle}>
+                  {/* <div style={officialFooterStyle}>
                     <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                       {reportData?.right_logo ? (
                         <img src={reportData.right_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
@@ -1216,7 +1208,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                       <div><strong>{reportData?.school_name || 'Department of Education'}</strong> &bull; {reportData?.division || ''} &bull; {reportData?.district || ''}</div>
                       <div>Address: {reportData?.district || ''}, {reportData?.division || ''}, {reportData?.region || ''} &bull; Contact Numbers: Official Records &bull; Email Address: deped.gov.ph</div>
                     </div>
-                  </div>
+                  </div> */}
 
                   <div style={auditFooterContainerStyle}>
                     <div>
@@ -1559,24 +1551,6 @@ const sigLineStyle: React.CSSProperties = {
   color: '#000000',
 };
 
-const officialFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  marginTop: 8,
-  paddingTop: 4,
-  borderTop: '1px solid #000000',
-  width: '100%',
-  boxSizing: 'border-box',
-};
-
-const officeDetailsTextStyle: React.CSSProperties = {
-  fontFamily: 'Calibri, sans-serif',
-  fontSize: '10pt',
-  color: '#000000',
-  lineHeight: 1.25,
-  textAlign: 'left',
-};
 
 const auditFooterContainerStyle: React.CSSProperties = {
   display: 'flex',

@@ -17,7 +17,7 @@ import {
   SF2ReportTab,
   SF4ReportTab,
   StudentsTab,
-  TeachersTab,
+  FacultysTab,
   DTRTab,
   ScannersTab,
   GatePassesTab,
@@ -33,7 +33,7 @@ const ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'dashboard',
     'gate-logs',
     'students',
-    'teachers',
+    'facultys',
     'users',
     'gate-passes',
     'schedules',
@@ -166,10 +166,10 @@ const AppContent: React.FC = () => {
       case 'dashboard':
         return `${currentSchool}Dashboard Overview`;
       case 'gate-logs':
-        return 'Gate Access Logs';
+        return 'Gate Logs';
       case 'students':
         return 'Student Directory & ID Cards';
-      case 'teachers':
+      case 'facultys':
         return 'Faculty';
       case 'users':
         return 'User Accounts & Roles';
@@ -291,8 +291,8 @@ const AppContent: React.FC = () => {
         );
       case 'students':
         return <StudentsTab />;
-      case 'teachers':
-        return <TeachersTab />;
+      case 'facultys':
+        return <FacultysTab />;
       case 'dtr':
         return <DTRTab />;
       case 'scanners':

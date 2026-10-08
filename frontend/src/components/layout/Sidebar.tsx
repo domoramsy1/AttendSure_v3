@@ -21,7 +21,7 @@ export type NavItemKey =
   | 'dashboard'
   | 'gate-logs'
   | 'students'
-  | 'teachers'
+  | 'facultys'
   | 'users'
   | 'gate-passes'
   | 'schedules'
@@ -126,7 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         {
           id: 'gate-logs',
-          label: 'Gate Access Logs',
+          label: 'Gate Logs',
           icon: Radio,
           allowedRoles: ['ADMIN'],
         },
@@ -142,7 +142,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           allowedRoles: ['ADMIN', 'TEACHER'],
         },
         {
-          id: 'teachers',
+          id: 'facultys',
           label: 'Faculty',
           icon: Users,
           allowedRoles: ['ADMIN'],
@@ -195,13 +195,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         {
           id: 'users',
-          label: 'System Users',
+          label: 'Users',
           icon: UserCheck,
           allowedRoles: ['ADMIN'],
         },
         {
           id: 'settings',
-          label: 'School Settings',
+          label: 'Settings',
           icon: Settings,
           allowedRoles: ['ADMIN'],
         },

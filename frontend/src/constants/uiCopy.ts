@@ -17,7 +17,7 @@ export const UI_TEXT = {
     telemetryWaiting: "Waiting for Gate Taps",
     telemetryActive: "Gate Active & Logging",
     mainTitle: "Today's Attendance Overview",
-    mainSubtitle: "Live gate taps, classroom attendance, and teacher time cards.",
+    mainSubtitle: "Live gate taps, classroom attendance, and faculty time cards.",
     
     // 4 Stat Cards
     cards: {
@@ -39,7 +39,7 @@ export const UI_TEXT = {
       facultyDtr: {
         title: "TEACHER DTR (FORM 48)",
         badge: "Form 48",
-        waitingSubtext: "No teachers checked in yet",
+        waitingSubtext: "No facultys checked in yet",
       },
     },
 
@@ -53,21 +53,21 @@ export const UI_TEXT = {
     },
     sectionPanel: {
       title: "Class Attendance",
-      subtitle: "Based on teacher classroom scans today",
+      subtitle: "Based on faculty classroom scans today",
       tabAll: "All Classes",
       tabTop: "Highest",
       emptyTitle: "No Class Attendance Yet",
-      emptyDescription: "Class attendance will show here once teachers scan their students.",
+      emptyDescription: "Class attendance will show here once facultys scan their students.",
     },
   },
   sidebar: {
     dashboard: "Dashboard",
     students: "Students",
-    teachers: "Teachers",
+    facultys: "Facultys",
     users: "User Accounts",
     gatePasses: "Pass Slips",
     schedules: "Classes & Sections",
-    dtr: "Teacher DTR (Form 48)",
+    dtr: "Faculty DTR (Form 48)",
     geofence: "Campus Boundary",
     scanners: "Gate Scanners",
     reports: "DepEd Reports (SF1, SF2)",

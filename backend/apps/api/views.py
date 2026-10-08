@@ -3,7 +3,7 @@ import calendar
 import hmac
 import logging
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time
 
 from django.conf import settings
 from django.contrib.auth import authenticate
@@ -31,6 +31,7 @@ from apps.academics.models import (
     Schedule,
     ScheduleDay,
     SchoolProfile,
+    FacultyMonthlyDTR,
     Section,
     SmsOutbox,
     FacultyGateLog,
@@ -80,9 +81,8 @@ class StandardResultsSetPagination(PageNumberPagination):
             'results': data
         })
 
-
 # ============================================================================
-# USER ROLE CHECKS (ADMIN & TEACHER)
+# USER ROLE CHECKS & PERMISSION CLASSES
 # ============================================================================
 
 def get_user_profile(user):
@@ -103,33 +103,58 @@ def get_user_role(user):
 
 
 class IsSystemAdminRole(permissions.BasePermission):
+    """Full access to system settings, kiosk pairing, and user management."""
     def has_permission(self, request, view):
-        if not (request.user and request.user.is_authenticated):
-            return False
-        return get_user_role(request.user) == 'ADMIN'
+        return bool(request.user and request.user.is_authenticated and get_user_role(request.user) == 'ADMIN')
+
+
+class IsPrincipalOrAdmin(permissions.BasePermission):
+    """Authority over official school reports (SF4), DTR overrides, and loafing pardons."""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and get_user_role(request.user) in ['PRINCIPAL', 'ADMIN'])
+
+
+class IsDeptHeadOrAdmin(permissions.BasePermission):
+    """Authority to review and endorse monthly faculty DTRs."""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and get_user_role(request.user) in ['DEPT_HEAD', 'ADMIN', 'PRINCIPAL'])
+
+
+class IsGuardOrAdmin(permissions.BasePermission):
+    """Authority to scan passes and monitor real-time gate logs."""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and get_user_role(request.user) in ['GUARD', 'ADMIN'])
+
+
+class IsTeacherOrAbove(permissions.BasePermission):
+    """Authority to scan classroom batches and view class rosters."""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and get_user_role(request.user) in ['TEACHER', 'DEPT_HEAD', 'PRINCIPAL', 'ADMIN'])
 
 
 class IsAdviserOrAdmin(permissions.BasePermission):
+    """Authority to generate SF1 and SF2: Admins, Principals, or the section's assigned adviser."""
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated)
 
     def has_object_permission(self, request, view, obj):
-        if get_user_role(request.user) == 'ADMIN':
+        role = get_user_role(request.user)
+        if role in ['ADMIN', 'PRINCIPAL']:
             return True
         profile = get_user_profile(request.user)
-        if profile and profile.role == 'TEACHER' and profile.faculty:
+        if profile and profile.faculty:
             return getattr(obj, 'adviser_id', None) == profile.faculty.id
         return False
 
 
 class ReadOnlyOrAdminWrite(permissions.BasePermission):
+    """Read-only for authenticated staff, write access restricted to system admins."""
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
         if request.method in permissions.SAFE_METHODS:
             return True
         return get_user_role(request.user) == 'ADMIN'
-
 
 # ============================================================================
 # RATE LIMITS
@@ -1674,51 +1699,309 @@ class ReportAuditLogAPIView(APIView):
     def post(self, request):
         return Response({'success': True, 'message': 'Report audit recorded.'}, status=status.HTTP_201_CREATED)
 
-
 class DTRListAPIView(APIView):
+    """
+    Civil Service Form No. 48 (Daily Time Record) API.
+    Calculates 31-day biometric attendance, undertime, loafing penalties,
+    and manages Department Head endorsements and Principal excuses.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request):
-        month = request.GET.get('month', timezone.now().strftime('%Y-%m'))
+    def get(self, request, faculty_id=None, *args, **kwargs):
+        # 1. Resolve Target Faculty ID
+        target_id = faculty_id or request.query_params.get('faculty_id')
+        if not target_id:
+            user_prof = getattr(request.user, 'profile', None)
+            target_id = getattr(user_prof, 'faculty_id', None)
+
+        if not target_id:
+            return Response(
+                {'error': 'Faculty ID is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        faculty = FacultyProfile.objects.filter(id=target_id).first()
+        if not faculty:
+            return Response(
+                {'error': 'Faculty record not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 2. Resolve Month & Year
+        now = timezone.localdate()
         try:
-            year, month_num = map(int, month.split('-'))
-        except ValueError:
-            now = timezone.now()
-            year, month_num = now.year, now.month
+            month = int(request.query_params.get('month', now.month))
+            year = int(request.query_params.get('year', now.year))
+        except (ValueError, TypeError):
+            month = now.month
+            year = now.year
 
-        is_admin = get_user_role(request.user) == 'ADMIN'
-        user_profile = get_user_profile(request.user)
-        calling_faculty = getattr(user_profile, 'faculty', None) if user_profile else None
+        num_days = calendar.monthrange(year, month)[1]
 
-        logs_qs = FacultyGateLog.objects.filter(
-            scan_time__year=year,
-            scan_time__month=month_num
-        ).select_related('faculty')
+        # 3. Retrieve or Initialize Monthly DTR Record Safely
+        reg_hours = '8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM'
+        sat_hours = 'As Required'
+        dtr_submitted = False
+        submitted_at_str = None
+        dept_approved = False
+        approved_at_str = None
 
-        if not is_admin:
-            if not calling_faculty:
-                return Response([], status=status.HTTP_200_OK)
-            logs_qs = logs_qs.filter(faculty=calling_faculty)
-
-        logs = logs_qs.order_by('-scan_time')
-        daily_records = {}
-        for l in logs:
-            key = (l.faculty.employee_id, l.scan_time.date())
-            if key not in daily_records:
-                daily_records[key] = {
-                    'record_id': f"DTR-{l.faculty.employee_id}-{l.scan_time.strftime('%Y%m%d')}",
-                    'faculty_name': f"{l.faculty.first_name} {l.faculty.last_name}",
-                    'date': l.scan_time.strftime('%Y-%m-%d'),
-                    'time_in': '—',
-                    'time_out': '—',
-                    'status': 'COMPLETE'
+        try:
+            dtr_record, _ = FacultyMonthlyDTR.objects.get_or_create(
+                faculty=faculty,
+                month=month,
+                year=year,
+                defaults={
+                    'regular_hours': reg_hours,
+                    'saturday_hours': sat_hours,
                 }
-            if l.direction == 'IN' and daily_records[key]['time_in'] == '—':
-                daily_records[key]['time_in'] = l.scan_time.strftime('%I:%M %p')
-            elif l.direction == 'OUT':
-                daily_records[key]['time_out'] = l.scan_time.strftime('%I:%M %p')
+            )
+            reg_hours = dtr_record.regular_hours
+            sat_hours = dtr_record.saturday_hours
+            dtr_submitted = dtr_record.is_submitted
+            dept_approved = dtr_record.is_dept_head_approved
+            if dtr_record.submitted_at:
+                submitted_at_str = dtr_record.submitted_at.strftime('%Y-%m-%d %I:%M %p')
+            if dtr_record.dept_head_approved_at:
+                approved_at_str = dtr_record.dept_head_approved_at.strftime('%Y-%m-%d %I:%M %p')
+        except Exception as exc:
+            logger.warning("FacultyMonthlyDTR query warning: %s", exc)
 
-        return Response(list(daily_records.values()), status=status.HTTP_200_OK)
+        # 4. Fetch School Principal
+        school = SchoolProfile.objects.first()
+        school_head = school.principal_name if school and school.principal_name else 'JACQUELINE GALUPO'
+
+        # 5. Fetch Gate Scans
+        logs = FacultyGateLog.objects.filter(
+            faculty=faculty,
+            scan_time__year=year,
+            scan_time__month=month
+        ).order_by('scan_time')
+
+        # 6. Resolve User Privileges
+        user_role = getattr(request.user, 'role', 'FACULTY')
+        if request.user.is_superuser:
+            user_role = 'PRINCIPAL'
+
+        can_approve_dept = user_role in ['DEPT_HEAD', 'ADMIN', 'PRINCIPAL']
+        can_clear_loafing = user_role in ['PRINCIPAL', 'ADMIN'] or request.user.is_superuser
+
+        rows = []
+        days_present = 0
+        total_undertime_hours = 0
+        total_undertime_minutes = 0
+
+        # Standard DepEd Prescribed Arrival/Departure Windows
+        MORNING_IN_EXPECTED = time(8, 0)
+        AFTERNOON_OUT_EXPECTED = time(17, 0)
+
+        for day in range(1, num_days + 1):
+            date_obj = date(year, month, day)
+            is_weekend = date_obj.weekday() in [5, 6]  # 5=Saturday, 6=Sunday
+            day_logs = [l for l in logs if timezone.localtime(l.scan_time).date() == date_obj]
+
+            am_arrival = ''
+            am_departure = ''
+            pm_arrival = ''
+            pm_departure = ''
+
+            is_loafing = False
+            loafing_excused = False
+            loafing_remarks = ''
+            first_am_in = None
+            last_pm_out = None
+
+            # Process Scans & Violations
+            for l in day_logs:
+                local_time = timezone.localtime(l.scan_time)
+                time_str = local_time.strftime('%I:%M %p')
+                hour = local_time.hour
+
+                if getattr(l, 'is_violation', False) or 'LOAFING' in getattr(l, 'violation_type', ''):
+                    is_loafing = True
+                    loafing_excused = getattr(l, 'is_excused_by_principal', False)
+                    loafing_remarks = getattr(l, 'remarks', 'Loafing detected during work hours.')
+
+                if l.direction == 'IN':
+                    if hour < 12 and not am_arrival:
+                        am_arrival = time_str
+                        first_am_in = local_time.time()
+                    elif hour >= 12 and not pm_arrival:
+                        pm_arrival = time_str
+                elif l.direction == 'OUT':
+                    if hour < 13 and not am_departure:
+                        am_departure = time_str
+                    elif not pm_departure:
+                        pm_departure = time_str
+                        last_pm_out = local_time.time()
+
+            # Rule: Loafing not pardoned by Principal triggers 8 hours absence / deduction
+            has_deduction = is_loafing and not loafing_excused
+            day_undertime_h = 0
+            day_undertime_m = 0
+
+            if has_deduction:
+                am_arrival = 'ABSENT'
+                am_departure = 'LOAFING'
+                pm_arrival = 'DEDUCTED'
+                pm_departure = 'SALARY'
+                day_undertime_h = 8
+                total_undertime_hours += 8
+            else:
+                if am_arrival or pm_arrival:
+                    days_present += 1
+
+                # Calculate standard undertime/tardiness if present
+                if first_am_in and first_am_in > MORNING_IN_EXPECTED:
+                    late_mins = (datetime.combine(date_obj, first_am_in) - datetime.combine(date_obj, MORNING_IN_EXPECTED)).seconds // 60
+                    day_undertime_m += late_mins
+
+                if last_pm_out and last_pm_out < AFTERNOON_OUT_EXPECTED:
+                    early_mins = (datetime.combine(date_obj, AFTERNOON_OUT_EXPECTED) - datetime.combine(date_obj, last_pm_out)).seconds // 60
+                    day_undertime_m += early_mins
+
+                if day_undertime_m >= 60:
+                    day_undertime_h += day_undertime_m // 60
+                    day_undertime_m = day_undertime_m % 60
+
+                total_undertime_hours += day_undertime_h
+                total_undertime_minutes += day_undertime_m
+
+            rows.append({
+                'day': day,
+                'date_str': date_obj.isoformat(),
+                'day_of_week': date_obj.strftime('%a'),
+                'is_weekend': is_weekend,
+                'am_arrival': am_arrival,
+                'am_departure': am_departure,
+                'pm_arrival': pm_arrival,
+                'pm_departure': pm_departure,
+                'undertime_hours': day_undertime_h if (day_undertime_h > 0 or has_deduction) else '',
+                'undertime_minutes': day_undertime_m if (day_undertime_m > 0 or has_deduction) else '',
+                'is_loafing': is_loafing,
+                'loafing_excused': loafing_excused,
+                'loafing_remarks': loafing_remarks,
+            })
+
+        # Normalize total undertime minutes
+        if total_undertime_minutes >= 60:
+            total_undertime_hours += total_undertime_minutes // 60
+            total_undertime_minutes = total_undertime_minutes % 60
+
+        month_name = calendar.month_name[month]
+        full_name = f"{faculty.last_name}, {faculty.first_name}"
+        if getattr(faculty, 'middle_name', None):
+            full_name += f" {faculty.middle_name}"
+
+        return Response({
+            'faculty_id': faculty.id,
+            'faculty_name': full_name,
+            'employee_id': getattr(faculty, 'employee_id', f'EMP-{faculty.id}'),
+            'department': getattr(faculty, 'department', 'Junior High School'),
+            'month': month_name,
+            'month_number': month,
+            'year': year,
+            'regular_days_hours': reg_hours,
+            'saturdays_hours': sat_hours,
+            'school_head': school_head,
+            'dtr_submitted': dtr_submitted,
+            'submitted_at': submitted_at_str,
+            'dept_head_approved': dept_approved,
+            'approved_by_dept_head_at': approved_at_str,
+            'user_role': user_role,
+            'can_submit': True,
+            'can_approve_dept': can_approve_dept,
+            'can_clear_loafing': can_clear_loafing,
+            'rows': rows,
+            'total_undertime_hours': total_undertime_hours,
+            'total_undertime_minutes': total_undertime_minutes,
+            'days_present': days_present,
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, faculty_id=None, *args, **kwargs):
+        action = request.data.get('action')
+        target_id = faculty_id or request.data.get('faculty_id')
+
+        faculty = FacultyProfile.objects.filter(id=target_id).first()
+        if not faculty:
+            return Response(
+                {'error': 'Faculty record not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        now = timezone.localdate()
+        month = int(request.data.get('month', now.month))
+        year = int(request.data.get('year', now.year))
+
+        dtr_record, _ = FacultyMonthlyDTR.objects.get_or_create(
+            faculty=faculty,
+            month=month,
+            year=year
+        )
+
+        user_role = getattr(request.user, 'role', 'FACULTY')
+
+        # ACTION 1: Submit DTR by Faculty
+        if action == 'SUBMIT_DTR':
+            dtr_record.is_submitted = True
+            dtr_record.submitted_at = timezone.now()
+            dtr_record.save()
+            return Response({
+                'success': True,
+                'message': f"DTR for {calendar.month_name[month]} {year} submitted to Department Head for review."
+            })
+
+        # ACTION 2: Approve DTR by Department Head
+        elif action == 'APPROVE_DEPT_HEAD':
+            if not (request.user.is_superuser or user_role in ['DEPT_HEAD', 'ADMIN', 'PRINCIPAL']):
+                return Response(
+                    {'error': 'Unauthorized: Only Department Heads or Admins can endorse this DTR.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            dtr_record.is_dept_head_approved = True
+            dtr_record.dept_head_approved_at = timezone.now()
+            dtr_record.approved_by = request.user
+            dtr_record.save()
+            return Response({
+                'success': True,
+                'message': 'DTR successfully approved and endorsed by Department Head. Printing unlocked.'
+            })
+
+        # ACTION 3: Principal Excuses Loafing Violation
+        elif action == 'EXCUSE_LOAFING':
+            if not (request.user.is_superuser or user_role in ['PRINCIPAL', 'ADMIN']):
+                return Response(
+                    {'error': 'Forbidden: Only the School Principal has the authority to excuse loafing violations.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            date_str = request.data.get('date_str')
+            if not date_str:
+                return Response({'error': 'Date string (date_str) is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            logs = FacultyGateLog.objects.filter(
+                faculty=faculty,
+                scan_time__date=date_str
+            )
+            logs.update(
+                is_violation=False,
+                is_excused_by_principal=True,
+                excused_at=timezone.now(),
+                excused_by=request.user
+            )
+
+            return Response({
+                'success': True,
+                'message': f"Loafing violation on {date_str} pardoned by Principal. Salary deduction removed."
+            })
+
+        return Response(
+            {'error': f"Unknown action: '{action}'"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
 
 
 class GeofenceAPIView(APIView):

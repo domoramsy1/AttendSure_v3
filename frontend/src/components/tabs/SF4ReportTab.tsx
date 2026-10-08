@@ -77,6 +77,35 @@ export interface SF4ReportTabProps {
   onSelectReport?: (reportId: string) => void;
 }
 
+const parseGradeLevelAndSection = (gradeLevelInput: string, existingSectionName?: string) => {
+  const cleanGrade = (gradeLevelInput || '').trim();
+  const cleanSection = (existingSectionName || '').trim();
+
+  if (cleanSection) {
+    return { grade: cleanGrade, section: cleanSection };
+  }
+
+  if (cleanGrade.includes(' - ')) {
+    const parts = cleanGrade.split(' - ');
+    return {
+      grade: parts[0].trim(),
+      section: parts.slice(1).join(' - ').trim(),
+    };
+  }
+
+  if (cleanGrade.includes('-') && !cleanGrade.toLowerCase().startsWith('non-')) {
+    const parts = cleanGrade.split('-');
+    if (parts.length === 2 && parts[0].toLowerCase().includes('grade')) {
+      return {
+        grade: parts[0].trim(),
+        section: parts[1].trim(),
+      };
+    }
+  }
+
+  return { grade: cleanGrade, section: '' };
+};
+
 export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
   activeReportId = 'sf4',
   onSelectReport = () => {},
@@ -88,26 +117,34 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
   const [reportData, setReportData] = useState<SF4ReportData | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [exportingPdf, setExportingPdf] = useState<boolean>(false);
+  const [isPrinting, setIsPrinting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isPageSetupOpen, setIsPageSetupOpen] = useState(false);
 
-  // Persistent Page Setup Configuration — Folio Landscape Default
   const { config: savedPageConfig, saveConfig: savePageConfig } = usePageSetup('sf4');
   const [activePageConfig, setActivePageConfig] = useState<PageSetupConfig>(() => ({
     ...savedPageConfig,
-    orientation: 'landscape',
+    orientation: savedPageConfig.orientation || 'landscape',
     paperSize: savedPageConfig.paperSize || 'folio',
   }));
 
   useEffect(() => {
-    setActivePageConfig((prev) => ({
-      ...savedPageConfig,
-      orientation: savedPageConfig.orientation || 'landscape',
-      paperSize: savedPageConfig.paperSize || prev.paperSize || 'folio',
-    }));
+    setActivePageConfig(savedPageConfig);
   }, [savedPageConfig]);
 
   const reportRef = useRef<HTMLDivElement>(null);
+  const viewportContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleBeforePrint = () => setIsPrinting(true);
+    const handleAfterPrint = () => setIsPrinting(false);
+    window.addEventListener('beforeprint', handleBeforePrint);
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
+    };
+  }, []);
 
   const fetchSF4 = useCallback(async () => {
     setLoading(true);
@@ -118,7 +155,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       );
       setReportData(res.data);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to retrieve official DepEd SF4 report data.');
+      setError(err?.response?.data?.error || 'Failed to retrieve official DepEd SF4 report data.');
     } finally {
       setLoading(false);
     }
@@ -127,6 +164,25 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
   useEffect(() => {
     fetchSF4();
   }, [fetchSF4]);
+
+  const pageGeometry = useMemo(() => {
+    const paper = PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.folio;
+    const isLandscape = activePageConfig.orientation === 'landscape';
+    const widthInches = isLandscape ? Math.max(paper.width, paper.height) : Math.min(paper.width, paper.height);
+    const heightInches = isLandscape ? Math.min(paper.width, paper.height) : Math.max(paper.width, paper.height);
+    const m = activePageConfig.margins || { top: 0.15, right: 0.2, bottom: 0.15, left: 0.2 };
+
+    const printableHeight = Math.max(3.0, heightInches - m.top - m.bottom);
+    const printableWidth = Math.max(4.0, widthInches - m.left - m.right);
+
+    return {
+      widthInches,
+      heightInches,
+      printableHeight,
+      printableWidth,
+      margins: m,
+    };
+  }, [activePageConfig]);
 
   const auditMeta = useMemo(() => {
     const now = new Date();
@@ -144,13 +200,27 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     });
     const printedAt = `${dateFormatted} at ${timeFormatted}`;
 
-    const schoolIdStr = reportData?.school_id || '304033';
+    const schoolIdStr = reportData?.school_id || '';
     const dateStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
     const timeCode = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
     const trackingId = `DOC-SF4-${schoolIdStr}-${dateStamp}-${timeCode}`;
 
     return { printedAt, trackingId };
   }, [reportData]);
+
+  const getBaseFilename = useCallback(() => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    return `SF4_Report_${selectedMonth}_${selectedYear}_${timestamp}`;
+  }, [selectedMonth, selectedYear]);
+
+  useEffect(() => {
+    document.title = getBaseFilename();
+    return () => {
+      document.title = 'AttendSure V3';
+    };
+  }, [getBaseFilename]);
 
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
@@ -187,7 +257,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       .filter((g) => g.sections.length > 0 || g.grade_level.toLowerCase().includes(q));
   }, [reportData, searchQuery]);
 
-  // Dynamic Pagination Engine with Real Row Height (0.24in per row)
+  // True Dynamic Space Utilization: Calculates capacity with footer removed
   const paginatedPages = useMemo(() => {
     if (activePageConfig.layoutMode === 'pageless') {
       return [
@@ -201,25 +271,19 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       ];
     }
 
-    const paper = PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.folio;
-    const isLandscape = activePageConfig.orientation === 'landscape';
-    const pageHeightInches = isLandscape ? paper.width : paper.height;
-    const printableHeight = Math.max(
-      4,
-      pageHeightInches - (activePageConfig.margins.top || 0.25) - (activePageConfig.margins.bottom || 0.25)
-    );
-
-    const fullHeaderH = 1.60;
-    const theadH = 0.75;
-    const footerH = 1.70;
-    const trackingH = 0.25;
-    const rowH = 0.24;
+    const { printableHeight } = pageGeometry;
+    const rowH = 0.22;
+    const fullHeaderH = 1.35;
+    const theadH = 0.58;
+    const trackingH = 0.22;
+    const footerH = 1.25; // Guidelines and Signatures only (office details footer removed)
 
     const totalContentRows = filteredGradeGroups.reduce(
       (acc, g) => acc + (g.sections.length > 0 ? g.sections.length + 1 : 1),
       3
     );
 
+    // Keep on 1 single page if total rows fit within printable capacity
     const singlePageOverhead = fullHeaderH + theadH + footerH + trackingH;
     const singlePageCapacity = Math.floor((printableHeight - singlePageOverhead) / rowH);
 
@@ -235,6 +299,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       ];
     }
 
+    // Multi-page chunking: Every page sheet renders the full DepEd header
     const pages: SF4PageChunk[] = [];
     let currentGroups: SF4GradeGroup[] = [];
     let currentRowsCount = 0;
@@ -242,12 +307,10 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     for (let i = 0; i < filteredGradeGroups.length; i++) {
       const g = filteredGradeGroups[i];
       const groupRows = g.sections.length > 0 ? g.sections.length + 1 : 1;
-      const isFirstPage = pages.length === 0;
-      const showFullHeader = isFirstPage || (activePageConfig.headerRepeat || 'all_pages') === 'all_pages';
-      const overheadWithoutFooter = (showFullHeader ? fullHeaderH : 0) + theadH + trackingH;
-      const pageCapacity = Math.floor((printableHeight - overheadWithoutFooter) / rowH);
+      const pageOverhead = fullHeaderH + theadH + trackingH;
+      const capacity = Math.max(6, Math.floor((printableHeight - pageOverhead) / rowH));
 
-      if (currentRowsCount + groupRows <= pageCapacity) {
+      if (currentRowsCount + groupRows <= capacity) {
         currentGroups.push(g);
         currentRowsCount += groupRows;
       } else {
@@ -256,7 +319,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
             pageNumber: pages.length + 1,
             groups: currentGroups,
             isFinalPage: false,
-            showFullHeader,
+            showFullHeader: true, // Always show header in Pages mode
           });
         }
         currentGroups = [g];
@@ -265,44 +328,18 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     }
 
     if (currentGroups.length > 0) {
-      const pageNum = pages.length + 1;
-      const showFullHeader = pageNum === 1 || (activePageConfig.headerRepeat || 'all_pages') === 'all_pages';
       pages.push({
-        pageNumber: pageNum,
+        pageNumber: pages.length + 1,
         groups: currentGroups,
         isFinalPage: true,
-        showFullHeader,
+        showFullHeader: true, // Always show header in Pages mode
       });
     }
 
     const totalPages: number = pages.length;
     return pages.map((p) => ({ ...p, totalPages }));
-  }, [activePageConfig, filteredGradeGroups]);
+  }, [activePageConfig, filteredGradeGroups, pageGeometry]);
 
-  const sheetDimensions = useMemo(() => {
-    const m = activePageConfig.margins;
-    const paddingStr = `${m.top}in ${m.right}in ${m.bottom}in ${m.left}in`;
-
-    if (activePageConfig.layoutMode === 'pageless') {
-      return {
-        width: '100%',
-        maxWidth: '100%',
-        boxShadow: 'none',
-        padding: paddingStr,
-      };
-    }
-
-    const paper = PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.folio;
-    const isLandscape = activePageConfig.orientation === 'landscape';
-    const widthInches = isLandscape ? paper.height : paper.width;
-
-    return {
-      width: '100%',
-      maxWidth: `${widthInches}in`,
-      boxShadow: '0 4px 24px rgba(0,0,0,0.12)',
-      padding: paddingStr,
-    };
-  }, [activePageConfig]);
 
   const handleToggleLayoutMode = (newMode: LayoutMode) => {
     const updated: PageSetupConfig = { ...activePageConfig, layoutMode: newMode };
@@ -310,53 +347,24 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     setActivePageConfig(updated);
   };
 
-  const getBaseFilename = () => {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    return `SF4_Report_${selectedMonth}_${selectedYear}_${timestamp}`;
-  };
-
-  const saveFileWithPicker = async (
-    blob: Blob,
-    suggestedName: string,
-    mimeType: string,
-    extension: string,
-    description: string
-  ) => {
-    if ('showSaveFilePicker' in window) {
-      try {
-        const handle = await (window as any).showSaveFilePicker({
-          suggestedName,
-          types: [{ description, accept: { [mimeType]: [`.${extension}`] } }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        return;
-      } catch (err: any) {
-        if (err.name === 'AbortError') return;
-      }
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = suggestedName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
   const handlePrint = () => {
     logReportAudit('PRINT');
-    window.print();
+    setIsPrinting(true);
+    setTimeout(() => {
+      window.print();
+      setIsPrinting(false);
+    }, 120);
   };
 
-  const handleDownloadPDF = async () => {
+const handleDownloadPDF = async () => {
     if (!reportRef.current || !reportData) return;
     setExportingPdf(true);
-    logReportAudit('PDF');
+
+    // 1. Reset scroll container so canvas origin starts at 0
+    if (viewportContainerRef.current) {
+      viewportContainerRef.current.scrollLeft = 0;
+    }
+
     try {
       let html2pdfInstance = (window as any).html2pdf;
       if (!html2pdfInstance) {
@@ -370,40 +378,36 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         html2pdfInstance = (window as any).html2pdf;
       }
 
+      const { widthInches, heightInches } = pageGeometry;
       const isLandscape = activePageConfig.orientation === 'landscape';
-      const isPageless = activePageConfig.layoutMode === 'pageless';
-      const isSingle = paginatedPages.length === 1;
-      const paper = PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.folio;
-      const widthInches = isLandscape ? paper.height : paper.width;
+      const exactWidthPx = Math.ceil(widthInches * 96);
 
-      let jsPdfFormat: string | number[] =
-        activePageConfig.paperSize === 'folio' ? [8.5, 13] : activePageConfig.paperSize;
-
-      if (isPageless && reportRef.current) {
-        const scrollHeightPx = reportRef.current.scrollHeight;
-        const scrollWidthPx = reportRef.current.scrollWidth;
-        const approxHeightInches = Number((scrollHeightPx / 96).toFixed(2)) + 0.3;
-        const approxWidthInches = Number((scrollWidthPx / 96).toFixed(2)) || widthInches;
-        jsPdfFormat = [approxWidthInches, approxHeightInches];
-      }
-
+      // 2. Prevent left/right virtual canvas truncation
       const opt = {
         margin: [0, 0, 0, 0],
         filename: `${getBaseFilename()}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: exactWidthPx + 150, // Ensures virtual window is wider than paper width
+          width: exactWidthPx,             // Renders the exact paper pixel width
+          x: 0,                            // Anchors capture directly at left edge
+        },
         jsPDF: {
           unit: 'in',
-          format: jsPdfFormat,
+          format: [widthInches, heightInches],
           orientation: isLandscape ? 'landscape' : 'portrait',
         },
-        pagebreak: isSingle || isPageless ? { mode: [] } : { mode: ['css', 'legacy'] },
+        pagebreak: { mode: ['css', 'legacy'] },
       };
 
-      const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
-      await saveFileWithPicker(pdfBlob, `${getBaseFilename()}.pdf`, 'application/pdf', 'pdf', 'PDF Document (*.pdf)');
+      await html2pdfInstance().from(reportRef.current).set(opt).save();
     } catch {
-      alert('Unable to generate PDF directly. Please choose Print and save as PDF.');
+      handlePrint();
     } finally {
       setExportingPdf(false);
     }
@@ -428,37 +432,14 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       </html>
     `;
     const blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    await saveFileWithPicker(blob, `${getBaseFilename()}.xls`, 'application/vnd.ms-excel', 'xls', 'Excel Worksheet (*.xls)');
-  };
-
-  const handleExportGoogleSheets = () => {
-    handleExportExcel();
-    window.open('https://sheets.new', '_blank');
-  };
-
-  const handleExportWord = async () => {
-    if (!reportRef.current || !reportData) return;
-    logReportAudit('WORD');
-    const wordContent = `
-      <html>
-        <head><meta charset="utf-8"></head>
-        <body>
-          ${reportRef.current.innerHTML}
-          <br/>
-          <p style="font-size:8pt; color:#000000; font-family:Calibri;">
-            <strong>DOCUMENT TRACKING ID:</strong> ${auditMeta.trackingId} &bull; 
-            <strong>DATE &amp; TIME PRINTED:</strong> ${auditMeta.printedAt}
-          </p>
-        </body>
-      </html>
-    `;
-    const blob = new Blob([wordContent], { type: 'application/msword;charset=utf-8;' });
-    await saveFileWithPicker(blob, `${getBaseFilename()}.doc`, 'application/msword', 'doc', 'Word Document (*.doc)');
-  };
-
-  const handleExportGoogleDocs = () => {
-    handleExportWord();
-    window.open('https://docs.new', '_blank');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${getBaseFilename()}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleExportCSV = async () => {
@@ -483,8 +464,9 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     const rows: (string | number)[][] = [];
     filteredGradeGroups.forEach((g) => {
       g.sections.forEach((s) => {
+        const { grade, section } = parseGradeLevelAndSection(s.grade_level, s.section_name);
         rows.push([
-          `"${s.adviser_name}"`, `"${s.grade_level}"`, `"${s.section_name}"`,
+          `"${s.adviser_name}"`, `"${grade}"`, `"${section}"`,
           s.registered_end.m, s.registered_end.f, s.registered_end.total,
           s.daily_average.m, s.daily_average.f, s.daily_average.total,
           s.attendance_percentage.m, s.attendance_percentage.f, s.attendance_percentage.total,
@@ -501,110 +483,95 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       });
     });
 
-    const auditMetaComments = [
+    const csvContent = '\uFEFF' + [
       `# DOCUMENT TRACKING ID: ${auditMeta.trackingId}`,
       `# DATE AND TIME PRINTED: ${auditMeta.printedAt}`,
-    ];
-
-    const csvContent = '\uFEFF' + [...auditMetaComments, headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+      headers.join(','),
+      ...rows.map((r) => r.join(','))
+    ].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    await saveFileWithPicker(blob, `${getBaseFilename()}.csv`, 'text/csv', 'csv', 'CSV Document (*.csv)');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${getBaseFilename()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
-  const handleExportJSON = async () => {
-    if (!reportData) return;
-    logReportAudit('JSON');
-    const exportPayload = {
-      tracking_id: auditMeta.trackingId,
-      date_and_time_printed: auditMeta.printedAt,
-      report_data: reportData,
-    };
-    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
-    await saveFileWithPicker(blob, `${getBaseFilename()}.json`, 'application/json', 'json', 'JSON Document (*.json)');
-  };
-
-  // Official DepEd SF4 Header Component (DepEd Manual of Style Fonts and Sizes)
   const renderHeader = () => (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
-      {/* Seal – 0.76 Inch */}
-      <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 4, width: '100%', boxSizing: 'border-box' }}>
+      <div style={{ flexShrink: 0, width: '0.62in', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
         {reportData?.left_logo ? (
-          <img src={reportData.left_logo} alt="Republic Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+          <img src={reportData.left_logo} alt="Republic Seal" style={{ width: '0.62in', height: '0.62in', objectFit: 'contain' }} />
         ) : (
-          <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <KagawaranNgEdukasyonLogo size={70} />
+          <div style={{ width: '0.62in', height: '0.62in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <KagawaranNgEdukasyonLogo size={58} />
           </div>
         )}
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ textAlign: 'center', marginBottom: 6 }}>
-          {/* Republic of the Philippines – Old English Text MT (12 point size, bold) */}
-          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '12pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.15 }}>
+        <div style={{ textAlign: 'center', marginBottom: 3 }}>
+          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '10.5pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.15 }}>
             Republic of the Philippines
           </div>
-          {/* Department of Education – Old English Text MT (18 point size, bold) */}
-          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '18pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
+          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '15pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
             Department of Education
           </div>
-          {/* Name of Regional Office – Tahoma (10 point size, bold) */}
           {reportData?.region && (
-            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2, marginTop: 1 }}>
+            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '8.8pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.1, marginTop: 1 }}>
               {reportData.region}
             </div>
           )}
-          {/* Name of Office – Tahoma (10 point size, bold) */}
           {reportData?.division && (
-            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
+            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '8.8pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.1 }}>
               {reportData.division}
             </div>
           )}
-          <div style={{ fontFamily: 'Arial, sans-serif', fontSize: '10.5pt', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: 3, color: '#000000' }}>
+          <div style={{ fontFamily: 'Arial, sans-serif', fontSize: '9pt', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.3px', marginTop: 2, color: '#000000' }}>
             School Form 4 (SF4) Monthly Learner's Movement and Attendance
           </div>
-          <div style={{ fontFamily: 'Arial, sans-serif', fontSize: '7.5pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
+          <div style={{ fontFamily: 'Arial, sans-serif', fontSize: '6.2pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
             (This replaced Form 3 &amp; STS Form 4-Absenteeism and Dropout Profile)
           </div>
         </div>
 
-        {/* Administrative Metadata Rows */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
               <span style={fieldLabelStyle}>School ID</span>
-              <div style={{ ...fieldBoxStyle, width: 110 }}>{reportData?.school_id || ''}</div>
+              <div style={{ ...fieldBoxStyle, width: 90 }}>{reportData?.school_id || ''}</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-              {/* Name of Regional Office – Tahoma (10 point size, bold) */}
-              <span style={{ ...fieldLabelStyle, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>Region</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>{reportData?.region || ''}</div>
+              <span style={{ ...fieldLabelStyle, fontFamily: 'Tahoma, sans-serif', fontSize: '8.5pt', fontWeight: 'bold' }}>Region</span>
+              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4, fontFamily: 'Tahoma, sans-serif', fontSize: '8.5pt', fontWeight: 'bold' }}>{reportData?.region || ''}</div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', width: '25%', paddingLeft: 10 }}>
-              {/* Name of Office – Tahoma (10 point size, bold) */}
-              <span style={{ ...fieldLabelStyle, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>Division</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>{reportData?.division || ''}</div>
+            <div style={{ display: 'flex', alignItems: 'center', width: '25%', paddingLeft: 6 }}>
+              <span style={{ ...fieldLabelStyle, fontFamily: 'Tahoma, sans-serif', fontSize: '8.5pt', fontWeight: 'bold' }}>Division</span>
+              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4, fontFamily: 'Tahoma, sans-serif', fontSize: '8.5pt', fontWeight: 'bold' }}>{reportData?.division || ''}</div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', width: '25%', paddingLeft: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', width: '25%', paddingLeft: 6 }}>
               <span style={fieldLabelStyle}>District</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{reportData?.district || ''}</div>
+              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4 }}>{reportData?.district || ''}</div>
             </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', width: '48%' }}>
-              {/* Name of Office (School Name) – Tahoma (10 point size, bold) */}
-              <span style={{ ...fieldLabelStyle, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>School Name</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 10, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>
+              <span style={{ ...fieldLabelStyle, fontFamily: 'Tahoma, sans-serif', fontSize: '8.5pt', fontWeight: 'bold' }}>School Name</span>
+              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4, marginRight: 6, fontFamily: 'Tahoma, sans-serif', fontSize: '8.5pt', fontWeight: 'bold' }}>
                 {reportData?.school_name || ''}
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', width: '24%' }}>
               <span style={fieldLabelStyle}>School Year</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, marginRight: 10 }}>{reportData?.school_year || selectedAcademicYear}</div>
+              <div style={{ ...fieldBoxStyle, flex: 1, marginRight: 6 }}>{reportData?.school_year || selectedAcademicYear}</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', width: '28%' }}>
-              <span style={{ ...fieldLabelStyle, width: 145 }}>Report for the Month of</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>
+              <span style={{ ...fieldLabelStyle, width: 130 }}>Report for Month of</span>
+              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4 }}>
                 {reportData?.month} {reportData?.year}
               </div>
             </div>
@@ -612,60 +579,66 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         </div>
       </div>
 
-      {/* Seal – 0.76 Inch */}
-      <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+      <div style={{ flexShrink: 0, width: '0.62in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
         {reportData?.right_logo ? (
-          <img src={reportData.right_logo} alt="DepEd Logo" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+          <img src={reportData.right_logo} alt="DepEd Logo" style={{ width: '0.62in', height: '0.62in', objectFit: 'contain' }} />
         ) : (
-          <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <DepEdLogoComp className="h-14 w-auto" style={{ maxHeight: '0.76in', maxWidth: '0.76in' }} />
-          </div>
+          <DepEdLogoComp className="h-11 w-auto" style={{ maxHeight: '0.62in', maxWidth: '0.62in' }} />
         )}
       </div>
     </div>
   );
 
-  // Official DepEd SF4 3-Tier Header Columns (NAME OF ADVISER, GRADE/YEAR LEVEL, SECTION)
   const renderTableHeader = () => (
-    <thead>
-      <tr>
-        <th rowSpan={3} style={{ width: '9.2%', ...thCell }}>NAME OF ADVISER</th>
-        <th rowSpan={3} style={{ width: '6.4%', ...thCell }}>
-          GRADE/<br />YEAR<br />LEVEL
-        </th>
-        <th rowSpan={3} style={{ width: '6.2%', ...thCell }}>SECTION</th>
-        <th colSpan={3} rowSpan={2} style={{ width: '6.8%', ...thCell }}>
-          REGISTERED LEARNER<br />
-          <span style={subHeaderSpan}>(As of End of the Month)</span>
-        </th>
-        <th colSpan={6} style={{ width: '13.0%', ...thCell }}>ATTENDANCE</th>
-        <th colSpan={9} style={{ width: '19.4%', ...thCell }}>DROPPED OUT</th>
-        <th colSpan={9} style={{ width: '19.5%', ...thCell }}>TRANSFERRED OUT</th>
-        <th colSpan={9} style={{ width: '19.5%', ...thCell }}>TRANSFERRED IN</th>
-      </tr>
-      <tr>
-        <th colSpan={3} style={{ ...thCell, fontSize: '6.5pt' }}>Daily Average</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '6.5pt' }}>Percentage for the Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(A) Cumulative as of<br />Previous Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(B) For the Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(A+B) Cumulative as of<br />End of the Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(A) Cumulative as of<br />Previous Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(B) For the Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(A+B) Cumulative as of<br />End of the Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(A) Cumulative as of<br />Previous Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(B) For the Month</th>
-        <th colSpan={3} style={{ ...thCell, fontSize: '5.8pt' }}>(A+B) Cumulative as of<br />End of the Month</th>
-      </tr>
-      <tr>
-        {Array.from({ length: 12 }).map((_, i) => (
-          <React.Fragment key={`triplet-${i}`}>
-            <th style={thSubCell}>M</th>
-            <th style={thSubCell}>F</th>
-            <th style={{ ...thSubCell, fontWeight: 800 }}>T</th>
-          </React.Fragment>
+    <>
+      <colgroup>
+        <col style={{ width: '8.8%' }} />
+        <col style={{ width: '7.0%' }} />
+        <col style={{ width: '6.6%' }} />
+        {Array.from({ length: 36 }).map((_, i) => (
+          <col key={`col-${i}`} style={{ width: '2.155%' }} />
         ))}
-      </tr>
-    </thead>
+      </colgroup>
+      <thead>
+        <tr>
+          <th rowSpan={3} style={{ width: '8.8%', ...thCell }}>NAME OF ADVISER</th>
+          <th rowSpan={3} style={{ width: '7.0%', ...thCell }}>
+            GRADE/<br />YEAR<br />LEVEL
+          </th>
+          <th rowSpan={3} style={{ width: '6.6%', ...thCell }}>SECTION</th>
+          <th colSpan={3} rowSpan={2} style={{ width: '6.467%', ...thCell }}>
+            REGISTERED LEARNER<br />
+            <span style={subHeaderSpan}>(As of End of Month)</span>
+          </th>
+          <th colSpan={6} style={{ width: '12.934%', ...thCell }}>ATTENDANCE</th>
+          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>DROPPED OUT</th>
+          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>TRANSFERRED OUT</th>
+          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>TRANSFERRED IN</th>
+        </tr>
+        <tr>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.6pt' }}>Daily Average</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.6pt' }}>Percentage for Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
+          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
+        </tr>
+        <tr>
+          {Array.from({ length: 12 }).map((_, i) => (
+            <React.Fragment key={`triplet-${i}`}>
+              <th style={thSubCell}>M</th>
+              <th style={thSubCell}>F</th>
+              <th style={{ ...thSubCell, fontWeight: 800 }}>T</th>
+            </React.Fragment>
+          ))}
+        </tr>
+      </thead>
+    </>
   );
 
   const renderMetricCells = (triplet?: MetricTriplet) => (
@@ -679,7 +652,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
   const renderSummaryFooter = () => (
     <div style={footerContainerStyle}>
       <div style={guidelinesPanelStyle}>
-        <div style={{ fontWeight: 800, fontSize: '8.5pt', marginBottom: 3, color: '#000000', fontFamily: 'Calibri, sans-serif' }}>
+        <div style={{ fontWeight: 800, fontSize: '7.2pt', marginBottom: 2, color: '#000000', fontFamily: 'Calibri, sans-serif' }}>
           GUIDELINES:
         </div>
         <div style={ruleTextStyle}>
@@ -697,11 +670,11 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       </div>
 
       <div style={signaturePanelStyle}>
-        <div style={{ fontSize: '8.5pt', fontWeight: 700, textAlign: 'left', marginBottom: 24, color: '#000000', fontFamily: 'Calibri, sans-serif' }}>
+        <div style={{ fontSize: '7.5pt', fontWeight: 700, textAlign: 'left', marginBottom: 16, color: '#000000', fontFamily: 'Calibri, sans-serif' }}>
           Prepared and Submitted by:
         </div>
         <div style={sigLineStyle}>{reportData?.school_head || '\u00A0'}</div>
-        <div style={{ textAlign: 'center', fontSize: '7.5pt', marginTop: 3, color: '#000000', fontFamily: 'Calibri, sans-serif' }}>
+        <div style={{ textAlign: 'center', fontSize: '6.5pt', marginTop: 2, color: '#000000', fontFamily: 'Calibri, sans-serif' }}>
           (Signature of School Head over Printed Name)
         </div>
       </div>
@@ -745,17 +718,19 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         exportHandlers={{
           onExportPdf: handleDownloadPDF,
           onExportExcel: handleExportExcel,
-          onExportGoogleSheets: handleExportGoogleSheets,
-          onExportWord: handleExportWord,
-          onExportGoogleDocs: handleExportGoogleDocs,
+          onExportWord: () => {},
           onExportCsv: handleExportCSV,
-          onExportJson: handleExportJSON,
+          onExportJson: () => {},
         }}
         onPrint={handlePrint}
         isExporting={exportingPdf}
       />
 
-      <div className="report-viewer-viewport" style={viewerScrollContainerStyle}>
+      <div
+        ref={viewportContainerRef}
+        className="report-viewer-viewport"
+        style={viewerScrollContainerStyle}
+      >
         {loading ? (
           <div style={loadingStateStyle}>
             <Loader2 className="animate-spin" size={32} color="#0284c7" />
@@ -767,95 +742,117 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
             <span style={{ fontSize: '9.5pt' }}>{error}</span>
           </div>
         ) : reportData ? (
-          <div id="sf4-print-document" ref={reportRef} style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div
+            id="sf4-print-document"
+            ref={reportRef}
+            style={{
+              margin: '0 auto',
+              width: isPrinting ? '100%' : `${pageGeometry.widthInches}in`,
+              minWidth: isPrinting ? '0' : `${pageGeometry.widthInches}in`,
+              maxWidth: isPrinting ? '100%' : `${pageGeometry.widthInches}in`,
+              display: 'block',
+            }}
+          >
             {paginatedPages.map((page) => (
               <div
                 key={`sf4-page-${page.pageNumber}`}
                 className="sf4-page-sheet"
                 style={{
                   ...sheetWrapperStyle,
-                  ...sheetDimensions,
-                  backgroundColor: activePageConfig.pageColor,
+                  width: isPrinting ? '100%' : `${pageGeometry.widthInches}in`,
+                  minWidth: isPrinting ? '0' : `${pageGeometry.widthInches}in`,
+                  maxWidth: isPrinting ? '100%' : `${pageGeometry.widthInches}in`,
+                  boxShadow: isPrinting ? 'none' : '0 4px 24px rgba(0,0,0,0.12)',
+                  padding: `${pageGeometry.margins.top}in ${pageGeometry.margins.right}in ${pageGeometry.margins.bottom}in ${pageGeometry.margins.left}in`,
+                  backgroundColor: activePageConfig.pageColor || '#ffffff',
                   pageBreakBefore: page.pageNumber > 1 ? 'always' : 'auto',
+                  breakBefore: page.pageNumber > 1 ? 'page' : 'auto',
                 }}
               >
-                {page.showFullHeader && renderHeader()}
+                {/* Always render official DepEd header on each page sheet */}
+                {renderHeader()}
 
                 <table style={mainTableStyle}>
                   {renderTableHeader()}
                   <tbody>
-                    <tr style={{ height: '20px', backgroundColor: '#ffffff' }}>
-                      <td colSpan={39} style={{ ...leftCell, fontWeight: 800, fontSize: '7.5pt' }}>
+                    <tr style={{ height: '17px', backgroundColor: '#ffffff' }}>
+                      <td colSpan={39} style={{ ...adviserCell, fontWeight: 800, fontSize: '6.8pt' }}>
                         ELEMENTARY/SECONDARY:
                       </td>
                     </tr>
 
-                    {page.groups.map((group) => (
-                      <React.Fragment key={`grade-group-${group.grade_level}`}>
-                        {group.sections && group.sections.length > 0 ? (
-                          <>
-                            {group.sections.map((sec) => (
-                              <tr key={`section-row-${sec.section_id}`} style={dataRowStyle}>
-                                <td style={leftCell}>{sec.adviser_name}</td>
-                                <td style={{ ...leftCell, fontWeight: 700 }}>{sec.grade_level}</td>
-                                <td style={leftCell}>{sec.section_name}</td>
-                                {renderMetricCells(sec.registered_end)}
-                                {renderMetricCells(sec.daily_average)}
-                                {renderMetricCells(sec.attendance_percentage)}
-                                {renderMetricCells(sec.dropped_out_prev)}
-                                {renderMetricCells(sec.dropped_out_month)}
-                                {renderMetricCells(sec.dropped_out_cumulative)}
-                                {renderMetricCells(sec.transferred_out_prev)}
-                                {renderMetricCells(sec.transferred_out_month)}
-                                {renderMetricCells(sec.transferred_out_cumulative)}
-                                {renderMetricCells(sec.transferred_in_prev)}
-                                {renderMetricCells(sec.transferred_in_month)}
-                                {renderMetricCells(sec.transferred_in_cumulative)}
+                    {page.groups.map((group) => {
+                      const { grade: groupGrade, section: groupSection } = parseGradeLevelAndSection(group.grade_level);
+                      return (
+                        <React.Fragment key={`grade-group-${group.grade_level}`}>
+                          {group.sections && group.sections.length > 0 ? (
+                            <>
+                              {group.sections.map((sec) => {
+                                const { grade: secGrade, section: secName } = parseGradeLevelAndSection(sec.grade_level, sec.section_name);
+                                return (
+                                  <tr key={`section-row-${sec.section_id}`} style={dataRowStyle}>
+                                    <td style={adviserCell}>{sec.adviser_name}</td>
+                                    <td style={gradeCell}>{secGrade}</td>
+                                    <td style={sectionCell}>{secName}</td>
+                                    {renderMetricCells(sec.registered_end)}
+                                    {renderMetricCells(sec.daily_average)}
+                                    {renderMetricCells(sec.attendance_percentage)}
+                                    {renderMetricCells(sec.dropped_out_prev)}
+                                    {renderMetricCells(sec.dropped_out_month)}
+                                    {renderMetricCells(sec.dropped_out_cumulative)}
+                                    {renderMetricCells(sec.transferred_out_prev)}
+                                    {renderMetricCells(sec.transferred_out_month)}
+                                    {renderMetricCells(sec.transferred_out_cumulative)}
+                                    {renderMetricCells(sec.transferred_in_prev)}
+                                    {renderMetricCells(sec.transferred_in_month)}
+                                    {renderMetricCells(sec.transferred_in_cumulative)}
+                                  </tr>
+                                );
+                              })}
+                              <tr style={gradeSubtotalRowStyle}>
+                                <td colSpan={3} style={{ ...adviserCell, fontWeight: 800 }}>
+                                  TOTAL FOR {groupGrade.toUpperCase()}
+                                </td>
+                                {renderMetricCells(group.subtotal.registered_end)}
+                                {renderMetricCells(group.subtotal.daily_average)}
+                                {renderMetricCells(group.subtotal.attendance_percentage)}
+                                {renderMetricCells(group.subtotal.dropped_out_prev)}
+                                {renderMetricCells(group.subtotal.dropped_out_month)}
+                                {renderMetricCells(group.subtotal.dropped_out_cumulative)}
+                                {renderMetricCells(group.subtotal.transferred_out_prev)}
+                                {renderMetricCells(group.subtotal.transferred_out_month)}
+                                {renderMetricCells(group.subtotal.transferred_out_cumulative)}
+                                {renderMetricCells(group.subtotal.transferred_in_prev)}
+                                {renderMetricCells(group.subtotal.transferred_in_month)}
+                                {renderMetricCells(group.subtotal.transferred_in_cumulative)}
                               </tr>
-                            ))}
-                            <tr style={gradeSubtotalRowStyle}>
-                              <td colSpan={3} style={{ ...leftCell, fontWeight: 800 }}>
-                                TOTAL FOR {group.grade_level.toUpperCase()}
-                              </td>
-                              {renderMetricCells(group.subtotal.registered_end)}
-                              {renderMetricCells(group.subtotal.daily_average)}
-                              {renderMetricCells(group.subtotal.attendance_percentage)}
-                              {renderMetricCells(group.subtotal.dropped_out_prev)}
-                              {renderMetricCells(group.subtotal.dropped_out_month)}
-                              {renderMetricCells(group.subtotal.dropped_out_cumulative)}
-                              {renderMetricCells(group.subtotal.transferred_out_prev)}
-                              {renderMetricCells(group.subtotal.transferred_out_month)}
-                              {renderMetricCells(group.subtotal.transferred_out_cumulative)}
-                              {renderMetricCells(group.subtotal.transferred_in_prev)}
-                              {renderMetricCells(group.subtotal.transferred_in_month)}
-                              {renderMetricCells(group.subtotal.transferred_in_cumulative)}
+                            </>
+                          ) : (
+                            <tr style={dataRowStyle}>
+                              <td style={adviserCell}></td>
+                              <td style={gradeCell}>{groupGrade}</td>
+                              <td style={sectionCell}>{groupSection}</td>
+                              {renderMetricCells(group.subtotal?.registered_end)}
+                              {renderMetricCells(group.subtotal?.daily_average)}
+                              {renderMetricCells(group.subtotal?.attendance_percentage)}
+                              {renderMetricCells(group.subtotal?.dropped_out_prev)}
+                              {renderMetricCells(group.subtotal?.dropped_out_month)}
+                              {renderMetricCells(group.subtotal?.dropped_out_cumulative)}
+                              {renderMetricCells(group.subtotal?.transferred_out_prev)}
+                              {renderMetricCells(group.subtotal?.transferred_out_month)}
+                              {renderMetricCells(group.subtotal?.transferred_out_cumulative)}
+                              {renderMetricCells(group.subtotal?.transferred_in_prev)}
+                              {renderMetricCells(group.subtotal?.transferred_in_month)}
+                              {renderMetricCells(group.subtotal?.transferred_in_cumulative)}
                             </tr>
-                          </>
-                        ) : (
-                          <tr style={dataRowStyle}>
-                            <td style={leftCell}></td>
-                            <td style={{ ...leftCell, fontWeight: 700 }}>{group.grade_level}</td>
-                            <td style={leftCell}></td>
-                            {renderMetricCells(group.subtotal?.registered_end)}
-                            {renderMetricCells(group.subtotal?.daily_average)}
-                            {renderMetricCells(group.subtotal?.attendance_percentage)}
-                            {renderMetricCells(group.subtotal?.dropped_out_prev)}
-                            {renderMetricCells(group.subtotal?.dropped_out_month)}
-                            {renderMetricCells(group.subtotal?.dropped_out_cumulative)}
-                            {renderMetricCells(group.subtotal?.transferred_out_prev)}
-                            {renderMetricCells(group.subtotal?.transferred_out_month)}
-                            {renderMetricCells(group.subtotal?.transferred_out_cumulative)}
-                            {renderMetricCells(group.subtotal?.transferred_in_prev)}
-                            {renderMetricCells(group.subtotal?.transferred_in_month)}
-                            {renderMetricCells(group.subtotal?.transferred_in_cumulative)}
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    ))}
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
 
                     {page.isFinalPage && reportData.non_graded_summary && (
                       <tr style={gradeSubtotalRowStyle}>
-                        <td colSpan={3} style={{ ...leftCell, fontWeight: 800 }}>
+                        <td colSpan={3} style={{ ...adviserCell, fontWeight: 800 }}>
                           TOTAL FOR NON-GRADED
                         </td>
                         {renderMetricCells(reportData.non_graded_summary.registered_end)}
@@ -875,7 +872,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 
                     {page.isFinalPage && reportData.total_summary && (
                       <tr style={grandTotalRowStyle}>
-                        <td colSpan={3} style={{ ...leftCell, fontWeight: 900 }}>
+                        <td colSpan={3} style={{ ...adviserCell, fontWeight: 900 }}>
                           TOTAL
                         </td>
                         {renderMetricCells(reportData.total_summary.registered_end)}
@@ -896,27 +893,6 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
                 </table>
 
                 {page.isFinalPage && renderSummaryFooter()}
-
-                {/* FOOTER: Division Seal/School Seal – 0.76 Inch & Office Details – Calibri 10pt */}
-                {page.isFinalPage && (
-                  <div style={officialFooterStyle}>
-                    <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                      {reportData?.right_logo ? (
-                        <img src={reportData.right_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-                      ) : reportData?.left_logo ? (
-                        <img src={reportData.left_logo} alt="Division / School Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-                      ) : (
-                        <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <KagawaranNgEdukasyonLogo size={70} />
-                        </div>
-                      )}
-                    </div>
-                    <div style={officeDetailsTextStyle}>
-                      <div><strong>{reportData?.school_name || 'Department of Education'}</strong> &bull; {reportData?.division || ''} &bull; {reportData?.district || ''}</div>
-                      <div>Address: {reportData?.district || ''}, {reportData?.division || ''}, {reportData?.region || ''} &bull; Contact Numbers: Official Records &bull; Email Address: deped.gov.ph</div>
-                    </div>
-                  </div>
-                )}
 
                 <div style={auditFooterContainerStyle}>
                   <div>
@@ -952,68 +928,68 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       <style>{`
         @media print {
           @page {
-            size: 13in 8.5in;
-            margin: ${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in;
+            size: ${pageGeometry.widthInches}in ${pageGeometry.heightInches}in;
+            margin: 0 !important;
           }
           
+          .no-print,
+          nav,
+          aside,
+          header,
+          footer,
+          button,
+          input,
+          select {
+            display: none !important;
+          }
+
           html,
           body,
           #root,
-          body > div,
-          body > div > div,
+          #root > div,
           main,
           .report-tab-root,
           .report-viewer-viewport {
             margin: 0 !important;
             padding: 0 !important;
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
             height: auto !important;
-            min-height: 100% !important;
-            background-color: #ffffff !important;
+            min-height: 0 !important;
+            overflow: visible !important;
+            display: block !important;
             background: #ffffff !important;
-            box-shadow: none !important;
+            background-color: #ffffff !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
 
-          .no-print,
-          nav,
-          aside,
-          header {
-            display: none !important;
-          }
-
-          main {
-            margin: 0 !important;
-            padding: 0 !important;
-            overflow: visible !important;
-            height: auto !important;
-            display: block !important;
-            width: 100% !important;
-            background-color: #ffffff !important;
-            background: #ffffff !important;
-          }
-
-          div {
-            overflow: visible !important;
+          * {
+            -webkit-transform: none !important;
+            transform: none !important;
+            zoom: 1 !important;
           }
 
           #sf4-print-document {
             width: 100% !important;
             max-width: 100% !important;
-            margin: 0 !important;
+            min-width: 0 !important;
+            margin: 0 auto !important;
             padding: 0 !important;
             display: block !important;
           }
 
           .sf4-page-sheet {
-            width: 100% !important;
-            max-width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            box-shadow: none !important;
+            width: ${pageGeometry.widthInches}in !important;
+            max-width: ${pageGeometry.widthInches}in !important;
+            min-width: ${pageGeometry.widthInches}in !important;
+            box-sizing: border-box !important;
+            margin: 0 auto !important;
             border: none !important;
-            background-color: #ffffff !important;
+            box-shadow: none !important;
             background: #ffffff !important;
+            background-color: #ffffff !important;
             page-break-after: always !important;
             break-after: page !important;
           }
@@ -1024,16 +1000,15 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
           }
 
           table {
+            width: 100% !important;
+            max-width: 100% !important;
+            table-layout: fixed !important;
             page-break-inside: auto;
           }
 
           tr {
             page-break-inside: avoid !important;
             break-inside: avoid !important;
-          }
-
-          td {
-            white-space: nowrap !important;
           }
         }
       `}</style>
@@ -1047,22 +1022,22 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 const fieldLabelStyle: React.CSSProperties = {
   fontFamily: 'Tahoma, sans-serif',
   fontWeight: 700,
-  fontSize: '9.0pt',
+  fontSize: '8.2pt',
   color: '#000000',
-  marginRight: 6,
+  marginRight: 4,
 };
 
 const fieldBoxStyle: React.CSSProperties = {
-  minHeight: 20,
-  lineHeight: '20px',
+  minHeight: 17,
+  lineHeight: '17px',
   border: '1.2px solid #000000',
   backgroundColor: '#ffffff',
   textAlign: 'center',
   fontWeight: 700,
   fontFamily: 'Tahoma, sans-serif',
-  fontSize: '9.0pt',
+  fontSize: '8.2pt',
   color: '#000000',
-  padding: '0 6px',
+  padding: '0 4px',
   boxSizing: 'border-box',
 };
 
@@ -1071,9 +1046,7 @@ const viewerScrollContainerStyle: React.CSSProperties = {
   overflowY: 'auto',
   overflowX: 'auto',
   padding: '16px 20px',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
+  display: 'block',
   width: '100%',
   boxSizing: 'border-box',
 };
@@ -1092,7 +1065,7 @@ const mainTableStyle: React.CSSProperties = {
   width: '100%',
   tableLayout: 'fixed',
   borderCollapse: 'collapse',
-  fontSize: '7.2pt',
+  fontSize: '6.2pt',
   border: '1.2px solid #000000',
   boxSizing: 'border-box',
   fontFamily: 'Arial, sans-serif',
@@ -1100,31 +1073,32 @@ const mainTableStyle: React.CSSProperties = {
 
 const thCell: React.CSSProperties = {
   border: '1px solid #000000',
-  padding: '3px 1px',
+  padding: '1px 1px',
   backgroundColor: '#ffffff',
   fontWeight: 700,
   textAlign: 'center',
   verticalAlign: 'middle',
   color: '#000000',
-  lineHeight: 1.15,
-  fontSize: '7.5pt',
+  lineHeight: 1.05,
+  fontSize: '5.8pt',
   wordBreak: 'break-word',
 };
 
 const thSubCell: React.CSSProperties = {
   border: '1px solid #000000',
-  padding: '2px 0',
+  padding: '1px 0',
   backgroundColor: '#ffffff',
   fontWeight: 700,
   textAlign: 'center',
   verticalAlign: 'middle',
-  fontSize: '7.0pt',
+  fontSize: '5.4pt',
   color: '#000000',
   lineHeight: 1,
+  whiteSpace: 'nowrap',
 };
 
 const subHeaderSpan: React.CSSProperties = {
-  fontSize: '6.2pt',
+  fontSize: '4.8pt',
   fontWeight: 400,
   fontStyle: 'italic',
   color: '#000000',
@@ -1135,54 +1109,80 @@ const subHeaderSpan: React.CSSProperties = {
 const dataRowStyle: React.CSSProperties = {
   borderBottom: '1px solid #000000',
   verticalAlign: 'middle',
-  height: '22px',
+  height: '16px',
 };
 
 const gradeSubtotalRowStyle: React.CSSProperties = {
   borderTop: '1px solid #000000',
   borderBottom: '1px solid #000000',
   backgroundColor: '#ffffff',
-  height: '22px',
+  height: '17px',
 };
 
 const grandTotalRowStyle: React.CSSProperties = {
   borderTop: '1.4px solid #000000',
   borderBottom: '1.4px solid #000000',
   backgroundColor: '#ffffff',
-  height: '24px',
+  height: '18px',
+};
+
+const adviserCell: React.CSSProperties = {
+  textAlign: 'left',
+  border: '1px solid #000000',
+  padding: '0 3px',
+  color: '#000000',
+  verticalAlign: 'middle',
+  lineHeight: 1.1,
+  fontSize: '6.0pt',
+  fontFamily: 'Arial, sans-serif',
+  whiteSpace: 'normal',
+  wordBreak: 'break-word',
+};
+
+const gradeCell: React.CSSProperties = {
+  textAlign: 'left',
+  border: '1px solid #000000',
+  padding: '0 3px',
+  color: '#000000',
+  verticalAlign: 'middle',
+  lineHeight: 1.1,
+  fontSize: '6.0pt',
+  fontWeight: 700,
+  fontFamily: 'Arial, sans-serif',
+  whiteSpace: 'normal',
+  wordBreak: 'break-word',
+};
+
+const sectionCell: React.CSSProperties = {
+  textAlign: 'left',
+  border: '1px solid #000000',
+  padding: '0 3px',
+  color: '#000000',
+  verticalAlign: 'middle',
+  lineHeight: 1.1,
+  fontSize: '6.0pt',
+  fontFamily: 'Arial, sans-serif',
+  whiteSpace: 'normal',
+  wordBreak: 'break-word',
 };
 
 const centerCell: React.CSSProperties = {
   textAlign: 'center',
   border: '1px solid #000000',
-  padding: '0 1px',
+  padding: '0',
   color: '#000000',
   verticalAlign: 'middle',
-  fontSize: '7.2pt',
-  whiteSpace: 'nowrap',
-  lineHeight: '20px',
+  fontSize: '5.6pt',
+  lineHeight: '16px',
   fontFamily: 'Arial, sans-serif',
-};
-
-const leftCell: React.CSSProperties = {
-  textAlign: 'left',
-  border: '1px solid #000000',
-  padding: '0 4px',
-  color: '#000000',
   whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  verticalAlign: 'middle',
-  lineHeight: '20px',
-  fontSize: '7.2pt',
-  fontFamily: 'Arial, sans-serif',
 };
 
 const footerContainerStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '7.2fr 2.8fr',
-  gap: 16,
-  marginTop: 8,
+  gap: 12,
+  marginTop: 4,
   alignItems: 'start',
   width: '100%',
   boxSizing: 'border-box',
@@ -1191,15 +1191,15 @@ const footerContainerStyle: React.CSSProperties = {
 
 const guidelinesPanelStyle: React.CSSProperties = {
   fontFamily: 'Calibri, sans-serif',
-  fontSize: '8.0pt',
-  lineHeight: 1.25,
+  fontSize: '7.0pt',
+  lineHeight: 1.15,
   boxSizing: 'border-box',
   minWidth: 0,
   color: '#000000',
 };
 
 const ruleTextStyle: React.CSSProperties = {
-  marginBottom: 3,
+  marginBottom: 2,
   color: '#000000',
 };
 
@@ -1209,52 +1209,33 @@ const signaturePanelStyle: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   color: '#000000',
-  paddingLeft: 10,
+  paddingLeft: 8,
 };
 
 const sigLineStyle: React.CSSProperties = {
   borderBottom: '1.2px solid #000000',
-  minHeight: 18,
+  minHeight: 16,
   display: 'flex',
   alignItems: 'flex-end',
   justifyContent: 'center',
   fontWeight: 800,
-  fontSize: '9.5pt',
+  fontSize: '8.5pt',
   fontFamily: 'Calibri, sans-serif',
   textTransform: 'uppercase',
-  paddingBottom: 2,
+  paddingBottom: 1,
   color: '#000000',
   width: '100%',
-};
-
-const officialFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  marginTop: 8,
-  paddingTop: 4,
-  borderTop: '1px solid #000000',
-  width: '100%',
-  boxSizing: 'border-box',
-};
-
-const officeDetailsTextStyle: React.CSSProperties = {
-  fontFamily: 'Calibri, sans-serif',
-  fontSize: '10pt',
-  color: '#000000',
-  lineHeight: 1.25,
-  textAlign: 'left',
 };
 
 const auditFooterContainerStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
-  fontSize: '7.0pt',
+  fontSize: '6.2pt',
   fontFamily: 'Calibri, monospace',
   color: '#000000',
-  marginTop: 8,
-  paddingTop: 4,
+  marginTop: 4,
+  paddingTop: 2,
   borderTop: '0.8px dashed #000000',
   width: '100%',
   boxSizing: 'border-box',

@@ -285,6 +285,8 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
             </select>
           </div>
 
+
+
           {/* 5. Page Background Color */}
           <div style={sectionGroupStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>

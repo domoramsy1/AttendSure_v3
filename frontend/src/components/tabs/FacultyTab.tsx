@@ -5,7 +5,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { Pencil, Trash2, Loader2 } from 'lucide-react';
 
-interface Teacher {
+interface Faculty {
   id: number;
   employee_id: string;
   first_name: string;
@@ -18,32 +18,32 @@ interface Teacher {
   is_active: boolean;
 }
 
-export const TeachersTab: React.FC = () => {
-  const [teachers, setTeachers] = useState<Teacher[]>([]);
+export const FacultysTab: React.FC = () => {
+  const [facultys, setFacultys] = useState<Faculty[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
   // CRUD Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
+  const [editingFaculty, setEditingFaculty] = useState<Faculty | null>(null);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
     employee_id: '',
     first_name: '',
     last_name: '',
-    position: 'Teacher I',
+    position: 'Faculty I',
     department: 'Junior High School',
     contact_number: '',
     rfid_uid: '',
   });
 
-  const fetchTeachers = useCallback(async (query = '') => {
+  const fetchFacultys = useCallback(async (query = '') => {
     try {
       setLoading(true);
       setError(null);
-      const res = await apiClient.get<Teacher[]>(`/teachers/?search=${encodeURIComponent(query)}`);
-      setTeachers(res.data);
+      const res = await apiClient.get<Faculty[]>(`/facultys/?search=${encodeURIComponent(query)}`);
+      setFacultys(res.data);
     } catch (err: any) {
       setError('Failed to fetch faculty records.');
     } finally {
@@ -52,17 +52,17 @@ export const TeachersTab: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const timeout = setTimeout(() => fetchTeachers(search), 300);
+    const timeout = setTimeout(() => fetchFacultys(search), 300);
     return () => clearTimeout(timeout);
-  }, [search, fetchTeachers]);
+  }, [search, fetchFacultys]);
 
   const handleOpenCreate = () => {
-    setEditingTeacher(null);
+    setEditingFaculty(null);
     setFormData({
       employee_id: '',
       first_name: '',
       last_name: '',
-      position: 'Teacher I',
+      position: 'Faculty I',
       department: 'Junior High School',
       contact_number: '',
       rfid_uid: '',
@@ -70,16 +70,16 @@ export const TeachersTab: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleOpenEdit = (teacher: Teacher) => {
-    setEditingTeacher(teacher);
+  const handleOpenEdit = (faculty: Faculty) => {
+    setEditingFaculty(faculty);
     setFormData({
-      employee_id: teacher.employee_id,
-      first_name: teacher.first_name,
-      last_name: teacher.last_name,
-      position: teacher.position || 'Teacher I',
-      department: teacher.department || 'Junior High School',
-      contact_number: teacher.contact_number || '',
-      rfid_uid: teacher.rfid_uid || '',
+      employee_id: faculty.employee_id,
+      first_name: faculty.first_name,
+      last_name: faculty.last_name,
+      position: faculty.position || 'Faculty I',
+      department: faculty.department || 'Junior High School',
+      contact_number: faculty.contact_number || '',
+      rfid_uid: faculty.rfid_uid || '',
     });
     setIsModalOpen(true);
   };
@@ -88,12 +88,12 @@ export const TeachersTab: React.FC = () => {
     e.preventDefault();
     setSaving(true);
     try {
-      if (editingTeacher) {
-        const res = await apiClient.put<Teacher>(`/teachers/${editingTeacher.id}/`, formData);
-        setTeachers((prev) => prev.map((t) => (t.id === editingTeacher.id ? res.data : t)));
+      if (editingFaculty) {
+        const res = await apiClient.put<Faculty>(`/facultys/${editingFaculty.id}/`, formData);
+        setFacultys((prev) => prev.map((t) => (t.id === editingFaculty.id ? res.data : t)));
       } else {
-        const res = await apiClient.post<Teacher>('/teachers/', formData);
-        setTeachers((prev) => [res.data, ...prev]);
+        const res = await apiClient.post<Faculty>('/facultys/', formData);
+        setFacultys((prev) => [res.data, ...prev]);
       }
       setIsModalOpen(false);
     } catch (err: any) {
@@ -103,11 +103,11 @@ export const TeachersTab: React.FC = () => {
     }
   };
 
-  const handleDelete = async (teacher: Teacher) => {
-    if (!window.confirm(`Delete faculty record for ${teacher.full_name}?`)) return;
+  const handleDelete = async (faculty: Faculty) => {
+    if (!window.confirm(`Delete faculty record for ${faculty.full_name}?`)) return;
     try {
-      await apiClient.delete(`/teachers/${teacher.id}/`);
-      setTeachers((prev) => prev.filter((t) => t.id !== teacher.id));
+      await apiClient.delete(`/facultys/${faculty.id}/`);
+      setFacultys((prev) => prev.filter((t) => t.id !== faculty.id));
     } catch (err) {
       alert('Failed to delete faculty member.');
     }
@@ -117,7 +117,7 @@ export const TeachersTab: React.FC = () => {
     <>
       <ModuleTableLayout
         title="Faculty Directory"
-        subtitle="Full CRUD management over teaching faculty and faculty."
+        subtitle="Faculy management and records."
         searchPlaceholder="Search by Employee ID or Name..."
         searchValue={search}
         onSearchChange={setSearch}
@@ -125,7 +125,7 @@ export const TeachersTab: React.FC = () => {
         onAdd={handleOpenCreate}
         loading={loading}
         error={error}
-        data={teachers}
+        data={facultys}
         keyExtractor={(t) => t.id}
         columns={[
           { header: 'Employee ID', render: (t) => <span style={{ fontWeight: 700 }}>{t.employee_id}</span> },
@@ -156,7 +156,7 @@ export const TeachersTab: React.FC = () => {
               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                 <button
                   onClick={() => handleOpenEdit(t)}
-                  title="Edit Teacher"
+                  title="Edit Faculty"
                   style={{
                     background: '#f1f5f9',
                     border: '1px solid #cbd5e1',
@@ -170,7 +170,7 @@ export const TeachersTab: React.FC = () => {
                 </button>
                 <button
                   onClick={() => handleDelete(t)}
-                  title="Delete Teacher"
+                  title="Delete Faculty"
                   style={{
                     background: '#fef2f2',
                     border: '1px solid #fee2e2',
@@ -191,7 +191,7 @@ export const TeachersTab: React.FC = () => {
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingTeacher ? 'Edit Faculty Record' : 'Register New Faculty'}
+        title={editingFaculty ? 'Edit Faculty Record' : 'Register New Faculty'}
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
@@ -292,7 +292,7 @@ export const TeachersTab: React.FC = () => {
             </Button>
             <Button variant="primary" size="md" type="submit" disabled={saving}>
               {saving ? <Loader2 className="animate-spin" size={16} /> : null}
-              {editingTeacher ? 'Save Changes' : 'Add Faculty'}
+              {editingFaculty ? 'Save Changes' : 'Add Faculty'}
             </Button>
           </div>
         </form>

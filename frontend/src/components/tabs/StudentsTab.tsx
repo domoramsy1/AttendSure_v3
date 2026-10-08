@@ -16,6 +16,10 @@ import {
   Upload,
   Camera,
   Image as ImageIcon,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react';
 
 interface Student {
@@ -33,11 +37,26 @@ interface Student {
   is_active: boolean;
 }
 
+interface PaginatedResponse<T> {
+  count: number;
+  total_pages: number;
+  current_page: number;
+  next?: string | null;
+  previous?: string | null;
+  results: T[];
+}
+
 export const StudentsTab: React.FC = () => {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [totalCount, setTotalCount] = useState<number>(0);
 
   const [copiedLrn, setCopiedLrn] = useState<string | null>(null);
   const [badgeStudent, setBadgeStudent] = useState<Student | null>(null);
@@ -58,12 +77,29 @@ export const StudentsTab: React.FC = () => {
     photo: null as string | null,
   });
 
-  const fetchStudents = useCallback(async (query = '') => {
+  const fetchStudents = useCallback(async (page = 1, size = 25, query = '') => {
     try {
       setLoading(true);
       setError(null);
-      const res = await apiClient.get<Student[]>(`/students/?search=${encodeURIComponent(query)}`);
-      setStudents(res.data);
+      const res = await apiClient.get<PaginatedResponse<Student> | Student[]>('/students/', {
+        params: {
+          page,
+          page_size: size,
+          search: query.trim() || undefined,
+        },
+      });
+
+      if (res.data && 'results' in res.data) {
+        setStudents(res.data.results);
+        setTotalCount(res.data.count);
+        setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size));
+        setCurrentPage(res.data.current_page || page);
+      } else if (Array.isArray(res.data)) {
+        setStudents(res.data);
+        setTotalCount(res.data.length);
+        setTotalPages(1);
+        setCurrentPage(1);
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to load students.');
     } finally {
@@ -72,16 +108,31 @@ export const StudentsTab: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const timeout = setTimeout(() => fetchStudents(search), 300);
+    const timeout = setTimeout(() => {
+      setCurrentPage(1);
+      fetchStudents(1, pageSize, search);
+    }, 300);
     return () => clearTimeout(timeout);
-  }, [search, fetchStudents]);
+  }, [search, pageSize, fetchStudents]);
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages) return;
+    setCurrentPage(newPage);
+    fetchStudents(newPage, pageSize, search);
+  };
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize);
+    setCurrentPage(1);
+    fetchStudents(1, newSize, search);
+  };
 
   // Real database counts
-  const totalStudents = students.length;
+  const totalStudents = totalCount || students.length;
   const totalBoys = students.filter((s) => s.sex === 'Male' || s.sex === 'M').length;
   const totalGirls = students.filter((s) => s.sex === 'Female' || s.sex === 'F').length;
   const pairedCards = students.filter((s) => Boolean(s.rfid_uid && s.rfid_uid.trim().length > 0)).length;
-  const unpairedCards = totalStudents - pairedCards;
+  const unpairedCards = Math.max(0, students.length - pairedCards);
 
   const handleCopyLrn = (lrn: string) => {
     navigator.clipboard.writeText(lrn);
@@ -144,7 +195,6 @@ export const StudentsTab: React.FC = () => {
     setSaving(true);
 
     try {
-      // 1. Clean the payload before sending
       const payload: any = {
         lrn: formData.lrn.trim(),
         first_name: formData.first_name.trim(),
@@ -152,23 +202,19 @@ export const StudentsTab: React.FC = () => {
         last_name: formData.last_name.trim(),
         sex: formData.sex === 'Female' ? 'Female' : 'Male',
         parent_contact: formData.parent_contact.trim() || '',
-        // Send null if empty so unique constraint check succeeds
         rfid_uid: formData.rfid_uid && formData.rfid_uid.trim() !== '' ? formData.rfid_uid.trim() : null,
       };
 
-      // 2. Only send photo if a new base64 picture was selected
       if (formData.photo && formData.photo.startsWith('data:image')) {
         payload.photo = formData.photo;
       }
 
       if (editingStudent) {
-        // UPDATE (PUT)
         const res = await apiClient.put<Student>(`/students/${editingStudent.id}/`, payload);
         setStudents((prev) => prev.map((s) => (s.id === editingStudent.id ? res.data : s)));
       } else {
-        // CREATE (POST)
-        const res = await apiClient.post<Student>('/students/', payload);
-        setStudents((prev) => [res.data, ...prev]);
+        await apiClient.post<Student>('/students/', payload);
+        fetchStudents(1, pageSize, search);
       }
 
       setIsModalOpen(false);
@@ -193,11 +239,14 @@ export const StudentsTab: React.FC = () => {
     }
     try {
       await apiClient.delete(`/students/${student.id}/`);
-      setStudents((prev) => prev.filter((s) => s.id !== student.id));
+      fetchStudents(currentPage, pageSize, search);
     } catch {
       alert('Failed to delete student record.');
     }
   };
+
+  const startRecord = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
+  const endRecord = Math.min(currentPage * pageSize, totalCount);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -211,27 +260,27 @@ export const StudentsTab: React.FC = () => {
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>GENDER RATIO</div>
+          <div style={statLabel}>SEX RATIO (PAGE)</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span style={{ fontSize: '1.40rem', fontWeight: 800, color: '#0284c7' }}>{totalBoys}</span>
-            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Boys</span>
+            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Male</span>
             <span style={{ fontSize: '1.40rem', fontWeight: 800, color: '#ec4899', marginLeft: 6 }}>{totalGirls}</span>
-            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Girls</span>
+            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Female</span>
           </div>
-          <div style={statHelp}>DepEd classroom balance</div>
+          <div style={statHelp}>Current page distribution</div>
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>RFID CARDS PAIRED</div>
+          <div style={statLabel}>RFID CARDS PAIRED (PAGE)</div>
           <div style={{ fontSize: '1.40rem', fontWeight: 800, color: '#059669' }}>
             {pairedCards}
-            <span style={{ fontSize: '0.80rem', color: '#94a3b8', fontWeight: 500 }}> / {totalStudents}</span>
+            <span style={{ fontSize: '0.80rem', color: '#94a3b8', fontWeight: 500 }}> / {students.length}</span>
           </div>
           <div style={statHelp}>Ready for gate card tap</div>
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>NEEDS RFID CARD</div>
+          <div style={statLabel}>NEEDS RFID CARD (PAGE)</div>
           <div style={{ fontSize: '1.40rem', fontWeight: 800, color: unpairedCards > 0 ? '#d97706' : '#059669' }}>
             {unpairedCards}
           </div>
@@ -240,178 +289,254 @@ export const StudentsTab: React.FC = () => {
       </div>
 
       {/* 2. Main Table */}
-      <ModuleTableLayout
-        title="Student Management"
-        subtitle="Manage master student records, photos, RFID cards, and gate passes."
-        searchPlaceholder="Search by LRN or Name..."
-        searchValue={search}
-        onSearchChange={setSearch}
-        addButtonLabel="Enroll Student"
-        onAdd={handleOpenCreate}
-        loading={loading}
-        error={error}
-        data={students}
-        keyExtractor={(s) => s.id}
-        columns={[
-          {
-            header: 'Photo & Learner Name',
-            render: (s) => {
-              const hasPhoto = Boolean(s.photo && !s.photo.includes('default_avatar.png') && !imgErrorMap[s.id]);
-              return (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={avatarStyle}>
-                    {hasPhoto ? (
-                      <img
-                        src={s.photo!}
-                        alt={s.full_name}
-                        onError={() => setImgErrorMap((prev) => ({ ...prev, [s.id]: true }))}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
-                    ) : (
-                      <span>
-                        {s.first_name ? s.first_name.charAt(0).toUpperCase() : 'S'}
-                        {s.last_name ? s.last_name.charAt(0).toUpperCase() : ''}
-                      </span>
-                    )}
-                  </div>
-
-                  <div>
-                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.86rem' }}>
-                      {s.full_name || `${s.last_name}, ${s.first_name}`}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                      <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
-                        LRN: {s.lrn}
-                      </span>
-                      <button
-                        onClick={() => handleCopyLrn(s.lrn)}
-                        title="Copy LRN"
-                        style={copyBtnStyle}
-                        type="button"
-                      >
-                        {copiedLrn === s.lrn ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
-                      </button>
-                      {copiedLrn === s.lrn && (
-                        <span style={{ fontSize: '0.62rem', color: '#059669', fontWeight: 700 }}>Copied!</span>
+      <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+        <ModuleTableLayout
+          title="Student Management"
+          subtitle="Manage master student records, photos, RFID cards, and gate passes."
+          searchPlaceholder="Search by LRN or Name..."
+          searchValue={search}
+          onSearchChange={setSearch}
+          addButtonLabel="Enroll Student"
+          onAdd={handleOpenCreate}
+          loading={loading}
+          error={error}
+          data={students}
+          keyExtractor={(s) => s.id}
+          columns={[
+            {
+              header: 'Photo & Learner Name',
+              render: (s) => {
+                const hasPhoto = Boolean(s.photo && !s.photo.includes('default_avatar.png') && !imgErrorMap[s.id]);
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={avatarStyle}>
+                      {hasPhoto ? (
+                        <img
+                          src={s.photo!}
+                          alt={s.full_name}
+                          onError={() => setImgErrorMap((prev) => ({ ...prev, [s.id]: true }))}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      ) : (
+                        <span>
+                          {s.first_name ? s.first_name.charAt(0).toUpperCase() : 'S'}
+                          {s.last_name ? s.last_name.charAt(0).toUpperCase() : ''}
+                        </span>
                       )}
                     </div>
+
+                    <div>
+                      <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.86rem' }}>
+                        {s.full_name || `${s.last_name}, ${s.first_name}`}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                        <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
+                          LRN: {s.lrn}
+                        </span>
+                        <button
+                          onClick={() => handleCopyLrn(s.lrn)}
+                          title="Copy LRN"
+                          style={copyBtnStyle}
+                          type="button"
+                        >
+                          {copiedLrn === s.lrn ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
+                        </button>
+                        {copiedLrn === s.lrn && (
+                          <span style={{ fontSize: '0.62rem', color: '#059669', fontWeight: 700 }}>Copied!</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              );
+                );
+              },
             },
-          },
-          {
-            header: 'Sex',
-            render: (s) => {
-              const isMale = s.sex === 'Male' || s.sex === 'M';
-              return (
+            {
+              header: 'Sex',
+              render: (s) => {
+                const isMale = s.sex === 'Male' || s.sex === 'M';
+                return (
+                  <span
+                    style={{
+                      padding: '3px 8px',
+                      borderRadius: 6,
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      backgroundColor: isMale ? '#eff6ff' : '#fdf2f8',
+                      color: isMale ? '#0284c7' : '#db2777',
+                    }}
+                  >
+                    {isMale ? 'Male' : 'Female'}
+                  </span>
+                );
+              },
+            },
+            {
+              header: 'Section',
+              render: (s) => (
                 <span
                   style={{
                     padding: '3px 8px',
                     borderRadius: 6,
-                    fontSize: '0.72rem',
-                    fontWeight: 700,
-                    backgroundColor: isMale ? '#eff6ff' : '#fdf2f8',
-                    color: isMale ? '#0284c7' : '#db2777',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    backgroundColor: '#f1f5f9',
+                    color: '#334155',
                   }}
                 >
-                  {isMale ? 'Male' : 'Female'}
+                  {s.current_section || 'Unassigned'}
                 </span>
-              );
+              ),
             },
-          },
-          {
-            header: 'Section',
-            render: (s) => (
-              <span
-                style={{
-                  padding: '3px 8px',
-                  borderRadius: 6,
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  backgroundColor: '#f1f5f9',
-                  color: '#334155',
-                }}
-              >
-                {s.current_section || 'Unassigned'}
-              </span>
-            ),
-          },
-          {
-            header: 'Gate RFID Card',
-            render: (s) =>
-              s.rfid_uid ? (
-                <div style={rfidChipStyle}>
-                  <CreditCard size={12} color="#059669" />
-                  <span>{s.rfid_uid}</span>
-                </div>
-              ) : (
-                <div style={unlinkedChipStyle}>
-                  <CreditCard size={12} color="#d97706" />
-                  <span>No Card</span>
+            {
+              header: 'Gate RFID Card',
+              render: (s) =>
+                s.rfid_uid ? (
+                  <div style={rfidChipStyle}>
+                    <CreditCard size={12} color="#059669" />
+                    <span>{s.rfid_uid}</span>
+                  </div>
+                ) : (
+                  <div style={unlinkedChipStyle}>
+                    <CreditCard size={12} color="#d97706" />
+                    <span>No Card</span>
+                  </div>
+                ),
+            },
+            {
+              header: 'Parent Phone (SMS)',
+              render: (s) => (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: '#334155' }}>
+                  <Phone size={12} color="#64748b" />
+                  <span>{s.parent_contact || '—'}</span>
                 </div>
               ),
-          },
-          {
-            header: 'Parent Phone (SMS)',
-            render: (s) => (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: '#334155' }}>
-                <Phone size={12} color="#64748b" />
-                <span>{s.parent_contact || '—'}</span>
-              </div>
-            ),
-          },
-          {
-            header: 'Status',
-            render: (s) => (
-              <span
-                style={{
-                  padding: '3px 8px',
-                  borderRadius: 12,
-                  fontSize: '0.68rem',
-                  fontWeight: 800,
-                  backgroundColor: s.is_active ? '#ecfdf5' : '#fef2f2',
-                  color: s.is_active ? '#059669' : '#dc2626',
-                }}
+            },
+            {
+              header: 'Status',
+              render: (s) => (
+                <span
+                  style={{
+                    padding: '3px 8px',
+                    borderRadius: 12,
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    backgroundColor: s.is_active ? '#ecfdf5' : '#fef2f2',
+                    color: s.is_active ? '#059669' : '#dc2626',
+                  }}
+                >
+                  {s.is_active ? 'ACTIVE' : 'INACTIVE'}
+                </span>
+              ),
+            },
+            {
+              header: 'Actions',
+              align: 'right',
+              render: (s) => (
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => setBadgeStudent(s)}
+                    title="View Student Gate Pass & QR Badge"
+                    style={iconActionBtn}
+                    type="button"
+                  >
+                    <QrCode size={13} color="#0284c7" />
+                  </button>
+                  <button
+                    onClick={() => handleOpenEdit(s)}
+                    title="Edit Student Information"
+                    style={iconActionBtn}
+                    type="button"
+                  >
+                    <Pencil size={13} color="#475569" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(s)}
+                    title="Delete Student"
+                    style={{ ...iconActionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
+                    type="button"
+                  >
+                    <Trash2 size={13} color="#dc2626" />
+                  </button>
+                </div>
+              ),
+            },
+          ]}
+        />
+
+        {/* Pagination Bar */}
+        <div style={paginationContainer}>
+          <div style={{ fontSize: '0.80rem', color: '#475569' }}>
+            {totalCount > 0 ? (
+              <>
+                Showing <strong>{startRecord}</strong> to <strong>{endRecord}</strong> of{' '}
+                <strong>{totalCount}</strong> students
+              </>
+            ) : (
+              'No records found'
+            )}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 8 }}>
+              <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                style={paginationSelect}
               >
-                {s.is_active ? 'ACTIVE' : 'INACTIVE'}
-              </span>
-            ),
-          },
-          {
-            header: 'Actions',
-            align: 'right',
-            render: (s) => (
-              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                <button
-                  onClick={() => setBadgeStudent(s)}
-                  title="View Student Gate Pass & QR Badge"
-                  style={iconActionBtn}
-                  type="button"
-                >
-                  <QrCode size={13} color="#0284c7" />
-                </button>
-                <button
-                  onClick={() => handleOpenEdit(s)}
-                  title="Edit Student Information"
-                  style={iconActionBtn}
-                  type="button"
-                >
-                  <Pencil size={13} color="#475569" />
-                </button>
-                <button
-                  onClick={() => handleDelete(s)}
-                  title="Delete Student"
-                  style={{ ...iconActionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
-                  type="button"
-                >
-                  <Trash2 size={13} color="#dc2626" />
-                </button>
-              </div>
-            ),
-          },
-        ]}
-      />
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => handlePageChange(1)}
+              disabled={currentPage <= 1 || loading}
+              style={{ ...paginationBtn, opacity: currentPage <= 1 || loading ? 0.35 : 1 }}
+              title="First Page"
+              type="button"
+            >
+              <ChevronsLeft size={16} />
+            </button>
+
+            <button
+              onClick={() => handlePageChange(currentPage - 1)}
+              disabled={currentPage <= 1 || loading}
+              style={{ ...paginationBtn, opacity: currentPage <= 1 || loading ? 0.35 : 1 }}
+              title="Previous Page"
+              type="button"
+            >
+              <ChevronLeft size={16} />
+            </button>
+
+            <span style={{ fontSize: '0.80rem', fontWeight: 600, padding: '0 8px', color: '#0f172a' }}>
+              Page {currentPage} of {Math.max(1, totalPages)}
+            </span>
+
+            <button
+              onClick={() => handlePageChange(currentPage + 1)}
+              disabled={currentPage >= totalPages || loading}
+              style={{ ...paginationBtn, opacity: currentPage >= totalPages || loading ? 0.35 : 1 }}
+              title="Next Page"
+              type="button"
+            >
+              <ChevronRight size={16} />
+            </button>
+
+            <button
+              onClick={() => handlePageChange(totalPages)}
+              disabled={currentPage >= totalPages || loading}
+              style={{ ...paginationBtn, opacity: currentPage >= totalPages || loading ? 0.35 : 1 }}
+              title="Last Page"
+              type="button"
+            >
+              <ChevronsRight size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* 3. Enroll / Edit Modal with Profile Photo Upload */}
       <Modal
@@ -808,6 +933,37 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
   boxSizing: 'border-box',
   color: '#0f172a',
+};
+
+const paginationContainer: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '12px 18px',
+  backgroundColor: '#ffffff',
+  borderTop: '1px solid #e2e8f0',
+  boxSizing: 'border-box',
+};
+
+const paginationBtn: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '6px',
+  border: '1px solid #cbd5e1',
+  borderRadius: 6,
+  backgroundColor: '#ffffff',
+  color: '#334155',
+  cursor: 'pointer',
+};
+
+const paginationSelect: React.CSSProperties = {
+  padding: '4px 6px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  fontSize: '0.78rem',
+  color: '#0f172a',
+  backgroundColor: '#ffffff',
 };
 
 export default StudentsTab;

@@ -435,9 +435,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                     onChange={(e) => setRegForm({ ...regForm, role: e.target.value as any })}
                     style={{ width: '100%' }}
                   >
-                    <option value="TEACHER">Faculty Teacher</option>
-                    <option value="REGISTRAR">School Registrar</option>
-                    <option value="ADMIN">System Administrator</option>
+                    <option value="TEACHER">Faculty </option>
+                    <option value="REGISTRAR">Registrar</option>
+                    <option value="ADMIN">Administrator</option>
                   </Select>
                 </div>
               </div>

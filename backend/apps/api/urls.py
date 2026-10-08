@@ -30,24 +30,26 @@ from apps.api.views import (
 # 1. Register Core Entity ViewSets
 router = DefaultRouter()
 router.register(r'students', StudentViewSet, basename='student')
-router.register(r'facultys', FacultyViewSet, basename='faculty')
+router.register(r'faculty', FacultyViewSet, basename='faculty')
+router.register(r'facultys', FacultyViewSet, basename='facultys')
+router.register(r'teachers', FacultyViewSet, basename='teachers')
 router.register(r'scanners', ScannerViewSet, basename='scanner')
 router.register(r'gate-passes', GatePassViewSet, basename='gatepass')
 router.register(r'schedules', ScheduleViewSet, basename='schedule')
 router.register(r'subjects', SubjectViewSet, basename='subject')
 router.register(r'users', UserManagementViewSet, basename='user')
-
-# In your router registration section:
 router.register(r'rooms', RoomViewSet, basename='rooms')
 router.register(r'grade-levels', GradeLevelViewSet, basename='grade-levels')
 
 # 2. Main API Route Configuration
 urlpatterns = [
-    # Router endpoints (CRUD for students, facultys, scanners, passes, etc.)
+    # Router endpoints (CRUD for students, faculty, scanners, passes, etc.)
     path('', include(router.urls)),
 
-
+    # Faculty Device Binding
     path('facultys/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-reset-device-binding'),
+    path('faculty/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-faculty-reset-device-binding'),
+
     # Authentication & User Profile Management
     path('auth/login/', LoginAPIView.as_view(), name='api-login'),
     path('me/', CurrentUserProfileView.as_view(), name='current-user-profile'),
@@ -64,12 +66,16 @@ urlpatterns = [
     # Hardware Kiosk & Attendance Scanners
     path('gate/scan/', GateScanAPIView.as_view(), name='api-gate-scan'),
     path('gate/logs/', GateLogsAPIView.as_view(), name='api-gate-logs'),
+    path('faculty-gate-logs/', GateLogsAPIView.as_view(), name='api-faculty-gate-logs-alias'),
     path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='api-classroom-batch-scan'),
     path('telemetry/heartbeat/', TelemetryHeartbeatAPIView.as_view(), name='api-telemetry-heartbeat'),
 
-    # Faculty Daily Time Records (Work Attendance)
+    # Faculty Daily Time Records (Civil Service Form 48)
     path('dtr/', DTRListAPIView.as_view(), name='api-dtr'),
+    path('dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='api-dtr-detail'),
     path('faculty/dtr/', DTRListAPIView.as_view(), name='api-faculty-dtr-alias'),
+    path('reports/dtr/', DTRListAPIView.as_view(), name='api-reports-dtr-root'),
+    path('reports/dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='api-reports-dtr'),
 
     # Campus Geofence Boundary
     path('geofence/', GeofenceAPIView.as_view(), name='api-geofence'),

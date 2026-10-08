@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.conf import settings
 
 User = get_user_model()
 
@@ -54,7 +55,10 @@ ENROLLMENT_TYPE_CHOICES = [
 
 USER_ROLE_CHOICES = [
     ('ADMIN', 'System Administrator'),
-    ('TEACHER', 'Teacher'),
+    ('PRINCIPAL', 'School Principal'),
+    ('DEPT_HEAD', 'Department Head'),
+    ('TEACHER', 'Teacher / Adviser'),
+    ('GUARD', 'Security Guard'),
 ]
 
 GATE_PASS_STATUS_CHOICES = [
@@ -101,7 +105,6 @@ class AcademicYear(models.Model):
 
 
 class SchoolProfile(models.Model):
-    # Pure database values without fake fallback defaults
     school_id = models.CharField(max_length=50, blank=True, default='')
     school_name = models.CharField(max_length=255, blank=True, default='')
     region = models.CharField(max_length=100, blank=True, default='')
@@ -115,7 +118,6 @@ class SchoolProfile(models.Model):
     principal_name = models.CharField(max_length=150, blank=True, default='')
     principal_title = models.CharField(max_length=100, blank=True, default='')
 
-    # Real logo uploads (base64 or storage path)
     kagawaran_logo = models.TextField(blank=True, null=True)
     deped_logo = models.TextField(blank=True, null=True)
     school_logo = models.TextField(blank=True, null=True)
@@ -123,7 +125,6 @@ class SchoolProfile(models.Model):
     left_logo = models.TextField(blank=True, null=True)
     right_logo = models.TextField(blank=True, null=True)
 
-    # Campus GPS Coordinates
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     geofence_radius_meters = models.PositiveIntegerField(null=True, blank=True)
@@ -412,6 +413,10 @@ class ScheduleDay(models.Model):
 # ============================================================================
 
 class FacultyGateLog(models.Model):
+    """
+    Main gate scan record for teachers and staff.
+    Includes anti-cheating, loafing violation flags, and Principal pardon fields.
+    """
     id = models.BigAutoField(primary_key=True)
     faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='gate_logs')
     kiosk = models.ForeignKey(IoTKiosk, on_delete=models.SET_NULL, null=True, blank=True)
@@ -420,9 +425,39 @@ class FacultyGateLog(models.Model):
     scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default='RFID')
     raw_identifier = models.CharField(max_length=128)
 
+    # DTR, Loafing & Anti-Cheating Violation Flags
+    is_violation = models.BooleanField(
+        default=False,
+        help_text="Flagged when unauthorized gate exit occurs during official work hours without Gate Pass"
+    )
+    violation_type = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text="e.g. LOAFING, PREMATURE_EXIT, CUTTING"
+    )
+    remarks = models.TextField(blank=True, default='')
+
+    # Principal Exemption / Consideration
+    is_excused_by_principal = models.BooleanField(
+        default=False,
+        help_text="Only the School Principal can excuse a loafing violation to prevent salary deduction"
+    )
+    excused_at = models.DateTimeField(null=True, blank=True)
+    excused_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='excused_faculty_gate_violations'
+    )
+
     class Meta:
         db_table = 'faculty_gate_logs'
         ordering = ['-scan_time']
+
+    def __str__(self):
+        return f"{self.faculty} - {self.direction} at {self.scan_time}"
 
 
 class StudentGateLog(models.Model):
@@ -531,7 +566,6 @@ class SmsOutbox(models.Model):
         ordering = ['priority', 'created_at']
 
 
-
 # ============================================================================
 # AUDIT LOG (MANAGED BY DATABASE)
 # ============================================================================
@@ -562,3 +596,59 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"[{self.action}] {self.table_name} #{self.record_id}"
+
+
+# ============================================================================
+# 5. DTR MONTHLY GOVERNANCE
+# ============================================================================
+
+class FacultyMonthlyDTR(models.Model):
+    """
+    Tracks monthly DTR submission, Department Head approval,
+    and governance status for Civil Service Form 48.
+    """
+    faculty = models.ForeignKey(
+        FacultyProfile,
+        on_delete=models.CASCADE,
+        related_name='monthly_dtrs'
+    )
+    month = models.PositiveSmallIntegerField(help_text="Month number (1-12)")
+    year = models.PositiveSmallIntegerField(help_text="Year (e.g., 2026)")
+
+    # Submission Workflow
+    is_submitted = models.BooleanField(default=False)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+
+    # Department Head Approval Workflow
+    is_dept_head_approved = models.BooleanField(default=False)
+    dept_head_approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_dtrs'
+    )
+
+    # Prescribed Work Schedule
+    regular_hours = models.CharField(
+        max_length=120,
+        default="8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM"
+    )
+    saturday_hours = models.CharField(
+        max_length=120,
+        default="As Required"
+    )
+
+    remarks = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'faculty_monthly_dtr'
+        unique_together = ('faculty', 'month', 'year')
+        ordering = ['-year', '-month']
+
+    def __str__(self):
+        status = "Approved" if self.is_dept_head_approved else ("Submitted" if self.is_submitted else "Draft")
+        return f"{self.faculty} - {self.month}/{self.year} ({status})"

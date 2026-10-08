@@ -4,7 +4,7 @@ import { Button } from '../ui/Button';
 
 interface Column<T> {
   header: string;
-  render: (item: T) => React.ReactNode;
+  render: (item: T, index?: number) => React.ReactNode;
   align?: 'left' | 'center' | 'right';
 }
 
@@ -37,6 +37,15 @@ export function ModuleTableLayout<T>({
   data,
   keyExtractor,
 }: ModuleTableLayoutProps<T>) {
+  // Runtime defensive check: safely unwrap whether data is an array or a paginated object
+  const tableItems: T[] = Array.isArray(data)
+    ? data
+    : (data as any)?.results && Array.isArray((data as any).results)
+    ? (data as any).results
+    : (data as any)?.data && Array.isArray((data as any).data)
+    ? (data as any).data
+    : [];
+
   return (
     <div style={{ padding: '24px 32px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -92,7 +101,7 @@ export function ModuleTableLayout<T>({
           minHeight: '200px',
           display: 'flex',
           flexDirection: 'column',
-          justifyContent: loading || data.length === 0 ? 'center' : 'flex-start',
+          justifyContent: loading || tableItems.length === 0 ? 'center' : 'flex-start',
         }}
       >
         {loading ? (
@@ -100,7 +109,7 @@ export function ModuleTableLayout<T>({
             <Loader2 className="animate-spin" size={22} color="#0284c7" />
             <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Querying database records...</span>
           </div>
-        ) : data.length === 0 ? (
+        ) : tableItems.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 48, color: '#94a3b8', fontSize: '0.88rem' }}>
             No matching database records found.
           </div>
@@ -116,11 +125,11 @@ export function ModuleTableLayout<T>({
               </tr>
             </thead>
             <tbody>
-              {data.map((item) => (
+              {tableItems.map((item, index) => (
                 <tr key={keyExtractor(item)} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   {columns.map((col, cIdx) => (
                     <td key={cIdx} style={{ padding: '14px 16px', textAlign: col.align || 'left' }}>
-                      {col.render(item)}
+                      {col.render(item, index)}
                     </td>
                   ))}
                 </tr>

@@ -1,511 +1,577 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import apiClient from '../../api/client';
-import { ModuleTableLayout } from './ModuleTableLayout';
-import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
 import { 
+  Calendar, 
+  Layers, 
+  DoorOpen, 
+  Users, 
+  Search, 
+  Filter, 
+  Edit2, 
+  Trash2, 
   Clock, 
   MapPin, 
   UserCheck, 
-  Pencil, 
-  Trash2, 
-  Loader2, 
   BookOpen, 
-  Filter 
+  Loader2, 
+  AlertCircle, 
+  RefreshCw 
 } from 'lucide-react';
+import { AcademicSetupModal, type TabType as AcademicTabType } from '../modals/AcademicSetupModal';
 
 interface ScheduleItem {
   id: number;
-  schedule_id: string;
-  section: number;
-  section_name: string;
-  grade_level_name: string;
-  subject: number;
-  subject_code: string;
-  subject_title: string;
-  teacher: number | null;
-  teacher_name: string;
-  room_number: string;
+  schedule_code?: string;
+  code?: string;
+  section?: any;
+  section_name?: string;
+  grade_level_name?: string;
+  subject?: any;
+  subject_code?: string;
+  subject_name?: string;
+  faculty?: any;
+  faculty_name?: string;
+  faculty_id?: number;
+  teacher?: any;
+  teacher_name?: string;
+  room?: any;
+  room_name?: string;
+  room_number?: string;
   start_time: string;
   end_time: string;
-  time_slot: string;
+  days_of_week?: string;
 }
 
-interface DropdownItem {
+interface SectionOption {
   id: number;
-  label: string;
+  name: string;
+  grade_level_name?: string;
 }
 
 export const SchedulesTab: React.FC = () => {
   const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  const [sections, setSections] = useState<SectionOption[]>([]);
+  const [facultyList, setFacultyList] = useState<any[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string>('');
+
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedSectionFilter, setSelectedSectionFilter] = useState<string>('ALL');
 
-  // Dropdown master records for creation modal
-  const [sections, setSections] = useState<DropdownItem[]>([]);
-  const [subjects, setSubjects] = useState<DropdownItem[]>([]);
-  const [teachers, setTeachers] = useState<DropdownItem[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [modalTab, setModalTab] = useState<AcademicTabType>('SCHEDULE');
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<ScheduleItem | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [formData, setFormData] = useState({
-    section: '',
-    subject: '',
-    teacher: '',
-    room_number: '',
-    start_time: '07:30',
-    end_time: '08:30',
-  });
-
-  const fetchSchedules = useCallback(async () => {
+  const loadData = async () => {
+    setLoading(true);
+    setError('');
     try {
-      setLoading(true);
-      setError(null);
-      const res = await apiClient.get<ScheduleItem[]>('/schedules/');
-      setSchedules(res.data);
-    } catch (err: any) {
-      setError('Unable to load class timetables.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const fetchDropdownDependencies = async () => {
-    try {
-      const [secRes, subRes, teachRes] = await Promise.all([
-        apiClient.get<any[]>('/sections/'),
-        apiClient.get<any[]>('/subjects/'),
-        apiClient.get<any[]>('/teachers/'),
+      const [schedRes, secRes, facRes] = await Promise.all([
+        apiClient.get('/schedules/'),
+        apiClient.get('/sections/'),
+        apiClient.get('/facultys/'),
       ]);
 
-      setSections(
-        secRes.data.map((s) => ({
-          id: s.id,
-          label: s.display_label || `${s.grade_level || 'Grade'} - ${s.name}`,
-        }))
-      );
-      setSubjects(
-        subRes.data.map((sub) => ({
-          id: sub.id,
-          label: `${sub.code} - ${sub.title}`,
-        }))
-      );
-      setTeachers(
-        teachRes.data.map((t) => ({
-          id: t.id,
-          label: `${t.last_name}, ${t.first_name} (${t.position || 'Faculty'})`,
-        }))
-      );
-    } catch (err) {
-      console.error('Failed to load schedule dependencies:', err);
+      setSchedules(Array.isArray(schedRes.data) ? schedRes.data : schedRes.data.results || []);
+      setSections(Array.isArray(secRes.data) ? secRes.data : secRes.data.results || []);
+      setFacultyList(Array.isArray(facRes.data) ? facRes.data : facRes.data.results || []);
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail || err.message;
+      setError(`[HTTP ${status || 'Error'}] Could not load timetable data: ${detail}`);
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchSchedules();
-    fetchDropdownDependencies();
-  }, [fetchSchedules]);
+    loadData();
+  }, []);
 
-  const handleOpenCreate = () => {
-    setEditingItem(null);
-    setFormData({
-      section: sections[0]?.id ? String(sections[0].id) : '',
-      subject: subjects[0]?.id ? String(subjects[0].id) : '',
-      teacher: '',
-      room_number: 'Room 101',
-      start_time: '07:30',
-      end_time: '08:30',
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleOpenEdit = (item: ScheduleItem) => {
-    setEditingItem(item);
-    setFormData({
-      section: String(item.section),
-      subject: String(item.subject),
-      teacher: item.teacher ? String(item.teacher) : '',
-      room_number: item.room_number || '',
-      start_time: item.start_time ? item.start_time.substring(0, 5) : '07:30',
-      end_time: item.end_time ? item.end_time.substring(0, 5) : '08:30',
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
+  const handleDelete = async (id: number, code: string) => {
+    if (!window.confirm(`Are you sure you want to delete schedule ${code}?`)) return;
     try {
-      const payload: any = {
-        section: Number(formData.section),
-        subject: Number(formData.subject),
-        room_number: formData.room_number,
-        start_time: formData.start_time.length === 5 ? `${formData.start_time}:00` : formData.start_time,
-        end_time: formData.end_time.length === 5 ? `${formData.end_time}:00` : formData.end_time,
-        teacher: formData.teacher ? Number(formData.teacher) : null,
-      };
-
-      if (editingItem) {
-        const res = await apiClient.put<ScheduleItem>(`/schedules/${editingItem.id}/`, payload);
-        setSchedules((prev) => prev.map((s) => (s.id === editingItem.id ? res.data : s)));
-      } else {
-        const res = await apiClient.post<ScheduleItem>('/schedules/', payload);
-        setSchedules((prev) => [res.data, ...prev]);
-      }
-      setIsModalOpen(false);
+      await apiClient.delete(`/schedules/${id}/`);
+      setSchedules((prev) => prev.filter((item) => item.id !== id));
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to save class schedule period.');
-    } finally {
-      setSubmitting(false);
+      alert(`Delete failed: ${err?.response?.data?.detail || err.message}`);
     }
   };
 
-  const handleDelete = async (item: ScheduleItem) => {
-    if (!window.confirm(`Delete class period ${item.schedule_id} (${item.subject_title})?`)) return;
-    try {
-      await apiClient.delete(`/schedules/${item.id}/`);
-      setSchedules((prev) => prev.filter((s) => s.id !== item.id));
-    } catch (err) {
-      alert('Unable to delete class schedule period.');
-    }
+  const handleOpenModal = (tab: AcademicTabType) => {
+    setModalTab(tab);
+    setIsModalOpen(true);
   };
 
-  const filtered = schedules.filter((s) => {
-    const matchesSearch =
-      s.schedule_id.toLowerCase().includes(search.toLowerCase()) ||
-      s.section_name.toLowerCase().includes(search.toLowerCase()) ||
-      s.subject_title.toLowerCase().includes(search.toLowerCase()) ||
-      s.subject_code.toLowerCase().includes(search.toLowerCase()) ||
-      s.teacher_name.toLowerCase().includes(search.toLowerCase()) ||
-      (s.room_number && s.room_number.toLowerCase().includes(search.toLowerCase()));
+  const formatTime = (timeStr?: string) => {
+    if (!timeStr) return '--:--';
+    const parts = timeStr.split(':');
+    if (parts.length < 2) return timeStr;
+    let hours = parseInt(parts[0], 10);
+    const minutes = parts[1];
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    const strHours = hours < 10 ? `0${hours}` : `${hours}`;
+    return `${strHours}:${minutes} ${ampm}`;
+  };
 
-    const matchesSection = selectedSectionFilter === 'ALL' || String(s.section) === selectedSectionFilter;
-    return matchesSearch && matchesSection;
-  });
+  const getScheduleCode = (item: ScheduleItem) => {
+    return item.schedule_code || item.code || `SCH-${String(item.id).padStart(3, '0')}`;
+  };
+
+  const getFacultyDisplay = (item: ScheduleItem) => {
+    if (item.faculty_name) return item.faculty_name;
+    if (item.teacher_name) return item.teacher_name;
+    if (typeof item.faculty === 'object' && item.faculty) return item.faculty.full_name || item.faculty.name;
+    if (typeof item.faculty === 'string') return item.faculty;
+
+    const rawId = item.faculty || item.faculty_id || item.teacher;
+    if (rawId) {
+      const matched = facultyList.find((f) => f.id === rawId || f.user_id === rawId);
+      if (matched) return matched.full_name || matched.name;
+    }
+
+    return 'Unassigned';
+  };
+
+  const getSubjectCode = (item: ScheduleItem) => {
+    if (item.subject_code) return item.subject_code;
+    if (typeof item.subject === 'object' && item.subject) return item.subject.code || item.subject.name;
+    if (typeof item.subject === 'string') return item.subject;
+    return item.subject ? `SUB-${item.subject}` : '—';
+  };
+
+  const getSubjectName = (item: ScheduleItem) => {
+    if (item.subject_name) return item.subject_name;
+    if (typeof item.subject === 'object' && item.subject) return item.subject.name;
+    return '';
+  };
+
+  const getRoomDisplay = (item: ScheduleItem) => {
+    if (item.room_name) return item.room_name;
+    if (item.room_number) return item.room_number;
+    if (typeof item.room === 'object' && item.room) return item.room.name || item.room.room_number;
+    if (typeof item.room === 'string') return item.room;
+    if (item.room) return `Rm ${item.room}`;
+    return '—';
+  };
+
+  const filteredSchedules = useMemo(() => {
+    return schedules.filter((s) => {
+      if (selectedSectionFilter !== 'ALL') {
+        const matchesSection = 
+          String(s.section) === selectedSectionFilter ||
+          String(s.section_name) === selectedSectionFilter;
+        if (!matchesSection) return false;
+      }
+
+      if (searchQuery.trim() !== '') {
+        const q = searchQuery.toLowerCase();
+        const code = getScheduleCode(s).toLowerCase();
+        const sec = (s.section_name || String(s.section || '')).toLowerCase();
+        const sub = (getSubjectCode(s) + ' ' + getSubjectName(s)).toLowerCase();
+        const fac = getFacultyDisplay(s).toLowerCase();
+        const rm = getRoomDisplay(s).toLowerCase();
+
+        return code.includes(q) || sec.includes(q) || sub.includes(q) || fac.includes(q) || rm.includes(q);
+      }
+
+      return true;
+    });
+  }, [schedules, selectedSectionFilter, searchQuery, facultyList]);
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ padding: '20px 24px', backgroundColor: '#f8fafc', minHeight: '100vh', fontFamily: 'sans-serif' }}>
       {/* Top Filter Bar */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 24px',
-          backgroundColor: '#ffffff',
-          borderBottom: '1px solid #e2e8f0',
-          fontSize: '0.8rem',
-        }}
-      >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7', fontWeight: 700 }}>
-            <Filter size={15} />
-            <span>Filter Section:</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7', fontWeight: 700, fontSize: '0.82rem' }}>
+            <Filter size={16} /> Filter Section:
           </div>
-
           <select
             value={selectedSectionFilter}
             onChange={(e) => setSelectedSectionFilter(e.target.value)}
-            style={{
-              padding: '4px 10px',
-              borderRadius: 6,
-              border: '1px solid #cbd5e1',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              color: '#334155',
-              backgroundColor: '#f8fafc',
-              outline: 'none',
-              cursor: 'pointer',
-            }}
+            style={selectStyle}
           >
             <option value="ALL">All Sections ({schedules.length} periods)</option>
             {sections.map((sec) => (
-              <option key={sec.id} value={String(sec.id)}>
-                {sec.label}
+              <option key={sec.id} value={sec.id}>
+                {sec.name} {sec.grade_level_name ? `(${sec.grade_level_name})` : ''}
               </option>
             ))}
           </select>
         </div>
 
-        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-          Displaying <strong>{filtered.length}</strong> of <strong>{schedules.length}</strong> timetable slots
+        <div style={{ fontSize: '0.80rem', color: '#64748b' }}>
+          Displaying <strong style={{ color: '#0f172a' }}>{filteredSchedules.length}</strong> of{' '}
+          <strong style={{ color: '#0f172a' }}>{schedules.length}</strong> timetable slots
         </div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <ModuleTableLayout
-          title="Classes, Sections & Schedules"
-          subtitle="Manage academic section timetables, subject room assignments, and assigned faculty."
-          searchPlaceholder="Search by section, subject code, teacher, or room..."
-          searchValue={search}
-          onSearchChange={setSearch}
-          addButtonLabel="Add Schedule Period"
-          onAdd={handleOpenCreate}
-          loading={loading}
-          error={error}
-          data={filtered}
-          keyExtractor={(s) => s.id}
-          columns={[
-            {
-              header: 'Code',
-              render: (s) => (
-                <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0284c7' }}>
-                  {s.schedule_id}
-                </span>
-              ),
-            },
-            {
-              header: 'Section',
-              render: (s) => (
-                <div>
-                  <div style={{ fontWeight: 700, color: '#0f172a' }}>{s.section_name}</div>
-                  <div style={{ fontSize: '0.7rem', color: '#64748b' }}>{s.grade_level_name}</div>
-                </div>
-              ),
-            },
-            {
-              header: 'Subject / Course',
-              render: (s) => (
-                <div>
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      fontWeight: 700,
-                      color: '#1e293b',
-                    }}
-                  >
-                    <BookOpen size={13} color="#0284c7" />
-                    {s.subject_code}
-                  </span>
-                  <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{s.subject_title}</div>
-                </div>
-              ),
-            },
-            {
-              header: 'Assigned Faculty',
-              render: (s) => (
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    fontSize: '0.76rem',
-                    fontWeight: 600,
-                    color: s.teacher ? '#334155' : '#94a3b8',
-                  }}
-                >
-                  <UserCheck size={13} color={s.teacher ? '#059669' : '#cbd5e1'} />
-                  {s.teacher_name}
-                </span>
-              ),
-            },
-            {
-              header: 'Time Period',
-              render: (s) => (
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '2px 8px',
-                    borderRadius: 6,
-                    fontSize: '0.74rem',
-                    fontWeight: 600,
-                    backgroundColor: '#f1f5f9',
-                    color: '#334155',
-                  }}
-                >
-                  <Clock size={12} color="#64748b" />
-                  {s.time_slot}
-                </span>
-              ),
-            },
-            {
-              header: 'Room',
-              render: (s) => (
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    fontSize: '0.74rem',
-                    color: '#475569',
-                    fontWeight: 500,
-                  }}
-                >
-                  <MapPin size={12} color="#94a3b8" />
-                  {s.room_number || 'TBD'}
-                </span>
-              ),
-            },
-            {
-              header: 'Actions',
-              align: 'right',
-              render: (s) => (
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                  <button
-                    onClick={() => handleOpenEdit(s)}
-                    title="Edit Schedule"
-                    style={{
-                      background: '#f1f5f9',
-                      border: '1px solid #cbd5e1',
-                      borderRadius: 6,
-                      padding: 5,
-                      cursor: 'pointer',
-                      color: '#0284c7',
-                    }}
-                  >
-                    <Pencil size={13} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(s)}
-                    title="Delete Schedule"
-                    style={{
-                      background: '#fef2f2',
-                      border: '1px solid #fee2e2',
-                      borderRadius: 6,
-                      padding: 5,
-                      cursor: 'pointer',
-                      color: '#dc2626',
-                    }}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              ),
-            },
-          ]}
-        />
-      </div>
-
-      {/* Modal Dialog for Create & Edit */}
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title={editingItem ? `Edit Period: ${editingItem.schedule_id}` : 'Create Schedule Period'}
-      >
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Main Content Card */}
+      <div style={cardStyle}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
           <div>
-            <label style={labelStyle}>Target Section *</label>
-            <select
-              required
-              value={formData.section}
-              onChange={(e) => setFormData({ ...formData, section: e.target.value })}
-              style={inputStyle}
-            >
-              <option value="">Select Section...</option>
-              {sections.map((sec) => (
-                <option key={sec.id} value={sec.id}>
-                  {sec.label}
-                </option>
-              ))}
-            </select>
+            <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: '#0f172a' }}>
+              Classes, Sections & Schedules
+            </h2>
+            <p style={{ margin: '4px 0 0 0', fontSize: '0.80rem', color: '#64748b' }}>
+              Manage academic section timetables, subject room assignments, and assigned faculty.
+            </p>
           </div>
 
-          <div>
-            <label style={labelStyle}>Subject / Course *</label>
-            <select
-              required
-              value={formData.subject}
-              onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
-              style={inputStyle}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => handleOpenModal('YEAR_LEVEL')}
+              style={secondaryBtnStyle}
+              title="Add a Grade Level"
             >
-              <option value="">Select Subject...</option>
-              {subjects.map((sub) => (
-                <option key={sub.id} value={sub.id}>
-                  {sub.label}
-                </option>
-              ))}
-            </select>
-          </div>
+              <Layers size={14} color="#0284c7" /> + Year Level
+            </button>
 
-          <div>
-            <label style={labelStyle}>Assigned Faculty Teacher</label>
-            <select
-              value={formData.teacher}
-              onChange={(e) => setFormData({ ...formData, teacher: e.target.value })}
-              style={inputStyle}
+            <button
+              onClick={() => handleOpenModal('ROOM')}
+              style={secondaryBtnStyle}
+              title="Add a Classroom / Lab"
             >
-              <option value="">Unassigned (TBA)</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </div>
+              <DoorOpen size={14} color="#0284c7" /> + Room
+            </button>
 
-          <div>
-            <label style={labelStyle}>Classroom / Room Assignment</label>
+            <button
+              onClick={() => handleOpenModal('SUBJECT')}
+              style={secondaryBtnStyle}
+              title="Add a Subject"
+            >
+              <BookOpen size={14} color="#0284c7" /> + Subject
+            </button>
+
+            <button
+              onClick={() => handleOpenModal('SECTION')}
+              style={secondaryBtnStyle}
+              title="Add a Section"
+            >
+              <Users size={14} color="#0284c7" /> + Section
+            </button>
+
+            <button
+              onClick={() => handleOpenModal('SCHEDULE')}
+              style={primaryBtnStyle}
+              title="Add a Class Schedule"
+            >
+              <Calendar size={15} /> + Add Schedule Period
+            </button>
+          </div>
+        </div>
+
+        {/* Search */}
+        <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 16 }}>
+          <div style={searchContainerStyle}>
+            <Search size={16} color="#94a3b8" />
             <input
               type="text"
-              placeholder="e.g. Bldg A - Rm 101, Science Lab"
-              value={formData.room_number}
-              onChange={(e) => setFormData({ ...formData, room_number: e.target.value })}
-              style={inputStyle}
+              placeholder="Search by section, subject code, room..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={searchInputStyle}
             />
           </div>
+        </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <div>
-              <label style={labelStyle}>Start Time *</label>
-              <input
-                type="time"
-                required
-                value={formData.start_time}
-                onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
-                style={inputStyle}
-              />
+        {/* Error Banner */}
+        {error && (
+          <div style={errorBannerStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <AlertCircle size={18} color="#991b1b" />
+              <span>{error}</span>
             </div>
-            <div>
-              <label style={labelStyle}>End Time *</label>
-              <input
-                type="time"
-                required
-                value={formData.end_time}
-                onChange={(e) => setFormData({ ...formData, end_time: e.target.value })}
-                style={inputStyle}
-              />
-            </div>
+            <button onClick={loadData} style={retryBtnStyle}>
+              <RefreshCw size={14} /> Retry
+            </button>
           </div>
+        )}
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-            <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" size="md" type="submit" disabled={submitting}>
-              {submitting && <Loader2 className="animate-spin" size={15} style={{ marginRight: 6 }} />}
-              {editingItem ? 'Save Changes' : 'Create Schedule'}
-            </Button>
+        {/* Table */}
+        {loading ? (
+          <div style={loadingContainerStyle}>
+            <Loader2 size={28} className="animate-spin" color="#0284c7" />
+            <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Loading schedules from database...</span>
           </div>
-        </form>
-      </Modal>
+        ) : filteredSchedules.length === 0 ? (
+          <div style={emptyContainerStyle}>
+            <Calendar size={40} color="#cbd5e1" />
+            <p style={{ margin: '8px 0 2px 0', fontWeight: 700, color: '#334155', fontSize: '0.90rem' }}>
+              No timetable records found
+            </p>
+            <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8' }}>
+              Click <strong>"+ Add Schedule Period"</strong> above to schedule your first class.
+            </p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr style={tableHeaderRowStyle}>
+                  <th style={thStyle}>Code</th>
+                  <th style={thStyle}>Section</th>
+                  <th style={thStyle}>Subject / Course</th>
+                  <th style={thStyle}>Assigned Faculty</th>
+                  <th style={thStyle}>Time Period</th>
+                  <th style={thStyle}>Room</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredSchedules.map((row) => {
+                  const displayCode = getScheduleCode(row);
+                  return (
+                    <tr key={row.id} style={tableRowStyle}>
+                      <td style={tdStyle}>
+                        <span style={{ color: '#0284c7', fontWeight: 700, fontSize: '0.80rem' }}>
+                          {displayCode}
+                        </span>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.82rem' }}>
+                          {row.section_name || (typeof row.section === 'object' ? row.section?.name : `Section #${row.section}`)}
+                        </div>
+                        {row.grade_level_name && (
+                          <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                            {row.grade_level_name}
+                          </div>
+                        )}
+                      </td>
+
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <BookOpen size={14} color="#0284c7" />
+                          <span style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.82rem' }}>
+                            {getSubjectCode(row)}
+                          </span>
+                        </div>
+                        {getSubjectName(row) && (
+                          <div style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 20 }}>
+                            {getSubjectName(row)}
+                          </div>
+                        )}
+                      </td>
+
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', color: '#334155' }}>
+                          <UserCheck size={14} color="#10b981" />
+                          <span>{getFacultyDisplay(row)}</span>
+                        </div>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <div style={pillStyle}>
+                          <Clock size={13} color="#64748b" />
+                          <span>{formatTime(row.start_time)} - {formatTime(row.end_time)}</span>
+                        </div>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', color: '#64748b' }}>
+                          <MapPin size={13} color="#94a3b8" />
+                          <span>{getRoomDisplay(row)}</span>
+                        </div>
+                      </td>
+
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: 6 }}>
+                          <button
+                            onClick={() => handleOpenModal('SCHEDULE')}
+                            style={iconBtnStyle}
+                            title="Edit Schedule"
+                          >
+                            <Edit2 size={14} color="#0284c7" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(row.id, displayCode)}
+                            style={{ ...iconBtnStyle, borderColor: '#fecaca' }}
+                            title="Delete Schedule"
+                          >
+                            <Trash2 size={14} color="#ef4444" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <AcademicSetupModal
+        isOpen={isModalOpen}
+        initialTab={modalTab}
+        onClose={() => setIsModalOpen(false)}
+        onSuccess={loadData}
+      />
     </div>
   );
 };
 
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.8rem',
-  fontWeight: 600,
-  color: '#334155',
-  marginBottom: 4,
+const cardStyle: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  borderRadius: 8,
+  padding: '20px 22px',
+  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
+  border: '1px solid #e2e8f0',
 };
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 12px',
+const selectStyle: React.CSSProperties = {
+  padding: '6px 12px',
   borderRadius: 6,
   border: '1px solid #cbd5e1',
-  fontSize: '0.85rem',
-  color: '#0f172a',
-  outline: 'none',
-  boxSizing: 'border-box',
   backgroundColor: '#ffffff',
+  fontSize: '0.80rem',
+  color: '#334155',
+  fontWeight: 600,
+  outline: 'none',
+  cursor: 'pointer',
+};
+
+const secondaryBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  backgroundColor: '#f8fafc',
+  color: '#334155',
+  border: '1px solid #cbd5e1',
+  padding: '8px 12px',
+  borderRadius: 6,
+  fontWeight: 700,
+  fontSize: '0.78rem',
+  cursor: 'pointer',
+};
+
+const primaryBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  backgroundColor: '#0284c7',
+  color: '#ffffff',
+  border: 'none',
+  padding: '8px 14px',
+  borderRadius: 6,
+  fontWeight: 700,
+  fontSize: '0.80rem',
+  cursor: 'pointer',
+};
+
+const searchContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '6px 12px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  backgroundColor: '#ffffff',
+  width: '100%',
+  maxWidth: 320,
+};
+
+const searchInputStyle: React.CSSProperties = {
+  border: 'none',
+  outline: 'none',
+  fontSize: '0.80rem',
+  width: '100%',
+};
+
+const tableStyle: React.CSSProperties = {
+  width: '100%',
+  borderCollapse: 'collapse',
+  textAlign: 'left',
+};
+
+const tableHeaderRowStyle: React.CSSProperties = {
+  borderBottom: '1px solid #e2e8f0',
+  backgroundColor: '#f8fafc',
+};
+
+const thStyle: React.CSSProperties = {
+  padding: '12px 14px',
+  fontSize: '0.75rem',
+  fontWeight: 700,
+  color: '#475569',
+  textTransform: 'uppercase',
+  letterSpacing: '0.03em',
+};
+
+const tableRowStyle: React.CSSProperties = {
+  borderBottom: '1px solid #f1f5f9',
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: '12px 14px',
+  verticalAlign: 'middle',
+};
+
+const pillStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  backgroundColor: '#f1f5f9',
+  padding: '4px 8px',
+  borderRadius: 6,
+  fontSize: '0.74rem',
+  color: '#475569',
+  fontWeight: 600,
+};
+
+const iconBtnStyle: React.CSSProperties = {
+  background: '#ffffff',
+  border: '1px solid #e2e8f0',
+  borderRadius: 6,
+  padding: '6px 8px',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+const loadingContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 10,
+  padding: '50px 0',
+};
+
+const emptyContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '40px 0',
+};
+
+const errorBannerStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  backgroundColor: '#fef2f2',
+  border: '1px solid #fecaca',
+  color: '#991b1b',
+  borderRadius: 6,
+  padding: '10px 14px',
+  marginBottom: 16,
+  fontSize: '0.80rem',
+};
+
+const retryBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  backgroundColor: '#ffffff',
+  border: '1px solid #fca5a5',
+  color: '#991b1b',
+  padding: '4px 8px',
+  borderRadius: 4,
+  fontSize: '0.74rem',
+  cursor: 'pointer',
+  fontWeight: 700,
 };
