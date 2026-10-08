@@ -100,7 +100,7 @@ class Migration(migrations.Migration):
                 ('middle_name', models.CharField(blank=True, default='', max_length=100)),
                 ('last_name', models.CharField(max_length=100)),
                 ('suffix', models.CharField(blank=True, default='', max_length=20)),
-                ('position', models.CharField(default='Teacher I', max_length=100)),
+                ('position', models.CharField(default='Faculty I', max_length=100)),
                 ('department', models.CharField(default='Junior High School', max_length=100)),
                 ('contact_number', models.CharField(blank=True, default='', max_length=50)),
                 ('email', models.EmailField(blank=True, default='', max_length=150)),
@@ -259,7 +259,7 @@ class Migration(migrations.Migration):
                 ('end_time', models.TimeField()),
                 ('room_number', models.CharField(default='Room 101', max_length=50)),
                 ('section', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='schedules', to='academics.section')),
-                ('teacher', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='assigned_schedules', to='academics.facultyprofile')),
+                ('faculty', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='assigned_schedules', to='academics.facultyprofile')),
                 ('subject', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='schedules', to='academics.subject')),
             ],
             options={
@@ -271,7 +271,7 @@ class Migration(migrations.Migration):
             name='UserProfile',
             fields=[
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
-                ('role', models.CharField(choices=[('ADMIN', 'Admin'), ('REGISTRAR', 'Registrar'), ('TEACHER', 'Teacher')], default='TEACHER', max_length=20)),
+                ('role', models.CharField(choices=[('ADMIN', 'Admin'), ('REGISTRAR', 'Registrar'), ('TEACHER', 'Faculty')], default='TEACHER', max_length=20)),
                 ('avatar', models.ImageField(blank=True, default='avatars/default_user.png', upload_to='avatars/')),
                 ('failed_attempts', models.IntegerField(default=0)),
                 ('locked_until', models.DateTimeField(blank=True, null=True)),
@@ -377,7 +377,7 @@ class Migration(migrations.Migration):
                 ('status', models.CharField(choices=[('PRESENT', 'Present'), ('LATE', 'Late'), ('CUTTING', 'Cutting Classes'), ('ABSENT', 'Absent')], default='PRESENT', max_length=10)),
                 ('schedule', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='attendance_records', to='academics.schedule')),
                 ('student', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='subject_attendance', to='academics.student')),
-                ('teacher', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='submitted_attendance', to='academics.facultyprofile')),
+                ('faculty', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='submitted_attendance', to='academics.facultyprofile')),
             ],
             options={
                 'db_table': 'subject_attendance_logs',

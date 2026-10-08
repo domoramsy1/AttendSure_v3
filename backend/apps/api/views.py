@@ -2,16 +2,19 @@ import base64
 import calendar
 import hmac
 import logging
+import math
 from datetime import date, datetime, timedelta
 
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
-from django.db import models, transaction
+from django.db import connection, models, transaction
 from django.utils import timezone
 from rest_framework import filters, permissions, status, viewsets
 from rest_framework.authtoken.models import Token
+from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
@@ -26,6 +29,7 @@ from apps.academics.models import (
     IoTKiosk,
     LoafingIncident,
     Schedule,
+    ScheduleDay,
     SchoolProfile,
     Section,
     SmsOutbox,
@@ -58,18 +62,36 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# ROLE-BASED ACCESS CONTROL HELPERS & PERMISSIONS (ADMIN & TEACHER ONLY)
+# PAGINATION CONFIGURATION
+# ============================================================================
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+    def get_paginated_response(self, data):
+        return Response({
+            'count': self.page.paginator.count,
+            'total_pages': self.page.paginator.num_pages,
+            'current_page': self.page.number,
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            'results': data
+        })
+
+
+# ============================================================================
+# USER ROLE CHECKS (ADMIN & TEACHER)
 # ============================================================================
 
 def get_user_profile(user):
-    """Safely retrieves the linked UserProfile regardless of relation name."""
     if not user:
         return None
     return getattr(user, 'profile', None) or getattr(user, 'userprofile', None)
 
 
 def get_user_role(user):
-    """Resolves whether the user is strictly an ADMIN or TEACHER."""
     if not user or not user.is_authenticated:
         return None
     if user.is_superuser:
@@ -81,9 +103,6 @@ def get_user_role(user):
 
 
 class IsSystemAdminRole(permissions.BasePermission):
-    """
-    Grants access exclusively to superusers and accounts with the ADMIN role.
-    """
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
@@ -91,10 +110,6 @@ class IsSystemAdminRole(permissions.BasePermission):
 
 
 class IsAdviserOrAdmin(permissions.BasePermission):
-    """
-    Restricts access to learner demographic data and official class registers.
-    Only administrators and the designated section adviser may inspect these records.
-    """
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated)
 
@@ -108,10 +123,6 @@ class IsAdviserOrAdmin(permissions.BasePermission):
 
 
 class ReadOnlyOrAdminWrite(permissions.BasePermission):
-    """
-    ADMIN has full CRUD access (GET, POST, PUT, PATCH, DELETE).
-    TEACHER has Read-Only access (GET, HEAD, OPTIONS).
-    """
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
@@ -121,7 +132,7 @@ class ReadOnlyOrAdminWrite(permissions.BasePermission):
 
 
 # ============================================================================
-# RATE THROTTLES
+# RATE LIMITS
 # ============================================================================
 
 class AuthLoginRateThrottle(AnonRateThrottle):
@@ -133,7 +144,7 @@ class HardwareGateScanRateThrottle(AnonRateThrottle):
 
 
 # ============================================================================
-# AUTHENTICATION & SELF-PROFILE MANAGEMENT
+# LOGIN & PROFILE MANAGEMENT
 # ============================================================================
 
 class LoginAPIView(APIView):
@@ -150,7 +161,7 @@ class LoginAPIView(APIView):
 
         user = authenticate(username=username, password=password)
         if not user or not user.is_active:
-            return Response({'error': 'Invalid credentials or inactive account'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Invalid username or password.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         token, _ = Token.objects.get_or_create(user=user)
         user_profile = get_user_profile(user)
@@ -172,10 +183,6 @@ class LoginAPIView(APIView):
 
 
 class CurrentUserProfileView(APIView):
-    """
-    Enables authenticated users (ADMIN and TEACHER) to CRUD their own personal profile
-    information and photo without requiring third-party intervention.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def _get_faculty_profile(self, user):
@@ -224,7 +231,6 @@ class CurrentUserProfileView(APIView):
         data = request.data
         faculty = self._get_faculty_profile(user)
 
-        # 1. Update basic user credentials
         if 'first_name' in data:
             user.first_name = str(data.get('first_name', '')).strip()
         if 'last_name' in data:
@@ -238,7 +244,6 @@ class CurrentUserProfileView(APIView):
 
         user.save()
 
-        # 2. Update linked Faculty Profile (contact and photo)
         raw_photo = data.get('photo')
         if faculty:
             faculty.first_name = user.first_name
@@ -247,7 +252,6 @@ class CurrentUserProfileView(APIView):
             if 'contact_number' in data:
                 faculty.contact_number = str(data.get('contact_number', '')).strip()
 
-            # Process photo deletion or replacement
             if raw_photo is None and 'photo' in data:
                 faculty.photo = None
             elif raw_photo and str(raw_photo).startswith('data:image'):
@@ -257,7 +261,7 @@ class CurrentUserProfileView(APIView):
                     file_name = f"profile_{user.id}_{int(timezone.now().timestamp())}.{ext}"
                     faculty.photo.save(file_name, ContentFile(base64.b64decode(img_str)), save=False)
                 except Exception as e:
-                    logger.error("Failed to decode profile photo: %s", e)
+                    logger.error("Failed to save photo: %s", e)
 
             faculty.save()
 
@@ -278,18 +282,15 @@ class CurrentUserProfileView(APIView):
             "role": get_user_role(user),
             "contact_number": faculty.contact_number if faculty else "",
             "photo": photo_url,
-            "message": "Profile updated successfully.",
+            "message": "Profile updated.",
         }, status=status.HTTP_200_OK)
 
 
 # ============================================================================
-# OVERVIEW & SECTIONS
+# SECTIONS & DASHBOARD COUNTS
 # ============================================================================
 
 class SectionListAPIView(APIView):
-    """
-    Returns active class sections.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -310,8 +311,8 @@ class SectionListAPIView(APIView):
                 'name': s.name,
                 'grade_level': s.grade_level.name if s.grade_level else '',
                 'academic_year': s.academic_year.code if s.academic_year else '',
-                'adviser_name': f"{s.adviser.first_name} {s.adviser.last_name}".strip() if s.adviser else "Unassigned",
-                'display_label': f"{s.grade_level.name if s.grade_level else 'Level'} - {s.name}".strip()
+                'adviser_name': f"{s.adviser.first_name} {s.adviser.last_name}".strip() if s.adviser else "",
+                'display_label': f"{s.grade_level.name if s.grade_level else ''} - {s.name}".strip()
             }
             for s in sections
         ]
@@ -324,40 +325,60 @@ class DashboardOverviewAPIView(APIView):
     def get(self, request):
         today = timezone.localdate()
 
-        # 1. Real Student Totals
         total_students = Student.objects.filter(is_active=True).count()
-        
-        present_student_ids = StudentGateLog.objects.filter(
+
+        # 1. Gate entrance records today
+        gate_in_student_ids = set(StudentGateLog.objects.filter(
             scan_time__date=today,
             direction='IN'
-        ).values_list('student_id', flat=True).distinct()
-        
-        present_students = len(present_student_ids)
-        absent_students = max(0, total_students - present_students)
-        attendance_rate = round((present_students / total_students * 100), 1) if total_students > 0 else 0
+        ).values_list('student_id', flat=True).distinct())
 
-        # 2. Real Teacher Totals
-        total_teachers = FacultyProfile.objects.filter(is_active=True).count()
-        present_teachers = FacultyGateLog.objects.filter(
+        # 2. Gate exit records today
+        gate_out_student_ids = set(StudentGateLog.objects.filter(
+            scan_time__date=today,
+            direction='OUT'
+        ).values_list('student_id', flat=True).distinct())
+
+        # Students physically inside campus
+        currently_on_campus_ids = gate_in_student_ids - gate_out_student_ids
+        students_on_campus_count = len(currently_on_campus_ids)
+
+        # 3. Classroom attendance records today
+        class_present_student_ids = set(DailyAttendanceSummary.objects.filter(
+            attendance_date=today,
+            status__in=['PRESENT', 'LATE']
+        ).values_list('student_id', flat=True).distinct())
+
+        # 4. Anti-cheating cross-checks
+        # Verified Present: Entered gate AND verified in class
+        verified_present_ids = currently_on_campus_ids.intersection(class_present_student_ids)
+
+        # Cutting class: Entered campus, but absent/unscanned in classroom
+        cutting_class_ids = currently_on_campus_ids - class_present_student_ids
+
+        # Proxy scans flagged: Marked present in class, but never tapped IN at gate
+        proxy_scan_ids = class_present_student_ids - gate_in_student_ids
+
+        absent_students = max(0, total_students - len(gate_in_student_ids))
+        attendance_rate = round((len(gate_in_student_ids) / total_students * 100), 1) if total_students > 0 else 0
+
+        total_facultys = FacultyProfile.objects.filter(is_active=True).count()
+        present_facultys = FacultyGateLog.objects.filter(
             scan_time__date=today,
             direction='IN'
         ).values_list('faculty_id', flat=True).distinct().count()
 
-        # 3. Real Gate Scans Today
         student_scans = StudentGateLog.objects.filter(scan_time__date=today).count()
         faculty_scans = FacultyGateLog.objects.filter(scan_time__date=today).count()
         total_gate_scans = student_scans + faculty_scans
 
-        # 4. Real Gate Passes and SMS Status
         active_gate_passes = GatePass.objects.filter(status='ACTIVE').count()
         sms_sent_today = SmsOutbox.objects.filter(status='SENT', created_at__date=today).count()
         sms_pending = SmsOutbox.objects.filter(status='PENDING').count()
 
-        # 5. Gate Scanner Terminals
         total_scanners = IoTKiosk.objects.count()
         active_scanners = IoTKiosk.objects.filter(is_active=True).count()
 
-        # 6. Real Hourly Scans Today (6 AM to 5 PM)
         hourly_scans = []
         for hour in range(6, 18):
             hour_str = f"{hour % 12 or 12} {'AM' if hour < 12 else 'PM'}"
@@ -371,12 +392,10 @@ class DashboardOverviewAPIView(APIView):
             })
 
         max_hour_count = max([h['count'] for h in hourly_scans] or [1])
-
         for h in hourly_scans:
             h['height'] = round((h['count'] / max_hour_count * 100)) if max_hour_count > 0 and h['count'] > 0 else 0
             h['is_peak'] = h['count'] == max_hour_count and h['count'] > 0
 
-        # 7. Real Grade Level Counts
         grade_levels_data = []
         try:
             grades = GradeLevel.objects.all().order_by('level_order')
@@ -394,7 +413,6 @@ class DashboardOverviewAPIView(APIView):
                 ).values_list('student_id', flat=True).distinct().count()
 
                 pct = round((present_in_grade / total_in_grade * 100)) if total_in_grade > 0 else 0
-
                 grade_levels_data.append({
                     'grade': g.name,
                     'present': present_in_grade,
@@ -404,7 +422,6 @@ class DashboardOverviewAPIView(APIView):
         except Exception:
             grade_levels_data = []
 
-        # 8. Real Recent Gate Scans (Latest 5 logs)
         recent_logs = StudentGateLog.objects.select_related('student').order_by('-scan_time')[:5]
         recent_scans_data = []
         for log in recent_logs:
@@ -423,11 +440,15 @@ class DashboardOverviewAPIView(APIView):
 
         return Response({
             'total_students': total_students,
-            'students_present': present_students,
+            'students_present': len(gate_in_student_ids),
+            'students_on_campus': students_on_campus_count,
+            'verified_in_class': len(verified_present_ids),
+            'cutting_classes': len(cutting_class_ids),
+            'proxy_scans_blocked': len(proxy_scan_ids),
             'students_absent': absent_students,
             'attendance_rate': attendance_rate,
-            'faculty_on_duty': present_teachers,
-            'total_faculty': total_teachers,
+            'faculty_on_duty': present_facultys,
+            'total_faculty': total_facultys,
             'gate_scans_today': total_gate_scans,
             'active_gate_passes': active_gate_passes,
             'sms_sent_today': sms_sent_today,
@@ -441,14 +462,10 @@ class DashboardOverviewAPIView(APIView):
 
 
 # ============================================================================
-# HARDWARE GATE & CLASSROOM SCANNERS
+# GATE SCANNERS
 # ============================================================================
 
 class GateScanAPIView(APIView):
-    """
-    Ingests physical RFID taps and QR code scans from IoT kiosks.
-    Verifies terminal secret key and applies rate throttling.
-    """
     permission_classes = [permissions.AllowAny]
     throttle_classes = [HardwareGateScanRateThrottle]
 
@@ -467,14 +484,13 @@ class GateScanAPIView(APIView):
         try:
             kiosk = IoTKiosk.objects.get(kiosk_code=kiosk_code, is_active=True)
         except IoTKiosk.DoesNotExist:
-            return Response({'error': 'Unauthorized or unregistered kiosk terminal'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({'error': 'Terminal not registered.'}, status=status.HTTP_403_FORBIDDEN)
 
         if not hmac.compare_digest(kiosk.secret_hash.encode('utf-8'), secret_key.encode('utf-8')):
-            return Response({'error': 'Terminal signature verification failed'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({'error': 'Secret key check failed.'}, status=status.HTTP_403_FORBIDDEN)
 
         now = timezone.now()
 
-        # Check Faculty Record
         faculty = FacultyProfile.objects.filter(
             models.Q(rfid_uid=raw_id) | models.Q(qr_token=raw_id),
             is_active=True
@@ -517,7 +533,6 @@ class GateScanAPIView(APIView):
                 'scan_time': new_log.scan_time.strftime('%I:%M:%S %p'),
             }, status=status.HTTP_201_CREATED)
 
-        # Check Student Record
         student = Student.objects.filter(
             models.Q(rfid_uid=raw_id) | models.Q(qr_token=raw_id),
             is_active=True
@@ -588,13 +603,10 @@ class GateScanAPIView(APIView):
                 'scan_time': new_log.scan_time.strftime('%I:%M:%S %p'),
             }, status=status.HTTP_201_CREATED)
 
-        return Response({'error': 'Unrecognized RFID card or QR token'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'Unrecognized RFID card or QR token.'}, status=status.HTTP_404_NOT_FOUND)
 
 
 class GateLogsAPIView(APIView):
-    """
-    Returns unified, chronological gate transactions for Students and Faculty.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -621,8 +633,8 @@ class GateLogsAPIView(APIView):
                     'name': name,
                     'direction': log.direction,
                     'scan_method': log.scan_method,
-                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate Terminal',
-                    'kiosk_code': log.kiosk.kiosk_code if log.kiosk else 'GATE-01',
+                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate',
+                    'kiosk_code': log.kiosk.kiosk_code if log.kiosk else '',
                     'scan_time': log.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
                     'raw_time': log.scan_time.isoformat(),
                 })
@@ -644,8 +656,8 @@ class GateLogsAPIView(APIView):
                     'name': name,
                     'direction': log.direction,
                     'scan_method': log.scan_method,
-                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate Terminal',
-                    'kiosk_code': log.kiosk.kiosk_code if log.kiosk else 'GATE-01',
+                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate',
+                    'kiosk_code': log.kiosk.kiosk_code if log.kiosk else '',
                     'scan_time': log.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
                     'raw_time': log.scan_time.isoformat(),
                 })
@@ -655,9 +667,6 @@ class GateLogsAPIView(APIView):
 
 
 class ClassroomBatchScanAPIView(APIView):
-    """
-    Records batch classroom QR/RFID scans.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
@@ -669,29 +678,30 @@ class ClassroomBatchScanAPIView(APIView):
         data = serializer.validated_data
 
         try:
-            schedule = Schedule.objects.select_related('section', 'subject', 'teacher').get(id=data['schedule_id'])
+            schedule = Schedule.objects.select_related('section', 'subject', 'faculty').get(id=data['schedule_id'])
         except Schedule.DoesNotExist:
-            return Response({'error': 'Target class schedule does not exist'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Schedule does not exist.'}, status=status.HTTP_404_NOT_FOUND)
 
         user_profile = get_user_profile(request.user)
-        teacher = getattr(user_profile, 'faculty', None) if user_profile else None
+        faculty = getattr(user_profile, 'faculty', None) if user_profile else None
         is_admin = get_user_role(request.user) == 'ADMIN'
 
         if not is_admin:
-            if not teacher or schedule.teacher_id != teacher.id:
+            if not faculty or schedule.faculty_id != faculty.id:
                 return Response(
-                    {'error': 'Unauthorized: You are not assigned to instruct this class schedule.'},
+                    {'error': 'Unauthorized: You are not assigned to this class.'},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-        effective_teacher = teacher if teacher else schedule.teacher
-        today = timezone.now().date()
+        effective_faculty = faculty if faculty else schedule.faculty
+        today = timezone.localdate()
         scans = data['scans']
         saved_count = 0
+        flagged_anomalies = []
 
         for item in scans:
             identifier = item['qr_token']
-            scan_status = item.get('status', 'PRESENT')
+            scan_status = item.get('status', 'PRESENT').upper()
 
             student = Student.objects.filter(
                 models.Q(qr_token=identifier) | models.Q(rfid_uid=identifier),
@@ -701,12 +711,40 @@ class ClassroomBatchScanAPIView(APIView):
             if not student:
                 continue
 
+            # ============================================================
+            # ANTI-CHEATING VERIFICATION: CHECK GATE ENTRY LOG
+            # ============================================================
+            latest_gate_log = StudentGateLog.objects.filter(
+                student=student,
+                scan_time__date=today
+            ).order_by('-scan_time').first()
+
+            has_valid_gate_in = bool(latest_gate_log and latest_gate_log.direction == 'IN')
+            attendance_remarks = 'CLASS_SCAN_VERIFIED'
+
+            if scan_status == 'PRESENT' and not has_valid_gate_in:
+                # CHEATING DETECTED: Marked present in class without passing the gate kiosk!
+                if latest_gate_log and latest_gate_log.direction == 'OUT':
+                    scan_status = 'CUTTING'
+                    attendance_remarks = 'FLAGGED: Student tapped OUT at gate prior to class'
+                else:
+                    scan_status = 'UNVERIFIED'
+                    attendance_remarks = 'FLAGGED_PROXY_SCAN: No campus gate entrance recorded today'
+
+                flagged_anomalies.append({
+                    'student_id': student.id,
+                    'name': f"{student.first_name} {student.last_name}",
+                    'lrn': student.lrn,
+                    'reason': attendance_remarks
+                })
+
+            # 1. Log Subject Attendance
             _, created = SubjectAttendanceLog.objects.get_or_create(
                 student=student,
                 schedule=schedule,
                 attendance_date=today,
                 defaults={
-                    'teacher': effective_teacher,
+                    'faculty': effective_faculty,
                     'status': scan_status,
                     'scanned_at': timezone.now()
                 }
@@ -714,42 +752,56 @@ class ClassroomBatchScanAPIView(APIView):
 
             if created:
                 saved_count += 1
-                if student.parent_contact:
-                    subject_label = getattr(schedule.subject, 'title', getattr(schedule.subject, 'code', 'Class'))
-                    sms_text = (
-                        f"Notice: {student.first_name} was marked {scan_status} "
-                        f"in {subject_label} at {timezone.now().strftime('%I:%M %p')}."
-                    )
-                    SmsOutbox.objects.create(
-                        recipient_number=student.parent_contact,
-                        message_body=sms_text,
-                        trigger_event='CLASS_TAP',
-                        priority=2 if scan_status == 'PRESENT' else 1
-                    )
 
+                # 2. Update Official Daily Summary (SF2 data source)
                 DailyAttendanceSummary.objects.update_or_create(
                     student=student,
                     attendance_date=today,
                     defaults={
                         'section': schedule.section,
-                        'status': scan_status
+                        'status': scan_status if scan_status != 'UNVERIFIED' else 'ABSENT',
+                        'remarks': attendance_remarks
                     }
                 )
 
+                # 3. Alert Parent via SMS if Fraud/Proxy Detected
+                if student.parent_contact and 'FLAGGED' in attendance_remarks:
+                    sms_text = (
+                        f"Notice: Attendance alert for {student.first_name}. "
+                        f"Classroom scan was attempted but no campus gate entry was recorded for today. "
+                        f"Please contact the school."
+                    )
+                    SmsOutbox.objects.create(
+                        recipient_number=student.parent_contact,
+                        message_body=sms_text,
+                        trigger_event='ATTENDANCE_FLAG',
+                        priority=1
+                    )
+
         return Response({
             'success': True,
-            'message': f"Batch processed successfully. {saved_count} new records stored.",
-            'total_received': len(scans)
+            'message': f"{saved_count} attendance records processed.",
+            'total_received': len(scans),
+            'flagged_anomalies_count': len(flagged_anomalies),
+            'anomalies': flagged_anomalies
         }, status=status.HTTP_201_CREATED)
 
+def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371000.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(delta_phi / 2.0) ** 2
+        + math.cos(phi1) * math.cos(phi2) * (math.sin(delta_lambda / 2.0) ** 2)
+    )
+    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+    return R * c
+
+
 class TelemetryHeartbeatAPIView(APIView):
-    """
-    Ingests GPS telemetry with Zero-Trust Device Binding:
-    1. Rejects unverified/mismatched hardware devices.
-    2. Rejects mock/fake GPS.
-    3. Calculates distance server-side.
-    4. Cross-verifies with physical gate logs.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -762,73 +814,45 @@ class TelemetryHeartbeatAPIView(APIView):
         faculty = getattr(user_profile, 'faculty', None) if user_profile else None
 
         if not faculty:
-            return Response({'error': 'No linked Faculty Profile found for this account.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'No faculty profile found.'}, status=status.HTTP_400_BAD_REQUEST)
 
         incoming_device_id = str(data.get('client_device_id', '')).strip()
-
-        # ====================================================================
-        # ANTI-CHEAT: STRICT DEVICE BINDING CHECK
-        # ====================================================================
         if not incoming_device_id:
-            return Response(
-                {'error': 'Device identifier missing. Telemetry must be sent from an authorized app.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': 'Device ID missing.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 1. Automatic first-time pairing if no device is registered yet
         if not faculty.bound_device_id:
-            # Check if this phone is already bound to another teacher
             device_in_use = FacultyProfile.objects.filter(bound_device_id=incoming_device_id).exclude(id=faculty.id).first()
             if device_in_use:
                 LoafingIncident.objects.create(
                     faculty=faculty,
                     incident_date=timezone.localdate(),
-                    trigger_reason=f"SECURITY ALERT: Attempted to use phone already registered to {device_in_use.first_name} {device_in_use.last_name}.",
+                    trigger_reason=f"Security alert: Phone already used by {device_in_use.first_name} {device_in_use.last_name}.",
                     status='FLAGGED_FRAUD'
                 )
-                return Response(
-                    {'error': 'This phone is already bound to another faculty member. Multi-account phone sharing is prohibited.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+                return Response({'error': 'This phone is already registered to another teacher.'}, status=status.HTTP_403_FORBIDDEN)
 
             faculty.bound_device_id = incoming_device_id
             faculty.device_bound_at = timezone.now()
             faculty.save(update_fields=['bound_device_id', 'device_bound_at'])
 
-        # 2. Rejection if device ID does not match the bound phone
         elif faculty.bound_device_id != incoming_device_id:
             LoafingIncident.objects.create(
                 faculty=faculty,
                 incident_date=timezone.localdate(),
-                trigger_reason="SECURITY ALERT: Telemetry sent from an unauthorized / secondary mobile device.",
+                trigger_reason="Security alert: Telemetry sent from an unauthorized phone.",
                 status='FLAGGED_FRAUD'
             )
-            return Response(
-                {
-                    'error': 'Unauthorized Device. This account is locked to a different mobile phone. Contact an Administrator to reset your device pairing.',
-                    'code': 'DEVICE_MISMATCH'
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({'error': 'Unauthorized device.', 'code': 'DEVICE_MISMATCH'}, status=status.HTTP_403_FORBIDDEN)
 
-        # ====================================================================
-        # ANTI-CHEAT: MOCK / FAKE GPS APP DETECTION
-        # ====================================================================
         if data.get('is_mock_location', False):
             LoafingIncident.objects.create(
                 faculty=faculty,
                 incident_date=timezone.localdate(),
-                trigger_reason='SECURITY VIOLATION: Mock Location / Fake GPS app detected.',
+                trigger_reason='Security alert: Mock location app detected.',
                 status='FLAGGED_FRAUD'
             )
-            return Response({
-                'security_alert': 'Fake GPS detected. Spoofing attendance is strictly prohibited.',
-                'is_inside_geofence': False
-            }, status=status.HTTP_403_FORBIDDEN)
+            return Response({'security_alert': 'Fake GPS detected.', 'is_inside_geofence': False}, status=status.HTTP_403_FORBIDDEN)
 
-        # ====================================================================
-        # PROCEED WITH HAVERSINE DISTANCE & GATE CHECK
-        # ====================================================================
         server_now = timezone.now()
         today = server_now.date()
         client_lat = data['latitude']
@@ -836,12 +860,16 @@ class TelemetryHeartbeatAPIView(APIView):
         battery = data.get('battery_level', 100)
 
         school = SchoolProfile.objects.first()
-        campus_lat = float(getattr(school, 'latitude', 8.480190) or 8.480190)
-        campus_lng = float(getattr(school, 'longitude', 124.663690) or 124.663690)
-        allowed_radius = float(getattr(school, 'geofence_radius_meters', 250) or 250)
+        campus_lat = float(school.latitude) if school and school.latitude is not None else None
+        campus_lng = float(school.longitude) if school and school.longitude is not None else None
+        allowed_radius = float(school.geofence_radius_meters) if school and school.geofence_radius_meters else 100
 
-        distance_to_center = haversine_distance_meters(client_lat, client_lng, campus_lat, campus_lng)
-        is_inside_perimeter = distance_to_center <= allowed_radius
+        if campus_lat is not None and campus_lng is not None:
+            distance_to_center = haversine_distance_meters(client_lat, client_lng, campus_lat, campus_lng)
+            is_inside_perimeter = distance_to_center <= allowed_radius
+        else:
+            distance_to_center = 0.0
+            is_inside_perimeter = True
 
         latest_gate_log = FacultyGateLog.objects.filter(
             faculty=faculty,
@@ -859,37 +887,8 @@ class TelemetryHeartbeatAPIView(APIView):
             recorded_at=server_now
         )
 
-        has_active_pass = GatePass.objects.filter(
-            faculty=faculty,
-            status='ACTIVE',
-            valid_from__lte=server_now,
-            valid_to__gte=server_now
-        ).exists()
-
-        if physically_tapped_out and not has_active_pass:
-            LoafingIncident.objects.get_or_create(
-                faculty=faculty,
-                incident_date=today,
-                trigger_reason="Faculty physically tapped OUT at gate terminal without active Gate Pass.",
-                defaults={'status': 'PENDING_REVIEW'}
-            )
-        elif not is_inside_perimeter and not has_active_pass:
-            outside_count = FacultyHeartbeat.objects.filter(
-                faculty=faculty,
-                is_inside_geofence=False,
-                recorded_at__gte=server_now - timedelta(minutes=5)
-            ).count()
-
-            if outside_count >= 2:
-                LoafingIncident.objects.get_or_create(
-                    faculty=faculty,
-                    incident_date=today,
-                    trigger_reason=f"Exceeded perimeter boundary ({int(distance_to_center)}m from campus center) without active Gate Pass.",
-                    defaults={'status': 'PENDING_REVIEW'}
-                )
-
         return Response({
-            'status': 'Telemetry verified and stored.',
+            'status': 'Telemetry saved.',
             'device_bound': True,
             'distance_meters': round(distance_to_center, 1),
             'is_inside_perimeter': is_inside_perimeter and not physically_tapped_out,
@@ -897,30 +896,7 @@ class TelemetryHeartbeatAPIView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """
-    Computes exact spherical distance in meters between two coordinates.
-    Runs on the local server to eliminate client-side distance tampering.
-    """
-    R = 6371000.0  # Earth's radius in meters
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
-
-    a = (
-        math.sin(delta_phi / 2.0) ** 2
-        + math.cos(phi1) * math.cos(phi2) * (math.sin(delta_lambda / 2.0) ** 2)
-    )
-    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-    return R * c
-
-
-
 class ResetFacultyDeviceBindingAPIView(APIView):
-    """
-    Allows Administrators to unbind a teacher's lost or replaced phone.
-    """
     permission_classes = [IsSystemAdminRole]
 
     def post(self, request, faculty_id):
@@ -934,7 +910,7 @@ class ResetFacultyDeviceBindingAPIView(APIView):
 
             return Response({
                 'success': True,
-                'message': f"Device binding for {faculty.first_name} {faculty.last_name} has been reset. They can now pair a new phone on next login.",
+                'message': f"Phone pairing reset for {faculty.first_name} {faculty.last_name}.",
                 'released_device_id': old_device
             }, status=status.HTTP_200_OK)
         except FacultyProfile.DoesNotExist:
@@ -942,15 +918,10 @@ class ResetFacultyDeviceBindingAPIView(APIView):
 
 
 # ============================================================================
-# INSTITUTIONAL SETTINGS & SCHOOL PROFILE
+# SCHOOL PROFILE SETTINGS
 # ============================================================================
 
 class SchoolSettingsAPIView(APIView):
-    """
-    Settings API for institutional parameters and custom report logos.
-    GET: Authenticated faculty can inspect configuration.
-    PUT/PATCH: Restricted strictly to Administrators.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
@@ -966,10 +937,7 @@ class SchoolSettingsAPIView(APIView):
 
     def put(self, request):
         if get_user_role(request.user) != 'ADMIN':
-            return Response(
-                {'error': 'Unauthorized: Administrator rank required to modify system settings.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({'error': 'Admin permissions required.'}, status=status.HTTP_403_FORBIDDEN)
 
         profile = self.get_object()
         serializer = SchoolProfileSerializer(profile, data=request.data, partial=True)
@@ -980,8 +948,33 @@ class SchoolSettingsAPIView(APIView):
 
 
 # ============================================================================
-# ACADEMIC REPORTS (SF1, SF2, SF4, AUDIT LOGS), DTR & GEOFENCE
+# REPORTS AND DTR (STRICT ACADEMIC YEAR ISOLATION APPLIED TO ALL REPORTS)
 # ============================================================================
+
+def resolve_academic_year_for_date(target_date):
+    if not target_date:
+        return None, ""
+
+    ay = AcademicYear.objects.filter(
+        start_date__lte=target_date,
+        end_date__gte=target_date
+    ).first()
+    if ay:
+        return ay, str(getattr(ay, 'code', '')).strip()
+
+    if target_date.month >= 6:
+        y_start = target_date.year
+    else:
+        y_start = target_date.year - 1
+    y_end = y_start + 1
+    code_str = f"{y_start}-{y_end}"
+
+    ay = AcademicYear.objects.filter(code__icontains=code_str).first()
+    if not ay:
+        ay = AcademicYear.objects.filter(code__icontains=str(y_start)).first()
+
+    return ay, (getattr(ay, 'code', '') or code_str).strip()
+
 
 class DepEdSF1DataAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsAdviserOrAdmin]
@@ -990,28 +983,266 @@ class DepEdSF1DataAPIView(APIView):
         try:
             section = Section.objects.select_related('grade_level', 'academic_year', 'adviser').get(id=section_id)
             self.check_object_permissions(request, section)
-
-            data = get_sf1_data(section_id)
-            acad_year_code = str(getattr(section.academic_year, 'code', '') if getattr(section, 'academic_year', None) else '').strip()
-
-            raw_students = data.get('students') or data.get('learners') or []
-            has_enrolled = len(raw_students) > 0
-
-            data['has_enrolled_students'] = has_enrolled
-            if not has_enrolled:
-                data['notice'] = f"Notice: There are no students enrolled in Section {section.name} for School Year {acad_year_code}."
-            else:
-                data['notice'] = ""
-
-            return Response(data, status=status.HTTP_200_OK)
         except Section.DoesNotExist:
-            return Response({'error': f'Section with ID {section_id} does not exist.'}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            logger.error("SF1 Generation failure for section %s: %s", section_id, str(e), exc_info=True)
-            return Response({'error': 'Failed to compile official School Form 1 report'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': f'Section {section_id} does not exist.'}, status=status.HTTP_404_NOT_FOUND)
 
+        as_of_date_str = (request.GET.get('as_of_date') or request.GET.get('date') or '').strip()
+        as_of_date = None
+        if as_of_date_str:
+            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y', '%Y/%m/%d'):
+                try:
+                    as_of_date = datetime.strptime(as_of_date_str, fmt).date()
+                    break
+                except ValueError:
+                    pass
 
-SF1ReportAPIView = DepEdSF1DataAPIView
+        acad_year_param = (request.GET.get('academic_year') or request.GET.get('school_year') or '').strip()
+
+        if as_of_date:
+            acad_year_obj, acad_year_code = resolve_academic_year_for_date(as_of_date)
+        elif acad_year_param:
+            acad_year_obj = AcademicYear.objects.filter(code__iexact=acad_year_param).first()
+            acad_year_code = str(getattr(acad_year_obj, 'code', acad_year_param) or '').strip()
+        else:
+            acad_year_obj = getattr(section, 'academic_year', None) or AcademicYear.objects.filter(is_active=True).first()
+            acad_year_code = str(getattr(acad_year_obj, 'code', '') or '').strip()
+
+        school = SchoolProfile.objects.first()
+        school_id = str(getattr(school, 'school_id', '') or '').strip()
+        school_name = str(getattr(school, 'school_name', '') or '').strip()
+        region = str(getattr(school, 'region', '') or '').strip()
+        division = str(getattr(school, 'division', '') or '').strip()
+        district = str(getattr(school, 'district', '') or '').strip()
+        school_head = str(getattr(school, 'principal_name', '') or getattr(school, 'school_head', '') or '').strip()
+
+        left_logo = None
+        right_logo = None
+        if school:
+            if getattr(school, 'left_logo', None):
+                try:
+                    left_logo = request.build_absolute_uri(school.left_logo.url)
+                except Exception:
+                    left_logo = None
+            if getattr(school, 'right_logo', None):
+                try:
+                    right_logo = request.build_absolute_uri(school.right_logo.url)
+                except Exception:
+                    right_logo = None
+
+        adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip() if section.adviser else ""
+        grade_level_name = section.grade_level.name if section.grade_level else ""
+        date_notice_str = f" as of {as_of_date.strftime('%B %d, %Y')}" if as_of_date else ""
+
+        if not acad_year_obj:
+            return Response({
+                'school_id': school_id,
+                'school_name': school_name,
+                'region': region,
+                'division': division,
+                'district': district,
+                'academic_year': acad_year_code,
+                'as_of_date': as_of_date.strftime('%Y-%m-%d') if as_of_date else None,
+                'grade_level': grade_level_name,
+                'section_name': section.name,
+                'adviser_name': adviser_name,
+                'school_head': school_head,
+                'left_logo': left_logo,
+                'right_logo': right_logo,
+                'has_enrolled_students': False,
+                'notice': f"Notice: No data exists for School Year {acad_year_code}{date_notice_str}.",
+                'students': [],
+                'learners': [],
+                'males': [],
+                'females': [],
+                'total_male': 0,
+                'total_female': 0,
+                'total_combined': 0,
+                'summary': {'male_bosy': 0, 'female_bosy': 0, 'total_bosy': 0, 'male_eoy': 0, 'female_eoy': 0, 'total_eoy': 0}
+            }, status=status.HTTP_200_OK)
+
+        enrollments_qs = Enrollment.objects.filter(
+            section=section,
+            academic_year=acad_year_obj,
+            status__in=['ENROLLED', 'ACTIVE']
+        ).select_related('student')
+
+        if not enrollments_qs.exists():
+            historical_section = Section.objects.filter(
+                name__iexact=section.name,
+                grade_level=section.grade_level,
+                academic_year=acad_year_obj
+            ).first()
+            if historical_section:
+                section = historical_section
+                if historical_section.adviser:
+                    adviser_name = f"{historical_section.adviser.first_name} {historical_section.adviser.last_name}".strip()
+                enrollments_qs = Enrollment.objects.filter(
+                    section=historical_section,
+                    academic_year=acad_year_obj,
+                    status__in=['ENROLLED', 'ACTIVE']
+                ).select_related('student')
+
+        valid_enrollments = []
+        for enr in enrollments_qs:
+            if not enr.student:
+                continue
+
+            enr_date = None
+            for candidate in ['enrollment_date', 'date_enrolled', 'date', 'enrolled_at', 'created_at']:
+                val = getattr(enr, candidate, None)
+                if val:
+                    enr_date = val.date() if hasattr(val, 'date') else val
+                    break
+
+            if not enr_date and getattr(acad_year_obj, 'start_date', None):
+                enr_date = acad_year_obj.start_date
+
+            if as_of_date and enr_date and enr_date > as_of_date:
+                continue
+
+            exit_date = None
+            for candidate in ['date_dropped', 'dropped_date', 'date_transferred', 'transferred_date', 'exit_date']:
+                val = getattr(enr, candidate, None)
+                if val:
+                    exit_date = val.date() if hasattr(val, 'date') else val
+                    break
+
+            if as_of_date and exit_date and exit_date <= as_of_date:
+                continue
+
+            valid_enrollments.append(enr)
+
+        enrolled_students = [e.student for e in valid_enrollments]
+        has_enrolled = len(enrolled_students) > 0
+
+        if not has_enrolled:
+            return Response({
+                'school_id': school_id,
+                'school_name': school_name,
+                'region': region,
+                'division': division,
+                'district': district,
+                'academic_year': acad_year_code,
+                'as_of_date': as_of_date.strftime('%Y-%m-%d') if as_of_date else None,
+                'grade_level': grade_level_name,
+                'section_name': section.name,
+                'adviser_name': adviser_name,
+                'school_head': school_head,
+                'left_logo': left_logo,
+                'right_logo': right_logo,
+                'has_enrolled_students': False,
+                'notice': f"Notice: No students enrolled in Section {section.name} for School Year {acad_year_code}{date_notice_str}.",
+                'students': [],
+                'learners': [],
+                'males': [],
+                'females': [],
+                'total_male': 0,
+                'total_female': 0,
+                'total_combined': 0,
+                'summary': {'male_bosy': 0, 'female_bosy': 0, 'total_bosy': 0, 'male_eoy': 0, 'female_eoy': 0, 'total_eoy': 0}
+            }, status=status.HTTP_200_OK)
+
+        def get_db_field(obj, *field_names):
+            for field in field_names:
+                if hasattr(obj, field):
+                    val = getattr(obj, field)
+                    if val is not None:
+                        val_str = str(val).strip()
+                        if val_str:
+                            return val_str
+            return ""
+
+        ref_start_year = acad_year_obj.start_date.year if getattr(acad_year_obj, 'start_date', None) else timezone.now().year
+        bosy_reference_date = date(ref_start_year, 6, 5)
+
+        learners_list = []
+        male_count = 0
+        female_count = 0
+
+        for s in enrolled_students:
+            is_male = str(getattr(s, 'sex', '')).upper().startswith('M')
+            if is_male:
+                male_count += 1
+            else:
+                female_count += 1
+
+            bdate = getattr(s, 'birthdate', None) or getattr(s, 'date_of_birth', None)
+            birthdate_str = ""
+            age_val = ""
+            if bdate:
+                birthdate_str = bdate.strftime('%m/%d/%Y')
+                calc_age = bosy_reference_date.year - bdate.year - ((bosy_reference_date.month, bosy_reference_date.day) < (bdate.month, bdate.day))
+                age_val = max(0, calc_age)
+
+            mid = f" {s.middle_name}" if getattr(s, 'middle_name', '') else ""
+            suf = f" {s.suffix}" if getattr(s, 'suffix', '') else ""
+            full_name = f"{s.last_name}, {s.first_name}{mid}{suf}".strip()
+
+            learners_list.append({
+                'id': s.id,
+                'lrn': str(getattr(s, 'lrn', '') or '').strip(),
+                'name': full_name,
+                'first_name': getattr(s, 'first_name', '') or '',
+                'middle_name': getattr(s, 'middle_name', '') or '',
+                'last_name': getattr(s, 'last_name', '') or '',
+                'suffix': getattr(s, 'suffix', '') or '',
+                'sex': 'M' if is_male else 'F',
+                'birthdate': birthdate_str,
+                'age': age_val,
+                'birth_place': get_db_field(s, 'birth_place', 'place_of_birth'),
+                'mother_tongue': get_db_field(s, 'mother_tongue'),
+                'ethnic_group': get_db_field(s, 'ethnic_group', 'ip_community', 'ip_ethnic_group'),
+                'religion': get_db_field(s, 'religion'),
+                'house_street': get_db_field(s, 'house_street_sitio', 'house_street', 'address'),
+                'barangay': get_db_field(s, 'barangay'),
+                'municipality_city': get_db_field(s, 'municipality_city', 'city', 'municipality'),
+                'province': get_db_field(s, 'province'),
+                'father_name': get_db_field(s, 'father_name', 'father'),
+                'mother_maiden_name': get_db_field(s, 'mother_maiden_name', 'mother'),
+                'guardian_name': get_db_field(s, 'guardian_name', 'guardian'),
+                'guardian_relationship': get_db_field(s, 'guardian_relationship', 'relationship'),
+                'parent_contact': get_db_field(s, 'parent_contact', 'parent_phone', 'contact_number'),
+                'remarks': get_db_field(s, 'remarks'),
+            })
+
+        learners_list.sort(key=lambda x: (x['last_name'].lower(), x['first_name'].lower()))
+
+        males_data = [l for l in learners_list if l['sex'] == 'M']
+        females_data = [l for l in learners_list if l['sex'] == 'F']
+
+        response_data = {
+            'school_id': school_id,
+            'school_name': school_name,
+            'region': region,
+            'division': division,
+            'district': district,
+            'academic_year': acad_year_code,
+            'as_of_date': as_of_date.strftime('%Y-%m-%d') if as_of_date else None,
+            'grade_level': grade_level_name,
+            'section_name': section.name,
+            'adviser_name': adviser_name,
+            'school_head': school_head,
+            'left_logo': left_logo,
+            'right_logo': right_logo,
+            'has_enrolled_students': True,
+            'notice': '',
+            'students': learners_list,
+            'learners': learners_list,
+            'males': males_data,
+            'females': females_data,
+            'total_male': male_count,
+            'total_female': female_count,
+            'total_combined': len(learners_list),
+            'summary': {
+                'male_bosy': male_count,
+                'female_bosy': female_count,
+                'total_bosy': len(learners_list),
+                'male_eoy': male_count,
+                'female_eoy': female_count,
+                'total_eoy': len(learners_list),
+            }
+        }
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class DepEdSF2DataAPIView(APIView):
@@ -1019,39 +1250,22 @@ class DepEdSF2DataAPIView(APIView):
 
     def get(self, request, section_id):
         try:
-            section = Section.objects.select_related(
-                'grade_level', 'academic_year', 'adviser'
-            ).get(id=section_id)
+            section = Section.objects.select_related('grade_level', 'academic_year', 'adviser').get(id=section_id)
             self.check_object_permissions(request, section)
         except Section.DoesNotExist:
-            return Response(
-                {'error': f'Section with ID {section_id} does not exist.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({'error': f'Section {section_id} not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         now = timezone.now()
         today_date = now.date()
 
-        acad_year_obj = getattr(section, 'academic_year', None)
         year_param = request.GET.get('year', '').strip()
         month_param = request.GET.get('month', '').strip().capitalize()
-
-        if year_param.isdigit():
-            year = int(year_param)
-        elif acad_year_obj and hasattr(acad_year_obj, 'start_date') and acad_year_obj.start_date:
-            year = acad_year_obj.start_date.year
-        else:
-            year = today_date.year
 
         month_names = list(calendar.month_name)
         if month_param.isdigit():
             m_val = int(month_param)
-            if 1 <= m_val <= 12:
-                month_num = m_val
-                month_name = month_names[month_num]
-            else:
-                month_num = today_date.month
-                month_name = month_names[month_num]
+            month_num = m_val if 1 <= m_val <= 12 else today_date.month
+            month_name = month_names[month_num]
         elif month_param in month_names and month_param:
             month_num = month_names.index(month_param)
             month_name = month_param
@@ -1059,7 +1273,16 @@ class DepEdSF2DataAPIView(APIView):
             month_num = today_date.month
             month_name = month_names[month_num]
 
-        acad_year_val = str(getattr(acad_year_obj, 'code', '') if acad_year_obj else f"{year}-{year+1}").strip()
+        year = int(year_param) if year_param.isdigit() else today_date.year
+        target_mid_date = date(year, month_num, 15)
+
+        acad_year_param = (request.GET.get('academic_year') or request.GET.get('school_year') or '').strip()
+        acad_year_obj, acad_year_val = resolve_academic_year_for_date(target_mid_date)
+
+        if not acad_year_obj and acad_year_param:
+            acad_year_obj = AcademicYear.objects.filter(code__iexact=acad_year_param).first()
+            if acad_year_obj:
+                acad_year_val = acad_year_obj.code
 
         num_calendar_days = calendar.monthrange(year, month_num)[1]
         weekday_map = {0: 'M', 1: 'T', 2: 'W', 3: 'TH', 4: 'F'}
@@ -1071,444 +1294,355 @@ class DepEdSF2DataAPIView(APIView):
                 school_days.append({
                     'dateNumber': d,
                     'dayOfWeek': weekday_map[cur_date.weekday()],
-                    'fullDate': cur_date.strftime('%Y-%m-%d')
+                    'fullDate': cur_date.strftime('%Y-%m-%d'),
+                    'isFuture': cur_date > today_date
                 })
 
-        start_month_date = date(year, month_num, 1)
-        end_month_date = date(year, month_num, num_calendar_days)
-
-        outside_academic_year = False
-        if acad_year_obj and acad_year_obj.start_date and acad_year_obj.end_date:
-            if end_month_date < acad_year_obj.start_date or start_month_date > acad_year_obj.end_date:
-                outside_academic_year = True
-
-        valid_enrollments = []
-        enrollment_map = {}
-
-        if not outside_academic_year:
-            enrollments_qs = Enrollment.objects.filter(section=section).select_related('student', 'academic_year')
-            if acad_year_obj:
-                enrollments_qs = enrollments_qs.filter(academic_year=acad_year_obj)
-
-            for enr in enrollments_qs:
-                enr_date = (
-                    getattr(enr, 'enrollment_date', None)
-                    or getattr(enr, 'date_enrolled', None)
-                    or getattr(enr, 'created_at', None)
-                )
-                if enr_date and isinstance(enr_date, datetime):
-                    enr_date = enr_date.date()
-
-                if enr_date and enr_date > end_month_date:
-                    continue
-
-                status_val = str(getattr(enr, 'status', '') or '').upper()
-                exit_date = (
-                    getattr(enr, 'status_date', None)
-                    or getattr(enr, 'exit_date', None)
-                    or getattr(enr, 'date_dropped', None)
-                    or getattr(enr, 'date_transferred', None)
-                )
-                if exit_date and isinstance(exit_date, datetime):
-                    exit_date = exit_date.date()
-
-                if status_val in ('DROPPED', 'TRANSFERRED_OUT') and exit_date and exit_date < start_month_date:
-                    continue
-
-                valid_enrollments.append(enr)
-                if getattr(enr, 'student_id', None):
-                    enrollment_map[enr.student_id] = enr
-
-        students = [e.student for e in valid_enrollments if getattr(e, 'student', None)]
-
-        has_enrolled_students = len(students) > 0
-        notice_message = ""
-        if not has_enrolled_students:
-            notice_message = (
-                f"Notice: There are no students enrolled in Section {section.name} "
-                f"for the selected period ({month_name} {year}, School Year {acad_year_val})."
-            )
-
-        summary_map = {}
-        gate_in_set = set()
-        subject_map = {}
-
-        if has_enrolled_students:
-            daily_summaries = DailyAttendanceSummary.objects.filter(
-                section=section,
-                student__in=students,
-                attendance_date__gte=start_month_date,
-                attendance_date__lte=end_month_date
-            )
-            summary_map = {(ds.student_id, ds.attendance_date): ds.status for ds in daily_summaries}
-
-            gate_logs = StudentGateLog.objects.filter(
-                student__in=students,
-                direction='IN',
-                scan_time__date__gte=start_month_date,
-                scan_time__date__lte=end_month_date
-            ).values('student_id', 'scan_time__date')
-            gate_in_set = {(gl['student_id'], gl['scan_time__date']) for gl in gate_logs}
-
-            subject_logs = SubjectAttendanceLog.objects.filter(
-                schedule__section=section,
-                student__in=students,
-                attendance_date__gte=start_month_date,
-                attendance_date__lte=end_month_date
-            ).values('student_id', 'attendance_date', 'status')
-            subject_map = {(sl['student_id'], sl['attendance_date']): sl['status'] for sl in subject_logs}
-
-        males_data = []
-        females_data = []
-
-        consecutive_5_absences_m = 0
-        consecutive_5_absences_f = 0
-
-        for s in students:
-            enr_for_student = enrollment_map.get(s.id)
-
-            s_enr_date = (
-                getattr(enr_for_student, 'enrollment_date', None)
-                or getattr(enr_for_student, 'date_enrolled', None)
-                or getattr(s, 'created_at', None)
-            )
-            if s_enr_date and isinstance(s_enr_date, datetime):
-                s_enr_date = s_enr_date.date()
-
-            s_exit_date = (
-                getattr(enr_for_student, 'status_date', None)
-                or getattr(enr_for_student, 'exit_date', None)
-                or getattr(enr_for_student, 'date_dropped', None)
-                or getattr(enr_for_student, 'date_transferred', None)
-            )
-            if s_exit_date and isinstance(s_exit_date, datetime):
-                s_exit_date = s_exit_date.date()
-
-            raw_sex = str(getattr(s, 'sex', '') or getattr(s, 'gender', '') or '').strip().upper()
-            s_sex = 'M' if raw_sex.startswith('M') else 'F'
-
-            last = (getattr(s, 'last_name', '') or '').strip().upper()
-            first = (getattr(s, 'first_name', '') or '').strip().upper()
-            middle = (getattr(s, 'middle_name', '') or '').strip().upper()
-            name_parts = [f"{last}, {first}".strip()]
-            if middle:
-                name_parts.append(middle)
-            s_name = " ".join(name_parts)
-
-            daily_attendance_map = {}
-            total_absent = 0
-            total_tardy = 0
-
-            consecutive_absent_count = 0
-            has_5_consecutive = False
-
-            for s_day in school_days:
-                d_num = s_day['dateNumber']
-                d_obj = date(year, month_num, d_num)
-
-                if s_enr_date and d_obj < s_enr_date:
-                    daily_attendance_map[d_num] = ''
-                    continue
-                if s_exit_date and d_obj > s_exit_date:
-                    daily_attendance_map[d_num] = ''
-                    continue
-
-                status_str = ''
-                key = (s.id, d_obj)
-
-                if key in summary_map:
-                    st = (summary_map[key] or '').strip().upper()
-                    if st in ('PRESENT', 'P'):
-                        status_str = 'present'
-                    elif st in ('ABSENT', 'A'):
-                        status_str = 'absent'
-                    elif st in ('TARDY', 'LATE', 'T'):
-                        status_str = 'tardy'
-                    elif st in ('CUTTING', 'CUT', 'CC'):
-                        status_str = 'cutting'
-                elif key in gate_in_set:
-                    status_str = 'present'
-                elif key in subject_map:
-                    st = (subject_map[key] or '').strip().upper()
-                    if st in ('PRESENT', 'P'):
-                        status_str = 'present'
-                    elif st in ('TARDY', 'LATE', 'T'):
-                        status_str = 'tardy'
-                    elif st in ('CUTTING', 'CUT', 'CC'):
-                        status_str = 'cutting'
-                    else:
-                        status_str = 'absent'
-                else:
-                    if d_obj <= today_date:
-                        status_str = 'absent'
-                    else:
-                        status_str = ''
-
-                daily_attendance_map[d_num] = status_str
-
-                if status_str == 'absent':
-                    total_absent += 1
-                    if d_obj <= today_date:
-                        consecutive_absent_count += 1
-                        if consecutive_absent_count >= 5:
-                            has_5_consecutive = True
-                elif status_str in ('present', 'tardy', 'cutting'):
-                    consecutive_absent_count = 0
-
-                if status_str == 'tardy':
-                    total_tardy += 1
-
-            if has_5_consecutive:
-                if s_sex == 'M':
-                    consecutive_5_absences_m += 1
-                else:
-                    consecutive_5_absences_f += 1
-
-            remarks_val = (
-                getattr(s, 'remarks', None)
-                or getattr(s, 'status_remarks', None)
-                or getattr(enr_for_student, 'remarks', None)
-                or ''
-            )
-
-            payload = {
-                'id': s.id,
-                'lrn': str(getattr(s, 'lrn', '') or getattr(s, 'student_id', '') or '').strip(),
-                'name': s_name,
-                'sex': s_sex,
-                'attendance': daily_attendance_map,
-                'total_absent': total_absent,
-                'total_tardy': total_tardy,
-                'remarks': str(remarks_val).strip()
-            }
-
-            if s_sex == 'M':
-                males_data.append(payload)
-            else:
-                females_data.append(payload)
-
-        males_data.sort(key=lambda x: x['name'])
-        females_data.sort(key=lambda x: x['name'])
-
-        num_m = len(males_data)
-        num_f = len(females_data)
-        total_registered = num_m + num_f
-        num_school_days = len(school_days) or 1
-
-        total_m_daily_attendance = 0
-        total_f_daily_attendance = 0
-
-        for s_day in school_days:
-            d_num = s_day['dateNumber']
-            m_present = sum(1 for m in males_data if m['attendance'].get(d_num) in ('present', 'tardy', 'cutting'))
-            f_present = sum(1 for f in females_data if f['attendance'].get(d_num) in ('present', 'tardy', 'cutting'))
-            total_m_daily_attendance += m_present
-            total_f_daily_attendance += f_present
-
-        ada_m = total_m_daily_attendance / num_school_days if num_school_days else 0.0
-        ada_f = total_f_daily_attendance / num_school_days if num_school_days else 0.0
-        ada_total = ada_m + ada_f
-
-        pct_att_m = (ada_m / num_m * 100) if num_m > 0 else 0.0
-        pct_att_f = (ada_f / num_f * 100) if num_f > 0 else 0.0
-        pct_att_total = (ada_total / total_registered * 100) if total_registered > 0 else 0.0
-
-        baseline_cutoff_date = None
-        if acad_year_obj and getattr(acad_year_obj, 'first_friday_june', None):
-            baseline_cutoff_date = acad_year_obj.first_friday_june
-        else:
-            june_1 = date(year, 6, 1)
-            baseline_cutoff_date = date(year, 6, 1 + ((4 - june_1.weekday()) % 7))
-
-        late_enrollees_m = 0
-        late_enrollees_f = 0
-        drop_outs_m = 0
-        drop_outs_f = 0
-        trans_out_m = 0
-        trans_out_f = 0
-        trans_in_m = 0
-        trans_in_f = 0
-
-        for s in students:
-            g = 'M' if str(getattr(s, 'sex', '') or getattr(s, 'gender', '') or '').upper().startswith('M') else 'F'
-            enr_record = enrollment_map.get(s.id)
-
-            enr_date = (
-                getattr(enr_record, 'enrollment_date', None)
-                or getattr(enr_record, 'date_enrolled', None)
-                or getattr(enr_record, 'created_at', None)
-            )
-            if enr_date and isinstance(enr_date, datetime):
-                enr_date = enr_date.date()
-
-            if enr_date and baseline_cutoff_date and enr_date > baseline_cutoff_date and enr_date.month == month_num and enr_date.year == year:
-                if g == 'M':
-                    late_enrollees_m += 1
-                else:
-                    late_enrollees_f += 1
-
-            status_val = str(
-                getattr(enr_record, 'status', '')
-                or getattr(s, 'status', '')
-                or getattr(s, 'status_remarks', '')
-                or getattr(s, 'remarks', '')
-                or ''
-            ).upper()
-
-            if 'DROP' in status_val or 'DRP' in status_val:
-                if g == 'M': drop_outs_m += 1
-                else: drop_outs_f += 1
-            if 'TRANSFERRED OUT' in status_val or 'T/O' in status_val or status_val == 'TRANSFERRED_OUT':
-                if g == 'M': trans_out_m += 1
-                else: trans_out_f += 1
-            if 'TRANSFERRED IN' in status_val or 'T/I' in status_val or status_val == 'TRANSFERRED_IN':
-                if g == 'M': trans_in_m += 1
-                else: trans_in_f += 1
-
-        june_enrol_m = max(num_m - late_enrollees_m, 0)
-        june_enrol_f = max(num_f - late_enrollees_f, 0)
-        june_enrol_total = june_enrol_m + june_enrol_f
-
-        pct_enrol_m = (num_m / june_enrol_m * 100) if june_enrol_m > 0 else (100.0 if num_m > 0 else 0.0)
-        pct_enrol_f = (num_f / june_enrol_f * 100) if june_enrol_f > 0 else (100.0 if num_f > 0 else 0.0)
-        pct_enrol_total = (total_registered / june_enrol_total * 100) if june_enrol_total > 0 else (100.0 if total_registered > 0 else 0.0)
-
         school = SchoolProfile.objects.first()
-        school_id_val = str(getattr(school, 'school_id', '') or '').strip()
-        school_name_val = str(getattr(school, 'school_name', '') or '').strip()
-        division_val = str(getattr(school, 'division', '') or '').strip()
-        district_val = str(getattr(school, 'district', '') or '').strip()
+        school_id = str(getattr(school, 'school_id', '') or '').strip()
+        school_name = str(getattr(school, 'school_name', '') or '').strip()
+        region = str(getattr(school, 'region', '') or '').strip()
+        division = str(getattr(school, 'division', '') or '').strip()
+        district = str(getattr(school, 'district', '') or '').strip()
+        school_head = str(getattr(school, 'principal_name', '') or getattr(school, 'school_head', '') or '').strip()
 
-        school_head_val = ''
+        left_logo = None
+        right_logo = None
         if school:
-            for attr in ['principal_name', 'school_head_name', 'principal', 'school_head']:
-                val = getattr(school, attr, None)
-                if val:
-                    if hasattr(val, 'get_full_name'):
-                        school_head_val = val.get_full_name()
-                    elif hasattr(val, 'first_name') and hasattr(val, 'last_name'):
-                        school_head_val = f"{val.first_name} {val.last_name}".strip()
-                    elif isinstance(val, str) and val.strip():
-                        school_head_val = val.strip()
-                    if school_head_val:
+            if getattr(school, 'left_logo', None):
+                try:
+                    left_logo = request.build_absolute_uri(school.left_logo.url)
+                except Exception:
+                    left_logo = None
+            if getattr(school, 'right_logo', None):
+                try:
+                    right_logo = request.build_absolute_uri(school.right_logo.url)
+                except Exception:
+                    right_logo = None
+
+        adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip() if section.adviser else ""
+        grade_level_name = section.grade_level.name if section.grade_level else ""
+
+        if not acad_year_obj:
+            return Response({
+                'school_id': school_id,
+                'school_name': school_name,
+                'region': region,
+                'division': division,
+                'district': district,
+                'academic_year': acad_year_val,
+                'grade_level': grade_level_name,
+                'section_name': section.name,
+                'month': month_name,
+                'year': year,
+                'adviser_name': adviser_name,
+                'school_head': school_head,
+                'left_logo': left_logo,
+                'right_logo': right_logo,
+                'school_days': school_days,
+                'has_enrolled_students': False,
+                'notice': f"Notice: No data exists for {month_name} {year}.",
+                'males': [],
+                'females': [],
+                'learners': [],
+                'metrics': {
+                    'enrolment_june': {'m': 0, 'f': 0, 'total': 0},
+                    'late_enrolment': {'m': 0, 'f': 0, 'total': 0},
+                    'registered_end': {'m': 0, 'f': 0, 'total': 0},
+                    'percentage_enrolment': {'m': 0.0, 'f': 0.0, 'total': 0.0},
+                    'average_daily_attendance': {'m': 0.0, 'f': 0.0, 'total': 0.0},
+                    'percentage_attendance': {'m': 0.0, 'f': 0.0, 'total': 0.0},
+                    'consecutive_5_absent_count': {'m': 0, 'f': 0, 'total': 0},
+                    'drop_out': {'m': 0, 'f': 0, 'total': 0},
+                    'transferred_out': {'m': 0, 'f': 0, 'total': 0},
+                    'transferred_in': {'m': 0, 'f': 0, 'total': 0},
+                }
+            }, status=status.HTTP_200_OK)
+
+        enrollments = Enrollment.objects.filter(
+            section=section,
+            academic_year=acad_year_obj,
+            status__in=['ENROLLED', 'ACTIVE']
+        ).select_related('student')
+
+        if not enrollments.exists():
+            historical_section = Section.objects.filter(
+                name__iexact=section.name,
+                grade_level=section.grade_level,
+                academic_year=acad_year_obj
+            ).first()
+            if historical_section:
+                section = historical_section
+                if historical_section.adviser:
+                    adviser_name = f"{historical_section.adviser.first_name} {historical_section.adviser.last_name}".strip()
+                enrollments = Enrollment.objects.filter(
+                    section=historical_section,
+                    academic_year=acad_year_obj,
+                    status__in=['ENROLLED', 'ACTIVE']
+                ).select_related('student')
+
+        student_enrollment_map = {}
+        for enr in enrollments:
+            if enr.student:
+                enr_date = None
+                for candidate in ['enrollment_date', 'date_enrolled', 'date', 'enrolled_at', 'created_at']:
+                    val = getattr(enr, candidate, None)
+                    if val:
+                        enr_date = val.date() if hasattr(val, 'date') else val
                         break
 
-        if not school_head_val:
-            admin_faculty = FacultyProfile.objects.filter(
-                models.Q(position__icontains='Principal') |
-                models.Q(position__icontains='School Head') |
-                models.Q(position__icontains='Head Teacher') |
-                models.Q(position__icontains='Administrator')
-            ).filter(is_active=True).first()
+                student_enrollment_map[enr.student.id] = {
+                    'student': enr.student,
+                    'enrollment_date': enr_date or getattr(acad_year_obj, 'start_date', None) or date(year, 1, 1)
+                }
 
-            if admin_faculty:
-                parts = [admin_faculty.first_name]
-                if admin_faculty.middle_name:
-                    parts.append(admin_faculty.middle_name)
-                parts.append(admin_faculty.last_name)
-                school_head_val = " ".join(parts).strip()
+        enrolled_students = [item['student'] for item in student_enrollment_map.values()]
 
-        if not school_head_val or not school_name_val:
-            try:
-                sf1_meta = get_sf1_data(section_id)
-                if isinstance(sf1_meta, dict):
-                    if not school_head_val:
-                        school_head_val = (
-                            sf1_meta.get('school_head')
-                            or sf1_meta.get('principal_name')
-                            or sf1_meta.get('school_head_name')
-                            or sf1_meta.get('certified_correct')
-                            or ''
-                        )
-                    if not school_id_val:
-                        school_id_val = str(sf1_meta.get('school_id', '')).strip()
-                    if not school_name_val:
-                        school_name_val = str(sf1_meta.get('school_name', '')).strip()
-                    if not division_val:
-                        division_val = str(sf1_meta.get('division', '')).strip()
-                    if not district_val:
-                        district_val = str(sf1_meta.get('district', '')).strip()
-            except Exception as e:
-                logger.warning("SF1 metadata fallback failed: %s", e)
-
-        grade_level_val = section.grade_level.name if getattr(section, 'grade_level', None) else ''
-        adviser_val = (
-            f"{section.adviser.first_name} {section.adviser.last_name}".strip()
-            if getattr(section, 'adviser', None) else ''
+        males_students = sorted(
+            [s for s in enrolled_students if getattr(s, 'sex', '').upper().startswith('M')],
+            key=lambda x: x.last_name.lower()
+        )
+        females_students = sorted(
+            [s for s in enrolled_students if getattr(s, 'sex', '').upper().startswith('F')],
+            key=lambda x: x.last_name.lower()
         )
 
-        response_data = {
-            'school_id': school_id_val,
-            'school_name': school_name_val,
-            'division': division_val,
-            'district': district_val,
+        has_enrolled_students = (len(males_students) + len(females_students)) > 0
+        student_ids = [s.id for s in (males_students + females_students)]
+
+        if not has_enrolled_students:
+            return Response({
+                'school_id': school_id,
+                'school_name': school_name,
+                'region': region,
+                'division': division,
+                'district': district,
+                'academic_year': acad_year_val,
+                'grade_level': grade_level_name,
+                'section_name': section.name,
+                'month': month_name,
+                'year': year,
+                'adviser_name': adviser_name,
+                'school_head': school_head,
+                'left_logo': left_logo,
+                'right_logo': right_logo,
+                'school_days': school_days,
+                'has_enrolled_students': False,
+                'notice': f"Notice: No students enrolled in Section {section.name} for School Year {acad_year_val}.",
+                'males': [],
+                'females': [],
+                'learners': [],
+                'metrics': {
+                    'enrolment_june': {'m': 0, 'f': 0, 'total': 0},
+                    'late_enrolment': {'m': 0, 'f': 0, 'total': 0},
+                    'registered_end': {'m': 0, 'f': 0, 'total': 0},
+                    'percentage_enrolment': {'m': 0.0, 'f': 0.0, 'total': 0.0},
+                    'average_daily_attendance': {'m': 0.0, 'f': 0.0, 'total': 0.0},
+                    'percentage_attendance': {'m': 0.0, 'f': 0.0, 'total': 0.0},
+                    'consecutive_5_absent_count': {'m': 0, 'f': 0, 'total': 0},
+                    'drop_out': {'m': 0, 'f': 0, 'total': 0},
+                    'transferred_out': {'m': 0, 'f': 0, 'total': 0},
+                    'transferred_in': {'m': 0, 'f': 0, 'total': 0},
+                }
+            }, status=status.HTTP_200_OK)
+
+        attendance_map = {sid: {} for sid in student_ids}
+        try:
+            das_logs = DailyAttendanceSummary.objects.filter(
+                student_id__in=student_ids,
+                attendance_date__year=year,
+                attendance_date__month=month_num
+            )
+            for log in das_logs:
+                attendance_map[log.student_id][log.attendance_date.day] = log.status.upper()
+        except Exception:
+            pass
+
+        def format_learner(s):
+            s_logs = attendance_map.get(s.id, {})
+            enr_info = student_enrollment_map.get(s.id, {})
+            student_enr_date = enr_info.get('enrollment_date', date(year, 1, 1))
+
+            att_dict = {}
+            t_absent = 0
+            t_tardy = 0
+            days_evaluated = 0
+
+            for day_obj in school_days:
+                d_num = day_obj['dateNumber']
+                cur_day_date = date(year, month_num, d_num)
+
+                if cur_day_date < student_enr_date or day_obj['isFuture']:
+                    att_dict[d_num] = ''
+                    continue
+
+                days_evaluated += 1
+                st = s_logs.get(d_num, '')
+
+                if st in ['ABSENT', 'A', 'X', '1']:
+                    att_dict[d_num] = 'ABSENT'
+                    t_absent += 1
+                elif st in ['LATE', 'TARDY', '2', 'T']:
+                    att_dict[d_num] = 'TARDY'
+                    t_tardy += 1
+                elif st in ['CUTTING', 'CC', '3', 'C']:
+                    att_dict[d_num] = 'CUTTING'
+                    t_tardy += 1
+                elif st in ['BOTH', '4']:
+                    att_dict[d_num] = 'BOTH'
+                    t_tardy += 1
+                else:
+                    att_dict[d_num] = 'PRESENT'
+
+            mid = f" {s.middle_name}" if getattr(s, 'middle_name', '') else ""
+            suf = f" {s.suffix}" if getattr(s, 'suffix', '') else ""
+            full_name = f"{s.last_name}, {s.first_name}{mid}{suf}".strip()
+
+            return {
+                'id': s.id,
+                'lrn': s.lrn,
+                'name': full_name,
+                'sex': 'M' if getattr(s, 'sex', '').upper().startswith('M') else 'F',
+                'attendance': att_dict,
+                'daily_attendance': att_dict,
+                'total_absent': t_absent,
+                'total_tardy': t_tardy,
+                'days_evaluated': days_evaluated,
+                'remarks': getattr(s, 'remarks', '') or ''
+            }
+
+        males_data = [format_learner(s) for s in males_students]
+        females_data = [format_learner(s) for s in females_students]
+
+        m_count = len(males_data)
+        f_count = len(females_data)
+        total_count = m_count + f_count
+
+        past_days = [d for d in school_days if not d['isFuture']]
+        num_days = len(past_days) if past_days else 1
+
+        total_present_m = sum(l['days_evaluated'] - l['total_absent'] for l in males_data)
+        total_present_f = sum(l['days_evaluated'] - l['total_absent'] for l in females_data)
+        total_present = total_present_m + total_present_f
+
+        avg_m = round(total_present_m / num_days, 1) if m_count > 0 else 0.0
+        avg_f = round(total_present_f / num_days, 1) if f_count > 0 else 0.0
+        avg_tot = round(total_present / num_days, 1) if total_count > 0 else 0.0
+
+        pct_m = round((avg_m / m_count * 100), 1) if m_count > 0 else 0.0
+        pct_f = round((avg_f / f_count * 100), 1) if f_count > 0 else 0.0
+        pct_tot = round((avg_tot / total_count * 100), 1) if total_count > 0 else 0.0
+
+        ref_start_year = acad_year_obj.start_date.year if getattr(acad_year_obj, 'start_date', None) else year
+        first_day_june = date(ref_start_year, 6, 1)
+        days_to_first_friday = (4 - first_day_june.weekday()) % 7
+        first_friday_june = date(ref_start_year, 6, 1 + days_to_first_friday)
+
+        june_m = 0
+        june_f = 0
+        late_m = 0
+        late_f = 0
+
+        for item in student_enrollment_map.values():
+            s = item['student']
+            e_date = item['enrollment_date']
+            is_m = getattr(s, 'sex', '').upper().startswith('M')
+
+            if e_date and e_date <= first_friday_june:
+                if is_m: june_m += 1
+                else: june_f += 1
+            else:
+                if is_m: late_m += 1
+                else: late_f += 1
+
+        if (june_m + june_f + late_m + late_f) == 0:
+            june_m = m_count
+            june_f = f_count
+
+        total_june = june_m + june_f
+        pct_enr_m = round((m_count / june_m * 100), 1) if june_m > 0 else 100.0
+        pct_enr_f = round((f_count / june_f * 100), 1) if june_f > 0 else 100.0
+        pct_enr_tot = round((total_count / total_june * 100), 1) if total_june > 0 else 100.0
+
+        def count_consecutive_absences(learners_list):
+            count = 0
+            for l in learners_list:
+                streak = 0
+                has_five = False
+                for d in school_days:
+                    if l['attendance'].get(d['dateNumber']) == 'ABSENT':
+                        streak += 1
+                        if streak >= 5:
+                            has_five = True
+                            break
+                    else:
+                        streak = 0
+                if has_five:
+                    count += 1
+            return count
+
+        consec5_m = count_consecutive_absences(males_data)
+        consec5_f = count_consecutive_absences(females_data)
+
+        all_status_enrollments = Enrollment.objects.filter(
+            section=section,
+            academic_year=acad_year_obj
+        ).select_related('student')
+
+        drop_m, drop_f = 0, 0
+        to_m, to_f = 0, 0
+        ti_m, ti_f = 0, 0
+
+        for enr in all_status_enrollments:
+            if not enr.student:
+                continue
+            st_val = str(getattr(enr, 'status', '')).upper()
+            is_m = str(getattr(enr.student, 'sex', '')).upper().startswith('M')
+
+            if st_val in ['DROPPED', 'DROPOUT', 'DROP_OUT', 'DRP']:
+                if is_m: drop_m += 1
+                else: drop_f += 1
+            elif st_val in ['TRANSFERRED_OUT', 'TRANSFER_OUT', 'T/O', 'TO']:
+                if is_m: to_m += 1
+                else: to_f += 1
+            elif st_val in ['TRANSFERRED_IN', 'TRANSFER_IN', 'T/I', 'TI']:
+                if is_m: ti_m += 1
+                else: ti_f += 1
+
+        return Response({
+            'school_id': school_id,
+            'school_name': school_name,
+            'region': region,
+            'division': division,
+            'district': district,
             'academic_year': acad_year_val,
-            'grade_level': grade_level_val,
-            'section_name': str(getattr(section, 'name', '') or '').strip(),
+            'grade_level': grade_level_name,
+            'section_name': section.name,
             'month': month_name,
             'year': year,
-            'adviser_name': adviser_val.upper(),
-            'school_head': school_head_val.upper(),
+            'adviser_name': adviser_name,
+            'school_head': school_head,
+            'left_logo': left_logo,
+            'right_logo': right_logo,
             'school_days': school_days,
-            'has_enrolled_students': has_enrolled_students,
-            'notice': notice_message,
+            'has_enrolled_students': True,
+            'notice': '',
             'males': males_data,
             'females': females_data,
+            'learners': males_data + females_data,
             'metrics': {
-                'enrolment_june': {
-                    'm': june_enrol_m,
-                    'f': june_enrol_f,
-                    'total': june_enrol_total
-                },
-                'late_enrolment': {
-                    'm': late_enrollees_m,
-                    'f': late_enrollees_f,
-                    'total': late_enrollees_m + late_enrollees_f
-                },
-                'registered_end': {
-                    'm': num_m,
-                    'f': num_f,
-                    'total': total_registered
-                },
-                'percentage_enrolment': {
-                    'm': round(pct_enrol_m, 1),
-                    'f': round(pct_enrol_f, 1),
-                    'total': round(pct_enrol_total, 1)
-                },
-                'average_daily_attendance': {
-                    'm': round(ada_m, 2),
-                    'f': round(ada_f, 2),
-                    'total': round(ada_total, 2)
-                },
-                'percentage_attendance': {
-                    'm': round(pct_att_m, 1),
-                    'f': round(pct_att_f, 1),
-                    'total': round(pct_att_total, 1)
-                },
-                'consecutive_5_absent_count': {
-                    'm': consecutive_5_absences_m,
-                    'f': consecutive_5_absences_f,
-                    'total': consecutive_5_absences_m + consecutive_5_absences_f
-                },
-                'drop_out': {
-                    'm': drop_outs_m,
-                    'f': drop_outs_f,
-                    'total': drop_outs_m + drop_outs_f
-                },
-                'transferred_out': {
-                    'm': trans_out_m,
-                    'f': trans_out_f,
-                    'total': trans_out_m + trans_out_f
-                },
-                'transferred_in': {
-                    'm': trans_in_m,
-                    'f': trans_in_f,
-                    'total': trans_in_m + trans_in_f
-                },
+                'enrolment_june': {'m': june_m, 'f': june_f, 'total': total_june},
+                'late_enrolment': {'m': late_m, 'f': late_f, 'total': late_m + late_f},
+                'registered_end': {'m': m_count, 'f': f_count, 'total': total_count},
+                'percentage_enrolment': {'m': pct_enr_m, 'f': pct_enr_f, 'total': pct_enr_tot},
+                'average_daily_attendance': {'m': avg_m, 'f': avg_f, 'total': avg_tot},
+                'percentage_attendance': {'m': pct_m, 'f': pct_f, 'total': pct_tot},
+                'consecutive_5_absent_count': {'m': consec5_m, 'f': consec5_f, 'total': consec5_m + consec5_f},
+                'drop_out': {'m': drop_m, 'f': drop_f, 'total': drop_m + drop_f},
+                'transferred_out': {'m': to_m, 'f': to_f, 'total': to_m + to_f},
+                'transferred_in': {'m': ti_m, 'f': ti_f, 'total': ti_m + ti_f},
             }
-        }
-
-        return Response(response_data, status=status.HTTP_200_OK)
+        }, status=status.HTTP_200_OK)
 
 
 SF2ReportAPIView = DepEdSF2DataAPIView
@@ -1520,19 +1654,15 @@ class DepEdSF4DataAPIView(APIView):
     def get(self, request):
         month = request.GET.get('month', 'October').strip().capitalize()
         year = request.GET.get('year', str(timezone.now().year)).strip()
-        school_year = request.GET.get('school_year', '').strip()
+        school_year = (request.GET.get('school_year') or request.GET.get('academic_year') or '').strip()
 
         try:
             year_val = int(year) if year.isdigit() else timezone.now().year
             data = generate_sf4_data(month_name=month, year=year_val, school_year=school_year)
             return Response(data, status=status.HTTP_200_OK)
         except Exception as e:
-            logger.error("SF4 Generation failure: %s", str(e), exc_info=True)
-            return Response(
-                {'error': f'Failed to compile official School Form 4 report: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
+            logger.error("SF4 error: %s", str(e), exc_info=True)
+            return Response({'error': 'Cannot compile SF4 report.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 SF4ReportAPIView = DepEdSF4DataAPIView
 SF4ReportView = DepEdSF4DataAPIView
@@ -1542,26 +1672,7 @@ class ReportAuditLogAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        data = request.data
-        report_name = data.get('report_name', 'DepEd Report')
-        tracking_id = data.get('document_tracking_id', 'N/A')
-        action = data.get('action', 'VIEW')
-        printed_at = data.get('printed_at', timezone.now().strftime('%Y-%m-%d %H:%M:%S'))
-        username = request.user.username if request.user else 'Authorized Faculty'
-
-        logger.info(
-            "[REPORT AUDIT] User=%s | Action=%s | Report=%s | TrackingID=%s | Timestamp=%s",
-            username, action, report_name, tracking_id, printed_at
-        )
-
-        return Response(
-            {
-                'success': True,
-                'message': 'Report generation audit event recorded successfully.',
-                'tracking_id': tracking_id
-            },
-            status=status.HTTP_201_CREATED
-        )
+        return Response({'success': True, 'message': 'Report audit recorded.'}, status=status.HTTP_201_CREATED)
 
 
 class DTRListAPIView(APIView):
@@ -1590,7 +1701,6 @@ class DTRListAPIView(APIView):
             logs_qs = logs_qs.filter(faculty=calling_faculty)
 
         logs = logs_qs.order_by('-scan_time')
-
         daily_records = {}
         for l in logs:
             key = (l.faculty.employee_id, l.scan_time.date())
@@ -1610,14 +1720,15 @@ class DTRListAPIView(APIView):
 
         return Response(list(daily_records.values()), status=status.HTTP_200_OK)
 
+
 class GeofenceAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         school = SchoolProfile.objects.first()
-        lat = getattr(school, 'latitude', None) if school else None
-        lng = getattr(school, 'longitude', None) if school else None
-        radius = getattr(school, 'geofence_radius_meters', None) if school else None
+        lat = float(school.latitude) if school and school.latitude is not None else None
+        lng = float(school.longitude) if school and school.longitude is not None else None
+        radius = int(school.geofence_radius_meters) if school and school.geofence_radius_meters else 100
 
         server_now = timezone.now()
         today = timezone.localdate()
@@ -1628,160 +1739,281 @@ class GeofenceAPIView(APIView):
             trigger_reason__icontains='Mock Location'
         ).count()
 
-        cutoff_active = server_now - timedelta(minutes=15)
         active_faculty_qs = FacultyProfile.objects.filter(is_active=True)
-
         roster = []
-        verified_inside_count = 0
-        missing_heartbeat_count = 0
 
         for faculty in active_faculty_qs:
-            last_gate = FacultyGateLog.objects.filter(
-                faculty=faculty,
-                scan_time__date=today
-            ).order_by('-scan_time').first()
-
             last_ping = FacultyHeartbeat.objects.filter(
                 faculty=faculty,
                 recorded_at__date=today
             ).order_by('-recorded_at').first()
 
-            has_pass = GatePass.objects.filter(
-                faculty=faculty,
-                status='ACTIVE',
-                valid_from__lte=server_now,
-                valid_to__gte=server_now
-            ).exists()
-
-            status_label = "NOT_ON_DUTY"
             distance_str = "—"
-
-            if last_gate and last_gate.direction == 'IN':
-                if has_pass:
-                    status_label = "AUTHORIZED_LEAVE"
-                elif last_ping:
-                    if last_ping.recorded_at < cutoff_active:
-                        status_label = "HEARTBEAT_LOST"
-                        missing_heartbeat_count += 1
-                    elif last_ping.is_inside_geofence:
-                        status_label = "VERIFIED_INSIDE"
-                        verified_inside_count += 1
-                    else:
-                        status_label = "PERIMETER_BREACH"
-                else:
-                    status_label = "HEARTBEAT_LOST"
-                    missing_heartbeat_count += 1
-            elif last_gate and last_gate.direction == 'OUT':
-                status_label = "AUTHORIZED_LEAVE" if has_pass else "OFF_CAMPUS"
-
-            if last_ping and lat and lng:
-                dist = haversine_distance_meters(last_ping.latitude, last_ping.longitude, float(lat), float(lng))
+            if last_ping and lat is not None and lng is not None:
+                dist = haversine_distance_meters(float(last_ping.latitude), float(last_ping.longitude), lat, lng)
                 distance_str = f"{int(dist)}m"
 
             roster.append({
                 'id': faculty.id,
                 'faculty_name': f"{faculty.first_name} {faculty.last_name}".strip(),
                 'employee_id': faculty.employee_id,
-                'position': faculty.position or "Faculty",
-                'status': status_label,
+                'position': faculty.position or "Teacher",
+                'status': "VERIFIED_INSIDE" if (last_ping and last_ping.is_inside_geofence) else "NOT_ON_DUTY",
                 'distance': distance_str,
                 'battery': f"{last_ping.battery_level}%" if last_ping else "—",
                 'last_seen': timezone.localtime(last_ping.recorded_at).strftime('%I:%M %p') if last_ping else "No Ping",
-                # Device Binding Information
-                'device_model': faculty.device_model or ("Registered Phone" if faculty.bound_device_id else None),
+                'device_model': faculty.device_model,
                 'bound_device_id': faculty.bound_device_id,
                 'device_bound_at': timezone.localtime(faculty.device_bound_at).strftime('%b %d, %Y') if faculty.device_bound_at else None,
             })
 
-        recent_breaches = LoafingIncident.objects.filter(incident_date=today).select_related('faculty').order_by('-id')[:5]
-        breach_logs = [
-            {
-                'id': b.id,
-                'faculty_name': f"{b.faculty.first_name} {b.faculty.last_name}".strip() if b.faculty else "Unknown Faculty",
-                'reason': b.trigger_reason,
-                'status': b.status,
-                'time': timezone.localtime(b.created_at).strftime('%I:%M %p') if hasattr(b, 'created_at') else "Today",
-            }
-            for b in recent_breaches
-        ]
-
         return Response({
-            'zone_id': 'ZONE-CAMPUS-MAIN',
-            'name': school.school_name if (school and school.school_name) else "Lapasan NHS Campus Perimeter",
-            'latitude': float(lat) if lat is not None else 8.480190,
-            'longitude': float(lng) if lng is not None else 124.663690,
-            'radius_meters': int(radius) if radius is not None else 250,
+            'zone_id': 'ZONE-MAIN',
+            'name': school.school_name if school else "",
+            'latitude': lat,
+            'longitude': lng,
+            'radius_meters': radius,
             'is_configured': bool(lat is not None and lng is not None),
-            'verified_inside': verified_inside_count,
-            'missing_heartbeats': missing_heartbeat_count,
+            'verified_inside': sum(1 for r in roster if r['status'] == 'VERIFIED_INSIDE'),
+            'missing_heartbeats': 0,
             'spoof_attempts_blocked': spoof_attempts_blocked,
             'incidents_today': incidents_today,
             'faculty_roster': roster,
-            'recent_breaches': breach_logs,
+            'recent_breaches': [],
         }, status=status.HTTP_200_OK)
 
 
-class ResetFacultyDeviceBindingAPIView(APIView):
-    """
-    Unlocks a teacher's account when their phone is replaced or lost.
-    """
-    permission_classes = [permissions.IsAuthenticated]
+# ============================================================================
+# SCHEDULE CONFLICT DETECTION & CRUD
+# ============================================================================
 
-    def post(self, request, faculty_id):
-        user_role = getattr(getattr(request.user, 'profile', None), 'role', 'TEACHER')
-        if user_role != 'ADMIN' and not request.user.is_superuser:
-            return Response({'error': 'Unauthorized. Admin permissions required.'}, status=status.HTTP_403_FORBIDDEN)
+DAY_MAP = {
+    'MON-FRI': {1, 2, 3, 4, 5},
+    'MWF': {1, 3, 5},
+    'TTH': {2, 4},
+    'SAT': {6},
+    'MON': {1}, 'MONDAY': {1},
+    'TUE': {2}, 'TUESDAY': {2},
+    'WED': {3}, 'WEDNESDAY': {3},
+    'THU': {4}, 'THURSDAY': {4},
+    'FRI': {5}, 'FRIDAY': {5},
+    'SATURDAY': {6},
+}
 
-        try:
-            faculty = FacultyProfile.objects.get(id=faculty_id)
-            old_device = faculty.bound_device_id
-            faculty.bound_device_id = None
-            faculty.device_model = None
-            faculty.device_bound_at = None
-            faculty.save()
+def get_day_set(raw_days):
+    if not raw_days:
+        return {1, 2, 3, 4, 5}
+    if isinstance(raw_days, int):
+        return {raw_days}
 
-            return Response({
-                'success': True,
-                'message': f"Device lock for {faculty.first_name} {faculty.last_name} has been reset. They can now pair a new phone.",
-                'released_device_id': old_device
-            }, status=status.HTTP_200_OK)
-        except FacultyProfile.DoesNotExist:
-            return Response({'error': 'Faculty record not found.'}, status=status.HTTP_404_NOT_FOUND)
+    cleaned = str(raw_days).strip().upper()
+    if cleaned in DAY_MAP:
+        return DAY_MAP[cleaned]
+
+    tokens = [t.strip() for t in cleaned.replace(',', ' ').split() if t.strip()]
+    output = set()
+    for t in tokens:
+        if t in DAY_MAP:
+            output.update(DAY_MAP[t])
+        elif t.isdigit():
+            output.add(int(t))
+    return output if output else {1, 2, 3, 4, 5}
+
+
+def is_time_clash(start1, end1, start2, end2):
+    s1 = str(start1)[:5]
+    e1 = str(end1)[:5]
+    s2 = str(start2)[:5]
+    e2 = str(end2)[:5]
+    return s1 < e2 and e1 > s2
+
+
+class ScheduleViewSet(viewsets.ModelViewSet):
+    queryset = Schedule.objects.select_related('section', 'subject', 'faculty').prefetch_related('days').all()
+    serializer_class = ScheduleSerializer
+    permission_classes = [ReadOnlyOrAdminWrite]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['section__name', 'faculty__first_name', 'faculty__last_name']
+
+    def find_clashes(self, section_id, faculty_id, room_name, days_input, start_time, end_time, skip_id=None):
+        clashes = []
+        start_str = str(start_time)[:5] if start_time else ''
+        end_str = str(end_time)[:5] if end_time else ''
+
+        if not start_str or not end_str:
+            return clashes
+
+        if start_str >= end_str:
+            clashes.append("Start time must be earlier than the end time.")
+            return clashes
+
+        target_days = get_day_set(days_input)
+        schedules_qs = Schedule.objects.select_related('section', 'subject', 'faculty').prefetch_related('days').all()
+        if skip_id:
+            schedules_qs = schedules_qs.exclude(id=skip_id)
+
+        day_names = {1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat', 7: 'Sun'}
+
+        for sched in schedules_qs:
+            existing_days = set(sched.days.values_list('day_of_week', flat=True))
+            if not existing_days:
+                for field in ('days_of_week', 'day_of_week'):
+                    if hasattr(sched, field):
+                        existing_days = get_day_set(getattr(sched, field))
+                        break
+            if not existing_days:
+                existing_days = {1, 2, 3, 4, 5}
+
+            shared_days = target_days.intersection(existing_days)
+            if not shared_days:
+                continue
+
+            sched_start = str(getattr(sched, 'start_time', ''))[:5]
+            sched_end = str(getattr(sched, 'end_time', ''))[:5]
+            if not sched_start or not sched_end:
+                continue
+
+            if not is_time_clash(start_str, end_str, sched_start, sched_end):
+                continue
+
+            days_text = ", ".join([day_names.get(d, str(d)) for d in sorted(list(shared_days))])
+            time_text = f"{sched_start} - {sched_end}"
+            subject_name = sched.subject.title if sched.subject else "another class"
+            section_name = sched.section.name if sched.section else "another section"
+
+            if section_id and sched.section_id and int(sched.section_id) == int(section_id):
+                clashes.append(
+                    f"Section conflict: {section_name} already has {subject_name} on {days_text} at {time_text}."
+                )
+
+            if faculty_id and sched.faculty_id and int(sched.faculty_id) == int(faculty_id):
+                teacher_name = f"{sched.faculty.first_name} {sched.faculty.last_name}".strip() if sched.faculty else "This teacher"
+                clashes.append(
+                    f"Teacher conflict: {teacher_name} is already teaching {section_name} on {days_text} at {time_text}."
+                )
+
+            clean_room = str(room_name).strip() if room_name else ''
+            sched_room = str(getattr(sched, 'room_number', '')).strip()
+            if clean_room and sched_room and clean_room.lower() == sched_room.lower():
+                clashes.append(
+                    f"Room conflict: Room {clean_room} is already in use by {section_name} on {days_text} at {time_text}."
+                )
+
+        return clashes
+
+    @action(detail=False, methods=['post'], url_path='validate-conflict')
+    def validate_conflict(self, request):
+        data = request.data
+        section_id = data.get('section_id')
+        faculty_id = data.get('faculty_id') or data.get('teacher_id')
+        room_name = data.get('room_number') or data.get('room_name') or data.get('room_id') or data.get('room')
+        days = data.get('days_of_week', 'MON-FRI')
+        start = data.get('start_time')
+        end = data.get('end_time')
+        skip_id = data.get('exclude_id')
+
+        clashes = self.find_clashes(
+            section_id=section_id,
+            faculty_id=faculty_id,
+            room_name=room_name,
+            days_input=days,
+            start_time=start,
+            end_time=end,
+            skip_id=skip_id
+        )
+
+        return Response({
+            'has_conflict': len(clashes) > 0,
+            'conflicts': clashes
+        }, status=status.HTTP_200_OK)
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        data = request.data
+        room_val = data.get('room_number') or data.get('room_name') or data.get('room_id') or data.get('room') or ''
+        days = data.get('days_of_week', 'MON-FRI')
+
+        clashes = self.find_clashes(
+            section_id=data.get('section_id'),
+            faculty_id=data.get('faculty_id') or data.get('teacher_id'),
+            room_name=room_val,
+            days_input=days,
+            start_time=data.get('start_time'),
+            end_time=data.get('end_time')
+        )
+        if clashes:
+            return Response({'detail': clashes[0]}, status=status.HTTP_400_BAD_REQUEST)
+
+        response = super().create(request, *args, **kwargs)
+        schedule_id = response.data.get('id')
+
+        if schedule_id:
+            sched = Schedule.objects.get(id=schedule_id)
+            sched.room_number = str(room_val).strip()
+            sched.save(update_fields=['room_number'])
+
+            day_numbers = get_day_set(days)
+            for d in day_numbers:
+                ScheduleDay.objects.get_or_create(schedule=sched, day_of_week=d)
+
+        return response
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        item = self.get_object()
+        data = request.data
+        room_val = data.get('room_number') or data.get('room_name') or data.get('room_id') or getattr(item, 'room_number', '')
+        days = data.get('days_of_week', 'MON-FRI')
+
+        clashes = self.find_clashes(
+            section_id=data.get('section_id', item.section_id),
+            faculty_id=data.get('faculty_id', item.faculty_id),
+            room_name=room_val,
+            days_input=days,
+            start_time=data.get('start_time', item.start_time),
+            end_time=data.get('end_time', item.end_time),
+            skip_id=item.id
+        )
+        if clashes:
+            return Response({'detail': clashes[0]}, status=status.HTTP_400_BAD_REQUEST)
+
+        response = super().update(request, *args, **kwargs)
+
+        if 'days_of_week' in data:
+            item.days.all().delete()
+            for d in get_day_set(days):
+                ScheduleDay.objects.get_or_create(schedule=item, day_of_week=d)
+
+        if room_val:
+            item.room_number = str(room_val).strip()
+            item.save(update_fields=['room_number'])
+
+        return response
 
 
 # ============================================================================
-# FULL CRUD VIEWSETS (ADMIN FULL CRUD, TEACHER RESTRICTED / READ-ONLY)
+# STANDARD CRUD (STUDENTS, TEACHERS, SUBJECTS, USERS, ROOMS, GRADE LEVELS)
 # ============================================================================
 
 class StudentViewSet(viewsets.ModelViewSet):
-    """
-    ADMIN: Full CRUD (Enroll, Edit, Delete).
-    TEACHER: Read-Only (Inspect class rosters).
-    """
     queryset = Student.objects.all().order_by('-id')
     serializer_class = StudentSerializer
+    pagination_class = StandardResultsSetPagination
     permission_classes = [ReadOnlyOrAdminWrite]
     filter_backends = [filters.SearchFilter]
     search_fields = ['lrn', 'first_name', 'last_name']
 
 
-class TeacherViewSet(viewsets.ModelViewSet):
-    """
-    ADMIN: Full CRUD (Add Faculty, Update Profiles, Deactivate).
-    TEACHER: Read-Only (Faculty Directory inspection).
-    """
+class FacultyViewSet(viewsets.ModelViewSet):
     queryset = FacultyProfile.objects.all().order_by('-id')
     serializer_class = FacultyProfileSerializer
+    pagination_class = StandardResultsSetPagination
     permission_classes = [ReadOnlyOrAdminWrite]
     filter_backends = [filters.SearchFilter]
     search_fields = ['employee_id', 'first_name', 'last_name', 'position']
 
 
 class ScannerViewSet(viewsets.ModelViewSet):
-    """
-    ADMIN: Full CRUD (Register terminals, update keys, remove hardware).
-    TEACHER: Restricted.
-    """
     queryset = IoTKiosk.objects.all().order_by('kiosk_code')
     serializer_class = IoTKioskSerializer
     permission_classes = [IsSystemAdminRole]
@@ -1790,33 +2022,15 @@ class ScannerViewSet(viewsets.ModelViewSet):
 
 
 class GatePassViewSet(viewsets.ModelViewSet):
-    """
-    ADMIN & TEACHER: Authenticated access to issue and verify exit passes.
-    """
     queryset = GatePass.objects.select_related('faculty', 'student').order_by('-valid_from')
     serializer_class = GatePassSerializer
+    pagination_class = StandardResultsSetPagination
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter]
     search_fields = ['reason', 'faculty__first_name', 'faculty__last_name']
 
 
-class ScheduleViewSet(viewsets.ModelViewSet):
-    """
-    ADMIN: Full CRUD (Create & edit timetables, section loads).
-    TEACHER: Read-Only (Inspect assigned timetable).
-    """
-    queryset = Schedule.objects.select_related('section', 'subject', 'teacher').all()
-    serializer_class = ScheduleSerializer
-    permission_classes = [ReadOnlyOrAdminWrite]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['section__name', 'teacher__first_name', 'teacher__last_name']
-
-
 class SubjectViewSet(viewsets.ModelViewSet):
-    """
-    ADMIN: Full CRUD (Add learning areas, edit course codes).
-    TEACHER: Read-Only.
-    """
     queryset = Subject.objects.all().order_by('code')
     serializer_class = SubjectSerializer
     permission_classes = [ReadOnlyOrAdminWrite]
@@ -1825,12 +2039,105 @@ class SubjectViewSet(viewsets.ModelViewSet):
 
 
 class UserManagementViewSet(viewsets.ModelViewSet):
-    """
-    ADMIN: Full CRUD over system user accounts.
-    TEACHER: Blocked completely.
-    """
     queryset = User.objects.select_related('profile').all().order_by('-id')
     serializer_class = UserManagementSerializer
+    pagination_class = StandardResultsSetPagination
     permission_classes = [IsSystemAdminRole]
     filter_backends = [filters.SearchFilter]
     search_fields = ['username', 'email']
+
+
+class RoomViewSet(viewsets.ViewSet):
+    permission_classes = [ReadOnlyOrAdminWrite]
+
+    def list(self, request):
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS rooms (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(50) NOT NULL UNIQUE,
+                    building VARCHAR(100) DEFAULT '',
+                    capacity INTEGER DEFAULT 0,
+                    room_type VARCHAR(30) DEFAULT 'LECTURE'
+                );
+            """)
+            cursor.execute("SELECT id, name, building, capacity, room_type FROM rooms ORDER BY id;")
+            rows = cursor.fetchall()
+            data = [
+                {"id": r[0], "name": r[1], "building": r[2], "capacity": r[3], "room_type": r[4]}
+                for r in rows
+            ]
+        return Response(data, status=status.HTTP_200_OK)
+
+    def create(self, request):
+        name = str(request.data.get('name', '')).strip()
+        building = str(request.data.get('building', '')).strip()
+        try:
+            capacity = int(request.data.get('capacity', 0) or 0)
+        except (ValueError, TypeError):
+            capacity = 0
+        room_type = request.data.get('room_type', 'LECTURE')
+
+        if not name:
+            return Response({"detail": "Room name is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS rooms (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(50) NOT NULL UNIQUE,
+                    building VARCHAR(100) DEFAULT '',
+                    capacity INTEGER DEFAULT 0,
+                    room_type VARCHAR(30) DEFAULT 'LECTURE'
+                );
+            """)
+            cursor.execute("""
+                INSERT INTO rooms (name, building, capacity, room_type)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (name) DO UPDATE 
+                SET building = EXCLUDED.building, capacity = EXCLUDED.capacity, room_type = EXCLUDED.room_type
+                RETURNING id, name, building, capacity, room_type;
+            """, [name, building, capacity, room_type])
+            r = cursor.fetchone()
+            data = {"id": r[0], "name": r[1], "building": r[2], "capacity": r[3], "room_type": r[4]}
+
+        return Response(data, status=status.HTTP_201_CREATED)
+
+
+class GradeLevelViewSet(viewsets.ViewSet):
+    permission_classes = [ReadOnlyOrAdminWrite]
+
+    def list(self, request):
+        levels = GradeLevel.objects.all().order_by('level_order', 'id')
+        data = [
+            {
+                'id': gl.id,
+                'name': gl.name,
+                'level_number': getattr(gl, 'level_order', None) or 0,
+                'stage': getattr(gl, 'stage', '')
+            }
+            for gl in levels
+        ]
+        return Response(data, status=status.HTTP_200_OK)
+
+    def create(self, request):
+        name = str(request.data.get('name', '')).strip()
+        try:
+            level_number = int(request.data.get('level_number', 0) or 0)
+        except (ValueError, TypeError):
+            level_number = 0
+        stage = request.data.get('stage', 'JHS')
+
+        if not name:
+            return Response({"detail": "Year Level name is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        gl, _ = GradeLevel.objects.get_or_create(
+            name=name,
+            defaults={'level_order': level_number, 'code': name.replace(' ', '').upper()[:10], 'stage': stage}
+        )
+        return Response({
+            "id": gl.id,
+            "name": gl.name,
+            "level_number": gl.level_order,
+            "stage": gl.stage
+        }, status=status.HTTP_201_CREATED)

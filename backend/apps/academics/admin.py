@@ -70,11 +70,10 @@ class GeofenceSettingAdmin(admin.ModelAdmin):
 
 @admin.register(GradeLevel)
 class GradeLevelAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name', 'tier', 'level_order')
-    list_filter = ('tier',)
-    search_fields = ('code', 'name')
+    list_display = ('code', 'name', 'stage', 'level_order')
+    list_filter = ('stage',)
+    search_fields = ('name', 'code')
     ordering = ('level_order',)
-
 
 @admin.register(Section)
 class SectionAdmin(admin.ModelAdmin):
@@ -102,10 +101,10 @@ class ScheduleDayInline(admin.TabularInline):
 
 @admin.register(Schedule)
 class ScheduleAdmin(admin.ModelAdmin):
-    list_display = ('section', 'subject', 'teacher', 'start_time', 'end_time', 'room_number')
+    list_display = ('section', 'subject', 'faculty', 'start_time', 'end_time', 'room_number')
     list_filter = ('section__academic_year', 'section__grade_level')
-    search_fields = ('section__name', 'subject__code', 'subject__title', 'teacher__first_name', 'teacher__last_name')
-    autocomplete_fields = ('section', 'subject', 'teacher')
+    search_fields = ('section__name', 'subject__code', 'subject__title', 'faculty__first_name', 'faculty__last_name')
+    autocomplete_fields = ('section', 'subject', 'faculty')
     inlines = [ScheduleDayInline]
 
 
@@ -173,10 +172,10 @@ class FacultyGateLogAdmin(admin.ModelAdmin):
 
 @admin.register(SubjectAttendanceLog)
 class SubjectAttendanceLogAdmin(admin.ModelAdmin):
-    list_display = ('student', 'schedule', 'teacher', 'status', 'attendance_date', 'scanned_at')
+    list_display = ('student', 'schedule', 'faculty', 'status', 'attendance_date', 'scanned_at')
     list_filter = ('status', 'attendance_date')
-    search_fields = ('student__lrn', 'student__last_name', 'teacher__last_name')
-    autocomplete_fields = ('student', 'schedule', 'teacher')
+    search_fields = ('student__lrn', 'student__last_name', 'faculty__last_name')
+    autocomplete_fields = ('student', 'schedule', 'faculty')
     date_hierarchy = 'attendance_date'
 
 
@@ -252,5 +251,7 @@ class UserAdmin(BaseUserAdmin):
     inlines = (UserProfileInline,)
 
 
+
 admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
+

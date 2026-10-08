@@ -22,6 +22,6 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('TEACHER', 'Teacher / Faculty Adviser')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('TEACHER', 'Faculty / Faculty Adviser')], default='TEACHER', max_length=20),
         ),
     ]

@@ -426,7 +426,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
     grade_level_name = serializers.CharField(source='section.grade_level.name', read_only=True)
     subject_code = serializers.CharField(source='subject.code', read_only=True)
     subject_title = serializers.CharField(source='subject.title', read_only=True)
-    teacher_name = serializers.SerializerMethodField(read_only=True)
+    faculty_name = serializers.SerializerMethodField(read_only=True)
     time_slot = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
@@ -440,8 +440,8 @@ class ScheduleSerializer(serializers.ModelSerializer):
             'subject',
             'subject_code',
             'subject_title',
-            'teacher',
-            'teacher_name',
+            'faculty',
+            'faculty_name',
             'room_number',
             'start_time',
             'end_time',
@@ -449,15 +449,15 @@ class ScheduleSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             'room_number': {'required': False, 'allow_blank': True},
-            'teacher': {'required': False, 'allow_null': True},
+            'faculty': {'required': False, 'allow_null': True},
         }
 
     def get_schedule_id(self, obj):
         return f"SCH-{obj.id:03d}"
 
-    def get_teacher_name(self, obj):
-        if obj.teacher:
-            return f"{obj.teacher.first_name} {obj.teacher.last_name}".strip()
+    def get_faculty_name(self, obj):
+        if obj.faculty:
+            return f"{obj.faculty.first_name} {obj.faculty.last_name}".strip()
         return "Unassigned (TBA)"
 
     def get_time_slot(self, obj):

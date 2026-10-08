@@ -61,7 +61,7 @@ def get_school_metadata():
         "school_head": str(
             getattr(school, 'school_head', '') or 
             getattr(school, 'principal_name', '') or 
-            getattr(school, 'head_teacher', '') or ''
+            getattr(school, 'head_faculty', '') or ''
         ),
         "left_logo": getattr(school, 'left_logo', None) and getattr(school.left_logo, 'url', None),
         "right_logo": getattr(school, 'right_logo', None) and getattr(school.right_logo, 'url', None),

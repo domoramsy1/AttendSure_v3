@@ -15,7 +15,7 @@ class IsAdviserOrAdmin(permissions.BasePermission):
     """
     Restricts DepEd SF1 and sensitive learner records:
     - Admins have full access.
-    - Teachers can only view learners enrolled in their advisory section.
+    - Facultys can only view learners enrolled in their advisory section.
     """
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated)
@@ -29,7 +29,7 @@ class IsAdviserOrAdmin(permissions.BasePermission):
         if profile.role == 'ADMIN':
             return True
         if profile.role == 'TEACHER' and profile.faculty:
-            # Check if teacher is the registered adviser of the section
+            # Check if faculty is the registered adviser of the section
             return getattr(obj, 'adviser_id', None) == profile.faculty.id
         return False
 

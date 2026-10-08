@@ -11,15 +11,21 @@ def auto_sync_superuser_to_attendsure_admin(sender, instance, created, **kwargs)
     Catches superuser creation in Django and automatically binds 
     an AttendSure UserProfile with role='ADMIN'.
     """
+    # Safely check for is_faculty without crashing standard Django User objects
+    is_faculty = getattr(instance, 'is_faculty', False)
+    target_role = 'ADMIN' if (instance.is_superuser or is_faculty) else 'TEACHER'
+
     if created:
-        target_role = 'ADMIN' if (instance.is_superuser or instance.is_faculty) else 'TEACHER'
-        UserProfile.objects.create(
+        UserProfile.objects.get_or_create(
             user=instance,
-            role=target_role
+            defaults={'role': target_role}
         )
     else:
         if instance.is_superuser:
-            profile, _ = UserProfile.objects.get_or_create(user=instance)
+            profile, _ = UserProfile.objects.get_or_create(
+                user=instance,
+                defaults={'role': 'ADMIN'}
+            )
             if profile.role != 'ADMIN':
                 profile.role = 'ADMIN'
                 profile.save(update_fields=['role'])

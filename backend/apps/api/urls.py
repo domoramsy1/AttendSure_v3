@@ -1,6 +1,6 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-
+from .views import RoomViewSet, GradeLevelViewSet
 from apps.api.views import (
     ClassroomBatchScanAPIView,
     CurrentUserProfileView,
@@ -21,7 +21,7 @@ from apps.api.views import (
     SectionListAPIView,
     StudentViewSet,
     SubjectViewSet,
-    TeacherViewSet,
+    FacultyViewSet,
     TelemetryHeartbeatAPIView,
     UserManagementViewSet,
     ResetFacultyDeviceBindingAPIView,
@@ -30,20 +30,24 @@ from apps.api.views import (
 # 1. Register Core Entity ViewSets
 router = DefaultRouter()
 router.register(r'students', StudentViewSet, basename='student')
-router.register(r'teachers', TeacherViewSet, basename='teacher')
+router.register(r'facultys', FacultyViewSet, basename='faculty')
 router.register(r'scanners', ScannerViewSet, basename='scanner')
 router.register(r'gate-passes', GatePassViewSet, basename='gatepass')
 router.register(r'schedules', ScheduleViewSet, basename='schedule')
 router.register(r'subjects', SubjectViewSet, basename='subject')
 router.register(r'users', UserManagementViewSet, basename='user')
 
+# In your router registration section:
+router.register(r'rooms', RoomViewSet, basename='rooms')
+router.register(r'grade-levels', GradeLevelViewSet, basename='grade-levels')
+
 # 2. Main API Route Configuration
 urlpatterns = [
-    # Router endpoints (CRUD for students, teachers, scanners, passes, etc.)
+    # Router endpoints (CRUD for students, facultys, scanners, passes, etc.)
     path('', include(router.urls)),
 
 
-    path('teachers/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-reset-device-binding'),
+    path('facultys/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-reset-device-binding'),
     # Authentication & User Profile Management
     path('auth/login/', LoginAPIView.as_view(), name='api-login'),
     path('me/', CurrentUserProfileView.as_view(), name='current-user-profile'),

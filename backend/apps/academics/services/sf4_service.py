@@ -101,7 +101,7 @@ def get_school_metadata():
         admin_faculty = FacultyProfile.objects.filter(
             Q(position__icontains='Principal') |
             Q(position__icontains='School Head') |
-            Q(position__icontains='Head Teacher') |
+            Q(position__icontains='Head Faculty') |
             Q(position__icontains='Administrator')
         ).filter(is_active=True).first()
 

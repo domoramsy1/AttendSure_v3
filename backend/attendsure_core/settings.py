@@ -80,7 +80,7 @@ DATABASES = {
     }
 }
 
-# Cross-Origin Resource Sharing (Allows Teacher Mobile APK to connect via LAN)
+# Cross-Origin Resource Sharing (Allows Faculty Mobile APK to connect via LAN)
 CORS_ALLOW_ALL_ORIGINS = True
 
 # REST Framework API Authentication

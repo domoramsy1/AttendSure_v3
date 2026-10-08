@@ -381,7 +381,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='facultyprofile',
             name='position',
-            field=models.CharField(blank=True, default='Teacher', max_length=100),
+            field=models.CharField(blank=True, default='Faculty', max_length=100),
         ),
         migrations.AlterField(
             model_name='facultyprofile',
@@ -486,7 +486,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('REGISTRAR', 'Registrar / Academic Faculty'), ('TEACHER', 'Teacher / Faculty Adviser'), ('STAFF', 'School Faculty')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('REGISTRAR', 'Registrar / Academic Faculty'), ('TEACHER', 'Faculty / Faculty Adviser'), ('STAFF', 'School Faculty')], default='TEACHER', max_length=20),
         ),
         migrations.AlterModelTable(
             name='schoolprofile',
