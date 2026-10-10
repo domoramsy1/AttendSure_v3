@@ -1,4 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+/**
+ * AttendSure V3 - Universal Page Setup Modal
+ * File: frontend/src/components/common/PageSetupModal.tsx
+ *
+ * Configures paper dimensions, margins, orientation, and layout format.
+ * The official letterhead header is locked to Page 1 across all reports.
+ */
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   X,
   Check,
@@ -8,8 +16,7 @@ import {
   SlidersHorizontal,
   Palette,
   BookmarkCheck,
-  Copy,
-  ListOrdered,
+  Undo2,
 } from 'lucide-react';
 import { PAPER_SIZES, MARGIN_PRESETS } from '../../types/pageSetup';
 import type {
@@ -18,7 +25,6 @@ import type {
   PageOrientation,
   LayoutMode,
   MarginPresetKey,
-  HeaderRepeatMode,
 } from '../../types/pageSetup';
 
 interface PageSetupModalProps {
@@ -45,24 +51,56 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
   onApply,
   reportTitle = 'Report',
 }) => {
-  const [draft, setDraft] = useState<PageSetupConfig>(currentConfig);
+  const [draft, setDraft] = useState<PageSetupConfig>({
+    ...currentConfig,
+    headerRepeat: 'first_page_only', // Enforce 1st page header rule
+  });
   const [setAsDefault, setSetAsDefault] = useState<boolean>(false);
   const initialConfigRef = useRef<PageSetupConfig>(currentConfig);
 
   useEffect(() => {
     if (isOpen) {
-      setDraft(currentConfig);
+      setDraft({
+        ...currentConfig,
+        headerRepeat: 'first_page_only',
+      });
       initialConfigRef.current = currentConfig;
       setSetAsDefault(false);
     }
   }, [isOpen, currentConfig]);
 
-  if (!isOpen) return null;
+  const updateDraft = useCallback(
+    (newDraft: PageSetupConfig) => {
+      const standardizedDraft: PageSetupConfig = {
+        ...newDraft,
+        headerRepeat: 'first_page_only',
+      };
+      setDraft(standardizedDraft);
+      onLiveChange?.(standardizedDraft);
+    },
+    [onLiveChange]
+  );
 
-  const updateDraft = (newDraft: PageSetupConfig) => {
-    setDraft(newDraft);
-    onLiveChange?.(newDraft);
-  };
+  const handleCancel = useCallback(() => {
+    onLiveChange?.(initialConfigRef.current);
+    onClose();
+  }, [onLiveChange, onClose]);
+
+  // Keyboard shortcut listener (Escape to cancel)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleCancel();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, handleCancel]);
+
+  if (!isOpen) return null;
 
   const handleOrientationChange = (orientation: PageOrientation) => {
     updateDraft({ ...draft, orientation });
@@ -70,10 +108,6 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
 
   const handleLayoutModeChange = (layoutMode: LayoutMode) => {
     updateDraft({ ...draft, layoutMode });
-  };
-
-  const handleHeaderRepeatChange = (headerRepeat: HeaderRepeatMode) => {
-    updateDraft({ ...draft, headerRepeat });
   };
 
   const handlePaperSizeChange = (paperSize: PaperSizeKey) => {
@@ -103,9 +137,9 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
     });
   };
 
-  const handleCancel = () => {
-    onLiveChange?.(initialConfigRef.current);
-    onClose();
+  const handleResetToInitial = () => {
+    updateDraft(initialConfigRef.current);
+    setSetAsDefault(false);
   };
 
   const handleSave = () => {
@@ -113,9 +147,20 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
     onClose();
   };
 
+  const selectedPaper = PAPER_SIZES[draft.paperSize] || PAPER_SIZES.folio;
+  const isLandscape = draft.orientation === 'landscape';
+  const liveWidth = isLandscape ? selectedPaper.height : selectedPaper.width;
+  const liveHeight = isLandscape ? selectedPaper.width : selectedPaper.height;
+
   return (
-    <div style={overlayStyle}>
-      <div style={modalContainerStyle}>
+    <div
+      style={overlayStyle}
+      onClick={handleCancel}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="page-setup-modal-title"
+    >
+      <div style={modalContainerStyle} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div style={modalHeaderStyle}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -123,7 +168,7 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
               <SlidersHorizontal size={18} color="#0284c7" />
             </div>
             <div>
-              <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
+              <h2 id="page-setup-modal-title" style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
                 Page Setup
               </h2>
               <p style={{ margin: 0, fontSize: '0.74rem', color: '#64748b' }}>
@@ -131,7 +176,12 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
               </p>
             </div>
           </div>
-          <button onClick={handleCancel} style={closeButtonStyle}>
+          <button
+            onClick={handleCancel}
+            style={closeButtonStyle}
+            aria-label="Close page setup modal"
+            type="button"
+          >
             <X size={18} />
           </button>
         </div>
@@ -156,7 +206,7 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                   <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f172a' }}>Pages</span>
                 </div>
                 <p style={{ margin: '4px 0 0 0', fontSize: '0.68rem', color: '#64748b' }}>
-                  Divided sheets with headers, footers &amp; paper bounds.
+                  Divided sheets with Page 1 header, footers &amp; paper bounds.
                 </p>
               </button>
 
@@ -174,59 +224,13 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                   <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f172a' }}>Pageless</span>
                 </div>
                 <p style={{ margin: '4px 0 0 0', fontSize: '0.68rem', color: '#64748b' }}>
-                  Continuous fluid layout without page break lines.
+                  Continuous fluid layout with header at the top.
                 </p>
               </button>
             </div>
           </div>
 
-          {/* 2. Header Repetition (Every Page vs. First Page Only) */}
-          <div style={sectionGroupStyle}>
-            <label style={sectionLabelStyle}>Header on Subsequent Pages</label>
-            <div style={buttonToggleGridStyle}>
-              <button
-                type="button"
-                disabled={draft.layoutMode === 'pageless'}
-                onClick={() => handleHeaderRepeatChange('all_pages')}
-                style={{
-                  ...toggleCardStyle,
-                  opacity: draft.layoutMode === 'pageless' ? 0.5 : 1,
-                  borderColor: (draft.headerRepeat || 'all_pages') === 'all_pages' ? '#0284c7' : '#cbd5e1',
-                  backgroundColor: (draft.headerRepeat || 'all_pages') === 'all_pages' ? '#f0f9ff' : '#ffffff',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Copy size={16} color={(draft.headerRepeat || 'all_pages') === 'all_pages' ? '#0284c7' : '#64748b'} />
-                  <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f172a' }}>Every Page</span>
-                </div>
-                <p style={{ margin: '4px 0 0 0', fontSize: '0.68rem', color: '#64748b' }}>
-                  Complete official header (logos &amp; metadata) appears on every page.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                disabled={draft.layoutMode === 'pageless'}
-                onClick={() => handleHeaderRepeatChange('first_page_only')}
-                style={{
-                  ...toggleCardStyle,
-                  opacity: draft.layoutMode === 'pageless' ? 0.5 : 1,
-                  borderColor: draft.headerRepeat === 'first_page_only' ? '#0284c7' : '#cbd5e1',
-                  backgroundColor: draft.headerRepeat === 'first_page_only' ? '#f0f9ff' : '#ffffff',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <ListOrdered size={16} color={draft.headerRepeat === 'first_page_only' ? '#0284c7' : '#64748b'} />
-                  <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f172a' }}>First Page Only</span>
-                </div>
-                <p style={{ margin: '4px 0 0 0', fontSize: '0.68rem', color: '#64748b' }}>
-                  Complete header on 1st page only. Following pages start with table header (# to Remarks).
-                </p>
-              </button>
-            </div>
-          </div>
-
-          {/* 3. Orientation */}
+          {/* 2. Orientation */}
           <div style={sectionGroupStyle}>
             <label style={sectionLabelStyle}>Orientation</label>
             <div style={{ display: 'flex', gap: 12 }}>
@@ -245,7 +249,7 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                   <RotateCw size={15} color={draft.orientation === 'landscape' ? '#0284c7' : '#64748b'} />
                   <span style={{ fontWeight: 700, fontSize: '0.8rem', color: '#0f172a' }}>Landscape</span>
                 </div>
-                <span style={{ fontSize: '0.68rem', color: '#64748b' }}>Official DepEd SF1 / SF2</span>
+                <span style={{ fontSize: '0.68rem', color: '#64748b' }}>Official DepEd SF1 / SF2 / SF4</span>
               </button>
 
               <button
@@ -263,37 +267,46 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                   <FileText size={15} color={draft.orientation === 'portrait' ? '#0284c7' : '#64748b'} />
                   <span style={{ fontWeight: 700, fontSize: '0.8rem', color: '#0f172a' }}>Portrait</span>
                 </div>
-                <span style={{ fontSize: '0.68rem', color: '#64748b' }}>Standard upright page</span>
+                <span style={{ fontSize: '0.68rem', color: '#64748b' }}>Standard upright format</span>
               </button>
             </div>
           </div>
 
-          {/* 4. Paper Size Selection */}
+          {/* 3. Paper Size Selection with Dimension Badge */}
           <div style={sectionGroupStyle}>
-            <label style={sectionLabelStyle}>Paper Size</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <label style={{ ...sectionLabelStyle, marginBottom: 0 }}>Paper Size</label>
+              {draft.layoutMode !== 'pageless' && (
+                <span style={dimensionBadgeStyle}>
+                  {liveWidth.toFixed(2)}&quot; × {liveHeight.toFixed(2)}&quot; ({isLandscape ? 'Landscape' : 'Portrait'})
+                </span>
+              )}
+            </div>
             <select
               disabled={draft.layoutMode === 'pageless'}
               value={draft.paperSize}
               onChange={(e) => handlePaperSizeChange(e.target.value as PaperSizeKey)}
-              style={selectDropdownStyle}
+              style={{
+                ...selectDropdownStyle,
+                opacity: draft.layoutMode === 'pageless' ? 0.5 : 1,
+                cursor: draft.layoutMode === 'pageless' ? 'not-allowed' : 'pointer',
+              }}
             >
               {Object.entries(PAPER_SIZES).map(([key, item]) => (
                 <option key={key} value={key}>
-                  {item.name} — {item.description}
+                  {item.name} — {item.description} ({item.width}&quot; × {item.height}&quot;)
                 </option>
               ))}
             </select>
           </div>
 
-
-
-          {/* 5. Page Background Color */}
+          {/* 4. Page Background Color */}
           <div style={sectionGroupStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
               <Palette size={15} color="#475569" />
               <label style={{ ...sectionLabelStyle, marginBottom: 0 }}>Page Background Color</label>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {PRESET_COLORS.map((c) => (
                 <button
                   key={c.value}
@@ -334,12 +347,13 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                   value={draft.pageColor}
                   onChange={(e) => handlePageColorChange(e.target.value)}
                   style={colorPickerInputStyle}
+                  title="Choose custom background color"
                 />
               </div>
             </div>
           </div>
 
-          {/* 6. Margins Configuration */}
+          {/* 5. Margins Configuration */}
           <div style={sectionGroupStyle}>
             <label style={sectionLabelStyle}>Margins</label>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -416,14 +430,14 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
             </div>
           </div>
 
-          {/* 7. Default Persistence Option */}
+          {/* 6. Default Persistence Option */}
           <div style={defaultCheckboxContainerStyle}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={setAsDefault}
                 onChange={(e) => setSetAsDefault(e.target.checked)}
-                style={{ width: 16, height: 16, accentColor: '#0284c7' }}
+                style={{ width: 16, height: 16, accentColor: '#0284c7', cursor: 'pointer' }}
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <BookmarkCheck size={16} color="#0284c7" />
@@ -433,36 +447,48 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
               </div>
             </label>
             <p style={{ margin: '4px 0 0 26px', fontSize: '0.7rem', color: '#64748b' }}>
-              Saves these dimensions across SF1, SF2, and future generated registers.
+              Saves these dimensions across SF1, SF2, SF4, and future generated registers.
             </p>
           </div>
         </div>
 
         {/* Modal Actions */}
         <div style={modalFooterStyle}>
-          <button type="button" onClick={handleCancel} style={btnSecondaryStyle}>
-            Cancel
+          <button
+            type="button"
+            onClick={handleResetToInitial}
+            style={btnResetStyle}
+            title="Reset to initial configuration"
+          >
+            <Undo2 size={14} />
+            <span>Reset</span>
           </button>
-          <button type="button" onClick={handleSave} style={btnApplyStyle}>
-            <Check size={16} />
-            <span>Apply Settings</span>
-          </button>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button type="button" onClick={handleCancel} style={btnSecondaryStyle}>
+              Cancel
+            </button>
+            <button type="button" onClick={handleSave} style={btnApplyStyle}>
+              <Check size={16} />
+              <span>Apply Settings</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 };
 
-// ==========================================
-// STYLES
-// ==========================================
+export default PageSetupModal;
+
+// Styles
 const overlayStyle: React.CSSProperties = {
   position: 'fixed',
   top: 0,
   left: 0,
   right: 0,
   bottom: 0,
-  backgroundColor: 'rgba(15, 23, 42, 0.28)',
+  backgroundColor: 'rgba(15, 23, 42, 0.42)',
+  backdropFilter: 'blur(3px)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -472,10 +498,10 @@ const overlayStyle: React.CSSProperties = {
 
 const modalContainerStyle: React.CSSProperties = {
   width: '100%',
-  maxWidth: 560,
+  maxWidth: 580,
   backgroundColor: '#ffffff',
   borderRadius: 12,
-  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.28)',
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
@@ -531,6 +557,17 @@ const sectionLabelStyle: React.CSSProperties = {
   marginBottom: 8,
   textTransform: 'uppercase',
   letterSpacing: '0.4px',
+};
+
+const dimensionBadgeStyle: React.CSSProperties = {
+  fontSize: '0.70rem',
+  fontWeight: 700,
+  fontFamily: 'ui-monospace, monospace',
+  backgroundColor: '#f1f5f9',
+  color: '#0284c7',
+  padding: '2px 8px',
+  borderRadius: 4,
+  border: '1px solid #cbd5e1',
 };
 
 const buttonToggleGridStyle: React.CSSProperties = {
@@ -617,11 +654,25 @@ const defaultCheckboxContainerStyle: React.CSSProperties = {
 
 const modalFooterStyle: React.CSSProperties = {
   display: 'flex',
-  justifyContent: 'flex-end',
-  gap: 10,
+  justifyContent: 'space-between',
+  alignItems: 'center',
   padding: '14px 20px',
   borderTop: '1px solid #e2e8f0',
   backgroundColor: '#f8fafc',
+};
+
+const btnResetStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '7px 12px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  backgroundColor: '#ffffff',
+  color: '#64748b',
+  fontSize: '0.78rem',
+  fontWeight: 600,
+  cursor: 'pointer',
 };
 
 const btnSecondaryStyle: React.CSSProperties = {

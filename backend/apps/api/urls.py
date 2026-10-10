@@ -1,7 +1,12 @@
+"""
+AttendSure V3 - API Routing Architecture
+File: backend/apps/api/urls.py
+"""
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from .views import RoomViewSet, GradeLevelViewSet
-from apps.api.views import (
+
+from .views import (
     ClassroomBatchScanAPIView,
     CurrentUserProfileView,
     DashboardOverviewAPIView,
@@ -9,23 +14,34 @@ from apps.api.views import (
     DepEdSF2DataAPIView,
     DepEdSF4DataAPIView,
     DTRListAPIView,
+    FacultyViewSet,
     GateLogsAPIView,
     GatePassViewSet,
     GateScanAPIView,
     GeofenceAPIView,
+    GradeLevelViewSet,
     LoginAPIView,
+    MarkSmsStatusAPIView,
+    PendingSmsDispatchAPIView,
     ReportAuditLogAPIView,
+    ResetFacultyDeviceBindingAPIView,
+    RoomViewSet,
     ScannerViewSet,
     ScheduleViewSet,
     SchoolSettingsAPIView,
     SectionListAPIView,
+    SmsOutboxViewSet,
     StudentViewSet,
     SubjectViewSet,
-    FacultyViewSet,
     TelemetryHeartbeatAPIView,
     UserManagementViewSet,
-    ResetFacultyDeviceBindingAPIView,
 )
+
+# Optional bulk view fallback to prevent ImportError if not yet defined in views.py
+try:
+    from .views import BulkSmsStatusAPIView
+except ImportError:
+    BulkSmsStatusAPIView = None
 
 # 1. Register Core Entity ViewSets
 router = DefaultRouter()
@@ -40,13 +56,30 @@ router.register(r'subjects', SubjectViewSet, basename='subject')
 router.register(r'users', UserManagementViewSet, basename='user')
 router.register(r'rooms', RoomViewSet, basename='rooms')
 router.register(r'grade-levels', GradeLevelViewSet, basename='grade-levels')
+router.register(r'sms-outbox', SmsOutboxViewSet, basename='sms-outbox')
 
 # 2. Main API Route Configuration
 urlpatterns = [
-    # Router endpoints (CRUD for students, faculty, scanners, passes, etc.)
+    # Explicit SMS Outbox Action Routes (Prioritized above router to prevent pk collision)
+    path(
+        'sms-outbox/delete-delivered/',
+        SmsOutboxViewSet.as_view({'delete': 'purge_delivered', 'post': 'purge_delivered'}),
+        name='api-sms-delete-delivered',
+    ),
+    path(
+        'sms-outbox/broadcast/',
+        SmsOutboxViewSet.as_view({'post': 'broadcast'}),
+        name='api-sms-broadcast',
+    ),
+
+    # Router endpoints (CRUD for students, faculty, scanners, passes, SMS outbox, etc.)
     path('', include(router.urls)),
 
-    # Faculty Device Binding
+    # Hardware GSM Modem Daemon Endpoints
+    path('sms/pending/', PendingSmsDispatchAPIView.as_view(), name='api-sms-pending'),
+    path('sms/<int:pk>/status/', MarkSmsStatusAPIView.as_view(), name='api-sms-status'),
+
+    # Faculty Device Binding & Anti-Fraud Security
     path('facultys/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-reset-device-binding'),
     path('faculty/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-faculty-reset-device-binding'),
 
@@ -92,3 +125,10 @@ urlpatterns = [
     # Audit Logging & Transparency Records
     path('reports/audit-logs/', ReportAuditLogAPIView.as_view(), name='api-report-audit-logs'),
 ]
+
+# Register bulk status endpoint if available
+if BulkSmsStatusAPIView:
+    urlpatterns.insert(
+        3,
+        path('sms/bulk-status/', BulkSmsStatusAPIView.as_view(), name='api-sms-bulk-status'),
+    )

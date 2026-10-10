@@ -1,9 +1,22 @@
-import React, { useState, useEffect, useCallback } from 'react';
+/**
+ * AttendSure V3 - Student Directory & ID Cards
+ * File: frontend/src/components/tabs/StudentsTab.tsx
+ *
+ * Key Highlights:
+ * 1. DEFAULT USER ICON: Uses <User /> from lucide-react as the neutral fallback for all profiles.
+ * 2. NO COLORED INITIALS: Completely removed letter monograms and colored circle backgrounds.
+ * 3. FULL CRUD: Enroll new student, inspect ID badge & QR pass, edit profile & photo, delete student.
+ * 4. LIVE DATABASE POLLING: Silent 3-second background polling ensures real-time UI synchronization without manual refresh.
+ * 5. MODERN MODALS: Custom confirmation dialogs replace blocking browser alert() and confirm() prompts.
+ */
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import apiClient from '../../api/client';
 import { ModuleTableLayout } from './ModuleTableLayout';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import {
+  User,
   Pencil,
   Trash2,
   Loader2,
@@ -13,14 +26,19 @@ import {
   Check,
   Phone,
   Printer,
-  Upload,
   Camera,
-  Image as ImageIcon,
+  X,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  AlertTriangle,
+  AlertCircle,
 } from 'lucide-react';
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
 
 interface Student {
   id: number;
@@ -46,11 +64,79 @@ interface PaginatedResponse<T> {
   results: T[];
 }
 
+// ============================================================================
+// REUSABLE DEFAULT USER AVATAR COMPONENT
+// ============================================================================
+
+interface ProfileAvatarProps {
+  photoUrl?: string | null;
+  name?: string;
+  size?: number;
+  iconSize?: number;
+  shape?: 'circle' | 'rounded';
+}
+
+const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
+  photoUrl,
+  name = 'Student',
+  size = 38,
+  iconSize = 19,
+  shape = 'circle',
+}) => {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  // Reset error state whenever the photo URL changes
+  useEffect(() => {
+    setImageFailed(false);
+  }, [photoUrl]);
+
+  const hasPhoto = Boolean(
+    photoUrl &&
+    typeof photoUrl === 'string' &&
+    photoUrl.trim() !== '' &&
+    photoUrl.trim().toLowerCase() !== 'null' &&
+    photoUrl.trim().toLowerCase() !== 'undefined'
+  );
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: shape === 'circle' ? '50%' : '8px',
+        backgroundColor: '#f1f5f9',
+        border: '1px solid #e2e8f0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        flexShrink: 0,
+      }}
+      title={name}
+    >
+      {hasPhoto && !imageFailed ? (
+        <img
+          src={photoUrl!}
+          alt={name}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <User size={iconSize} color="#94a3b8" />
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export const StudentsTab: React.FC = () => {
   const [students, setStudents] = useState<Student[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState<string>('');
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -60,12 +146,11 @@ export const StudentsTab: React.FC = () => {
 
   const [copiedLrn, setCopiedLrn] = useState<string | null>(null);
   const [badgeStudent, setBadgeStudent] = useState<Student | null>(null);
-  const [imgErrorMap, setImgErrorMap] = useState<Record<string | number, boolean>>({});
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // Modal & Form State
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState<boolean>(false);
   const [formData, setFormData] = useState({
     lrn: '',
     first_name: '',
@@ -77,57 +162,99 @@ export const StudentsTab: React.FC = () => {
     photo: null as string | null,
   });
 
-  const fetchStudents = useCallback(async (page = 1, size = 25, query = '') => {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await apiClient.get<PaginatedResponse<Student> | Student[]>('/students/', {
-        params: {
-          page,
-          page_size: size,
-          search: query.trim() || undefined,
-        },
-      });
+  // Confirmation Modal State (replaces window.confirm)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel: string;
+    isDestructive: boolean;
+    action: () => Promise<void>;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: 'Confirm',
+    isDestructive: false,
+    action: async () => {},
+  });
 
-      if (res.data && 'results' in res.data) {
-        setStudents(res.data.results);
-        setTotalCount(res.data.count);
-        setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size));
-        setCurrentPage(res.data.current_page || page);
-      } else if (Array.isArray(res.data)) {
-        setStudents(res.data);
-        setTotalCount(res.data.length);
-        setTotalPages(1);
-        setCurrentPage(1);
+  // Guard flag: prevents silent background polling from interrupting open modals
+  const isInteracting = useRef<boolean>(false);
+  isInteracting.current = isModalOpen || Boolean(badgeStudent) || confirmDialog.isOpen;
+
+  // ============================================================================
+  // DATABASE DATA FETCHING & LIVE POLLING
+  // ============================================================================
+
+  const fetchStudents = useCallback(
+    async (page = 1, size = 25, query = '', silent = false) => {
+      try {
+        if (!silent) setLoading(true);
+        setError(null);
+        const res = await apiClient.get<PaginatedResponse<Student> | Student[]>('/students/', {
+          params: {
+            page,
+            page_size: size,
+            search: query.trim() || undefined,
+          },
+        });
+
+        if (res.data && 'results' in res.data) {
+          setStudents(res.data.results);
+          setTotalCount(res.data.count);
+          setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size));
+          setCurrentPage(res.data.current_page || page);
+        } else if (Array.isArray(res.data)) {
+          setStudents(res.data);
+          setTotalCount(res.data.length);
+          setTotalPages(1);
+          setCurrentPage(1);
+        }
+      } catch (err: any) {
+        if (!silent) {
+          setError(err.response?.data?.error || 'Failed to load students.');
+        }
+      } finally {
+        if (!silent) setLoading(false);
       }
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load students.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
+  // Debounced search watcher
   useEffect(() => {
     const timeout = setTimeout(() => {
       setCurrentPage(1);
-      fetchStudents(1, pageSize, search);
+      fetchStudents(1, pageSize, search, false);
     }, 300);
     return () => clearTimeout(timeout);
   }, [search, pageSize, fetchStudents]);
 
+  // LIVE ZERO-REFRESH POLLING: Syncs fresh data from PostgreSQL every 3 seconds
+  useEffect(() => {
+    const liveInterval = setInterval(() => {
+      if (!isInteracting.current) {
+        fetchStudents(currentPage, pageSize, search, true);
+      }
+    }, 3000);
+
+    return () => clearInterval(liveInterval);
+  }, [currentPage, pageSize, search, fetchStudents]);
+
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return;
     setCurrentPage(newPage);
-    fetchStudents(newPage, pageSize, search);
+    fetchStudents(newPage, pageSize, search, false);
   };
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
     setCurrentPage(1);
-    fetchStudents(1, newSize, search);
+    fetchStudents(1, newSize, search, false);
   };
 
-  // Real database counts
+  // Real database telemetry counts
   const totalStudents = totalCount || students.length;
   const totalBoys = students.filter((s) => s.sex === 'Male' || s.sex === 'M').length;
   const totalGirls = students.filter((s) => s.sex === 'Female' || s.sex === 'F').length;
@@ -140,13 +267,21 @@ export const StudentsTab: React.FC = () => {
     setTimeout(() => setCopiedLrn(null), 2000);
   };
 
-  // Convert uploaded image to base64
+  // ============================================================================
+  // PHOTO UPLOAD HANDLER
+  // ============================================================================
+
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!file.type.startsWith('image/')) {
+      alert('Please select a valid image file (JPEG or PNG).');
+      return;
+    }
+
     if (file.size > 2 * 1024 * 1024) {
-      alert('Photo must be less than 2MB.');
+      alert('Profile photo must be smaller than 2 MB.');
       return;
     }
 
@@ -159,6 +294,17 @@ export const StudentsTab: React.FC = () => {
     };
     reader.readAsDataURL(file);
   };
+
+  const handleRemovePhoto = () => {
+    setFormData((prev) => ({
+      ...prev,
+      photo: null,
+    }));
+  };
+
+  // ============================================================================
+  // CRUD ACTIONS
+  // ============================================================================
 
   const handleOpenCreate = () => {
     setEditingStudent(null);
@@ -205,7 +351,7 @@ export const StudentsTab: React.FC = () => {
         rfid_uid: formData.rfid_uid && formData.rfid_uid.trim() !== '' ? formData.rfid_uid.trim() : null,
       };
 
-      if (formData.photo && formData.photo.startsWith('data:image')) {
+      if (formData.photo !== undefined) {
         payload.photo = formData.photo;
       }
 
@@ -214,7 +360,7 @@ export const StudentsTab: React.FC = () => {
         setStudents((prev) => prev.map((s) => (s.id === editingStudent.id ? res.data : s)));
       } else {
         await apiClient.post<Student>('/students/', payload);
-        fetchStudents(1, pageSize, search);
+        fetchStudents(1, pageSize, search, true);
       }
 
       setIsModalOpen(false);
@@ -233,16 +379,23 @@ export const StudentsTab: React.FC = () => {
     }
   };
 
-  const handleDelete = async (student: Student) => {
-    if (!window.confirm(`Are you sure you want to delete student "${student.full_name}" (LRN: ${student.lrn})?`)) {
-      return;
-    }
-    try {
-      await apiClient.delete(`/students/${student.id}/`);
-      fetchStudents(currentPage, pageSize, search);
-    } catch {
-      alert('Failed to delete student record.');
-    }
+  const promptDelete = (student: Student) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Student Record',
+      message: `Permanently delete student "${student.full_name || student.first_name}" (LRN: ${student.lrn}) from the school registry?`,
+      confirmLabel: 'Delete Student',
+      isDestructive: true,
+      action: async () => {
+        try {
+          await apiClient.delete(`/students/${student.id}/`);
+          if (badgeStudent?.id === student.id) setBadgeStudent(null);
+          fetchStudents(currentPage, pageSize, search, true);
+        } catch {
+          alert('Failed to delete student record.');
+        }
+      },
+    });
   };
 
   const startRecord = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
@@ -251,7 +404,7 @@ export const StudentsTab: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       
-      {/* 1. Quick Stats Header */}
+      {/* 1. Quick Telemetry Stats Header */}
       <div style={statsContainer}>
         <div style={statCard}>
           <div style={statLabel}>TOTAL STUDENTS</div>
@@ -305,50 +458,40 @@ export const StudentsTab: React.FC = () => {
           columns={[
             {
               header: 'Photo & Learner Name',
-              render: (s) => {
-                const hasPhoto = Boolean(s.photo && !s.photo.includes('default_avatar.png') && !imgErrorMap[s.id]);
-                return (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={avatarStyle}>
-                      {hasPhoto ? (
-                        <img
-                          src={s.photo!}
-                          alt={s.full_name}
-                          onError={() => setImgErrorMap((prev) => ({ ...prev, [s.id]: true }))}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        />
-                      ) : (
-                        <span>
-                          {s.first_name ? s.first_name.charAt(0).toUpperCase() : 'S'}
-                          {s.last_name ? s.last_name.charAt(0).toUpperCase() : ''}
-                        </span>
+              render: (s) => (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {/* Default User Icon / Real Photo Avatar */}
+                  <ProfileAvatar
+                    photoUrl={s.photo}
+                    name={s.full_name || `${s.last_name}, ${s.first_name}`}
+                    size={38}
+                    iconSize={19}
+                    shape="circle"
+                  />
+
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.86rem' }}>
+                      {s.full_name || `${s.last_name}, ${s.first_name}`}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                      <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
+                        LRN: {s.lrn}
+                      </span>
+                      <button
+                        onClick={() => handleCopyLrn(s.lrn)}
+                        title="Copy LRN"
+                        style={copyBtnStyle}
+                        type="button"
+                      >
+                        {copiedLrn === s.lrn ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
+                      </button>
+                      {copiedLrn === s.lrn && (
+                        <span style={{ fontSize: '0.62rem', color: '#059669', fontWeight: 700 }}>Copied!</span>
                       )}
                     </div>
-
-                    <div>
-                      <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.86rem' }}>
-                        {s.full_name || `${s.last_name}, ${s.first_name}`}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                        <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
-                          LRN: {s.lrn}
-                        </span>
-                        <button
-                          onClick={() => handleCopyLrn(s.lrn)}
-                          title="Copy LRN"
-                          style={copyBtnStyle}
-                          type="button"
-                        >
-                          {copiedLrn === s.lrn ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
-                        </button>
-                        {copiedLrn === s.lrn && (
-                          <span style={{ fontSize: '0.62rem', color: '#059669', fontWeight: 700 }}>Copied!</span>
-                        )}
-                      </div>
-                    </div>
                   </div>
-                );
-              },
+                </div>
+              ),
             },
             {
               header: 'Sex',
@@ -432,7 +575,7 @@ export const StudentsTab: React.FC = () => {
               header: 'Actions',
               align: 'right',
               render: (s) => (
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
                   <button
                     onClick={() => setBadgeStudent(s)}
                     title="View Student Gate Pass & QR Badge"
@@ -450,7 +593,7 @@ export const StudentsTab: React.FC = () => {
                     <Pencil size={13} color="#475569" />
                   </button>
                   <button
-                    onClick={() => handleDelete(s)}
+                    onClick={() => promptDelete(s)}
                     title="Delete Student"
                     style={{ ...iconActionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
                     type="button"
@@ -546,32 +689,40 @@ export const StudentsTab: React.FC = () => {
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           
-          {/* Profile Photo Uploader */}
+          {/* Profile Photo Uploader with Default User Icon Fallback */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 12, backgroundColor: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <div style={photoUploadBox}>
-              {formData.photo ? (
-                <img
-                  src={formData.photo}
-                  alt="Student Preview"
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-              ) : (
-                <Camera size={24} color="#94a3b8" />
-              )}
-            </div>
-            <div>
-              <label style={uploadPhotoBtn}>
-                <Upload size={12} />
-                <span>Upload Profile Photo</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handlePhotoUpload}
-                  style={{ display: 'none' }}
-                />
-              </label>
-              <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 4 }}>
-                Square photo recommended (JPG or PNG, max 2MB).
+            <ProfileAvatar
+              photoUrl={formData.photo}
+              name={formData.first_name || 'Preview'}
+              size={56}
+              iconSize={28}
+              shape="rounded"
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <label style={uploadPhotoBtn}>
+                  <Camera size={13} />
+                  <span>{formData.photo ? 'Change Photo' : 'Upload Photo'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePhotoUpload}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+                {formData.photo && (
+                  <button
+                    type="button"
+                    onClick={handleRemovePhoto}
+                    style={removePhotoBtn}
+                  >
+                    <X size={12} />
+                    <span>Remove</span>
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
+                Square photo recommended (JPG or PNG, max 2 MB). Defaults to user icon.
               </div>
             </div>
           </div>
@@ -583,7 +734,7 @@ export const StudentsTab: React.FC = () => {
               required
               maxLength={12}
               value={formData.lrn}
-              onChange={(e) => setFormData({ ...formData, lrn: e.target.value })}
+              onChange={(e) => setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })}
               style={inputStyle}
               placeholder="12-digit LRN (e.g. 128930491029)"
             />
@@ -655,7 +806,7 @@ export const StudentsTab: React.FC = () => {
               type="text"
               placeholder="Card UID (e.g. 8A3F29C1)"
               value={formData.rfid_uid}
-              onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value })}
+              onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })}
               style={inputStyle}
             />
           </div>
@@ -672,7 +823,7 @@ export const StudentsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 4. Student QR Pass Modal with Real Photo */}
+      {/* 4. Student QR Pass Modal with Default User Icon Fallback */}
       {badgeStudent && (
         <Modal
           isOpen={Boolean(badgeStudent)}
@@ -698,30 +849,15 @@ export const StudentsTab: React.FC = () => {
                 Official Campus Entry Pass
               </div>
 
-              {/* Student Real Photo on ID Card */}
-              <div
-                style={{
-                  width: 72,
-                  height: 72,
-                  borderRadius: 8,
-                  backgroundColor: '#f1f5f9',
-                  border: '2px solid #0284c7',
-                  overflow: 'hidden',
-                  margin: '0 auto 10px auto',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                {badgeStudent.photo && !badgeStudent.photo.includes('default_avatar.png') && !imgErrorMap[badgeStudent.id] ? (
-                  <img
-                    src={badgeStudent.photo}
-                    alt={badgeStudent.full_name}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
-                ) : (
-                  <ImageIcon size={28} color="#94a3b8" />
-                )}
+              {/* Student Avatar on ID Card */}
+              <div style={{ margin: '0 auto 10px auto', display: 'flex', justifyContent: 'center' }}>
+                <ProfileAvatar
+                  photoUrl={badgeStudent.photo}
+                  name={badgeStudent.full_name || badgeStudent.first_name}
+                  size={72}
+                  iconSize={36}
+                  shape="rounded"
+                />
               </div>
 
               <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
@@ -790,11 +926,76 @@ export const StudentsTab: React.FC = () => {
         </Modal>
       )}
 
+      {/* 5. Modern Confirmation Modal */}
+      <Modal
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+        title={confirmDialog.title}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <div
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: '50%',
+                backgroundColor: confirmDialog.isDestructive ? '#fee2e2' : '#eff6ff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              {confirmDialog.isDestructive ? (
+                <AlertTriangle size={20} color="#dc2626" />
+              ) : (
+                <AlertCircle size={20} color="#0284c7" />
+              )}
+            </div>
+            <div style={{ fontSize: '0.84rem', color: '#334155', lineHeight: 1.5, marginTop: 4 }}>
+              {confirmDialog.message}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+            <Button
+              variant="secondary"
+              size="md"
+              type="button"
+              disabled={saving}
+              onClick={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="md"
+              type="button"
+              disabled={saving}
+              onClick={async () => {
+                await confirmDialog.action();
+                setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+              }}
+              style={
+                confirmDialog.isDestructive
+                  ? { backgroundColor: '#dc2626', borderColor: '#dc2626', color: '#ffffff' }
+                  : {}
+              }
+            >
+              {saving ? <Loader2 className="animate-spin" size={16} /> : confirmDialog.confirmLabel}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
     </div>
   );
 };
 
-// Styles
+// ============================================================================
+// STYLES
+// ============================================================================
+
 const statsContainer: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(4, 1fr)',
@@ -828,44 +1029,30 @@ const statHelp: React.CSSProperties = {
   marginTop: 4,
 };
 
-const avatarStyle: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 8,
-  backgroundColor: '#e0f2fe',
-  color: '#0284c7',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontWeight: 800,
-  fontSize: '0.78rem',
-  overflow: 'hidden',
-  flexShrink: 0,
-};
-
-const photoUploadBox: React.CSSProperties = {
-  width: 52,
-  height: 52,
-  borderRadius: 8,
-  backgroundColor: '#ffffff',
-  border: '1px solid #cbd5e1',
-  overflow: 'hidden',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-};
-
 const uploadPhotoBtn: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 5,
-  padding: '5px 10px',
+  padding: '6px 12px',
   backgroundColor: '#0284c7',
   color: '#ffffff',
   borderRadius: 6,
   fontSize: '0.74rem',
   fontWeight: 700,
+  cursor: 'pointer',
+};
+
+const removePhotoBtn: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '5px 8px',
+  backgroundColor: '#ffffff',
+  color: '#dc2626',
+  border: '1px solid #fecaca',
+  borderRadius: 6,
+  fontSize: '0.72rem',
+  fontWeight: 600,
   cursor: 'pointer',
 };
 

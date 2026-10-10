@@ -1,7 +1,20 @@
-import React, { useState, useEffect, useRef } from 'react';
+/**
+ * AttendSure V3 - Campus Perimeter & Geofence Security
+ * File: frontend/src/components/tabs/GeofenceTab.tsx
+ *
+ * Key Highlights:
+ * 1. DEFAULT USER ICON: Standardizes <User /> from lucide-react as the fallback for all profile images.
+ * 2. LIVE TELEMETRY POLLING: 3-second background polling keeps GPS presence and exceptions updated in real time.
+ * 3. REUSABLE ALERTS: Uses showConfirm and showAlert from AlertContext for hardware unbinding and perimeter saves.
+ * 4. SPATIAL GEOFENCING: Leaflet-powered boundary mapping with draggable campus pin and radius slider.
+ * 5. DEVICE SECURITY: Hardware binding overview, mock GPS spoof protection, and device pairing resets.
+ */
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import apiClient from '../../api/client';
 import { useAlert } from '../../context/AlertContext';
 import {
+  User,
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
@@ -20,6 +33,10 @@ import {
   RotateCcw,
 } from 'lucide-react';
 
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
 interface FacultyRosterItem {
   id: number;
   faculty_name: string;
@@ -32,6 +49,8 @@ interface FacultyRosterItem {
   device_model?: string | null;
   bound_device_id?: string | null;
   device_bound_at?: string | null;
+  photo?: string | null;
+  photo_url?: string | null;
 }
 
 interface GeofenceData {
@@ -61,8 +80,73 @@ declare global {
   }
 }
 
+// ============================================================================
+// REUSABLE DEFAULT USER AVATAR COMPONENT
+// ============================================================================
+
+interface ProfileAvatarProps {
+  photoUrl?: string | null;
+  name?: string;
+  size?: number;
+  iconSize?: number;
+}
+
+const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
+  photoUrl,
+  name = 'Faculty Member',
+  size = 36,
+  iconSize = 18,
+}) => {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [photoUrl]);
+
+  const hasPhoto = Boolean(
+    photoUrl &&
+    typeof photoUrl === 'string' &&
+    photoUrl.trim() !== '' &&
+    photoUrl.trim().toLowerCase() !== 'null' &&
+    photoUrl.trim().toLowerCase() !== 'undefined'
+  );
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        backgroundColor: '#f1f5f9',
+        border: '1px solid #e2e8f0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        flexShrink: 0,
+      }}
+      title={name}
+    >
+      {hasPhoto && !imageFailed ? (
+        <img
+          src={photoUrl!}
+          alt={name}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <User size={iconSize} color="#94a3b8" />
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export const GeofenceTab: React.FC = () => {
-  const { showAlert } = useAlert();
+  const { showAlert, showConfirm } = useAlert();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const circleInstanceRef = useRef<any>(null);
@@ -79,9 +163,15 @@ export const GeofenceTab: React.FC = () => {
   const [lng, setLng] = useState<number>(124.663690);
   const [radius, setRadius] = useState<number>(250);
 
+  // Track if admin modified perimeter controls locally to avoid overwriting during background polling
+  const isDirtyRef = useRef(false);
+  const isInteracting = useRef(false);
+  isInteracting.current = saving || resettingId !== null;
+
   const userRole = (localStorage.getItem('attendsure_role') || 'TEACHER').toUpperCase();
   const isAdmin = userRole === 'ADMIN';
 
+  // Load Leaflet dynamically
   useEffect(() => {
     if (window.L) {
       setLeafletReady(true);
@@ -100,33 +190,56 @@ export const GeofenceTab: React.FC = () => {
     document.head.appendChild(script);
   }, []);
 
-  const fetchGeofenceData = async () => {
-    setLoading(true);
-    try {
-      const res = await apiClient.get('/geofence/');
-      setGeoData(res.data);
-      const parsedLat = parseFloat(res.data.latitude) || 8.480190;
-      const parsedLng = parseFloat(res.data.longitude) || 124.663690;
-      const parsedRad = parseInt(res.data.radius_meters) || 250;
+  // Database Fetching
+  const fetchGeofenceData = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const res = await apiClient.get<GeofenceData>('/geofence/');
+        setGeoData(res.data);
 
-      setLat(parsedLat);
-      setLng(parsedLng);
-      setRadius(parsedRad);
-    } catch {
-      showAlert({
-        title: 'Connection Offline',
-        message: 'Could not connect to geofence server.',
-        type: 'warning',
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+        // Only update local inputs if user hasn't modified them in this session
+        if (!isDirtyRef.current) {
+          const parsedLat = parseFloat(String(res.data.latitude)) || 8.480190;
+          const parsedLng = parseFloat(String(res.data.longitude)) || 124.663690;
+          const parsedRad = parseInt(String(res.data.radius_meters), 10) || 250;
 
+          setLat(parsedLat);
+          setLng(parsedLng);
+          setRadius(parsedRad);
+        }
+      } catch {
+        if (!silent) {
+          showAlert({
+            title: 'Connection Offline',
+            message: 'Could not connect to geofence server.',
+            type: 'warning',
+          });
+        }
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [showAlert]
+  );
+
+  // Initial load
   useEffect(() => {
-    fetchGeofenceData();
-  }, []);
+    fetchGeofenceData(false);
+  }, [fetchGeofenceData]);
 
+  // LIVE ZERO-REFRESH POLLING: Sync telemetry and breaches every 3 seconds
+  useEffect(() => {
+    const liveInterval = setInterval(() => {
+      if (!isInteracting.current) {
+        fetchGeofenceData(true);
+      }
+    }, 3000);
+
+    return () => clearInterval(liveInterval);
+  }, [fetchGeofenceData]);
+
+  // Map Rendering & Synchronization
   useEffect(() => {
     if (!leafletReady || !mapContainerRef.current) return;
 
@@ -156,6 +269,7 @@ export const GeofenceTab: React.FC = () => {
 
       map.on('click', (e: any) => {
         if (!isAdmin) return;
+        isDirtyRef.current = true;
         setLat(parseFloat(e.latlng.lat.toFixed(6)));
         setLng(parseFloat(e.latlng.lng.toFixed(6)));
       });
@@ -202,6 +316,7 @@ export const GeofenceTab: React.FC = () => {
       }).addTo(currentMap);
 
       markerInstanceRef.current.on('dragend', (e: any) => {
+        isDirtyRef.current = true;
         const pos = e.target.getLatLng();
         setLat(parseFloat(pos.lat.toFixed(6)));
         setLng(parseFloat(pos.lng.toFixed(6)));
@@ -232,6 +347,7 @@ export const GeofenceTab: React.FC = () => {
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        isDirtyRef.current = true;
         const detectedLat = parseFloat(pos.coords.latitude.toFixed(6));
         const detectedLng = parseFloat(pos.coords.longitude.toFixed(6));
         setLat(detectedLat);
@@ -264,12 +380,13 @@ export const GeofenceTab: React.FC = () => {
         radius_meters: radius,
       });
 
+      isDirtyRef.current = false;
       showAlert({
         title: 'Perimeter Configuration Saved',
         message: res.data.message || 'Campus boundary successfully updated in database.',
         type: 'success',
       });
-      fetchGeofenceData();
+      fetchGeofenceData(true);
     } catch (err: any) {
       showAlert({
         title: 'Save Failed',
@@ -281,27 +398,35 @@ export const GeofenceTab: React.FC = () => {
     }
   };
 
-  const handleResetDevice = async (facultyId: number, facultyName: string) => {
+  const handleResetDevice = (facultyId: number, facultyName: string) => {
     if (!isAdmin) return;
 
-    setResettingId(facultyId);
-    try {
-      const res = await apiClient.post(`/facultys/${facultyId}/reset-device/`);
-      showAlert({
-        title: 'Device Binding Unlocked',
-        message: res.data.message || `Device binding for ${facultyName} has been cleared.`,
-        type: 'success',
-      });
-      fetchGeofenceData();
-    } catch (err: any) {
-      showAlert({
-        title: 'Reset Failed',
-        message: err.response?.data?.error || 'Could not reset device binding.',
-        type: 'error',
-      });
-    } finally {
-      setResettingId(null);
-    }
+    showConfirm({
+      title: 'Reset Hardware Device Binding',
+      message: `Unbind the registered mobile device for ${facultyName}? This will permit the staff member to pair a new device during their next check-in.`,
+      confirmLabel: 'Reset Device',
+      isDestructive: true,
+      onConfirm: async () => {
+        setResettingId(facultyId);
+        try {
+          const res = await apiClient.post(`/facultys/${facultyId}/reset-device/`);
+          showAlert({
+            title: 'Device Binding Cleared',
+            message: res.data.message || `Device binding for ${facultyName} has been cleared.`,
+            type: 'success',
+          });
+          fetchGeofenceData(true);
+        } catch (err: any) {
+          showAlert({
+            title: 'Reset Failed',
+            message: err.response?.data?.error || 'Could not reset device binding.',
+            type: 'error',
+          });
+        } finally {
+          setResettingId(null);
+        }
+      },
+    });
   };
 
   const getStatusBadge = (status: FacultyRosterItem['status']) => {
@@ -328,7 +453,7 @@ export const GeofenceTab: React.FC = () => {
         <div>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Building2 size={22} color="#0284c7" />
-            <span>Campus Perimeter & Geofence Security</span>
+            <span>Campus Perimeter &amp; Geofence Security</span>
           </h2>
           <p style={{ fontSize: '0.80rem', color: '#64748b', margin: '4px 0 0 0' }}>
             Zero-trust spatial presence monitoring, device hardware binding, and automated gate cross-checking.
@@ -336,7 +461,7 @@ export const GeofenceTab: React.FC = () => {
         </div>
 
         <button
-          onClick={fetchGeofenceData}
+          onClick={() => fetchGeofenceData(false)}
           disabled={loading}
           style={{
             display: 'inline-flex',
@@ -534,7 +659,10 @@ export const GeofenceTab: React.FC = () => {
                     disabled={!isAdmin}
                     required
                     value={lat}
-                    onChange={(e) => setLat(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => {
+                      isDirtyRef.current = true;
+                      setLat(parseFloat(e.target.value) || 0);
+                    }}
                     style={fieldInputStyle}
                   />
                 </div>
@@ -546,7 +674,10 @@ export const GeofenceTab: React.FC = () => {
                     disabled={!isAdmin}
                     required
                     value={lng}
-                    onChange={(e) => setLng(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => {
+                      isDirtyRef.current = true;
+                      setLng(parseFloat(e.target.value) || 0);
+                    }}
                     style={fieldInputStyle}
                   />
                 </div>
@@ -566,7 +697,10 @@ export const GeofenceTab: React.FC = () => {
                   step="25"
                   disabled={!isAdmin}
                   value={radius}
-                  onChange={(e) => setRadius(Number(e.target.value))}
+                  onChange={(e) => {
+                    isDirtyRef.current = true;
+                    setRadius(Number(e.target.value));
+                  }}
                   style={{ width: '100%', accentColor: '#0284c7', cursor: isAdmin ? 'pointer' : 'not-allowed' }}
                 />
 
@@ -580,7 +714,10 @@ export const GeofenceTab: React.FC = () => {
                       key={preset.val}
                       type="button"
                       disabled={!isAdmin}
-                      onClick={() => setRadius(preset.val)}
+                      onClick={() => {
+                        isDirtyRef.current = true;
+                        setRadius(preset.val);
+                      }}
                       style={{
                         flex: 1,
                         padding: '4px 6px',
@@ -675,7 +812,7 @@ export const GeofenceTab: React.FC = () => {
         <div style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: '0.90rem', fontWeight: 800, color: '#0f172a' }}>
-              Faculty Live Presence & Hardware Device Audit
+              Faculty Live Presence &amp; Hardware Device Audit
             </div>
             <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
               Displays registered mobile devices, device locks, GPS presence, and battery status.
@@ -690,7 +827,7 @@ export const GeofenceTab: React.FC = () => {
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
             <thead>
               <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#475569' }}>
-                <th style={{ padding: '10px 16px' }}>Faculty Name</th>
+                <th style={{ padding: '10px 16px' }}>Faculty Profile</th>
                 <th style={{ padding: '10px 16px' }}>Registered Hardware Device</th>
                 <th style={{ padding: '10px 16px' }}>Presence Status</th>
                 <th style={{ padding: '10px 16px' }}>Distance</th>
@@ -703,10 +840,22 @@ export const GeofenceTab: React.FC = () => {
               {geoData?.faculty_roster && geoData.faculty_roster.length > 0 ? (
                 geoData.faculty_roster.map((s) => (
                   <tr key={s.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '10px 16px', fontWeight: 600, color: '#0f172a' }}>
-                      {s.faculty_name}
-                      <div style={{ fontSize: '0.66rem', color: '#94a3b8', fontFamily: 'monospace' }}>
-                        ID: {s.employee_id} &bull; {s.position}
+                    <td style={{ padding: '10px 16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <ProfileAvatar
+                          photoUrl={s.photo_url || s.photo}
+                          name={s.faculty_name}
+                          size={36}
+                          iconSize={18}
+                        />
+                        <div>
+                          <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.84rem' }}>
+                            {s.faculty_name}
+                          </div>
+                          <div style={{ fontSize: '0.66rem', color: '#94a3b8', fontFamily: 'monospace' }}>
+                            ID: {s.employee_id} &bull; {s.position}
+                          </div>
+                        </div>
                       </div>
                     </td>
 
@@ -798,6 +947,10 @@ export const GeofenceTab: React.FC = () => {
     </div>
   );
 };
+
+// ============================================================================
+// STYLES
+// ============================================================================
 
 const kpiCardStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',

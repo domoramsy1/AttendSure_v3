@@ -1,3 +1,15 @@
+/**
+ * AttendSure V3 - User Profile & Account Settings Modal
+ * File: frontend/src/components/modals/ProfileModal.tsx
+ *
+ * Capabilities:
+ * - Profile photo upload with client-side 2MB constraint and immediate preview.
+ * - Dynamic server-relative media URL resolution.
+ * - Password modification with eye visibility toggle.
+ * - Synchronizes updated identity with localStorage and parent states.
+ * - Non-blocking inline error and success feedback banners.
+ */
+
 import React, { useState, useEffect } from 'react';
 import apiClient from '../../api/client';
 import { Modal } from '../ui/Modal';
@@ -12,6 +24,9 @@ import {
   Lock,
   Loader2,
   CheckCircle2,
+  AlertCircle,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 interface ProfileModalProps {
@@ -20,6 +35,31 @@ interface ProfileModalProps {
   onProfileUpdated: (updated: { full_name: string; photo?: string | null }) => void;
 }
 
+const resolvePhotoSource = (rawSrc?: string | null): string | null => {
+  if (!rawSrc || typeof rawSrc !== 'string') return null;
+  const trimmed = rawSrc.trim();
+  if (!trimmed) return null;
+
+  if (
+    trimmed.startsWith('data:image/') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('blob:')
+  ) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith('/media/') || trimmed.startsWith('media/')) {
+    const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    const backendPort = window.location.port === '8000' ? '' : ':8000';
+    return `${protocol}//${hostname}${backendPort}${cleanPath}`;
+  }
+
+  return trimmed;
+};
+
 export const ProfileModal: React.FC<ProfileModalProps> = ({
   isOpen,
   onClose,
@@ -27,7 +67,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 }) => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     username: '',
@@ -43,6 +85,8 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     setSuccessMsg(null);
+    setErrorMsg(null);
+    setShowPassword(false);
     setLoading(true);
 
     apiClient
@@ -60,7 +104,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         });
       })
       .catch((err) => {
-        alert(err.response?.data?.detail || 'Failed to load profile details.');
+        const detail =
+          err.response?.data?.detail ||
+          err.response?.data?.error ||
+          'Failed to load profile details.';
+        setErrorMsg(detail);
       })
       .finally(() => setLoading(false));
   }, [isOpen]);
@@ -70,10 +118,12 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     if (!file) return;
 
     if (file.size > 2 * 1024 * 1024) {
-      alert('Photo size must be less than 2MB.');
+      setErrorMsg('Photo size must be less than 2MB.');
+      e.target.value = '';
       return;
     }
 
+    setErrorMsg(null);
     const reader = new FileReader();
     reader.onloadend = () => {
       setFormData((prev) => ({
@@ -82,9 +132,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       }));
     };
     reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   const handleRemovePhoto = () => {
+    setErrorMsg(null);
     setFormData((prev) => ({
       ...prev,
       photo: null,
@@ -95,9 +147,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     e.preventDefault();
     setSaving(true);
     setSuccessMsg(null);
+    setErrorMsg(null);
 
     try {
-      const payload: any = {
+      const payload: Record<string, any> = {
         first_name: formData.first_name.trim(),
         last_name: formData.last_name.trim(),
         email: formData.email.trim(),
@@ -115,8 +168,16 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       const res = await apiClient.put('/me/', payload);
       setSuccessMsg('Profile saved successfully!');
 
+      const updatedFullName =
+        res.data.full_name ||
+        `${formData.first_name.trim()} ${formData.last_name.trim()}`.trim() ||
+        formData.username;
+
+      // Synchronize with local storage for app-wide reactivity
+      localStorage.setItem('attendsure_faculty_name', updatedFullName);
+
       onProfileUpdated({
-        full_name: res.data.full_name,
+        full_name: updatedFullName,
         photo: res.data.photo,
       });
 
@@ -124,15 +185,27 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         onClose();
       }, 700);
     } catch (err: any) {
-      const errorMsg =
-        err.response?.data?.detail ||
-        err.response?.data?.message ||
-        'Failed to save profile changes.';
-      alert(errorMsg);
+      const data = err.response?.data;
+      if (typeof data === 'object' && data !== null) {
+        if (data.detail) {
+          setErrorMsg(data.detail);
+        } else if (data.error) {
+          setErrorMsg(data.error);
+        } else {
+          const lines = Object.entries(data).map(
+            ([key, val]) => `${key}: ${Array.isArray(val) ? val.join(' ') : val}`
+          );
+          setErrorMsg(lines.join(' | ') || 'Failed to save profile changes.');
+        }
+      } else {
+        setErrorMsg('Failed to save profile changes. Please verify your connection.');
+      }
     } finally {
       setSaving(false);
     }
   };
+
+  const previewPhotoSrc = resolvePhotoSource(formData.photo);
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Manage Account Profile">
@@ -142,6 +215,26 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         </div>
       ) : (
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {errorMsg && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 12px',
+                backgroundColor: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 6,
+                color: '#dc2626',
+                fontSize: '0.80rem',
+                lineHeight: 1.4,
+              }}
+            >
+              <AlertCircle size={16} style={{ flexShrink: 0 }} />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
           {successMsg && (
             <div
               style={{
@@ -157,7 +250,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 fontWeight: 600,
               }}
             >
-              <CheckCircle2 size={16} />
+              <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
               <span>{successMsg}</span>
             </div>
           )}
@@ -187,9 +280,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 flexShrink: 0,
               }}
             >
-              {formData.photo ? (
+              {previewPhotoSrc ? (
                 <img
-                  src={formData.photo}
+                  src={previewPhotoSrc}
                   alt="Profile Preview"
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
@@ -312,11 +405,36 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           </div>
 
           <div>
-            <label style={labelStyle}>Change Password (leave blank to keep current)</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <label style={{ ...labelStyle, marginBottom: 0 }}>
+                Change Password (leave blank to keep current)
+              </label>
+              {formData.password && (
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#0284c7',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    padding: 0,
+                  }}
+                >
+                  {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                  <span>{showPassword ? 'Hide' : 'Show'}</span>
+                </button>
+              )}
+            </div>
             <div style={{ position: 'relative' }}>
               <Lock size={14} color="#94a3b8" style={inputIconStyle} />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 style={{ ...inputStyle, paddingLeft: 32 }}
@@ -340,6 +458,8 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     </Modal>
   );
 };
+
+export default ProfileModal;
 
 const labelStyle: React.CSSProperties = {
   display: 'block',
@@ -392,5 +512,3 @@ const removePhotoBtn: React.CSSProperties = {
   fontWeight: 700,
   cursor: 'pointer',
 };
-
-export default ProfileModal;

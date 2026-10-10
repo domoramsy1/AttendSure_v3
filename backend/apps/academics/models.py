@@ -105,44 +105,59 @@ class AcademicYear(models.Model):
 
 
 class SchoolProfile(models.Model):
-    school_id = models.CharField(max_length=50, blank=True, default='')
-    school_name = models.CharField(max_length=255, blank=True, default='')
+    school_id = models.CharField(max_length=50, unique=True)
+    school_name = models.CharField(max_length=255)
     region = models.CharField(max_length=100, blank=True, default='')
     division = models.CharField(max_length=100, blank=True, default='')
     district = models.CharField(max_length=100, blank=True, default='')
-
     address = models.TextField(blank=True, default='')
-    contact_number = models.CharField(max_length=100, blank=True, default='')
+    contact_number = models.CharField(max_length=50, blank=True, default='')
     email = models.EmailField(blank=True, default='')
 
-    principal_name = models.CharField(max_length=150, blank=True, default='')
-    principal_title = models.CharField(max_length=100, blank=True, default='')
+    # Link directly to the Faculty directory
+    principal_faculty = models.ForeignKey(
+        'FacultyProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='schools_as_principal',
+        help_text="Faculty member serving as School Head / Principal"
+    )
 
-    kagawaran_logo = models.TextField(blank=True, null=True)
-    deped_logo = models.TextField(blank=True, null=True)
+    # Official Printed Signature Names on Reports (SF1, SF2, SF4)
+    principal_name = models.CharField(max_length=255, blank=True, default='')
+    principal_title = models.CharField(max_length=150, blank=True, default='Secondary School Principal IV')
+
+    # Institutional Logos
     school_logo = models.TextField(blank=True, null=True)
-
     left_logo = models.TextField(blank=True, null=True)
     right_logo = models.TextField(blank=True, null=True)
 
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    geofence_radius_meters = models.PositiveIntegerField(null=True, blank=True)
-
+    # Campus Geofencing
+    latitude = models.FloatField(default=8.4858)
+    longitude = models.FloatField(default=124.6567)
+    geofence_radius_meters = models.IntegerField(default=150)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = 'school_profile'
+        db_table = 'attendsure_school_profile'
+        verbose_name = 'School Profile'
+        verbose_name_plural = 'School Profile'
 
     def save(self, *args, **kwargs):
-        if self.kagawaran_logo and not self.left_logo:
-            self.left_logo = self.kagawaran_logo
-        if self.deped_logo and not self.right_logo:
-            self.right_logo = self.deped_logo
+        # Automatically pull name and position title from the linked Faculty profile
+        if self.principal_faculty:
+            faculty = self.principal_faculty
+            if not self.principal_name:
+                mid = f" {faculty.middle_name[:1]}." if faculty.middle_name else ""
+                suf = f" {faculty.suffix}" if faculty.suffix else ""
+                self.principal_name = f"{faculty.first_name}{mid} {faculty.last_name}{suf}".strip()
+            if not self.principal_title and faculty.position:
+                self.principal_title = faculty.position
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.school_name or "School Profile"
+        return f"{self.school_name} ({self.school_id})"
 
 
 class ClassSchedule(models.Model):
@@ -551,20 +566,54 @@ class GatePass(models.Model):
 
 
 class SmsOutbox(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    recipient_number = models.CharField(max_length=20)
+    PRIORITY_CHOICES = [
+        ('HIGH', 'High Priority (Gate Entry/Exit)'),
+        ('NORMAL', 'Normal Priority (Class Attendance)'),
+        ('LOW', 'Low Priority (Announcements)'),
+    ]
+
+    TRIGGER_EVENT_CHOICES = [
+        ('GATE_IN', 'Gate Entry Notice'),
+        ('GATE_OUT', 'Gate Exit Notice'),
+        ('CLASS_ABSENT', 'Class Absence'),
+        ('EMERGENCY', 'School Broadcast'),
+        ('TEST', 'Modem Signal Test'),
+    ]
+
+    STATUS_CHOICES = [
+        ('PENDING', 'Pending Dispatch'),
+        ('SENT', 'Delivered'),
+        ('FAILED', 'Failed / No Signal'),
+    ]
+
+    recipient_name = models.CharField(max_length=150, blank=True, default='')
+    recipient_number = models.CharField(max_length=25, db_index=True)
     message_body = models.TextField()
-    trigger_event = models.CharField(max_length=50, default='CLASS_TAP')
-    priority = models.SmallIntegerField(default=2)
-    status = models.CharField(max_length=20, default='PENDING')
-    retry_count = models.IntegerField(default=0)
+    trigger_event = models.CharField(max_length=30, choices=TRIGGER_EVENT_CHOICES, default='GATE_IN', db_index=True)
+    category = models.CharField(max_length=30, choices=TRIGGER_EVENT_CHOICES, default='GATE_IN', blank=True)
+    priority = models.CharField(max_length=15, choices=PRIORITY_CHOICES, default='HIGH', db_index=True)
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='PENDING', db_index=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    error_message = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     sent_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
-        db_table = 'sms_outbox'
-        ordering = ['priority', 'created_at']
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'priority', 'created_at']),
+        ]
 
+    def save(self, *args, **kwargs):
+        # Keep trigger_event and category synchronized
+        if self.category and not self.trigger_event:
+            self.trigger_event = self.category
+        elif self.trigger_event and not self.category:
+            self.category = self.trigger_event
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"[{self.status}] [{self.priority}] To: {self.recipient_number} ({self.created_at.strftime('%Y-%m-%d %H:%M')})"
 
 # ============================================================================
 # AUDIT LOG (MANAGED BY DATABASE)

@@ -2,22 +2,90 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AttendSure</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0284c7" />
+    <meta name="description" content="AttendSure V3 - DepEd Attendance Management & Gate Security System" />
+    <title>AttendSure V3</title>
 
-    <!-- TV Debugger: Shows JavaScript crashes directly on screen -->
+    <!-- Dynamic School Profile Favicon Placeholder (Managed by SchoolContext) -->
+    <link id="app-favicon" rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" />
+
+    <!-- DepEd Manual of Style Typography Support -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=Carlito:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      /* Local Desktop Font Bindings for Windows / Office Environments */
+      @font-face {
+        font-family: 'Old English Text MT';
+        src: local('Old English Text MT'),
+             local('OldEnglishTextMT'),
+             local('Cloister Black');
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'Old English Text MT Fallback';
+        src: local('Old English Text MT'),
+             local('OldEnglishTextMT'),
+             local('Cloister Black');
+        font-display: swap;
+      }
+
+      /* Base Canvas Reset */
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #f8fafc;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      #root {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+
+    <!-- TV & Kiosk Debugger -->
     <script>
-      window.onerror = function (msg, url, lineNo, columnNo, error) {
-        var box = document.getElementById('tv-error-box');
-        if (!box) {
-          box = document.createElement('div');
-          box.id = 'tv-error-box';
-          box.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;background:#fee2e2;color:#b91c1c;padding:16px;border:2px solid #ef4444;font-family:monospace;font-size:14px;z-index:99999;word-break:break-all;';
-          document.body.appendChild(box);
+      (function () {
+        function displayError(title, detail) {
+          var box = document.getElementById('tv-error-box');
+          if (!box) {
+            box = document.createElement('div');
+            box.id = 'tv-error-box';
+            box.style.cssText =
+              'position:fixed;top:12px;left:12px;right:12px;background:#fee2e2;color:#991b1b;padding:14px 18px;border:2px solid #ef4444;border-radius:8px;font-family:monospace;font-size:13px;z-index:999999;box-shadow:0 10px 25px rgba(0,0,0,0.2);display:flex;justify-content:space-between;align-items:flex-start;gap:12px;word-break:break-all;';
+            document.body.appendChild(box);
+          }
+
+          box.innerHTML =
+            '<div style="flex:1;">' +
+            '<div style="font-weight:bold;font-size:14px;margin-bottom:4px;color:#b91c1c;">' + title + '</div>' +
+            '<div>' + detail + '</div>' +
+            '</div>' +
+            '<button onclick="this.parentElement.remove()" style="background:#b91c1c;color:#ffffff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px;flex-shrink:0;">Dismiss</button>';
         }
-        box.innerHTML = '<strong>TV Script Error:</strong> ' + msg + '<br/><small>' + url + ':' + lineNo + '</small>';
-        return false;
-      };
+
+        window.onerror = function (msg, url, lineNo, colNo, error) {
+          var location = (url ? url.split('/').pop() : 'script') + ':' + lineNo;
+          displayError('Application Script Error', msg + ' (' + location + ')');
+          return false;
+        };
+
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason;
+          var msg = reason && (reason.message || reason.statusText || reason) ? (reason.message || reason.statusText || reason) : 'Unhandled Async Rejection';
+          displayError('Async / Network Error', msg);
+        });
+      })();
     </script>
   </head>
   <body>

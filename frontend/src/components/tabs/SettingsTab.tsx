@@ -1,47 +1,52 @@
-import React, { useState, useEffect } from 'react';
+/**
+ * AttendSure V3 - School Profile & Administration Settings
+ * File: frontend/src/components/tabs/SettingsTab.tsx
+ *
+ * Branding Structure:
+ * 1. SCHOOL PROFILE PHOTO (school_logo): Main institutional avatar for sidebar, header & gate passes.
+ * 2. REPORT SEALS (left_logo & right_logo): Dual seals for official DepEd report letterheads (SF1, SF2, SF4).
+ * 3. VIEWPORT & SCROLL REPAIR: Clean top-aligned scrolling container prevents card clipping.
+ */
+
+import React, { useState, useEffect, useRef } from 'react';
 import apiClient from '../../api/client';
+import { useSchool } from '../../context/SchoolContext';
+import { useAlert } from '../../context/AlertContext';
 import { Button } from '../ui/Button';
 import {
   Building2,
-  Image as ImageIcon,
-  MapPin,
+  UserCheck,
   Save,
-  RotateCcw,
-  Upload,
-  CheckCircle2,
-  AlertCircle,
   Loader2,
+  Upload,
+  Trash2,
   ShieldCheck,
-  Mail,
-  Phone,
-  Compass,
+  User,
+  Image as ImageIcon,
 } from 'lucide-react';
 
-interface SchoolSettingsData {
-  school_id: string;
-  school_name: string;
-  region: string;
-  division: string;
-  district: string;
-  address: string;
-  contact_number: string;
-  email: string;
-  principal_name: string;
-  principal_title: string;
-  kagawaran_logo: string | null;
-  deped_logo: string | null;
-  school_logo: string | null;
-  left_logo?: string | null;
-  right_logo?: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  geofence_radius_meters: number | null;
+interface FacultyOption {
+  id: number;
+  employee_id: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  position: string;
+  department: string;
+  photo_url?: string | null;
 }
 
-type LogoType = 'kagawaran' | 'deped' | 'school';
-
 export const SettingsTab: React.FC = () => {
-  const [formData, setFormData] = useState<SchoolSettingsData>({
+  const { refreshSchool } = useSchool();
+  const { showAlert } = useAlert();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const [facultyList, setFacultyList] = useState<FacultyOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  const [formData, setFormData] = useState({
     school_id: '',
     school_name: '',
     region: '',
@@ -50,139 +55,151 @@ export const SettingsTab: React.FC = () => {
     address: '',
     contact_number: '',
     email: '',
+    principal_faculty: '' as string | number,
     principal_name: '',
     principal_title: '',
-    kagawaran_logo: null,
-    deped_logo: null,
-    school_logo: null,
-    latitude: null,
-    longitude: null,
-    geofence_radius_meters: null,
+    school_logo: '' as string | null,
+    left_logo: '' as string | null,
+    right_logo: '' as string | null,
+    latitude: 8.4858,
+    longitude: 124.6567,
+    geofence_radius_meters: 150,
   });
 
-  const [loading, setLoading] = useState<boolean>(true);
-  const [saving, setSaving] = useState<boolean>(false);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
   useEffect(() => {
-    fetchSettings();
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
   }, []);
 
-  const fetchSettings = async () => {
-    try {
+  useEffect(() => {
+    const loadInitialData = async () => {
       setLoading(true);
-      setErrorMsg(null);
-      const res = await apiClient.get<SchoolSettingsData>('/settings/school/');
-      setFormData({
-        school_id: res.data.school_id || '',
-        school_name: res.data.school_name || '',
-        region: res.data.region || '',
-        division: res.data.division || '',
-        district: res.data.district || '',
-        address: res.data.address || '',
-        contact_number: res.data.contact_number || '',
-        email: res.data.email || '',
-        principal_name: res.data.principal_name || '',
-        principal_title: res.data.principal_title || '',
-        kagawaran_logo: res.data.kagawaran_logo || res.data.left_logo || null,
-        deped_logo: res.data.deped_logo || res.data.right_logo || null,
-        school_logo: res.data.school_logo || null,
-        latitude: res.data.latitude ?? null,
-        longitude: res.data.longitude ?? null,
-        geofence_radius_meters: res.data.geofence_radius_meters ?? null,
-      });
-    } catch {
-      setErrorMsg('Failed to load institution settings from the database.');
-    } finally {
-      setLoading(false);
+      try {
+        const [schoolRes, facultyRes] = await Promise.all([
+          apiClient.get('/settings/school/'),
+          apiClient.get('/facultys/'),
+        ]);
+
+        const sData = schoolRes.data;
+        setFormData({
+          school_id: sData.school_id || '',
+          school_name: sData.school_name || '',
+          region: sData.region || '',
+          division: sData.division || '',
+          district: sData.district || '',
+          address: sData.address || '',
+          contact_number: sData.contact_number || '',
+          email: sData.email || '',
+          principal_faculty: sData.principal_faculty || '',
+          principal_name: sData.principal_name || '',
+          principal_title: sData.principal_title || 'Secondary School Principal IV',
+          school_logo: sData.school_logo || null,
+          left_logo: sData.left_logo || null,
+          right_logo: sData.right_logo || null,
+          latitude: sData.latitude ?? 8.4858,
+          longitude: sData.longitude ?? 124.6567,
+          geofence_radius_meters: sData.geofence_radius_meters ?? 150,
+        });
+
+        const fData = Array.isArray(facultyRes.data)
+          ? facultyRes.data
+          : facultyRes.data.results || [];
+        setFacultyList(fData);
+      } catch (err) {
+        console.error('Failed to load school settings:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadInitialData();
+  }, []);
+
+  const handleFacultyChange = (facultyIdStr: string) => {
+    if (!facultyIdStr) {
+      setFormData((prev) => ({
+        ...prev,
+        principal_faculty: '',
+      }));
+      return;
+    }
+
+    const fid = Number(facultyIdStr);
+    const chosen = facultyList.find((f) => f.id === fid);
+
+    if (chosen) {
+      setFormData((prev) => ({
+        ...prev,
+        principal_faculty: fid,
+        principal_name: `${chosen.first_name} ${chosen.last_name}`.trim(),
+        principal_title: chosen.position || 'Secondary School Principal IV',
+      }));
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, target: LogoType) => {
+  const selectedFacultyObj = facultyList.find(
+    (f) => String(f.id) === String(formData.principal_faculty)
+  );
+
+  const handleLogoUpload = (
+    field: 'school_logo' | 'left_logo' | 'right_logo',
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 2 * 1024 * 1024) {
-      alert('Selected image exceeds the maximum allowed size (2MB).');
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      showAlert({
+        title: 'Invalid Image Format',
+        message: 'Only PNG, JPG, and WebP images are allowed.',
+        type: 'error',
+      });
       return;
     }
 
     const reader = new FileReader();
     reader.onloadend = () => {
-      const base64String = reader.result as string;
-      setFormData((prev) => {
-        const updated = { ...prev };
-        if (target === 'kagawaran') {
-          updated.kagawaran_logo = base64String;
-          updated.left_logo = base64String;
-        } else if (target === 'deped') {
-          updated.deped_logo = base64String;
-          updated.right_logo = base64String;
-        } else if (target === 'school') {
-          updated.school_logo = base64String;
-        }
-        return updated;
-      });
+      setFormData((prev) => ({ ...prev, [field]: reader.result as string }));
     };
     reader.readAsDataURL(file);
   };
 
-  const handleClearLogo = (target: LogoType) => {
-    setFormData((prev) => {
-      const updated = { ...prev };
-      if (target === 'kagawaran') {
-        updated.kagawaran_logo = null;
-        updated.left_logo = null;
-      } else if (target === 'deped') {
-        updated.deped_logo = null;
-        updated.right_logo = null;
-      } else if (target === 'school') {
-        updated.school_logo = null;
-      }
-      return updated;
-    });
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    setSuccessMsg(null);
-    setErrorMsg(null);
+    setSaveSuccess(false);
+
+    const payload = {
+      ...formData,
+      principal_faculty: formData.principal_faculty ? Number(formData.principal_faculty) : null,
+    };
 
     try {
-      const payload = {
-        ...formData,
-        left_logo: formData.kagawaran_logo,
-        right_logo: formData.deped_logo,
-      };
-      const res = await apiClient.put<SchoolSettingsData>('/settings/school/', payload);
-      setFormData({
-        school_id: res.data.school_id || '',
-        school_name: res.data.school_name || '',
-        region: res.data.region || '',
-        division: res.data.division || '',
-        district: res.data.district || '',
-        address: res.data.address || '',
-        contact_number: res.data.contact_number || '',
-        email: res.data.email || '',
-        principal_name: res.data.principal_name || '',
-        principal_title: res.data.principal_title || '',
-        kagawaran_logo: res.data.kagawaran_logo || res.data.left_logo || null,
-        deped_logo: res.data.deped_logo || res.data.right_logo || null,
-        school_logo: res.data.school_logo || null,
-        latitude: res.data.latitude ?? null,
-        longitude: res.data.longitude ?? null,
-        geofence_radius_meters: res.data.geofence_radius_meters ?? null,
+      try {
+        await apiClient.put('/settings/school/', payload);
+      } catch (putErr: any) {
+        if (putErr?.response?.status === 405) {
+          await apiClient.post('/settings/school/', payload);
+        } else {
+          throw putErr;
+        }
+      }
+
+      await refreshSchool();
+      setSaveSuccess(true);
+      showAlert({
+        title: 'Settings Saved',
+        message: 'School profile, photos, and report seals updated successfully.',
+        type: 'success',
       });
-
-      // Broadcast update event so AdminSidebar and UI re-sync in real time
-      window.dispatchEvent(new CustomEvent('attendsure:school-settings-updated'));
-
-      setSuccessMsg('Institutional settings and official emblems successfully saved!');
-      setTimeout(() => setSuccessMsg(null), 5000);
+      setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err: any) {
-      setErrorMsg(err.response?.data?.error || 'Failed to save configuration to database.');
+      showAlert({
+        title: 'Update Failed',
+        message: err?.response?.data?.detail || 'Failed to update school profile.',
+        type: 'error',
+      });
     } finally {
       setSaving(false);
     }
@@ -190,335 +207,254 @@ export const SettingsTab: React.FC = () => {
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
         <Loader2 className="animate-spin" size={32} color="#0284c7" />
-        <span style={{ fontSize: '0.9rem', color: '#64748b', fontWeight: 600 }}>Loading school settings...</span>
       </div>
     );
   }
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', backgroundColor: '#f8fafc', padding: '24px 32px' }}>
-      <div style={{ maxWidth: 1080, margin: '0 auto' }}>
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ padding: 8, borderRadius: 8, backgroundColor: '#e0f2fe', color: '#0284c7' }}>
-              <Building2 size={24} />
-            </div>
-            <div>
-              <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                Institutional Profile &amp; Dynamic Identity Settings
-              </h1>
-              <p style={{ fontSize: '0.82rem', color: '#64748b', margin: '4px 0 0 0' }}>
-                All reports (SF1, SF2, SF4), headers, contacts, and footers query directly from this configuration.
-              </p>
-            </div>
-          </div>
+    <div
+      ref={scrollContainerRef}
+      style={{
+        width: '100%',
+        height: '100%',
+        flex: '1 1 auto',
+        alignSelf: 'stretch',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        boxSizing: 'border-box',
+        backgroundColor: '#f8fafc',
+      }}
+    >
+      <div
+        style={{
+          maxWidth: '1080px',
+          margin: '0 auto',
+          padding: '24px 24px 48px 24px',
+          boxSizing: 'border-box',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 20,
+        }}
+      >
+        {/* Header Block */}
+        <div>
+          <h1 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+            School Profile &amp; Administration
+          </h1>
+          <p style={{ fontSize: '0.82rem', color: '#64748b', marginTop: 4, margin: '4px 0 0 0' }}>
+            Manage official school identity, principal credentials, and official DepEd report seals.
+          </p>
         </div>
 
-        {successMsg && (
-          <div style={successAlertStyle}>
-            <CheckCircle2 size={18} color="#059669" />
-            <span>{successMsg}</span>
-          </div>
-        )}
-        {errorMsg && (
-          <div style={errorAlertStyle}>
-            <AlertCircle size={18} color="#dc2626" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit}>
-          {/* Institutional Metadata */}
+        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Section 1: School Head Assignment */}
           <div style={cardStyle}>
             <div style={cardHeaderStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <ShieldCheck size={18} color="#0284c7" />
-                <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>
-                  Institutional Identity &amp; Governance
-                </h2>
-              </div>
+              <UserCheck size={20} color="#0284c7" />
+              <h2 style={cardTitleStyle}>School Head / Principal Assignment</h2>
             </div>
 
-            <div style={gridThreeCols}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20, alignItems: 'start' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <label style={labelStyle}>Assign from Faculty &amp; Staff Directory *</label>
+                  <select
+                    value={formData.principal_faculty || ''}
+                    onChange={(e) => handleFacultyChange(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">-- Select Faculty Member --</option>
+                    {facultyList.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.last_name}, {f.first_name} — {f.position || 'Staff'} ({f.employee_id})
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: '0.74rem', color: '#64748b', marginTop: 4, display: 'block' }}>
+                    Pulls directly from active Faculty profiles. Updates name and title automatically.
+                  </span>
+                </div>
+
+                <div>
+                  <label style={labelStyle}>Official Signature Name (Printed on SF1, SF2, SF4)</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.principal_name}
+                    onChange={(e) => setFormData({ ...formData, principal_name: e.target.value })}
+                    placeholder="e.g. Maria A. Santos, PhD"
+                    style={inputStyle}
+                  />
+                </div>
+
+                <div>
+                  <label style={labelStyle}>Official DepEd Position / Title</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.principal_title}
+                    onChange={(e) => setFormData({ ...formData, principal_title: e.target.value })}
+                    placeholder="e.g. Secondary School Principal IV"
+                    style={inputStyle}
+                  />
+                </div>
+              </div>
+
+              {/* Profile Card Preview */}
+              <div style={previewBoxStyle}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#334155', marginBottom: 12 }}>
+                  Current School Head Credentials
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={avatarStyle}>
+                    {selectedFacultyObj?.photo_url ? (
+                      <img
+                        src={selectedFacultyObj.photo_url}
+                        alt="Principal"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <User size={28} color="#ffffff" />
+                    )}
+                  </div>
+
+                  <div>
+                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.92rem' }}>
+                      {formData.principal_name || 'No Principal Assigned'}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#0284c7', fontWeight: 700, marginTop: 2 }}>
+                      {formData.principal_title || 'Unassigned Title'}
+                    </div>
+                    {selectedFacultyObj && (
+                      <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 4 }}>
+                        ID: {selectedFacultyObj.employee_id} &bull; {selectedFacultyObj.department}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 2: School Identification */}
+          <div style={cardStyle}>
+            <div style={cardHeaderStyle}>
+              <Building2 size={20} color="#0284c7" />
+              <h2 style={cardTitleStyle}>School Identification &amp; Hierarchy</h2>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
               <div>
-                <label style={labelStyle}>DepEd School ID</label>
+                <label style={labelStyle}>DepEd School ID *</label>
                 <input
                   type="text"
-                  placeholder="e.g. 304033"
+                  required
                   value={formData.school_id}
                   onChange={(e) => setFormData({ ...formData, school_id: e.target.value })}
                   style={inputStyle}
-                  required
                 />
               </div>
-
               <div style={{ gridColumn: 'span 2' }}>
-                <label style={labelStyle}>Official School Name</label>
+                <label style={labelStyle}>Official School Name *</label>
                 <input
                   type="text"
-                  placeholder="e.g. Lapasan National High School"
+                  required
                   value={formData.school_name}
                   onChange={(e) => setFormData({ ...formData, school_name: e.target.value })}
                   style={inputStyle}
-                  required
                 />
               </div>
-
               <div>
                 <label style={labelStyle}>Region</label>
                 <input
                   type="text"
-                  placeholder="e.g. Region X - Northern Mindanao"
                   value={formData.region}
                   onChange={(e) => setFormData({ ...formData, region: e.target.value })}
                   style={inputStyle}
-                  required
                 />
               </div>
-
               <div>
-                <label style={labelStyle}>Schools Division</label>
+                <label style={labelStyle}>Division</label>
                 <input
                   type="text"
-                  placeholder="e.g. Division of Cagayan de Oro City"
                   value={formData.division}
                   onChange={(e) => setFormData({ ...formData, division: e.target.value })}
                   style={inputStyle}
-                  required
                 />
               </div>
-
               <div>
                 <label style={labelStyle}>District</label>
                 <input
                   type="text"
-                  placeholder="e.g. District II"
                   value={formData.district}
                   onChange={(e) => setFormData({ ...formData, district: e.target.value })}
                   style={inputStyle}
-                  required
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Principal / School Head Name</label>
-                <input
-                  type="text"
-                  placeholder="e.g. JACQUELINE GALUPO"
-                  value={formData.principal_name}
-                  onChange={(e) => setFormData({ ...formData, principal_name: e.target.value })}
-                  style={inputStyle}
-                  required
-                />
-              </div>
-
-              <div style={{ gridColumn: 'span 2' }}>
-                <label style={labelStyle}>Designation / Title</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Secondary School Principal II"
-                  value={formData.principal_title}
-                  onChange={(e) => setFormData({ ...formData, principal_title: e.target.value })}
-                  style={inputStyle}
                 />
               </div>
             </div>
           </div>
 
-          {/* Contact, Location & Footer Information */}
+          {/* Section 3: School Profile Photo (System & Sidebar Logo) */}
           <div style={cardStyle}>
             <div style={cardHeaderStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Compass size={18} color="#0284c7" />
-                <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>
-                  Office Details &amp; Report Footer Contacts (DO 31, s. 2019)
-                </h2>
-              </div>
+              <ImageIcon size={20} color="#0284c7" />
+              <h2 style={cardTitleStyle}>School Profile Photo &amp; Main Emblem</h2>
             </div>
 
-            <div style={gridTwoCols}>
-              <div style={{ gridColumn: 'span 2' }}>
-                <label style={labelStyle}>School Address (Appears on report footers)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Claro M. Recto Avenue, Lapasan, Cagayan de Oro City, 9000 Misamis Oriental"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  style={inputStyle}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Contact Numbers</label>
-                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                  <Phone size={14} color="#64748b" style={{ position: 'absolute', left: 10 }} />
-                  <input
-                    type="text"
-                    placeholder="e.g. (088) 856-1234 / 0917-123-4567"
-                    value={formData.contact_number}
-                    onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
-                    style={{ ...inputStyle, paddingLeft: 30 }}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+              <div
+                style={{
+                  width: 90,
+                  height: 90,
+                  borderRadius: '50%',
+                  border: '2px solid #e2e8f0',
+                  backgroundColor: '#f8fafc',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  overflow: 'hidden',
+                  flexShrink: 0,
+                  boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
+                }}
+              >
+                {formData.school_logo ? (
+                  <img
+                    src={formData.school_logo}
+                    alt="School Profile"
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
-                </div>
+                ) : (
+                  <Building2 size={36} color="#94a3b8" />
+                )}
               </div>
 
-              <div>
-                <label style={labelStyle}>Official Email Address</label>
-                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                  <Mail size={14} color="#64748b" style={{ position: 'absolute', left: 10 }} />
-                  <input
-                    type="email"
-                    placeholder="e.g. 304033@deped.gov.ph"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    style={{ ...inputStyle, paddingLeft: 30 }}
-                  />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.88rem' }}>
+                  Main School Profile Photo (e.g., LNHS Official Emblem)
                 </div>
-              </div>
-            </div>
-          </div>
+                <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: 4, lineHeight: 1.4 }}>
+                  This single photo represents your school across the entire AttendSure system: displayed in the top-left sidebar header, the portal navigation bar, and gate clearance passes.
+                </div>
 
-          {/* Dynamic Report Emblems & Logos */}
-          <div style={cardStyle}>
-            <div style={cardHeaderStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <ImageIcon size={18} color="#0284c7" />
-                <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>
-                  Official Emblems &amp; Document Seals (Auto-injected into SF1, SF2, SF4)
-                </h2>
-              </div>
-            </div>
-
-            <div style={gridThreeCols}>
-              {/* Kagawaran Logo */}
-              <div style={logoUploadBoxStyle}>
-                <div style={logoBoxTitleStyle}>
-                  1. Kagawaran ng Edukasyon Logo
-                </div>
-                <div style={logoBoxSubtitleStyle}>
-                  Republic Seal / Left Masthead
-                </div>
-                <div style={logoPreviewContainer}>
-                  {formData.kagawaran_logo ? (
-                    <img
-                      src={formData.kagawaran_logo}
-                      alt="Kagawaran Seal"
-                      style={{ maxWidth: 80, maxHeight: 80, objectFit: 'contain' }}
-                    />
-                  ) : (
-                    <span style={emptyLogoTextStyle}>Default Vector Used</span>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <label style={uploadBtnLabelStyle}>
-                    <Upload size={12} />
-                    <span>Upload</span>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <label style={uploadBtnStyle}>
+                    <Upload size={13} /> Upload School Photo
                     <input
                       type="file"
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload(e, 'kagawaran')}
-                      style={{ display: 'none' }}
-                    />
-                  </label>
-                  {formData.kagawaran_logo && (
-                    <button
-                      type="button"
-                      onClick={() => handleClearLogo('kagawaran')}
-                      style={resetBtnStyle}
-                      title="Clear logo"
-                    >
-                      <RotateCcw size={12} />
-                      <span>Reset</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* DepEd Logo */}
-              <div style={logoUploadBoxStyle}>
-                <div style={logoBoxTitleStyle}>
-                  2. DepEd Official Logo
-                </div>
-                <div style={logoBoxSubtitleStyle}>
-                  Agency Ribbon / Right Masthead
-                </div>
-                <div style={logoPreviewContainer}>
-                  {formData.deped_logo ? (
-                    <img
-                      src={formData.deped_logo}
-                      alt="DepEd Ribbon"
-                      style={{ maxWidth: 80, maxHeight: 80, objectFit: 'contain' }}
-                    />
-                  ) : (
-                    <span style={emptyLogoTextStyle}>Default Vector Used</span>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <label style={uploadBtnLabelStyle}>
-                    <Upload size={12} />
-                    <span>Upload</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload(e, 'deped')}
-                      style={{ display: 'none' }}
-                    />
-                  </label>
-                  {formData.deped_logo && (
-                    <button
-                      type="button"
-                      onClick={() => handleClearLogo('deped')}
-                      style={resetBtnStyle}
-                      title="Clear logo"
-                    >
-                      <RotateCcw size={12} />
-                      <span>Reset</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* School Crest */}
-              <div style={logoUploadBoxStyle}>
-                <div style={logoBoxTitleStyle}>
-                  3. School Crest / Institutional Seal
-                </div>
-                <div style={logoBoxSubtitleStyle}>
-                  Document Footer / Certification Seal
-                </div>
-                <div style={logoPreviewContainer}>
-                  {formData.school_logo ? (
-                    <img
-                      src={formData.school_logo}
-                      alt="School Crest"
-                      style={{ maxWidth: 80, maxHeight: 80, objectFit: 'contain' }}
-                    />
-                  ) : (
-                    <span style={emptyLogoTextStyle}>No School Seal Set</span>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <label style={uploadBtnLabelStyle}>
-                    <Upload size={12} />
-                    <span>Upload</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload(e, 'school')}
+                      accept="image/png, image/jpeg, image/webp"
+                      onChange={(e) => handleLogoUpload('school_logo', e)}
                       style={{ display: 'none' }}
                     />
                   </label>
                   {formData.school_logo && (
                     <button
                       type="button"
-                      onClick={() => handleClearLogo('school')}
-                      style={resetBtnStyle}
-                      title="Clear logo"
+                      onClick={() => setFormData((p) => ({ ...p, school_logo: null }))}
+                      style={removeBtnStyle}
                     >
-                      <RotateCcw size={12} />
-                      <span>Reset</span>
+                      <Trash2 size={13} /> Remove
                     </button>
                   )}
                 </div>
@@ -526,63 +462,109 @@ export const SettingsTab: React.FC = () => {
             </div>
           </div>
 
-          {/* Campus Geofence */}
+          {/* Section 4: Dual Report Letterhead Seals (DepEd Manual of Style) */}
           <div style={cardStyle}>
             <div style={cardHeaderStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <MapPin size={18} color="#0284c7" />
-                <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>
-                  Campus Geofence GPS Coordinates
-                </h2>
-              </div>
+              <ShieldCheck size={20} color="#0284c7" />
+              <h2 style={cardTitleStyle}>Official Report Letterhead Seals (SF1, SF2, SF4, DTR)</h2>
             </div>
+            <p style={{ fontSize: '0.76rem', color: '#64748b', margin: '0 0 14px 0' }}>
+              These two seals are printed at <strong>0.76 inches</strong> on official report headers according to the DepEd Manual of Style:
+            </p>
 
-            <div style={gridThreeCols}>
-              <div>
-                <label style={labelStyle}>Latitude</label>
-                <input
-                  type="number"
-                  step="any"
-                  placeholder="e.g. 8.4862"
-                  value={formData.latitude !== null ? formData.latitude : ''}
-                  onChange={(e) => setFormData({ ...formData, latitude: e.target.value === '' ? null : parseFloat(e.target.value) })}
-                  style={inputStyle}
-                />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+              {/* Left Report Seal */}
+              <div style={logoSlotStyle}>
+                <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#334155' }}>
+                  1. Left Seal (e.g., DepEd Seal / Kagawaran Seal)
+                </span>
+                <div style={logoBoxStyle}>
+                  {formData.left_logo ? (
+                    <img
+                      src={formData.left_logo}
+                      alt="Left Seal"
+                      style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <span style={{ fontSize: '0.74rem', color: '#94a3b8' }}>No seal uploaded</span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <label style={uploadBtnStyle}>
+                    <Upload size={13} /> Upload Left Seal
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleLogoUpload('left_logo', e)}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                  {formData.left_logo && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData((p) => ({ ...p, left_logo: null }))}
+                      style={removeBtnStyle}
+                    >
+                      <Trash2 size={13} /> Remove
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div>
-                <label style={labelStyle}>Longitude</label>
-                <input
-                  type="number"
-                  step="any"
-                  placeholder="e.g. 124.6618"
-                  value={formData.longitude !== null ? formData.longitude : ''}
-                  onChange={(e) => setFormData({ ...formData, longitude: e.target.value === '' ? null : parseFloat(e.target.value) })}
-                  style={inputStyle}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Perimeter Radius (Meters)</label>
-                <input
-                  type="number"
-                  min={10}
-                  placeholder="e.g. 250"
-                  value={formData.geofence_radius_meters !== null ? formData.geofence_radius_meters : ''}
-                  onChange={(e) => setFormData({ ...formData, geofence_radius_meters: e.target.value === '' ? null : parseInt(e.target.value, 10) })}
-                  style={inputStyle}
-                />
+              {/* Right Report Seal */}
+              <div style={logoSlotStyle}>
+                <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#334155' }}>
+                  2. Right Seal (e.g., Division Seal / DepEd Flame Logo)[cite: 14]
+                </span>
+                <div style={logoBoxStyle}>
+                  {formData.right_logo ? (
+                    <img
+                      src={formData.right_logo}
+                      alt="Right Seal"
+                      style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <span style={{ fontSize: '0.74rem', color: '#94a3b8' }}>No seal uploaded</span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <label style={uploadBtnStyle}>
+                    <Upload size={13} /> Upload Right Seal
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleLogoUpload('right_logo', e)}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                  {formData.right_logo && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData((p) => ({ ...p, right_logo: null }))}
+                      style={removeBtnStyle}
+                    >
+                      <Trash2 size={13} /> Remove
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 20 }}>
-            <Button variant="secondary" size="md" type="button" onClick={fetchSettings}>
-              Discard Changes
-            </Button>
+          {/* Action Button Bar */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 10 }}>
+            {saveSuccess && (
+              <span style={{ color: '#059669', fontSize: '0.85rem', fontWeight: 700 }}>
+                Settings saved successfully.
+              </span>
+            )}
             <Button variant="primary" size="md" type="submit" disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : <Save size={16} style={{ marginRight: 6 }} />}
-              Save All Settings
+              {saving ? (
+                <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} />
+              ) : (
+                <Save size={16} style={{ marginRight: 6 }} />
+              )}
+              Save School Configuration
             </Button>
           </div>
         </form>
@@ -591,37 +573,34 @@ export const SettingsTab: React.FC = () => {
   );
 };
 
-// ==========================================
+export default SettingsTab;
+
+// ============================================================================
 // STYLES
-// ==========================================
+// ============================================================================
+
 const cardStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
+  padding: '20px 24px',
   border: '1px solid #e2e8f0',
-  padding: '18px 24px',
-  marginBottom: 20,
-  boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
 };
 
 const cardHeaderStyle: React.CSSProperties = {
   display: 'flex',
-  justifyContent: 'space-between',
   alignItems: 'center',
-  borderBottom: '1px solid #f1f5f9',
-  paddingBottom: 12,
+  gap: 10,
   marginBottom: 16,
+  paddingBottom: 10,
+  borderBottom: '1px solid #f1f5f9',
 };
 
-const gridTwoCols: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 16,
-};
-
-const gridThreeCols: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(3, 1fr)',
-  gap: 16,
+const cardTitleStyle: React.CSSProperties = {
+  fontSize: '1rem',
+  fontWeight: 800,
+  color: '#0f172a',
+  margin: 0,
 };
 
 const labelStyle: React.CSSProperties = {
@@ -640,106 +619,73 @@ const inputStyle: React.CSSProperties = {
   fontSize: '0.84rem',
   color: '#0f172a',
   outline: 'none',
-  backgroundColor: '#ffffff',
   boxSizing: 'border-box',
 };
 
-const logoUploadBoxStyle: React.CSSProperties = {
-  border: '1px dashed #cbd5e1',
-  borderRadius: 8,
-  padding: 14,
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
+const previewBoxStyle: React.CSSProperties = {
   backgroundColor: '#f8fafc',
-  textAlign: 'center',
+  border: '1px solid #e2e8f0',
+  borderRadius: 8,
+  padding: '16px',
 };
 
-const logoBoxTitleStyle: React.CSSProperties = {
-  fontWeight: 700,
-  fontSize: '0.80rem',
-  color: '#1e293b',
-  lineHeight: 1.2,
-};
-
-const logoBoxSubtitleStyle: React.CSSProperties = {
-  fontSize: '0.68rem',
-  color: '#64748b',
-  marginBottom: 8,
-};
-
-const logoPreviewContainer: React.CSSProperties = {
-  width: 90,
-  height: 90,
+const avatarStyle: React.CSSProperties = {
+  width: 56,
+  height: 56,
+  borderRadius: '50%',
+  backgroundColor: '#0284c7',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  backgroundColor: '#ffffff',
-  borderRadius: 8,
-  border: '1px solid #e2e8f0',
-  marginBottom: 10,
+  overflow: 'hidden',
+  flexShrink: 0,
+  border: '2px solid #ffffff',
+  boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
 };
 
-const emptyLogoTextStyle: React.CSSProperties = {
-  fontSize: '0.68rem',
-  color: '#94a3b8',
-  fontStyle: 'italic',
-  padding: '0 4px',
+const logoSlotStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
 };
 
-const uploadBtnLabelStyle: React.CSSProperties = {
-  display: 'inline-flex',
+const logoBoxStyle: React.CSSProperties = {
+  width: '100%',
+  height: 100,
+  backgroundColor: '#f8fafc',
+  border: '1px dashed #cbd5e1',
+  borderRadius: '8px',
+  display: 'flex',
   alignItems: 'center',
-  gap: 4,
-  padding: '5px 10px',
-  backgroundColor: '#0284c7',
-  color: '#ffffff',
+  justifyContent: 'center',
+  padding: 8,
+  boxSizing: 'border-box',
+};
+
+const uploadBtnStyle: React.CSSProperties = {
+  padding: '6px 12px',
+  backgroundColor: '#f1f5f9',
+  border: '1px solid #cbd5e1',
   borderRadius: 6,
-  fontSize: '0.74rem',
+  fontSize: '0.76rem',
   fontWeight: 700,
+  color: '#0284c7',
   cursor: 'pointer',
-};
-
-const resetBtnStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 4,
-  padding: '5px 8px',
-  backgroundColor: '#ffffff',
-  color: '#dc2626',
-  border: '1px solid #fecaca',
-  borderRadius: 6,
-  fontSize: '0.74rem',
-  fontWeight: 600,
-  cursor: 'pointer',
+  gap: 6,
 };
 
-const successAlertStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  backgroundColor: '#ecfdf5',
-  border: '1px solid #a7f3d0',
-  color: '#065f46',
-  padding: '10px 16px',
-  borderRadius: 8,
-  marginBottom: 16,
-  fontSize: '0.84rem',
-  fontWeight: 600,
-};
-
-const errorAlertStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
+const removeBtnStyle: React.CSSProperties = {
+  padding: '6px 12px',
   backgroundColor: '#fef2f2',
   border: '1px solid #fecaca',
+  borderRadius: 6,
+  fontSize: '0.76rem',
+  fontWeight: 700,
   color: '#dc2626',
-  padding: '10px 16px',
-  borderRadius: 8,
-  marginBottom: 16,
-  fontSize: '0.84rem',
-  fontWeight: 600,
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
 };
-
-export default SettingsTab;

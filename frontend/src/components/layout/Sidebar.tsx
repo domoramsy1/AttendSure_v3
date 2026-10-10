@@ -1,12 +1,23 @@
-import React, { useState, useMemo } from 'react';
+/**
+ * AttendSure V3 - Institutional Navigation Sidebar
+ * File: frontend/src/components/layout/Sidebar.tsx
+ *
+ * Capabilities:
+ * - 5-Tier Role-Based Access Control (RBAC) navigation filtering.
+ * - Dynamic school logo and ID integration with SchoolContext fallback.
+ * - Complete route mapping including Gate Passes, SMS Gateway, and DepEd Reports.
+ * - Resilient user avatar with localStorage hydration fallback and image error handling.
+ * - Accessible collapsed/expanded navigation states.
+ */
+
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   LayoutDashboard,
   Radio,
   GraduationCap,
   Users,
   CalendarDays,
-  KeyRound,
-  Scan,
+  Cpu,
   Clock,
   MapPin,
   FileSpreadsheet,
@@ -14,7 +25,10 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  MessageSquare,
+  Ticket,
 } from 'lucide-react';
+import { useSchool } from '../../context/SchoolContext';
 import type { UserSession } from '../../types/section';
 
 export type NavItemKey =
@@ -28,10 +42,11 @@ export type NavItemKey =
   | 'dtr'
   | 'geofence'
   | 'scanners'
+  | 'sms'
   | 'reports'
   | 'settings';
 
-export type UserRole = 'ADMIN' | 'TEACHER';
+export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'TEACHER' | 'GUARD';
 
 interface NavItem {
   id: NavItemKey;
@@ -57,9 +72,9 @@ export interface SidebarProps {
   schoolLogo?: string | null;
 }
 
-const formatLogoSource = (rawLogo?: string | null): string | null => {
-  if (!rawLogo || typeof rawLogo !== 'string') return null;
-  const trimmed = rawLogo.trim();
+const formatImageSource = (rawSrc?: string | null): string | null => {
+  if (!rawSrc || typeof rawSrc !== 'string') return null;
+  const trimmed = rawSrc.trim();
   if (!trimmed) return null;
 
   if (
@@ -71,17 +86,23 @@ const formatLogoSource = (rawLogo?: string | null): string | null => {
     return trimmed;
   }
 
-  if (trimmed.startsWith('/media/')) {
-    return `http://localhost:8000${trimmed}`;
+  // Handle server-relative media paths dynamically without hardcoded localhost
+  if (trimmed.startsWith('/media/') || trimmed.startsWith('media/')) {
+    const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    const backendPort = window.location.port === '8000' ? '' : ':8000';
+    return `${protocol}//${hostname}${backendPort}${cleanPath}`;
   }
 
+  // Raw base64 string headers fallback
   if (trimmed.startsWith('/9j/')) {
     return `data:image/jpeg;base64,${trimmed}`;
   }
   if (trimmed.startsWith('iVBORw0KGgo')) {
     return `data:image/png;base64,${trimmed}`;
   }
-  if (trimmed.length > 100 && !trimmed.includes(' ')) {
+  if (trimmed.length > 50 && !trimmed.includes(' ') && !trimmed.startsWith('/')) {
     return `data:image/png;base64,${trimmed}`;
   }
 
@@ -99,21 +120,56 @@ export const Sidebar: React.FC<SidebarProps> = ({
   schoolId,
   schoolLogo,
 }) => {
+  const { school } = useSchool();
   const [imgFailed, setImgFailed] = useState(false);
-  const rawRole = (session?.role || 'TEACHER').toUpperCase();
-  const userRole: UserRole = rawRole === 'ADMIN' ? 'ADMIN' : 'TEACHER';
-  const userName = session?.faculty_name || session?.username || '';
+  const [userImgFailed, setUserImgFailed] = useState(false);
+
+  // Fallback to localStorage session data during initial hydration
+  const rawRole = (
+    session?.role ||
+    localStorage.getItem('attendsure_role') ||
+    'TEACHER'
+  ).toUpperCase();
+
+  const userRole: UserRole = (
+    ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'].includes(rawRole)
+      ? rawRole
+      : 'TEACHER'
+  ) as UserRole;
+
+  const userName =
+    session?.faculty_name ||
+    session?.username ||
+    localStorage.getItem('attendsure_faculty_name') ||
+    localStorage.getItem('attendsure_username') ||
+    'User';
+
+  const userInitial = userName ? userName.charAt(0).toUpperCase() : '?';
+
+  // Prioritize live database state from SchoolContext over initial props
+  const effectiveSchoolLogo = school.school_logo || schoolLogo || null;
+  const effectiveSchoolName = school.school_name || schoolName || 'Lapasan National High School';
+  const effectiveSchoolId = school.school_id || schoolId || school.school_id || '340964';
+
+  const resolvedLogo = formatImageSource(effectiveSchoolLogo);
+  const resolvedUserPhoto = formatImageSource(userPhoto);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [resolvedLogo, effectiveSchoolLogo]);
+
+  useEffect(() => {
+    setUserImgFailed(false);
+  }, [resolvedUserPhoto, userPhoto]);
 
   const dynamicMonogram = useMemo(() => {
-    if (!schoolName || !schoolName.trim()) return 'SCH';
-    const words = schoolName.trim().split(/\s+/).filter(Boolean);
+    if (!effectiveSchoolName || !effectiveSchoolName.trim()) return 'SCH';
+    const words = effectiveSchoolName.trim().split(/\s+/).filter(Boolean);
     const initials = words.map((w) => w[0]).join('').slice(0, 4).toUpperCase();
     return initials || 'SCH';
-  }, [schoolName]);
+  }, [effectiveSchoolName]);
 
-  const resolvedLogo = formatLogoSource(schoolLogo);
-
-  // Strictly ADMIN and TEACHER access
+  // 5-Tier RBAC Navigation Access
   const navGroups: NavGroup[] = [
     {
       groupTitle: 'OVERVIEW',
@@ -122,13 +178,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'dashboard',
           label: 'Dashboard',
           icon: LayoutDashboard,
-          allowedRoles: ['ADMIN', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'],
         },
         {
           id: 'gate-logs',
           label: 'Gate Logs',
           icon: Radio,
-          allowedRoles: ['ADMIN'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'GUARD'],
         },
       ],
     },
@@ -139,19 +195,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'students',
           label: 'Students',
           icon: GraduationCap,
-          allowedRoles: ['ADMIN', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
         },
         {
           id: 'facultys',
           label: 'Faculty',
           icon: Users,
-          allowedRoles: ['ADMIN'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD'],
         },
         {
           id: 'schedules',
           label: 'Schedules & Sections',
           icon: CalendarDays,
-          allowedRoles: ['ADMIN', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
         },
       ],
     },
@@ -159,28 +215,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
       groupTitle: 'GATE & SECURITY',
       items: [
         {
+          id: 'sms',
+          label: 'SMS Gateway',
+          icon: MessageSquare,
+          allowedRoles: ['ADMIN', 'PRINCIPAL'],
+        },
+        {
           id: 'gate-passes',
           label: 'Gate Passes',
-          icon: KeyRound,
-          allowedRoles: ['ADMIN', 'TEACHER'],
+          icon: Ticket,
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'],
         },
         {
           id: 'scanners',
-          label: 'Gate Scanners',
-          icon: Scan,
+          label: 'IoT Kiosks & Scanners',
+          icon: Cpu,
           allowedRoles: ['ADMIN'],
         },
         {
           id: 'dtr',
           label: 'DTR',
           icon: Clock,
-          allowedRoles: ['ADMIN', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
         },
         {
           id: 'geofence',
           label: 'Campus Perimeter',
           icon: MapPin,
-          allowedRoles: ['ADMIN'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL'],
         },
       ],
     },
@@ -191,7 +253,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'reports',
           label: 'Reports',
           icon: FileSpreadsheet,
-          allowedRoles: ['ADMIN', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
         },
         {
           id: 'users',
@@ -226,7 +288,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         zIndex: 50,
       }}
     >
-      {/* 1. Header: School Seal */}
+      {/* 1. Header: School Emblem & System Title */}
       <div
         style={{
           display: 'flex',
@@ -260,7 +322,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {resolvedLogo && !imgFailed ? (
               <img
                 src={resolvedLogo}
-                alt={schoolName || 'School Seal'}
+                alt={effectiveSchoolName}
                 onError={() => setImgFailed(true)}
                 style={{
                   width: '100%',
@@ -301,11 +363,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   textOverflow: 'ellipsis',
                   letterSpacing: '0.2px',
                 }}
+                title={effectiveSchoolName}
               >
-                {schoolName || 'AttendSure'}
+                {effectiveSchoolName}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                {schoolId && (
+                {effectiveSchoolId && (
                   <span
                     style={{
                       fontSize: '0.62rem',
@@ -314,7 +377,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       fontWeight: 600,
                     }}
                   >
-                    ID: {schoolId}
+                    ID: {effectiveSchoolId}
                   </span>
                 )}
                 <span
@@ -335,8 +398,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         <button
+          type="button"
           onClick={onToggleCollapse}
           title={isCollapsed ? 'Expand Navigation' : 'Collapse Navigation'}
+          aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           style={{
             position: 'absolute',
             right: isCollapsed ? -11 : 10,
@@ -387,7 +452,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     fontWeight: 800,
                     color: '#64748b',
                     letterSpacing: '0.8px',
-                    padding: '4px 10px 4px 10px',
+                    padding: '4px 10px',
                   }}
                 >
                   {group.groupTitle}
@@ -402,6 +467,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   return (
                     <button
                       key={item.id}
+                      type="button"
                       onClick={() => onSelectTab(item.id)}
                       title={isCollapsed ? item.label : undefined}
                       style={{
@@ -474,7 +540,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         })}
       </div>
 
-      {/* 3. Account Identity with Profile Photo */}
+      {/* 3. Bottom Account Profile */}
       <div
         style={{
           padding: isCollapsed ? '14px 6px' : '14px 14px',
@@ -503,14 +569,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             overflow: 'hidden',
           }}
         >
-          {userPhoto ? (
+          {resolvedUserPhoto && !userImgFailed ? (
             <img
-              src={userPhoto}
+              src={resolvedUserPhoto}
               alt={userName}
+              onError={() => setUserImgFailed(true)}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
-            userName ? userName.charAt(0).toUpperCase() : '?'
+            userInitial
           )}
         </div>
 
@@ -525,8 +592,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
+              title={userName}
             >
-              {userName || 'User'}
+              {userName}
             </div>
             {userRole && (
               <span

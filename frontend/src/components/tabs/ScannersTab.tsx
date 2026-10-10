@@ -1,8 +1,21 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+/**
+ * AttendSure V3 - IoT Kiosks & Hardware Scanners Management
+ * File: frontend/src/components/tabs/ScannersTab.tsx
+ *
+ * Key Highlights:
+ * 1. MODERN ALERTS: Uses showConfirm and showAlert from AlertContext instead of window.alert/confirm.
+ * 2. LIVE DATABASE POLLING: Silent 3-second heartbeat tracks real-time terminal online/offline statuses.
+ * 3. INTERACTION GUARD: Polling pauses automatically while modals and live verification tests run.
+ * 4. DUAL-MODE HARDWARE INSPECTOR: Simulates live RFID taps and optical QR scans against backend endpoints.
+ * 5. SERVER PAGINATION & TELEMETRY: Overview cards for online hardware and items-per-page selection.
+ */
+
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import apiClient from '../../api/client';
 import { ModuleTableLayout } from './ModuleTableLayout';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { useAlert } from '../../context/AlertContext';
 import {
   Cpu,
   Wifi,
@@ -26,7 +39,15 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Send,
+  Play,
+  Plus,
+  User,
 } from 'lucide-react';
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
 
 interface IoTKiosk {
   id: number;
@@ -36,8 +57,17 @@ interface IoTKiosk {
   secret_key?: string;
   is_active: boolean;
   last_ping: string | null;
+  is_online?: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+interface TestSubject {
+  id: number;
+  name: string;
+  type: 'STUDENT' | 'STAFF';
+  rfid_uid?: string;
+  qr_token?: string;
 }
 
 interface PaginatedResponse<T> {
@@ -47,24 +77,36 @@ interface PaginatedResponse<T> {
   results: T[];
 }
 
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export const ScannersTab: React.FC = () => {
+  const { showAlert, showConfirm } = useAlert();
+
   const [scanners, setScanners] = useState<IoTKiosk[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
-  // Server Pagination State
+  // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
 
-  // Security, Inspection & Clipboard States
+  // Security & Modal States
   const [revealedSecrets, setRevealedSecrets] = useState<Record<number, boolean>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [inspectedScanner, setInspectedScanner] = useState<IoTKiosk | null>(null);
 
-  // Modal & Form States
+  // Dynamic Live Test State
+  const [testSubjects, setTestSubjects] = useState<TestSubject[]>([]);
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>('');
+  const [activeTestMode, setActiveTestMode] = useState<'RFID' | 'QR'>('RFID');
+  const [testExecuting, setTestExecuting] = useState(false);
+  const [testResult, setTestResult] = useState<any | null>(null);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingScanner, setEditingScanner] = useState<IoTKiosk | null>(null);
   const [saving, setSaving] = useState(false);
@@ -76,58 +118,121 @@ export const ScannersTab: React.FC = () => {
     is_active: true,
   });
 
-  // Fetch real records from the database
-  const fetchScanners = useCallback(async (page = 1, size = 25, query = '') => {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await apiClient.get<PaginatedResponse<IoTKiosk> | IoTKiosk[]>('/scanners/', {
-        params: {
-          page,
-          page_size: size,
-          search: query.trim() || undefined,
-        },
-      });
+  // Guard flag: prevents silent background polling from interrupting open dialogs
+  const isInteracting = useRef(false);
+  isInteracting.current = isModalOpen || Boolean(inspectedScanner) || saving || testExecuting;
 
-      if (res.data && 'results' in res.data) {
-        setScanners(res.data.results);
-        setTotalCount(res.data.count);
-        setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size) || 1);
-        setCurrentPage(res.data.current_page || page);
-      } else if (Array.isArray(res.data)) {
-        setScanners(res.data);
-        setTotalCount(res.data.length);
-        setTotalPages(1);
-        setCurrentPage(1);
+  // ============================================================================
+  // DATABASE DATA FETCHING & LIVE POLLING
+  // ============================================================================
+
+  const fetchScanners = useCallback(
+    async (page = 1, size = 25, query = '', silent = false) => {
+      try {
+        if (!silent) setLoading(true);
+        setError(null);
+        const res = await apiClient.get<PaginatedResponse<IoTKiosk> | IoTKiosk[]>('/scanners/', {
+          params: {
+            page,
+            page_size: size,
+            search: query.trim() || undefined,
+          },
+        });
+
+        if (res.data && 'results' in res.data) {
+          setScanners(res.data.results);
+          setTotalCount(res.data.count);
+          setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size) || 1);
+          setCurrentPage(res.data.current_page || page);
+        } else if (Array.isArray(res.data)) {
+          setScanners(res.data);
+          setTotalCount(res.data.length);
+          setTotalPages(1);
+          setCurrentPage(1);
+        }
+      } catch (err: any) {
+        if (!silent) {
+          setError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to load scanner terminals from database.');
+        }
+      } finally {
+        if (!silent) setLoading(false);
       }
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to load scanner terminals from database.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
+  // Debounced search watcher
   useEffect(() => {
     const timer = setTimeout(() => {
       setCurrentPage(1);
-      fetchScanners(1, pageSize, search);
+      fetchScanners(1, pageSize, search, false);
     }, 300);
     return () => clearTimeout(timer);
   }, [search, pageSize, fetchScanners]);
 
+  // LIVE ZERO-REFRESH POLLING: Syncs hardware online/standby pings every 3 seconds
+  useEffect(() => {
+    const liveInterval = setInterval(() => {
+      if (!isInteracting.current) {
+        fetchScanners(currentPage, pageSize, search, true);
+      }
+    }, 3000);
+
+    return () => clearInterval(liveInterval);
+  }, [currentPage, pageSize, search, fetchScanners]);
+
+  // Dynamically load real registered records for dual-mode verification
+  const loadDynamicTestSubjects = async () => {
+    try {
+      const [stuRes, facRes] = await Promise.all([
+        apiClient.get('/students/?page_size=15'),
+        apiClient.get('/facultys/?page_size=15'),
+      ]);
+
+      const stuList = (Array.isArray(stuRes.data) ? stuRes.data : stuRes.data?.results || []).map((s: any) => ({
+        id: s.id,
+        name: `${s.first_name} ${s.last_name} (LRN: ${s.lrn})`,
+        type: 'STUDENT' as const,
+        rfid_uid: s.rfid_uid || '',
+        qr_token: s.qr_token || '',
+      }));
+
+      const facList = (Array.isArray(facRes.data) ? facRes.data : facRes.data?.results || []).map((f: any) => ({
+        id: f.id + 100000,
+        name: `${f.first_name} ${f.last_name} (${f.position || 'Faculty'})`,
+        type: 'STAFF' as const,
+        rfid_uid: f.rfid_uid || '',
+        qr_token: f.qr_token || '',
+      }));
+
+      const combined = [...stuList, ...facList];
+      setTestSubjects(combined);
+      if (combined.length > 0) {
+        setSelectedSubjectId(String(combined[0].id));
+      }
+    } catch (err) {
+      console.error('Failed to load active identity subjects:', err);
+    }
+  };
+
+  const handleOpenInspector = (scanner: IoTKiosk) => {
+    setInspectedScanner(scanner);
+    setTestResult(null);
+    loadDynamicTestSubjects();
+  };
+
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return;
     setCurrentPage(newPage);
-    fetchScanners(newPage, pageSize, search);
+    fetchScanners(newPage, pageSize, search, false);
   };
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
     setCurrentPage(1);
-    fetchScanners(1, newSize, search);
+    fetchScanners(1, newSize, search, false);
   };
 
-  // Hardware health computed from real database ping time
   const getDeviceHealth = (lastPing: string | null, isActive: boolean) => {
     if (!isActive) {
       return { status: 'DISABLED', label: 'Disabled', color: '#64748b', bg: '#f1f5f9', border: '#cbd5e1' };
@@ -143,7 +248,6 @@ export const ScannersTab: React.FC = () => {
     return { status: 'OFFLINE', label: 'Offline', color: '#dc2626', bg: '#fef2f2', border: '#fecaca' };
   };
 
-  // Database metrics calculated from live loaded records
   const metrics = useMemo(() => {
     const online = scanners.filter((s) => s.is_active && getDeviceHealth(s.last_ping, s.is_active).status === 'ONLINE').length;
     const active = scanners.filter((s) => s.is_active).length;
@@ -151,24 +255,57 @@ export const ScannersTab: React.FC = () => {
     return { online, active, inactiveOrOffline };
   }, [scanners]);
 
-  // Generate secure token for new hardware setup
   const createSecureToken = () => {
-    const randomBuffer = new Uint8Array(12);
-    window.crypto.getRandomValues(randomBuffer);
-    const token = Array.from(randomBuffer, (byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
-    return `SEC-${token.slice(0, 4)}-${token.slice(4, 8)}-${token.slice(8, 12)}-${token.slice(12, 16)}`;
+    try {
+      const randomBuffer = new Uint8Array(12);
+      window.crypto.getRandomValues(randomBuffer);
+      const token = Array.from(randomBuffer, (byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+      return `SEC-${token.slice(0, 4)}-${token.slice(4, 8)}-${token.slice(8, 12)}-${token.slice(12, 16)}`;
+    } catch {
+      return `SEC-${Date.now().toString(36).toUpperCase()}`;
+    }
   };
 
-  const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(id);
-    setTimeout(() => setCopiedKey(null), 2000);
+  const handleCopy = async (text: string, id: string) => {
+    let success = false;
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        success = true;
+      } catch {
+        success = false;
+      }
+    }
+    if (!success) {
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        success = document.execCommand('copy');
+        textArea.remove();
+      } catch (err) {
+        console.error('Copy fallback failed:', err);
+      }
+    }
+    if (success) {
+      setCopiedKey(id);
+      setTimeout(() => setCopiedKey(null), 2000);
+    }
   };
+
+  // ============================================================================
+  // CRUD ACTIONS
+  // ============================================================================
 
   const handleOpenCreate = () => {
     setEditingScanner(null);
     setFormData({
-      kiosk_code: `KIOSK-${Math.floor(1000 + Math.random() * 9000)}`,
+      kiosk_code: '',
       terminal_name: '',
       location: '',
       secret_key: createSecureToken(),
@@ -183,7 +320,7 @@ export const ScannersTab: React.FC = () => {
       kiosk_code: scanner.kiosk_code,
       terminal_name: scanner.terminal_name,
       location: scanner.location,
-      secret_key: '', // Left blank so existing secret is kept safe unless updated
+      secret_key: scanner.secret_key || '',
       is_active: scanner.is_active,
     });
     setIsModalOpen(true);
@@ -206,28 +343,99 @@ export const ScannersTab: React.FC = () => {
 
       if (editingScanner) {
         await apiClient.put(`/scanners/${editingScanner.id}/`, payload);
+        showAlert({
+          title: 'Terminal Updated',
+          message: `Scanner terminal "${formData.terminal_name}" updated successfully.`,
+          type: 'success',
+        });
       } else {
         await apiClient.post('/scanners/', payload);
+        showAlert({
+          title: 'Terminal Registered',
+          message: `Scanner terminal "${formData.terminal_name}" (${formData.kiosk_code}) registered.`,
+          type: 'success',
+        });
       }
 
       setIsModalOpen(false);
-      fetchScanners(currentPage, pageSize, search);
+      fetchScanners(currentPage, pageSize, search, true);
     } catch (err: any) {
-      alert(err?.response?.data?.detail || err?.response?.data?.error || 'Failed to save scanner terminal to database.');
+      showAlert({
+        title: 'Save Error',
+        message: err?.response?.data?.detail || err?.response?.data?.error || 'Failed to save scanner terminal to database.',
+        type: 'error',
+      });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (scanner: IoTKiosk) => {
-    if (!window.confirm(`Are you sure you want to delete "${scanner.terminal_name}" (${scanner.kiosk_code})? Any card or QR scans from this terminal will be rejected.`)) {
+  const handleDelete = (scanner: IoTKiosk) => {
+    showConfirm({
+      title: 'Delete Scanner Terminal',
+      message: `Permanently delete "${scanner.terminal_name}" (${scanner.kiosk_code})? Any gate card or QR code scans attempted at this terminal will be rejected immediately.`,
+      confirmLabel: 'Delete Terminal',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await apiClient.delete(`/scanners/${scanner.id}/`);
+          showAlert({
+            title: 'Terminal Deleted',
+            message: `Terminal ${scanner.kiosk_code} has been removed.`,
+            type: 'info',
+          });
+          fetchScanners(currentPage, pageSize, search, true);
+        } catch (err: any) {
+          showAlert({
+            title: 'Delete Failed',
+            message: err?.response?.data?.detail || 'Failed to delete scanner terminal.',
+            type: 'error',
+          });
+        }
+      },
+    });
+  };
+
+  // Resolve active testing target from database
+  const activeSubject = testSubjects.find((s) => String(s.id) === String(selectedSubjectId));
+  const activeIdentifier =
+    activeTestMode === 'RFID'
+      ? activeSubject?.rfid_uid || ''
+      : activeSubject?.qr_token || '';
+
+  const dynamicApiOrigin = window.location.origin;
+
+  // Execute authentic live test against backend
+  const handleExecuteLiveTest = async () => {
+    if (!inspectedScanner) return;
+    if (!activeIdentifier) {
+      showAlert({
+        title: 'Missing Identifier',
+        message: `The selected record (${activeSubject?.name}) does not have an active ${activeTestMode} identifier stored in the database.`,
+        type: 'warning',
+      });
       return;
     }
+
+    setTestExecuting(true);
+    setTestResult(null);
+
     try {
-      await apiClient.delete(`/scanners/${scanner.id}/`);
-      fetchScanners(currentPage, pageSize, search);
+      const res = await apiClient.post('/gate/scan/', {
+        kiosk_code: inspectedScanner.kiosk_code,
+        secret_key: inspectedScanner.secret_key || '',
+        raw_identifier: activeIdentifier,
+        scan_method: activeTestMode,
+      });
+      setTestResult({ success: true, data: res.data });
+      fetchScanners(currentPage, pageSize, search, true);
     } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Failed to delete scanner terminal.');
+      setTestResult({
+        success: false,
+        error: err?.response?.data || { detail: 'Request failed. Verify terminal secret key.' },
+      });
+    } finally {
+      setTestExecuting(false);
     }
   };
 
@@ -236,8 +444,7 @@ export const ScannersTab: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      
-      {/* 1. Real Hardware Metrics Overview */}
+      {/* 1. Hardware Metrics Overview */}
       <div style={statsGrid}>
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -281,8 +488,8 @@ export const ScannersTab: React.FC = () => {
       {/* 2. Main Hardware List Table */}
       <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
-          title="IoT Kiosks &amp; Hardware Scanners"
-          subtitle="Manage gate scanners, RFID readers, and microcontrollers registered in the database."
+          title="IoT Kiosks & Hardware Scanners"
+          subtitle="Manage campus gate scanners, RFID readers, and microcontrollers registered in the database."
           searchPlaceholder="Search terminal code, name, or location..."
           searchValue={search}
           onSearchChange={setSearch}
@@ -421,8 +628,8 @@ export const ScannersTab: React.FC = () => {
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                   <button
                     type="button"
-                    onClick={() => setInspectedScanner(s)}
-                    title="View Device Setup Details"
+                    onClick={() => handleOpenInspector(s)}
+                    title="Live Dual-Mode Inspector & Hardware Config"
                     style={{ ...actionBtn, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}
                   >
                     <Terminal size={13} color="#0284c7" />
@@ -439,7 +646,7 @@ export const ScannersTab: React.FC = () => {
                     type="button"
                     onClick={() => handleDelete(s)}
                     title="Delete Terminal"
-                    style={{ ...actionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
+                    style={{ ...actionBtn, backgroundColor: '#fff1f2', borderColor: '#fee2e2' }}
                   >
                     <Trash2 size={13} color="#dc2626" />
                   </button>
@@ -449,7 +656,7 @@ export const ScannersTab: React.FC = () => {
           ]}
         />
 
-        {/* Real Pagination Bar */}
+        {/* Server Pagination Bar */}
         <div style={paginationContainer}>
           <div style={{ fontSize: '0.80rem', color: '#475569' }}>
             {totalCount > 0 ? (
@@ -531,11 +738,10 @@ export const ScannersTab: React.FC = () => {
         title={editingScanner ? 'Edit Scanner Terminal' : 'Register New Scanner Terminal'}
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          
           <div style={infoBox}>
             <ShieldAlert size={18} color="#0284c7" style={{ flexShrink: 0, marginTop: 2 }} />
             <div style={{ fontSize: '0.74rem', color: '#1e293b', lineHeight: 1.35 }}>
-              Each device needs a unique <strong>Kiosk Code</strong> and <strong>Secret Key</strong>. Gate taps without a matching secret key will be blocked to stop unauthorized access[cite: 1, 8].
+              Each device needs a unique <strong>Kiosk Code</strong> and <strong>Secret Key</strong>. Gate taps without a matching secret key will be rejected by the server.
             </div>
           </div>
 
@@ -547,7 +753,7 @@ export const ScannersTab: React.FC = () => {
               value={formData.kiosk_code}
               onChange={(e) => setFormData({ ...formData, kiosk_code: e.target.value })}
               style={inputStyle}
-              placeholder="e.g. KIOSK-MAIN-01"
+              placeholder="Enter unique terminal code (e.g. KIOSK-MAIN-01)"
             />
           </div>
 
@@ -589,16 +795,37 @@ export const ScannersTab: React.FC = () => {
                 <span>Generate Key</span>
               </button>
             </div>
-            <input
-              type="text"
-              required={!editingScanner}
-              value={formData.secret_key}
-              onChange={(e) => setFormData({ ...formData, secret_key: e.target.value })}
-              style={{ ...inputStyle, fontFamily: 'monospace', fontWeight: 600 }}
-              placeholder={editingScanner ? '•••••••••••••••• (Unchanged)' : 'SEC-XXXX-XXXX-XXXX'}
-            />
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                required={!editingScanner}
+                value={formData.secret_key}
+                onChange={(e) => setFormData({ ...formData, secret_key: e.target.value })}
+                style={{ ...inputStyle, fontFamily: 'monospace', fontWeight: 600, paddingRight: 36 }}
+                placeholder={editingScanner ? '•••••••••••••••• (Unchanged)' : 'Enter or generate hardware secret key'}
+              />
+              {formData.secret_key && (
+                <button
+                  type="button"
+                  onClick={() => handleCopy(formData.secret_key, 'modal-key')}
+                  title="Copy Secret Key"
+                  style={{
+                    position: 'absolute',
+                    right: 8,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#64748b',
+                  }}
+                >
+                  {copiedKey === 'modal-key' ? <Check size={14} color="#059669" /> : <Copy size={14} />}
+                </button>
+              )}
+            </div>
             <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 4 }}>
-              Set this token in your scanner hardware configuration so it can authenticate.
+              Flash this secret token into your ESP32 or Raspberry Pi attendance firmware.
             </div>
           </div>
 
@@ -615,7 +842,7 @@ export const ScannersTab: React.FC = () => {
                 Allow Gate Attendance Scans
               </label>
               <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
-                When checked, RFID and QR scans from this terminal will be recorded in the database[cite: 8].
+                When checked, RFID and QR scans from this terminal are validated and recorded.
               </div>
             </div>
           </div>
@@ -625,64 +852,185 @@ export const ScannersTab: React.FC = () => {
               Cancel
             </Button>
             <Button variant="primary" size="md" type="submit" disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : null}
+              {saving ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
               {editingScanner ? 'Save Changes' : 'Register Terminal'}
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* 4. Terminal Payload Inspector Modal */}
+      {/* 4. Strictly Dynamic Dual-Mode Live Inspector */}
       {inspectedScanner && (
         <Modal
           isOpen={Boolean(inspectedScanner)}
           onClose={() => setInspectedScanner(null)}
-          title={`Device Config: ${inspectedScanner.terminal_name}`}
+          title={`Dual-Mode Verification: ${inspectedScanner.terminal_name}`}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ fontSize: '0.78rem', color: '#475569', lineHeight: 1.4 }}>
-              Use these values when flashing or configuring your Raspberry Pi, ESP32, or Windows attendance scanner:
-            </div>
+            {/* Real Identity Selector with Neutral Avatar */}
+            <div style={{ padding: '10px 12px', backgroundColor: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <User size={15} color="#0284c7" />
+                <label style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0f172a' }}>
+                  Select Active Database Record:
+                </label>
+              </div>
 
-            <div style={codeBox}>
-              <div style={codeHeader}>
-                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94a3b8' }}>API SCAN PAYLOAD SAMPLE</span>
+              <select
+                value={selectedSubjectId}
+                onChange={(e) => setSelectedSubjectId(e.target.value)}
+                style={{ ...inputStyle, backgroundColor: '#ffffff' }}
+              >
+                {testSubjects.map((sub) => (
+                  <option key={sub.id} value={sub.id}>
+                    [{sub.type}] {sub.name}
+                  </option>
+                ))}
+              </select>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button
                   type="button"
-                  onClick={() => handleCopy(JSON.stringify({
-                    kiosk_code: inspectedScanner.kiosk_code,
-                    secret_key: inspectedScanner.secret_key || 'YOUR_SAVED_SECRET_KEY',
-                    raw_identifier: '04A1B2C3D4',
-                    scan_method: 'RFID',
-                  }, null, 2), 'payload-json')}
+                  onClick={() => setActiveTestMode('RFID')}
+                  style={{
+                    flex: 1,
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    border: '1px solid',
+                    borderColor: activeTestMode === 'RFID' ? '#0284c7' : '#cbd5e1',
+                    backgroundColor: activeTestMode === 'RFID' ? '#f0f9ff' : '#ffffff',
+                    color: activeTestMode === 'RFID' ? '#0284c7' : '#475569',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Mode 1: RFID Chip Tap
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTestMode('QR')}
+                  style={{
+                    flex: 1,
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    border: '1px solid',
+                    borderColor: activeTestMode === 'QR' ? '#059669' : '#cbd5e1',
+                    backgroundColor: activeTestMode === 'QR' ? '#ecfdf5' : '#ffffff',
+                    color: activeTestMode === 'QR' ? '#059669' : '#475569',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Mode 2: Printed QR Scan
+                </button>
+              </div>
+            </div>
+
+            {/* Dynamic Hardware Payload Box */}
+            <div style={codeBox}>
+              <div style={codeHeader}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#38bdf8' }}>
+                  {activeTestMode === 'RFID' ? 'HARDWARE RFID SCAN PAYLOAD' : 'OPTICAL QR SCAN PAYLOAD'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleCopy(
+                      JSON.stringify(
+                        {
+                          kiosk_code: inspectedScanner.kiosk_code,
+                          secret_key: inspectedScanner.secret_key || '',
+                          raw_identifier: activeIdentifier || '(NO_IDENTIFIER_ASSIGNED)',
+                          scan_method: activeTestMode,
+                        },
+                        null,
+                        2
+                      ),
+                      'payload-copy'
+                    )
+                  }
                   style={copyBtn}
                 >
-                  {copiedKey === 'payload-json' ? <Check size={12} color="#10b981" /> : <Copy size={12} color="#cbd5e1" />}
-                  <span>{copiedKey === 'payload-json' ? 'Copied' : 'Copy'}</span>
+                  {copiedKey === 'payload-copy' ? <Check size={12} color="#10b981" /> : <Copy size={12} color="#cbd5e1" />}
+                  <span>{copiedKey === 'payload-copy' ? 'Copied' : 'Copy Payload'}</span>
                 </button>
               </div>
               <pre style={codeText}>
-{JSON.stringify({
-  kiosk_code: inspectedScanner.kiosk_code,
-  secret_key: inspectedScanner.secret_key || 'SEC-STORED-IN-DB',
-  raw_identifier: '04A1B2C3D4',
-  scan_method: 'RFID',
-}, null, 2)}
+{JSON.stringify(
+  {
+    kiosk_code: inspectedScanner.kiosk_code,
+    secret_key: inspectedScanner.secret_key || '(Protected)',
+    raw_identifier: activeIdentifier || 'No UID registered for this record',
+    scan_method: activeTestMode,
+  },
+  null,
+  2
+)}
               </pre>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: '0.74rem' }}>
-              <div style={fieldInfoBox}>
-                <div style={{ fontWeight: 700, color: '#0f172a' }}>POST Endpoint</div>
-                <div style={{ fontFamily: 'monospace', color: '#0284c7', marginTop: 2 }}>/api/gate/scan/</div>
+            {/* Dynamic cURL Command */}
+            <div style={codeBox}>
+              <div style={codeHeader}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fcd34d' }}>
+                  LIVE CURL TERMINAL COMMAND
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleCopy(
+                      `curl -X POST ${dynamicApiOrigin}/api/gate/scan/ \\\n -H "Content-Type: application/json" \\\n -d '{"kiosk_code":"${inspectedScanner.kiosk_code}","secret_key":"${inspectedScanner.secret_key || ''}","raw_identifier":"${activeIdentifier}","scan_method":"${activeTestMode}"}'`,
+                      'curl-copy'
+                    )
+                  }
+                  style={copyBtn}
+                >
+                  {copiedKey === 'curl-copy' ? <Check size={12} color="#10b981" /> : <Send size={12} color="#cbd5e1" />}
+                  <span>{copiedKey === 'curl-copy' ? 'Copied' : 'Copy cURL'}</span>
+                </button>
               </div>
-              <div style={fieldInfoBox}>
-                <div style={{ fontWeight: 700, color: '#0f172a' }}>Device Identifier</div>
-                <div style={{ fontFamily: 'monospace', color: '#059669', marginTop: 2 }}>{inspectedScanner.kiosk_code}</div>
-              </div>
+              <pre style={{ ...codeText, color: '#fef08a' }}>
+{`curl -X POST ${dynamicApiOrigin}/api/gate/scan/ \\
+ -H "Content-Type: application/json" \\
+ -d '{"kiosk_code":"${inspectedScanner.kiosk_code}","secret_key":"${inspectedScanner.secret_key || ''}","raw_identifier":"${activeIdentifier || 'UNDEFINED'}","scan_method":"${activeTestMode}"}'`}
+              </pre>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+            {/* Live Server Response Display */}
+            {testResult && (
+              <div
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 6,
+                  border: '1px solid',
+                  borderColor: testResult.success ? '#a7f3d0' : '#fecaca',
+                  backgroundColor: testResult.success ? '#ecfdf5' : '#fef2f2',
+                }}
+              >
+                <div style={{ fontSize: '0.76rem', fontWeight: 800, color: testResult.success ? '#059669' : '#dc2626' }}>
+                  {testResult.success ? '✓ Scan Accepted by Server' : '✗ Server Rejected Scan'}
+                </div>
+                <pre style={{ margin: 0, marginTop: 4, fontSize: '0.70rem', color: '#1e293b', whiteSpace: 'pre-wrap' }}>
+                  {JSON.stringify(testResult.data || testResult.error, null, 2)}
+                </pre>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+              <Button
+                variant="primary"
+                size="md"
+                type="button"
+                onClick={handleExecuteLiveTest}
+                disabled={testExecuting || !activeIdentifier}
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                {testExecuting ? <Loader2 className="animate-spin" size={15} /> : <Play size={15} />}
+                Test Live Tap in Database
+              </Button>
+
               <Button variant="secondary" size="md" type="button" onClick={() => setInspectedScanner(null)}>
                 Close
               </Button>
@@ -690,12 +1038,16 @@ export const ScannersTab: React.FC = () => {
           </div>
         </Modal>
       )}
-
     </div>
   );
 };
 
-// Styles
+export default ScannersTab;
+
+// ============================================================================
+// STYLES
+// ============================================================================
+
 const statsGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(4, 1fr)',
@@ -874,13 +1226,6 @@ const codeText: React.CSSProperties = {
   lineHeight: 1.4,
 };
 
-const fieldInfoBox: React.CSSProperties = {
-  padding: '8px 12px',
-  backgroundColor: '#f8fafc',
-  border: '1px solid #e2e8f0',
-  borderRadius: 6,
-};
-
 const paginationContainer: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -911,5 +1256,3 @@ const paginationSelect: React.CSSProperties = {
   color: '#0f172a',
   backgroundColor: '#ffffff',
 };
-
-export default ScannersTab;

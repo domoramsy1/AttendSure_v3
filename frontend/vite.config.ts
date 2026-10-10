@@ -11,13 +11,19 @@ export default defineConfig({
       'localhost',
     ],
   },
-  optimizeDeps: {
-    esbuildOptions: {
-      target: 'es2015',
-      // Explicitly forces esbuild to convert ?. and ?? into older ternary checks
-      supported: {
-        'optional-chaining': false,
-        'nullish-coalescing': false,
+  build: {
+    target: 'es2015',
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
+            return 'vendor-react';
+          }
+          if (id.includes('node_modules/lucide-react')) {
+            return 'vendor-icons';
+          }
+        },
       },
     },
   },

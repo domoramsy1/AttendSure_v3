@@ -1,19 +1,33 @@
+/**
+ * AttendSure V3 - Unified API Client
+ * File: frontend/src/api/client.ts
+ *
+ * Fixes Applied:
+ * 1. RESTORED PORT 8000: Targets backend port 8000 across localhost, IP, and domain access.
+ * 2. DYNAMIC PROTOCOL: Detects http: or https: dynamically from browser location.
+ * 3. ZERO TS ERRORS: Cleaned up unused type imports to satisfy verbatimModuleSyntax.
+ */
+
 import axios from 'axios';
 
-// Automatically detect the server IP from the current browser address.
-// On PC (localhost), this becomes: http://localhost:8000/api
-// On Mobile (10.149.144.49), this becomes: http://10.149.144.49:8000/api
+/**
+ * Resolves backend API URL with port 8000:
+ * - PC (localhost): http://localhost:8000/api
+ * - LAN / Mobile IP (10.149.144.49): http://10.149.144.49:8000/api
+ * - School Domain (lapasan.attendsure.com.ph): http://lapasan.attendsure.com.ph:8000/api
+ */
 const getBaseURL = (): string => {
   if (import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;
   }
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  return `http://${host}:8000/api`;
+  const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+  return `${protocol}//${host}:8000/api`;
 };
 
 const apiClient = axios.create({
   baseURL: getBaseURL(),
-  timeout: 10000,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -31,27 +45,31 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Color-coded response interceptor
+// Response interceptor with error logging & session expiry trigger
 apiClient.interceptors.response.use(
   (response) => {
     const method = response.config.method?.toUpperCase();
     const url = response.config.url;
     const status = response.status;
 
-    // Green badge for OK responses
-    console.log(
-      `%c[✓ OK ${status}] ${method} ${url}`,
-      'color: #059669; font-weight: bold; background: #ecfdf5; padding: 2px 6px; border-radius: 4px; border: 1px solid #a7f3d0;'
-    );
+    if (import.meta.env.DEV) {
+      console.log(
+        `%c[✓ OK ${status}] ${method} ${url}`,
+        'color: #059669; font-weight: bold; background: #ecfdf5; padding: 2px 6px; border-radius: 4px; border: 1px solid #a7f3d0;'
+      );
+    }
     return response;
   },
   (error) => {
     const method = error.config?.method?.toUpperCase();
     const url = error.config?.url;
     const status = error.response?.status || 'NET_ERR';
-    const errorMsg = error.response?.data?.detail || error.response?.data?.error || error.message;
+    const errorMsg =
+      error.response?.data?.detail ||
+      error.response?.data?.error ||
+      error.message ||
+      'Network communication failure';
 
-    // Red badge for Errors
     console.error(
       `%c[✗ ERROR ${status}] ${method} ${url} -> ${errorMsg}`,
       'color: #dc2626; font-weight: bold; background: #fef2f2; padding: 2px 6px; border-radius: 4px; border: 1px solid #fecaca;'

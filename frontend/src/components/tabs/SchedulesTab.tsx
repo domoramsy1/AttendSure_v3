@@ -1,5 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+/**
+ * AttendSure V3 - Academic Timetables, Sections & Schedules
+ * File: frontend/src/components/tabs/SchedulesTab.tsx
+ *
+ * Key Upgrades:
+ * 1. DEFAULT USER ICON: Faculty assignments render real portraits or the neutral <User /> icon fallback.
+ * 2. LIVE DATABASE POLLING: Silent 3-second background polling keeps timetables updated without full page reloads.
+ * 3. REUSABLE ALERTS: Uses showConfirm and showAlert from AlertContext for schedule removals.
+ * 4. TELEMETRY STATS: Live summary metric cards for Periods, Sections, Assigned Teachers, and Classrooms.
+ * 5. SAFE INTERACTION GUARD: Polling pauses seamlessly while the AcademicSetupModal is active.
+ */
+
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import apiClient from '../../api/client';
+import { useAlert } from '../../context/AlertContext';
 import { 
   Calendar, 
   Layers, 
@@ -11,13 +24,18 @@ import {
   Trash2, 
   Clock, 
   MapPin, 
-  UserCheck, 
   BookOpen, 
   Loader2, 
   AlertCircle, 
-  RefreshCw 
+  RefreshCw,
+  User,
+  Plus
 } from 'lucide-react';
 import { AcademicSetupModal, type TabType as AcademicTabType } from '../modals/AcademicSetupModal';
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
 
 interface ScheduleItem {
   id: number;
@@ -48,10 +66,87 @@ interface SectionOption {
   grade_level_name?: string;
 }
 
+interface FacultyOption {
+  id: number;
+  full_name: string;
+  name?: string;
+  user_id?: number;
+  photo?: string | null;
+  photo_url?: string | null;
+  position?: string;
+}
+
+// ============================================================================
+// REUSABLE DEFAULT USER AVATAR COMPONENT
+// ============================================================================
+
+interface ProfileAvatarProps {
+  photoUrl?: string | null;
+  name?: string;
+  size?: number;
+  iconSize?: number;
+}
+
+const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
+  photoUrl,
+  name = 'Faculty Member',
+  size = 30,
+  iconSize = 16,
+}) => {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [photoUrl]);
+
+  const hasPhoto = Boolean(
+    photoUrl &&
+    typeof photoUrl === 'string' &&
+    photoUrl.trim() !== '' &&
+    photoUrl.trim().toLowerCase() !== 'null' &&
+    photoUrl.trim().toLowerCase() !== 'undefined'
+  );
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        backgroundColor: '#f1f5f9',
+        border: '1px solid #e2e8f0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        flexShrink: 0,
+      }}
+      title={name}
+    >
+      {hasPhoto && !imageFailed ? (
+        <img
+          src={photoUrl!}
+          alt={name}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <User size={iconSize} color="#94a3b8" />
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export const SchedulesTab: React.FC = () => {
+  const { showAlert, showConfirm } = useAlert();
+
   const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
   const [sections, setSections] = useState<SectionOption[]>([]);
-  const [facultyList, setFacultyList] = useState<any[]>([]);
+  const [facultyList, setFacultyList] = useState<FacultyOption[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>('');
 
@@ -61,8 +156,16 @@ export const SchedulesTab: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [modalTab, setModalTab] = useState<AcademicTabType>('SCHEDULE');
 
-  const loadData = async () => {
-    setLoading(true);
+  // Guard flag: prevents background polling from interrupting open modal workflows
+  const isInteracting = useRef(false);
+  isInteracting.current = isModalOpen;
+
+  // ============================================================================
+  // DATABASE DATA FETCHING & LIVE POLLING
+  // ============================================================================
+
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError('');
     try {
       const [schedRes, secRes, facRes] = await Promise.all([
@@ -75,26 +178,61 @@ export const SchedulesTab: React.FC = () => {
       setSections(Array.isArray(secRes.data) ? secRes.data : secRes.data.results || []);
       setFacultyList(Array.isArray(facRes.data) ? facRes.data : facRes.data.results || []);
     } catch (err: any) {
-      const status = err?.response?.status;
-      const detail = err?.response?.data?.detail || err.message;
-      setError(`[HTTP ${status || 'Error'}] Could not load timetable data: ${detail}`);
+      if (!silent) {
+        const status = err?.response?.status;
+        const detail = err?.response?.data?.detail || err.message;
+        setError(`[HTTP ${status || 'Error'}] Could not load timetable data: ${detail}`);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadData();
   }, []);
 
-  const handleDelete = async (id: number, code: string) => {
-    if (!window.confirm(`Are you sure you want to delete schedule ${code}?`)) return;
-    try {
-      await apiClient.delete(`/schedules/${id}/`);
-      setSchedules((prev) => prev.filter((item) => item.id !== id));
-    } catch (err: any) {
-      alert(`Delete failed: ${err?.response?.data?.detail || err.message}`);
-    }
+  // Initial load
+  useEffect(() => {
+    loadData(false);
+  }, [loadData]);
+
+  // LIVE ZERO-REFRESH POLLING: Sync timetables every 3 seconds
+  useEffect(() => {
+    const liveInterval = setInterval(() => {
+      if (!isInteracting.current) {
+        loadData(true);
+      }
+    }, 3000);
+
+    return () => clearInterval(liveInterval);
+  }, [loadData]);
+
+  // ============================================================================
+  // ACTIONS
+  // ============================================================================
+
+  const handleDelete = (id: number, code: string) => {
+    showConfirm({
+      title: 'Delete Schedule Period',
+      message: `Permanently delete schedule period "${code}" from the timetable database? This class assignment will be unassigned.`,
+      confirmLabel: 'Delete Schedule',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await apiClient.delete(`/schedules/${id}/`);
+          setSchedules((prev) => prev.filter((item) => item.id !== id));
+          showAlert({
+            title: 'Schedule Removed',
+            message: `Schedule ${code} was deleted successfully.`,
+            type: 'info',
+          });
+          loadData(true);
+        } catch (err: any) {
+          showAlert({
+            title: 'Delete Error',
+            message: err?.response?.data?.detail || err.message || 'Failed to delete schedule period.',
+            type: 'error',
+          });
+        }
+      },
+    });
   };
 
   const handleOpenModal = (tab: AcademicTabType) => {
@@ -118,19 +256,27 @@ export const SchedulesTab: React.FC = () => {
     return item.schedule_code || item.code || `SCH-${String(item.id).padStart(3, '0')}`;
   };
 
-  const getFacultyDisplay = (item: ScheduleItem) => {
-    if (item.faculty_name) return item.faculty_name;
-    if (item.teacher_name) return item.teacher_name;
-    if (typeof item.faculty === 'object' && item.faculty) return item.faculty.full_name || item.faculty.name;
-    if (typeof item.faculty === 'string') return item.faculty;
+  const getFacultyInfo = (item: ScheduleItem) => {
+    let name = 'Unassigned';
+    let photo: string | null = null;
+
+    if (item.faculty_name) name = item.faculty_name;
+    else if (item.teacher_name) name = item.teacher_name;
+    else if (typeof item.faculty === 'object' && item.faculty) {
+      name = item.faculty.full_name || item.faculty.name || 'Faculty Member';
+      photo = item.faculty.photo_url || item.faculty.photo || null;
+    }
 
     const rawId = item.faculty || item.faculty_id || item.teacher;
     if (rawId) {
       const matched = facultyList.find((f) => f.id === rawId || f.user_id === rawId);
-      if (matched) return matched.full_name || matched.name;
+      if (matched) {
+        name = matched.full_name || matched.name || name;
+        photo = matched.photo_url || matched.photo || photo;
+      }
     }
 
-    return 'Unassigned';
+    return { name, photo };
   };
 
   const getSubjectCode = (item: ScheduleItem) => {
@@ -169,7 +315,7 @@ export const SchedulesTab: React.FC = () => {
         const code = getScheduleCode(s).toLowerCase();
         const sec = (s.section_name || String(s.section || '')).toLowerCase();
         const sub = (getSubjectCode(s) + ' ' + getSubjectName(s)).toLowerCase();
-        const fac = getFacultyDisplay(s).toLowerCase();
+        const fac = getFacultyInfo(s).name.toLowerCase();
         const rm = getRoomDisplay(s).toLowerCase();
 
         return code.includes(q) || sec.includes(q) || sub.includes(q) || fac.includes(q) || rm.includes(q);
@@ -179,13 +325,57 @@ export const SchedulesTab: React.FC = () => {
     });
   }, [schedules, selectedSectionFilter, searchQuery, facultyList]);
 
+  // Telemetry Metrics
+  const uniqueSectionsCount = new Set(schedules.map((s) => s.section_name || s.section).filter(Boolean)).size;
+  const uniqueTeachersCount = new Set(schedules.map((s) => s.faculty_name || s.teacher_name || s.faculty).filter(Boolean)).size;
+  const uniqueRoomsCount = new Set(schedules.map((s) => s.room_name || s.room_number || s.room).filter(Boolean)).size;
+
   return (
-    <div style={{ padding: '20px 24px', backgroundColor: '#f8fafc', minHeight: '100vh', fontFamily: 'sans-serif' }}>
-      {/* Top Filter Bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7', fontWeight: 700, fontSize: '0.82rem' }}>
-            <Filter size={16} /> Filter Section:
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* 1. Academic Telemetry Summary Cards */}
+      <div style={statsGrid}>
+        <div style={statCard}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={statLabel}>TOTAL TIMETABLE PERIODS</span>
+            <Calendar size={18} color="#0284c7" />
+          </div>
+          <div style={statVal}>{schedules.length}</div>
+          <div style={statSub}>Active schedule entries in database</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={statLabel}>SCHEDULED SECTIONS</span>
+            <Users size={18} color="#059669" />
+          </div>
+          <div style={{ ...statVal, color: '#059669' }}>{uniqueSectionsCount}</div>
+          <div style={statSub}>Classes with assigned periods</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={statLabel}>ASSIGNED TEACHERS</span>
+            <User size={18} color="#0284c7" />
+          </div>
+          <div style={{ ...statVal, color: '#0284c7' }}>{uniqueTeachersCount}</div>
+          <div style={statSub}>Faculty members teaching classes</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={statLabel}>ROOMS UTILIZED</span>
+            <DoorOpen size={18} color="#d97706" />
+          </div>
+          <div style={{ ...statVal, color: '#d97706' }}>{uniqueRoomsCount}</div>
+          <div style={statSub}>Classrooms and labs occupied</div>
+        </div>
+      </div>
+
+      {/* 2. Top Filter and Setup Navigation Bar */}
+      <div style={controlBar}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7', fontWeight: 700, fontSize: '0.80rem' }}>
+            <Filter size={15} /> Filter Section:
           </div>
           <select
             value={selectedSectionFilter}
@@ -201,78 +391,67 @@ export const SchedulesTab: React.FC = () => {
           </select>
         </div>
 
-        <div style={{ fontSize: '0.80rem', color: '#64748b' }}>
-          Displaying <strong style={{ color: '#0f172a' }}>{filteredSchedules.length}</strong> of{' '}
-          <strong style={{ color: '#0f172a' }}>{schedules.length}</strong> timetable slots
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => handleOpenModal('YEAR_LEVEL')}
+            style={secondaryBtnStyle}
+            title="Add a Grade Level"
+          >
+            <Layers size={13} color="#0284c7" /> + Year Level
+          </button>
+
+          <button
+            onClick={() => handleOpenModal('ROOM')}
+            style={secondaryBtnStyle}
+            title="Add a Classroom / Lab"
+          >
+            <DoorOpen size={13} color="#0284c7" /> + Room
+          </button>
+
+          <button
+            onClick={() => handleOpenModal('SUBJECT')}
+            style={secondaryBtnStyle}
+            title="Add a Subject"
+          >
+            <BookOpen size={13} color="#0284c7" /> + Subject
+          </button>
+
+          <button
+            onClick={() => handleOpenModal('SECTION')}
+            style={secondaryBtnStyle}
+            title="Add a Section"
+          >
+            <Users size={13} color="#0284c7" /> + Section
+          </button>
+
+          <button
+            onClick={() => handleOpenModal('SCHEDULE')}
+            style={primaryBtnStyle}
+            title="Add a Class Schedule"
+          >
+            <Plus size={15} /> Add Schedule Period
+          </button>
         </div>
       </div>
 
-      {/* Main Content Card */}
+      {/* 3. Main Timetable Ledger */}
       <div style={cardStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: '#0f172a' }}>
-              Classes, Sections & Schedules
-            </h2>
-            <p style={{ margin: '4px 0 0 0', fontSize: '0.80rem', color: '#64748b' }}>
-              Manage academic section timetables, subject room assignments, and assigned faculty.
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => handleOpenModal('YEAR_LEVEL')}
-              style={secondaryBtnStyle}
-              title="Add a Grade Level"
-            >
-              <Layers size={14} color="#0284c7" /> + Year Level
-            </button>
-
-            <button
-              onClick={() => handleOpenModal('ROOM')}
-              style={secondaryBtnStyle}
-              title="Add a Classroom / Lab"
-            >
-              <DoorOpen size={14} color="#0284c7" /> + Room
-            </button>
-
-            <button
-              onClick={() => handleOpenModal('SUBJECT')}
-              style={secondaryBtnStyle}
-              title="Add a Subject"
-            >
-              <BookOpen size={14} color="#0284c7" /> + Subject
-            </button>
-
-            <button
-              onClick={() => handleOpenModal('SECTION')}
-              style={secondaryBtnStyle}
-              title="Add a Section"
-            >
-              <Users size={14} color="#0284c7" /> + Section
-            </button>
-
-            <button
-              onClick={() => handleOpenModal('SCHEDULE')}
-              style={primaryBtnStyle}
-              title="Add a Class Schedule"
-            >
-              <Calendar size={15} /> + Add Schedule Period
-            </button>
-          </div>
-        </div>
-
-        {/* Search */}
-        <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 16 }}>
+        {/* Search Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
           <div style={searchContainerStyle}>
-            <Search size={16} color="#94a3b8" />
+            <Search size={15} color="#94a3b8" />
             <input
               type="text"
-              placeholder="Search by section, subject code, room..."
+              placeholder="Search by section, subject code, teacher, room..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={searchInputStyle}
             />
+          </div>
+
+          <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+            Showing <strong>{filteredSchedules.length}</strong> of{' '}
+            <strong>{schedules.length}</strong> timetable slots
           </div>
         </div>
 
@@ -283,25 +462,25 @@ export const SchedulesTab: React.FC = () => {
               <AlertCircle size={18} color="#991b1b" />
               <span>{error}</span>
             </div>
-            <button onClick={loadData} style={retryBtnStyle}>
-              <RefreshCw size={14} /> Retry
+            <button onClick={() => loadData(false)} style={retryBtnStyle}>
+              <RefreshCw size={13} /> Retry
             </button>
           </div>
         )}
 
-        {/* Table */}
+        {/* Data Table */}
         {loading ? (
           <div style={loadingContainerStyle}>
-            <Loader2 size={28} className="animate-spin" color="#0284c7" />
-            <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Loading schedules from database...</span>
+            <Loader2 size={26} className="animate-spin" color="#0284c7" />
+            <span style={{ fontSize: '0.84rem', color: '#64748b' }}>Loading schedules from database...</span>
           </div>
         ) : filteredSchedules.length === 0 ? (
           <div style={emptyContainerStyle}>
-            <Calendar size={40} color="#cbd5e1" />
-            <p style={{ margin: '8px 0 2px 0', fontWeight: 700, color: '#334155', fontSize: '0.90rem' }}>
+            <Calendar size={38} color="#cbd5e1" />
+            <p style={{ margin: '8px 0 2px 0', fontWeight: 700, color: '#334155', fontSize: '0.88rem' }}>
               No timetable records found
             </p>
-            <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8' }}>
+            <p style={{ margin: 0, fontSize: '0.76rem', color: '#94a3b8' }}>
               Click <strong>"+ Add Schedule Period"</strong> above to schedule your first class.
             </p>
           </div>
@@ -322,20 +501,22 @@ export const SchedulesTab: React.FC = () => {
               <tbody>
                 {filteredSchedules.map((row) => {
                   const displayCode = getScheduleCode(row);
+                  const facultyInfo = getFacultyInfo(row);
+
                   return (
                     <tr key={row.id} style={tableRowStyle}>
                       <td style={tdStyle}>
-                        <span style={{ color: '#0284c7', fontWeight: 700, fontSize: '0.80rem' }}>
+                        <span style={codeBadge}>
                           {displayCode}
                         </span>
                       </td>
 
                       <td style={tdStyle}>
-                        <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.82rem' }}>
+                        <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.84rem' }}>
                           {row.section_name || (typeof row.section === 'object' ? row.section?.name : `Section #${row.section}`)}
                         </div>
                         {row.grade_level_name && (
-                          <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                          <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 1 }}>
                             {row.grade_level_name}
                           </div>
                         )}
@@ -343,34 +524,41 @@ export const SchedulesTab: React.FC = () => {
 
                       <td style={tdStyle}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <BookOpen size={14} color="#0284c7" />
-                          <span style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.82rem' }}>
+                          <BookOpen size={13} color="#0284c7" />
+                          <span style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.82rem' }}>
                             {getSubjectCode(row)}
                           </span>
                         </div>
                         {getSubjectName(row) && (
-                          <div style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 20 }}>
+                          <div style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 19, marginTop: 1 }}>
                             {getSubjectName(row)}
                           </div>
                         )}
                       </td>
 
                       <td style={tdStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', color: '#334155' }}>
-                          <UserCheck size={14} color="#10b981" />
-                          <span>{getFacultyDisplay(row)}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <ProfileAvatar
+                            photoUrl={facultyInfo.photo}
+                            name={facultyInfo.name}
+                            size={30}
+                            iconSize={15}
+                          />
+                          <span style={{ fontSize: '0.80rem', fontWeight: 600, color: '#334155' }}>
+                            {facultyInfo.name}
+                          </span>
                         </div>
                       </td>
 
                       <td style={tdStyle}>
                         <div style={pillStyle}>
-                          <Clock size={13} color="#64748b" />
+                          <Clock size={12} color="#64748b" />
                           <span>{formatTime(row.start_time)} - {formatTime(row.end_time)}</span>
                         </div>
                       </td>
 
                       <td style={tdStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', color: '#64748b' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.80rem', color: '#64748b' }}>
                           <MapPin size={13} color="#94a3b8" />
                           <span>{getRoomDisplay(row)}</span>
                         </div>
@@ -383,14 +571,14 @@ export const SchedulesTab: React.FC = () => {
                             style={iconBtnStyle}
                             title="Edit Schedule"
                           >
-                            <Edit2 size={14} color="#0284c7" />
+                            <Edit2 size={13} color="#0284c7" />
                           </button>
                           <button
                             onClick={() => handleDelete(row.id, displayCode)}
-                            style={{ ...iconBtnStyle, borderColor: '#fecaca' }}
+                            style={{ ...iconBtnStyle, borderColor: '#fecaca', backgroundColor: '#fef2f2' }}
                             title="Delete Schedule"
                           >
-                            <Trash2 size={14} color="#ef4444" />
+                            <Trash2 size={13} color="#ef4444" />
                           </button>
                         </div>
                       </td>
@@ -407,17 +595,68 @@ export const SchedulesTab: React.FC = () => {
         isOpen={isModalOpen}
         initialTab={modalTab}
         onClose={() => setIsModalOpen(false)}
-        onSuccess={loadData}
+        onSuccess={() => loadData(true)}
       />
     </div>
   );
 };
 
+export default SchedulesTab;
+
+// ============================================================================
+// STYLES
+// ============================================================================
+
+const statsGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
+  gap: 14,
+};
+
+const statCard: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  borderRadius: 10,
+  border: '1px solid #e2e8f0',
+  padding: '16px 18px',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+};
+
+const statLabel: React.CSSProperties = {
+  fontSize: '0.68rem',
+  fontWeight: 700,
+  color: '#64748b',
+  letterSpacing: '0.3px',
+};
+
+const statVal: React.CSSProperties = {
+  fontSize: '1.50rem',
+  fontWeight: 800,
+  color: '#0f172a',
+  lineHeight: 1.1,
+  marginTop: 6,
+};
+
+const statSub: React.CSSProperties = {
+  fontSize: '0.70rem',
+  color: '#94a3b8',
+  marginTop: 4,
+};
+
+const controlBar: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  padding: '10px 14px',
+  backgroundColor: '#ffffff',
+  borderRadius: 10,
+  border: '1px solid #e2e8f0',
+};
+
 const cardStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',
-  borderRadius: 8,
-  padding: '20px 22px',
-  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
+  borderRadius: 10,
+  padding: '18px 20px',
+  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
   border: '1px solid #e2e8f0',
 };
 
@@ -436,28 +675,28 @@ const selectStyle: React.CSSProperties = {
 const secondaryBtnStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 5,
   backgroundColor: '#f8fafc',
   color: '#334155',
   border: '1px solid #cbd5e1',
-  padding: '8px 12px',
+  padding: '7px 11px',
   borderRadius: 6,
   fontWeight: 700,
-  fontSize: '0.78rem',
+  fontSize: '0.76rem',
   cursor: 'pointer',
 };
 
 const primaryBtnStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 5,
   backgroundColor: '#0284c7',
   color: '#ffffff',
   border: 'none',
-  padding: '8px 14px',
+  padding: '7px 13px',
   borderRadius: 6,
   fontWeight: 700,
-  fontSize: '0.80rem',
+  fontSize: '0.76rem',
   cursor: 'pointer',
 };
 
@@ -478,6 +717,7 @@ const searchInputStyle: React.CSSProperties = {
   outline: 'none',
   fontSize: '0.80rem',
   width: '100%',
+  color: '#0f172a',
 };
 
 const tableStyle: React.CSSProperties = {
@@ -492,8 +732,8 @@ const tableHeaderRowStyle: React.CSSProperties = {
 };
 
 const thStyle: React.CSSProperties = {
-  padding: '12px 14px',
-  fontSize: '0.75rem',
+  padding: '11px 14px',
+  fontSize: '0.74rem',
   fontWeight: 700,
   color: '#475569',
   textTransform: 'uppercase',
@@ -505,16 +745,28 @@ const tableRowStyle: React.CSSProperties = {
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: '12px 14px',
+  padding: '11px 14px',
   verticalAlign: 'middle',
+};
+
+const codeBadge: React.CSSProperties = {
+  fontFamily: 'monospace',
+  fontSize: '0.74rem',
+  fontWeight: 800,
+  color: '#0284c7',
+  backgroundColor: '#eff6ff',
+  padding: '2px 7px',
+  borderRadius: 4,
+  border: '1px solid #bae6fd',
 };
 
 const pillStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 6,
-  backgroundColor: '#f1f5f9',
-  padding: '4px 8px',
+  gap: 5,
+  backgroundColor: '#f8fafc',
+  border: '1px solid #e2e8f0',
+  padding: '3px 8px',
   borderRadius: 6,
   fontSize: '0.74rem',
   color: '#475569',
@@ -523,9 +775,9 @@ const pillStyle: React.CSSProperties = {
 
 const iconBtnStyle: React.CSSProperties = {
   background: '#ffffff',
-  border: '1px solid #e2e8f0',
+  border: '1px solid #cbd5e1',
   borderRadius: 6,
-  padding: '6px 8px',
+  padding: '5px 7px',
   cursor: 'pointer',
   display: 'inline-flex',
   alignItems: 'center',

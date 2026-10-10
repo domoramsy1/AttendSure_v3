@@ -12,3 +12,4 @@ export * from './GeofenceTab';
 export * from './UsersTab';
 export * from './SettingsTab';
 export * from './GeofenceTab';
+export * from './SmsTab';

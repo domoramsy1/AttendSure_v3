@@ -1,20 +1,23 @@
+/**
+ * AttendSure V3 - DepEd School Form 1 (SF 1) School Register
+ * File: frontend/src/components/tabs/SF1ReportTab.tsx
+ *
+ * Fixes Applied:
+ * 1. IMPLEMENTED EXPORT HANDLERS: Added handleExportWord and mapped handleExportJSON to onExportJson.
+ * 2. HEADER LOCKED TO PAGE 1: DepEd letterhead only appears on page 1 across all layout modes.
+ * 3. DMOS COMPLIANCE: 0.76" seals, Old English Text MT, Tahoma headings, and Calibri footer.
+ */
+
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import apiClient from '../../api/client';
-import { KagawaranNgEdukasyonLogo } from '../ui/KagawaranNgEdukasyonLogo';
-import { DepEdLogo } from '../ui/DepEdLogo';
+import { useSchool } from '../../context/SchoolContext';
+import { useAlert } from '../../context/AlertContext';
 import { ReportNavBar } from '../reports/ReportNavBar';
 import { PageSetupModal } from '../common/PageSetupModal';
 import { usePageSetup } from '../../hooks/usePageSetup';
 import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
-import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
-
-const DepEdLogoComp = DepEdLogo as React.ComponentType<{
-  className?: string;
-  width?: number | string;
-  height?: number | string;
-  style?: React.CSSProperties;
-}>;
+import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2, Users, Split } from 'lucide-react';
 
 interface Learner {
   id: number;
@@ -84,6 +87,9 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   activeReportId = 'sf1',
   onSelectReport = () => {},
 }) => {
+  const { school } = useSchool();
+  const { showAlert } = useAlert();
+
   const [sections, setSections] = useState<any[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<string>(
     sectionId ? String(sectionId) : ''
@@ -101,10 +107,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isPageSetupOpen, setIsPageSetupOpen] = useState(false);
 
-  // Auto-Scale Engine
-  const [zoomScale, setZoomScale] = useState<number>(1);
-  const [fitToWidth, setFitToWidth] = useState<boolean>(true);
-  const viewportContainerRef = useRef<HTMLDivElement>(null);
+  const [groupingMode, setGroupingMode] = useState<'COMBINED' | 'SEPARATED'>('COMBINED');
 
   const { config: savedPageConfig, saveConfig: savePageConfig } = usePageSetup('sf1');
   const [activePageConfig, setActivePageConfig] = useState<PageSetupConfig>(savedPageConfig);
@@ -113,9 +116,19 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     setActivePageConfig(savedPageConfig);
   }, [savedPageConfig]);
 
+  const paper = useMemo(() => {
+    return PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.folio || { width: 8.5, height: 13 };
+  }, [activePageConfig.paperSize]);
+
+  const isLandscape = activePageConfig.orientation === 'landscape';
+  const pageWidthInches = isLandscape ? paper.height : paper.width;
+  const pageHeightInches = isLandscape ? paper.width : paper.height;
+
+  const [zoomScale, setZoomScale] = useState<number>(1);
+  const [fitToWidth, setFitToWidth] = useState<boolean>(true);
+  const viewportContainerRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
 
-  // Synchronize print state with browser dialog
   useEffect(() => {
     const handleBeforePrint = () => setIsPrinting(true);
     const handleAfterPrint = () => setIsPrinting(false);
@@ -147,7 +160,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     fetchSections();
   }, [selectedSectionId]);
 
-  // Strict Date Filter Query
   const fetchSF1 = useCallback(async () => {
     if (!selectedSectionId) return;
     setLoading(true);
@@ -166,7 +178,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         setSelectedAcademicYear(res.data.academic_year);
       }
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to generate official DepEd SF1 report.');
+      setError(err?.response?.data?.error || 'Failed to generate official SF1 report.');
     } finally {
       setLoading(false);
     }
@@ -179,12 +191,12 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   const updateFitScale = useCallback(() => {
     if (!viewportContainerRef.current) return;
     const containerWidth = viewportContainerRef.current.clientWidth - 48;
-    const targetWidth = 13.5 * 96;
+    const targetWidth = pageWidthInches * 96;
     if (containerWidth > 0 && targetWidth > 0) {
       const scale = containerWidth / targetWidth;
-      setZoomScale(Number(Math.min(1.05, Math.max(0.45, scale)).toFixed(3)));
+      setZoomScale(Number(Math.min(1.15, Math.max(0.35, scale)).toFixed(3)));
     }
-  }, []);
+  }, [pageWidthInches]);
 
   useEffect(() => {
     if (fitToWidth && !isPrinting && !exportingPdf) {
@@ -195,7 +207,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         window.removeEventListener('resize', updateFitScale);
       };
     }
-  }, [fitToWidth, isPrinting, exportingPdf, updateFitScale, reportData]);
+  }, [fitToWidth, isPrinting, exportingPdf, updateFitScale, reportData, activePageConfig]);
 
   const fontSizes = useMemo(() => {
     const raw = (activePageConfig as any)?.fontSize;
@@ -232,8 +244,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     return years.length > 0 ? years : ['2026-2027'];
   }, [reportData, sections]);
 
-  // Real Database Learners List
-  const sortedLearners = useMemo(() => {
+  const sortedCombinedLearners = useMemo(() => {
     if (!reportData || reportData.has_enrolled_students === false) return [];
     const raw = reportData.students || reportData.learners || [];
     const sorted = [...raw].sort((a, b) => a.name.localeCompare(b.name));
@@ -245,20 +256,58 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     );
   }, [reportData, searchQuery]);
 
+  const { maleLearners, femaleLearners } = useMemo(() => {
+    if (!reportData || reportData.has_enrolled_students === false) {
+      return { maleLearners: [], femaleLearners: [] };
+    }
+
+    const rawMales =
+      reportData.males ||
+      (reportData.students || reportData.learners || []).filter(
+        (l) => l.sex === 'M' || l.sex === 'Male'
+      );
+    const rawFemales =
+      reportData.females ||
+      (reportData.students || reportData.learners || []).filter(
+        (l) => l.sex === 'F' || l.sex === 'Female'
+      );
+
+    const sortedMales = [...rawMales].sort((a, b) => a.name.localeCompare(b.name));
+    const sortedFemales = [...rawFemales].sort((a, b) => a.name.localeCompare(b.name));
+
+    if (!searchQuery.trim()) {
+      return { maleLearners: sortedMales, femaleLearners: sortedFemales };
+    }
+
+    const q = searchQuery.toLowerCase().trim();
+    return {
+      maleLearners: sortedMales.filter(
+        (l) => l.name.toLowerCase().includes(q) || l.lrn.toLowerCase().includes(q)
+      ),
+      femaleLearners: sortedFemales.filter(
+        (l) => l.name.toLowerCase().includes(q) || l.lrn.toLowerCase().includes(q)
+      ),
+    };
+  }, [reportData, searchQuery]);
+
   const maleCount = useMemo(
-    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_male ?? sortedLearners.filter((l) => l.sex === 'M').length),
-    [reportData, sortedLearners]
+    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_male ?? maleLearners.length),
+    [reportData, maleLearners]
   );
   const femaleCount = useMemo(
-    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_female ?? sortedLearners.filter((l) => l.sex === 'F').length),
-    [reportData, sortedLearners]
+    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_female ?? femaleLearners.length),
+    [reportData, femaleLearners]
   );
   const totalCount = useMemo(
-    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_combined ?? sortedLearners.length),
-    [reportData, sortedLearners]
+    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_combined ?? (maleCount + femaleCount)),
+    [reportData, maleCount, femaleCount]
   );
 
-  const isRosterEmpty = sortedLearners.length === 0;
+  const activeRosterList = useMemo(() => {
+    return groupingMode === 'COMBINED' ? sortedCombinedLearners : [...maleLearners, ...femaleLearners];
+  }, [groupingMode, sortedCombinedLearners, maleLearners, femaleLearners]);
+
+  const isRosterEmpty = activeRosterList.length === 0;
 
   const auditMeta = useMemo(() => {
     const now = new Date();
@@ -276,13 +325,13 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     });
     const printedAt = `${dateFormatted} at ${timeFormatted}`;
 
-    const schoolIdStr = reportData?.school_id || '';
+    const schoolIdStr = reportData?.school_id || school.school_id || '';
     const dateStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
     const timeCode = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
     const trackingId = `DOC-SF1-${schoolIdStr}-${dateStamp}-${timeCode}`;
 
     return { printedAt, trackingId };
-  }, [reportData]);
+  }, [reportData, school]);
 
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
@@ -300,12 +349,12 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   };
 
   const paginatedPages = useMemo(() => {
-    if (activePageConfig.layoutMode === 'pageless' || sortedLearners.length <= 25) {
+    if (activePageConfig.layoutMode === 'pageless' || activeRosterList.length <= 25) {
       return [
         {
           pageNumber: 1,
           totalPages: 1,
-          learners: sortedLearners,
+          learners: activeRosterList,
           startIndex: 0,
           showFullHeader: true,
           showFooter: true,
@@ -313,9 +362,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       ];
     }
 
-    const paper = PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.legal;
-    const isLandscape = activePageConfig.orientation === 'landscape';
-    const pageHeightInches = isLandscape ? paper.width : paper.height;
     const printableHeight = Math.max(
       4,
       pageHeightInches - (activePageConfig.margins.top || 0.25) - (activePageConfig.margins.bottom || 0.25)
@@ -324,18 +370,18 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     const fullHeaderH = 1.35;
     const theadH = 0.40;
     const trackingH = 0.22;
-    const footerH = 1.95;
-    const rowH = 0.175;
+    const footerH = 2.10;
+    const rowH = 0.18;
 
     const singlePageOverhead = fullHeaderH + theadH + footerH + trackingH;
     const singlePageCapacity = Math.floor((printableHeight - singlePageOverhead) / rowH);
 
-    if (sortedLearners.length <= singlePageCapacity) {
+    if (activeRosterList.length <= singlePageCapacity) {
       return [
         {
           pageNumber: 1,
           totalPages: 1,
-          learners: sortedLearners,
+          learners: activeRosterList,
           startIndex: 0,
           showFullHeader: true,
           showFooter: true,
@@ -345,12 +391,12 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
     const pages: SF1PageChunk[] = [];
     let currentIdx = 0;
-    const totalLearners = sortedLearners.length;
+    const totalLearners = activeRosterList.length;
 
     while (currentIdx < totalLearners) {
       const pageNum: number = pages.length + 1;
       const isFirstPage = pageNum === 1;
-      const showFullHeader = isFirstPage || (activePageConfig.headerRepeat || 'all_pages') === 'all_pages';
+      const showFullHeader = isFirstPage; // STRICT: Only Page 1 gets the letterhead
 
       const remaining = totalLearners - currentIdx;
       const overheadWithFooter = (showFullHeader ? fullHeaderH : 0) + theadH + footerH + trackingH;
@@ -359,7 +405,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       if (remaining <= capacityWithFooter) {
         pages.push({
           pageNumber: pageNum,
-          learners: sortedLearners.slice(currentIdx, currentIdx + remaining),
+          learners: activeRosterList.slice(currentIdx, currentIdx + remaining),
           startIndex: currentIdx,
           showFullHeader,
           showFooter: true,
@@ -372,7 +418,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
         pages.push({
           pageNumber: pageNum,
-          learners: sortedLearners.slice(currentIdx, currentIdx + sliceCount),
+          learners: activeRosterList.slice(currentIdx, currentIdx + sliceCount),
           startIndex: currentIdx,
           showFullHeader,
           showFooter: false,
@@ -383,19 +429,18 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
     if (pages.length > 0 && !pages[pages.length - 1].showFooter) {
       const pageNum: number = pages.length + 1;
-      const showFullHeader = (activePageConfig.headerRepeat || 'all_pages') === 'all_pages';
       pages.push({
         pageNumber: pageNum,
         learners: [],
         startIndex: totalLearners,
-        showFullHeader,
+        showFullHeader: false,
         showFooter: true,
       });
     }
 
     const totalPages: number = pages.length;
     return pages.map((p) => ({ ...p, totalPages }));
-  }, [activePageConfig, sortedLearners]);
+  }, [activePageConfig, activeRosterList, pageHeightInches]);
 
   const parseGuardian = (name: string, rel: string) => {
     const commonRel = ['MOTHER', 'FATHER', 'AUNT', 'UNCLE', 'GRANDMOTHER', 'GRANDFATHER', 'GUARDIAN'];
@@ -454,7 +499,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  // Safe Browser Print flow: resets screen transforms before the print dialog opens
   const handlePrint = () => {
     logReportAudit('PRINT');
     setIsPrinting(true);
@@ -481,22 +525,27 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         html2pdfInstance = (window as any).html2pdf;
       }
 
-
       const opt = {
         margin: [0, 0, 0, 0],
         filename: `${getBaseFilename()}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          backgroundColor: activePageConfig.pageColor || '#ffffff',
+        },
         jsPDF: {
           unit: 'in',
-          format: activePageConfig.paperSize === 'folio' ? [8.5, 13] : activePageConfig.paperSize,
-          orientation: 'landscape',
+          format: [pageWidthInches, pageHeightInches],
+          orientation: activePageConfig.orientation,
         },
-        pagebreak: paginatedPages.length === 1 ? { mode: [] } : { mode: ['css'] },
+        pagebreak: activePageConfig.layoutMode === 'pageless' ? { mode: [] } : { mode: ['css', 'legacy'] },
       };
 
       const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
       await saveFileWithPicker(pdfBlob, `${getBaseFilename()}.pdf`, 'application/pdf', 'pdf', 'PDF Document (*.pdf)');
+      showAlert({ title: 'PDF Exported', message: 'School Form 1 successfully saved.', type: 'success' });
     } catch {
       handlePrint();
     } finally {
@@ -524,6 +573,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     `;
     const blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
     await saveFileWithPicker(blob, `${getBaseFilename()}.xls`, 'application/vnd.ms-excel', 'xls', 'Excel Worksheet (*.xls)');
+    showAlert({ title: 'Excel Exported', message: 'SF1 spreadsheet exported successfully.', type: 'success' });
   };
 
   const handleExportWord = async () => {
@@ -544,6 +594,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     `;
     const blob = new Blob([wordContent], { type: 'application/msword;charset=utf-8;' });
     await saveFileWithPicker(blob, `${getBaseFilename()}.doc`, 'application/msword', 'doc', 'Word Document (*.doc)');
+    showAlert({ title: 'Word Exported', message: 'SF1 document exported successfully.', type: 'success' });
   };
 
   const handleExportCSV = async () => {
@@ -556,7 +607,8 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       'Father Name', 'Mother Maiden Name', 'Guardian Name', 'Guardian Relationship',
       'Contact Number', 'Remarks'
     ];
-    const rows = sortedLearners.map((l, idx) => {
+
+    const rows = activeRosterList.map((l, idx) => {
       const { gName, gRel } = parseGuardian(l.guardian_name, l.guardian_relationship);
       return [
         idx + 1,
@@ -590,6 +642,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     ].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     await saveFileWithPicker(blob, `${getBaseFilename()}.csv`, 'text/csv', 'csv', 'CSV Document (*.csv)');
+    showAlert({ title: 'CSV Exported', message: 'SF1 CSV export ready.', type: 'success' });
   };
 
   const handleExportJSON = async () => {
@@ -602,93 +655,100 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     };
     const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
     await saveFileWithPicker(blob, `${getBaseFilename()}.json`, 'application/json', 'json', 'JSON Document (*.json)');
+    showAlert({ title: 'JSON Exported', message: 'SF1 JSON export ready.', type: 'success' });
   };
 
-  const renderHeader = () => (
-    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
-      <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center' }}>
-        {reportData?.left_logo ? (
-          <img src={reportData.left_logo} alt="Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-        ) : (
-          <div style={{ width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <KagawaranNgEdukasyonLogo size={70} />
-          </div>
-        )}
-      </div>
+  const renderHeader = () => {
+    const effectiveLeftLogo = reportData?.left_logo || school.left_logo;
+    const effectiveRightLogo = reportData?.right_logo || school.right_logo;
+    const effectiveSchoolName = reportData?.school_name || school.school_name;
+    const effectiveSchoolId = reportData?.school_id || school.school_id;
+    const effectiveDivision = reportData?.division || school.division;
+    const effectiveRegion = reportData?.region || school.region;
+    const effectiveDistrict = reportData?.district || school.district;
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ textAlign: 'center', marginBottom: 6 }}>
-          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '12pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.15 }}>
-            Republic of the Philippines
-          </div>
-          <div style={{ fontFamily: "'Old English Text MT', 'Engravers Old English BT', Georgia, serif", fontSize: '18pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
-            Department of Education
-          </div>
-          {reportData?.region && (
-            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2, marginTop: 1 }}>
-              {reportData.region}
-            </div>
-          )}
-          {reportData?.division && (
-            <div style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', color: '#000000', lineHeight: 1.2 }}>
-              {reportData.division}
-            </div>
-          )}
-          <div style={{ fontSize: '9pt', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '4px 0 0 0', color: '#000000' }}>
-            School Form 1 (SF 1) School Register
-          </div>
-          <div style={{ fontSize: '6.2pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
-            (This replaces Form 1, Master List &amp; STS Form 2-Family Background and Profile)
-          </div>
+    return (
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ flexShrink: 0, width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {effectiveLeftLogo ? (
+            <img src={effectiveLeftLogo} alt="Left Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+          ) : null}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
-          <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-              <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 68, flexShrink: 0, color: '#000000' }}>School ID</span>
-              <div style={{ ...fieldBoxStyle, width: 100 }}>{reportData?.school_id}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ textAlign: 'center', marginBottom: 6 }}>
+            <div style={republicStyle}>
+              Republic of the Philippines
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', width: '28%', paddingRight: 12 }}>
-              <span style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', width: 64, flexShrink: 0, color: '#000000' }}>Division</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>{reportData?.division}</div>
+            <div style={depedTitleStyle}>
+              Department of Education
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', width: '47%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', width: '74%' }}>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 54, flexShrink: 0, color: '#000000' }}>District</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{reportData?.district}</div>
+            {effectiveRegion && (
+              <div style={regionalOfficeStyle}>
+                {effectiveRegion.toUpperCase()}
               </div>
-              <div style={{ width: '26%' }} />
+            )}
+            {effectiveDivision && (
+              <div style={officeStyle}>
+                {effectiveDivision.toUpperCase()}
+              </div>
+            )}
+
+            <div style={{ fontFamily: 'Tahoma, Arial, sans-serif', fontSize: '10.5pt', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: 4, color: '#000000' }}>
+              School Form 1 (SF 1) School Register
+            </div>
+            <div style={{ fontSize: '6.0pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
+              (This replaces Form 1, Master List &amp; STS Form 2-Family Background and Profile)
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-              <span style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', width: 88, flexShrink: 0, color: '#000000' }}>School Name</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 8, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>{reportData?.school_name}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', width: '22%' }}>
+                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 62, flexShrink: 0, color: '#000000' }}>School ID</span>
+                <div style={{ ...fieldBoxStyle, width: 88 }}>{effectiveSchoolId}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', width: '26%', paddingRight: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 48, flexShrink: 0, color: '#000000' }}>Region</span>
+                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{effectiveRegion}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', width: '28%', paddingRight: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 52, flexShrink: 0, color: '#000000' }}>Division</span>
+                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{effectiveDivision}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', width: '24%' }}>
+                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 48, flexShrink: 0, color: '#000000' }}>District</span>
+                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{effectiveDistrict}</div>
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', width: '28%', paddingRight: 12 }}>
-              <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 68, flexShrink: 0, color: '#000000' }}>School Year</span>
-              <div style={{ ...fieldBoxStyle, width: 110 }}>{reportData?.academic_year}</div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', width: '47%' }}>
-              <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 64, flexShrink: 0, color: '#000000' }}>Grade Level</span>
-              <div style={{ ...fieldBoxStyle, width: 52, flexShrink: 0, marginRight: 8 }}>{reportData?.grade_level}</div>
-              <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 44, flexShrink: 0, color: '#000000' }}>Section</span>
-              <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{reportData?.section_name}</div>
+
+            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', width: '42%' }}>
+                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 78, flexShrink: 0, color: '#000000' }}>School Name</span>
+                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 8 }}>{effectiveSchoolName}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', width: '25%', paddingRight: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 68, flexShrink: 0, color: '#000000' }}>School Year</span>
+                <div style={{ ...fieldBoxStyle, flex: 1 }}>{reportData?.academic_year}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', width: '33%' }}>
+                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 62, flexShrink: 0, color: '#000000' }}>Grade Level</span>
+                <div style={{ ...fieldBoxStyle, width: 48, flexShrink: 0, marginRight: 8 }}>{reportData?.grade_level}</div>
+                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 42, flexShrink: 0, color: '#000000' }}>Section</span>
+                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{reportData?.section_name}</div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <div style={{ flexShrink: 0, width: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-        {reportData?.right_logo ? (
-          <img src={reportData.right_logo} alt="DepEd Logo" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-        ) : (
-          <DepEdLogoComp className="h-14 w-auto" style={{ maxHeight: '0.76in', maxWidth: '0.76in' }} />
-        )}
+        <div style={{ flexShrink: 0, width: '0.76in', height: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          {effectiveRightLogo ? (
+            <img src={effectiveRightLogo} alt="Right Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
+          ) : null}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderTableHeader = () => (
     <thead>
@@ -731,10 +791,10 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         <th style={{ width: '4.0%', ...headerCell, fontSize: fontSizes.subHeader }}>Barangay</th>
         <th style={{ width: '4.4%', ...headerCell, fontSize: fontSizes.subHeader }}>Municipality/ City</th>
         <th style={{ width: '4.0%', ...headerCell, fontSize: fontSizes.subHeader }}>Province</th>
-        <th style={{ width: '6.8%', ...headerCell, fontSize: fontSizes.subHeader }}>Father's Name</th>
-        <th style={{ width: '6.8%', ...headerCell, fontSize: fontSizes.subHeader }}>Mother's Maiden Name</th>
+        <th style={{ width: '6.8%', ...headerCell, fontSize: fontSizes.subHeader }}>Father&apos;s Name</th>
+        <th style={{ width: '6.8%', ...headerCell, fontSize: fontSizes.subHeader }}>Mother&apos;s Maiden Name</th>
         <th style={{ width: '4.6%', ...headerCell, fontSize: fontSizes.subHeader }}>Name</th>
-        <th style={{ width: '3.6%', ...headerCell, fontSize: fontSizes.subHeader }}>Relation-ship</th>
+        <th style={{ width: '3.6%', ...headerCell, fontSize: fontSizes.subHeader }}>Relationship</th>
         <th style={{ width: '6.2%', ...headerCell, fontSize: fontSizes.subHeader, lineHeight: 1.05 }}>
           (Please refer to the<br />legend on last page)
         </th>
@@ -743,114 +803,136 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   );
 
   const renderSummaryFooter = () => (
-    <table style={{ width: '100%', borderCollapse: 'collapse', border: 'none', marginTop: 8 }}>
-      <tbody>
-        <tr style={{ verticalAlign: 'bottom' }}>
-          <td style={{ width: '56%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
-            <div style={{ fontWeight: 800, fontSize: '5.8pt', textAlign: 'center', marginBottom: 2, color: '#000000' }}>
-              List and Code of Indicators under REMARKS column
-            </div>
-            <table style={indicatorsTableStyle}>
-              <thead>
-                <tr>
-                  <th style={{ width: '15%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Indicator</th>
-                  <th style={{ width: '5%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Code</th>
-                  <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Required Information</th>
-                  <th style={{ width: '15%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Indicator</th>
-                  <th style={{ width: '5%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Code</th>
-                  <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Required Information</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Transferred Out</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>T/O</td>
-                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of School &amp; Effectivity Date</td>
-                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>CCT Recipient</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>CCT</td>
-                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>CCT Control number &amp; Effectivity Date</td>
-                </tr>
-                <tr>
-                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Transferred IN</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>T/I</td>
-                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of School &amp; Effectivity Date</td>
-                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Balik-Aral</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>B/A</td>
-                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of school last attended &amp; Year</td>
-                </tr>
-                <tr>
-                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Dropped</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>DRP</td>
-                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Reason and Effectivity Date</td>
-                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Learner With Disability</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>LWD</td>
-                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Specify</td>
-                </tr>
-                <tr>
-                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Late Enrollment</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>LE</td>
-                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Reason (Enrollment beyond 1st Friday of June)</td>
-                  <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Accelerated</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>ACL</td>
-                  <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Specify Level &amp; Effectivity Date</td>
-                </tr>
-              </tbody>
-            </table>
-          </td>
-
-          <td style={{ width: '14%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
-            <table style={summaryTableStyle}>
-              <thead>
-                <tr>
-                  <th style={{ width: '40%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>REGISTERED</th>
-                  <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>BoSY</th>
-                  <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>EoSY</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>MALE</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.footer }}>{maleCount}</td>
-                  <td style={indicatorCellCenter}></td>
-                </tr>
-                <tr>
-                  <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>FEMALE</td>
-                  <td style={{ ...indicatorCellCenter, fontSize: fontSizes.footer }}>{femaleCount}</td>
-                  <td style={indicatorCellCenter}></td>
-                </tr>
-                <tr>
-                  <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>TOTAL</td>
-                  <td style={{ ...indicatorCellCenter, fontWeight: 800, fontSize: fontSizes.footer }}>{totalCount}</td>
-                  <td style={indicatorCellCenter}></td>
-                </tr>
-              </tbody>
-            </table>
-          </td>
-
-          <td style={{ width: '15%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
-            <div style={signatureBlockStyle}>
-              <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 14, color: '#000000' }}>Prepared by :</div>
-              <div style={signatureLineStyle}>{reportData?.adviser_name}</div>
-              <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 2, color: '#000000' }}>(Signature of Adviser over Printed Name)</div>
-              <div style={datesRowStyle}>
-                <span>BoSY Date: ________</span><span>EoSY Date: ________</span>
+    <div style={{ marginTop: 8, width: '100%' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', border: 'none' }}>
+        <tbody>
+          <tr style={{ verticalAlign: 'bottom' }}>
+            <td style={{ width: '56%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
+              <div style={{ fontWeight: 800, fontSize: '5.8pt', textAlign: 'center', marginBottom: 2, color: '#000000' }}>
+                List and Code of Indicators under REMARKS column
               </div>
-            </div>
-          </td>
+              <table style={indicatorsTableStyle}>
+                <thead>
+                  <tr>
+                    <th style={{ width: '15%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Indicator</th>
+                    <th style={{ width: '5%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Code</th>
+                    <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Required Information</th>
+                    <th style={{ width: '15%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Indicator</th>
+                    <th style={{ width: '5%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Code</th>
+                    <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Required Information</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Transferred Out</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>T/O</td>
+                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of Public (P) Private (PR) School &amp; Effectivity Date</td>
+                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>CCT Recipient</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>CCT</td>
+                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>CCT Control Number &amp; Effectivity Date</td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Transferred IN</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>T/I</td>
+                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of Public (P) Private (PR) School &amp; Effectivity Date</td>
+                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Balik-Aral</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>B/A</td>
+                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of school last attended &amp; Year</td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Dropped</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>DRP</td>
+                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Reason and Effectivity Date</td>
+                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Learner With Disability</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>LWD</td>
+                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Specify</td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Late Enrollment</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>LE</td>
+                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Reason (Enrollment beyond 1st Friday of June)</td>
+                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Accelerated</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>ACL</td>
+                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Specify Level &amp; Effectivity Date</td>
+                  </tr>
+                </tbody>
+              </table>
+            </td>
 
-          <td style={{ width: '15%', verticalAlign: 'bottom', border: 'none' }}>
-            <div style={signatureBlockStyle}>
-              <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 14, color: '#000000' }}>Certified Correct:</div>
-              <div style={signatureLineStyle}>{reportData?.school_head}</div>
-              <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 2, color: '#000000' }}>(Signature of School Head over Printed Name)</div>
-              <div style={datesRowStyle}>
-                <span>BoSY Date: ________</span><span>EoSY Date: ________</span>
+            <td style={{ width: '14%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
+              <table style={summaryTableStyle}>
+                <thead>
+                  <tr>
+                    <th style={{ width: '40%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>REGISTERED</th>
+                    <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>BoSY</th>
+                    <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>EoSY</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>MALE</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.footer }}>{maleCount}</td>
+                    <td style={indicatorCellCenter}></td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>FEMALE</td>
+                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.footer }}>{femaleCount}</td>
+                    <td style={indicatorCellCenter}></td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>TOTAL</td>
+                    <td style={{ ...indicatorCellCenter, fontWeight: 800, fontSize: fontSizes.footer }}>{totalCount}</td>
+                    <td style={indicatorCellCenter}></td>
+                  </tr>
+                </tbody>
+              </table>
+            </td>
+
+            <td style={{ width: '15%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
+              <div style={signatureBlockStyle}>
+                <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 14, color: '#000000' }}>Prepared by :</div>
+                <div style={signatureLineStyle}>{reportData?.adviser_name}</div>
+                <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 2, color: '#000000' }}>(Signature of Adviser over Printed Name)</div>
+                <div style={datesRowStyle}>
+                  <span>BoSY Date: ________</span><span>EoSY Date: ________</span>
+                </div>
               </div>
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+            </td>
+
+            <td style={{ width: '15%', verticalAlign: 'bottom', border: 'none' }}>
+              <div style={signatureBlockStyle}>
+                <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 14, color: '#000000' }}>Certified Correct:</div>
+                <div style={signatureLineStyle}>{reportData?.school_head || school.principal_name}</div>
+                <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 2, color: '#000000' }}>(Signature of School Head over Printed Name)</div>
+                <div style={datesRowStyle}>
+                  <span>BoSY Date: ________</span><span>EoSY Date: ________</span>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Official DepEd Manual of Style Footer */}
+      <div style={dmosFooterStyle}>
+        <div style={{ width: '0.76in', height: '0.76in', minWidth: '0.76in', minHeight: '0.76in', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {(school.school_logo || school.left_logo) ? (
+            <img
+              src={school.school_logo || school.left_logo || ''}
+              alt="School Seal"
+              style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }}
+            />
+          ) : null}
+        </div>
+
+        <div style={dmosFooterDetailsStyle}>
+          <div><strong>Address:</strong> {school.address || 'Lapasan, Cagayan de Oro City, Northern Mindanao, 9000'}</div>
+          <div>
+            <strong>Contact No.:</strong> {school.contact_number || '(088) 856-1234'} &bull; <strong>Email:</strong> {school.email || 'lapasan.nhs@deped.gov.ph'}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 
   return (
@@ -894,19 +976,54 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         isExporting={exportingPdf}
       />
 
-      {/* Control Strip for Date Filter and 100% Fit Screen Zoom (Hidden during printing) */}
+      {/* Control Strip */}
       <div className="no-print" style={controlStripStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <label style={{ fontWeight: 700, color: '#334155', fontSize: '0.80rem' }}>As of Date:</label>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            style={dateInputStyle}
-          />
-          <span style={{ fontSize: '0.74rem', color: '#64748b' }}>
-            (Displays learners enrolled on or before this date)
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <label style={{ fontWeight: 700, color: '#334155', fontSize: '0.80rem' }}>As of Date:</label>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              style={dateInputStyle}
+            />
+          </div>
+
+          <div style={{ height: 20, width: 1, backgroundColor: '#cbd5e1' }} />
+
+          {/* Roster Grouping Mode Toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Roster Layout:</span>
+            <div style={{ display: 'flex', backgroundColor: '#f1f5f9', padding: 2, borderRadius: 6, border: '1px solid #cbd5e1' }}>
+              <button
+                type="button"
+                onClick={() => setGroupingMode('COMBINED')}
+                style={{
+                  ...formatToggleBtn,
+                  backgroundColor: groupingMode === 'COMBINED' ? '#0284c7' : 'transparent',
+                  color: groupingMode === 'COMBINED' ? '#ffffff' : '#64748b',
+                }}
+                title="Single combined alphabetical learner roster (Default)"
+              >
+                <Users size={12} />
+                <span>One List (Default)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setGroupingMode('SEPARATED')}
+                style={{
+                  ...formatToggleBtn,
+                  backgroundColor: groupingMode === 'SEPARATED' ? '#0284c7' : 'transparent',
+                  color: groupingMode === 'SEPARATED' ? '#ffffff' : '#64748b',
+                }}
+                title="Separate male and female roster sections"
+              >
+                <Split size={12} />
+                <span>Separate by Sex</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -921,14 +1038,14 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
               color: fitToWidth ? '#0284c7' : '#475569',
             }}
           >
-            <Maximize2 size={13} /> Fit Screen (100%)
+            <Maximize2 size={13} /> Fit Screen ({Math.round(zoomScale * 100)}%)
           </button>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button
               onClick={() => {
                 setFitToWidth(false);
-                setZoomScale((prev) => Math.max(0.4, Number((prev - 0.05).toFixed(2))));
+                setZoomScale((prev) => Math.max(0.35, Number((prev - 0.05).toFixed(2))));
               }}
               style={zoomBtnStyle}
             >
@@ -950,15 +1067,12 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         </div>
       </div>
 
-      {/* Main Viewport Container */}
-      <div
-        ref={viewportContainerRef}
-        style={viewerScrollContainerStyle}
-      >
+      {/* Synchronized Viewport Preview Container */}
+      <div ref={viewportContainerRef} style={viewerScrollContainerStyle}>
         {loading ? (
           <div style={loadingStateStyle}>
             <Loader2 className="animate-spin" size={28} color="#0284c7" />
-            <span>Loading...</span>
+            <span>Generating School Form 1...</span>
           </div>
         ) : error ? (
           <div style={errorStateStyle}>
@@ -968,7 +1082,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         ) : reportData ? (
           <div
             style={{
-              width: isPrinting ? '100%' : `${13.5 * zoomScale}in`,
+              width: isPrinting ? '100%' : `${pageWidthInches * zoomScale}in`,
               maxWidth: '100%',
               margin: '0 auto',
               display: 'flex',
@@ -980,32 +1094,38 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
               style={{
                 transform: isPrinting ? 'none' : `scale(${zoomScale})`,
                 transformOrigin: 'top center',
-                width: isPrinting ? '100%' : '13.5in',
-                minWidth: isPrinting ? '100%' : '13.5in',
+                width: isPrinting ? '100%' : `${pageWidthInches}in`,
+                minWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
                 transition: isPrinting ? 'none' : 'transform 0.15s ease-out',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
               }}
             >
-              <div id="sf1-print-document" ref={reportRef} style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div
+                id="sf1-print-document"
+                ref={reportRef}
+                style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+              >
                 {paginatedPages.map((page) => (
                   <div
                     key={`sf1-page-${page.pageNumber}`}
                     className="sf1-page-sheet"
                     style={{
                       ...sheetWrapperStyle,
-                      width: isPrinting ? '100%' : '13.5in',
-                      minWidth: isPrinting ? '100%' : '13.5in',
-                      maxWidth: isPrinting ? '100%' : '13.5in',
+                      width: isPrinting ? '100%' : `${pageWidthInches}in`,
+                      minWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
+                      maxWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
+                      minHeight: activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
                       boxShadow: isPrinting ? 'none' : '0 4px 24px rgba(0,0,0,0.12)',
-                      padding: isPrinting ? '0.1in 0.15in' : '0.2in 0.25in',
+                      padding: `${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in`,
                       backgroundColor: activePageConfig.pageColor || '#ffffff',
                       fontSize: fontSizes.table,
                       pageBreakBefore: page.pageNumber > 1 ? 'always' : 'auto',
                     }}
                   >
-                    {page.showFullHeader && renderHeader()}
+                    {/* Header ALWAYS ONLY on Page 1 */}
+                    {page.pageNumber === 1 && renderHeader()}
 
                     <table style={mainTableStyle}>
                       {renderTableHeader()}
@@ -1016,35 +1136,148 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                               {reportData.notice || `Notice: No students enrolled in Section ${reportData.section_name} as of ${selectedDate}.`}
                             </td>
                           </tr>
-                        ) : (
-                          page.learners.map((learner, idx) => {
-                            const absoluteIndex = page.startIndex + idx;
-                            const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
-                            return (
-                              <tr key={`learner-${learner.id}`} style={dataRowStyle}>
-                                <td style={centerCell}>{absoluteIndex + 1}</td>
-                                <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
-                                <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
-                                <td style={centerCell}>{learner.sex}</td>
-                                <td style={centerCell}>{learner.birthdate}</td>
-                                <td style={centerCell}>{learner.age}</td>
-                                <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
-                                <td style={centerCell}>{learner.mother_tongue}</td>
-                                <td style={centerCell}>{learner.ethnic_group}</td>
-                                <td style={centerCell}>{learner.religion}</td>
-                                <td style={leftCell}>{learner.house_street}</td>
-                                <td style={leftCell}>{learner.barangay}</td>
-                                <td style={leftCell}>{learner.municipality_city}</td>
-                                <td style={leftCell}>{learner.province}</td>
-                                <td style={leftCell}>{learner.father_name}</td>
-                                <td style={leftCell}>{learner.mother_maiden_name}</td>
-                                <td style={leftCell}>{gName}</td>
-                                <td style={centerCell}>{gRel}</td>
-                                <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
-                                <td style={centerCell}>{learner.remarks}</td>
+                        ) : groupingMode === 'COMBINED' ? (
+                          <>
+                            {page.learners.map((learner, idx) => {
+                              const absoluteIndex = page.startIndex + idx;
+                              const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+                              return (
+                                <tr key={`combined-${learner.id}`} style={dataRowStyle}>
+                                  <td style={centerCell}>{absoluteIndex + 1}</td>
+                                  <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
+                                  <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
+                                  <td style={centerCell}>{learner.sex}</td>
+                                  <td style={centerCell}>{learner.birthdate}</td>
+                                  <td style={centerCell}>{learner.age}</td>
+                                  <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
+                                  <td style={centerCell}>{learner.mother_tongue}</td>
+                                  <td style={centerCell}>{learner.ethnic_group}</td>
+                                  <td style={centerCell}>{learner.religion}</td>
+                                  <td style={leftCell}>{learner.house_street}</td>
+                                  <td style={leftCell}>{learner.barangay}</td>
+                                  <td style={leftCell}>{learner.municipality_city}</td>
+                                  <td style={leftCell}>{learner.province}</td>
+                                  <td style={leftCell}>{learner.father_name}</td>
+                                  <td style={leftCell}>{learner.mother_maiden_name}</td>
+                                  <td style={leftCell}>{gName}</td>
+                                  <td style={centerCell}>{gRel}</td>
+                                  <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
+                                  <td style={centerCell}>{learner.remarks}</td>
+                                </tr>
+                              );
+                            })}
+                            {page.showFooter && (
+                              <tr style={{ backgroundColor: '#e2e8f0', fontWeight: 900, borderTop: '1.5px solid #000' }}>
+                                <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 900 }}>
+                                  TOTAL ENROLLED LEARNERS
+                                </td>
+                                <td style={{ ...centerCell, fontWeight: 900 }}>{totalCount}</td>
+                                <td colSpan={16} style={{ ...leftCell, paddingLeft: 12, fontSize: '5pt', color: '#475569' }}>
+                                  (Male: <strong>{maleCount}</strong> &bull; Female: <strong>{femaleCount}</strong>)
+                                </td>
                               </tr>
-                            );
-                          })
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            {maleLearners.length > 0 && (
+                              <>
+                                <tr style={{ backgroundColor: '#f1f5f9', fontWeight: 800 }}>
+                                  <td colSpan={20} style={{ padding: '2px 8px', fontSize: fontSizes.header, textAlign: 'left', color: '#0284c7' }}>
+                                    MALE
+                                  </td>
+                                </tr>
+                                {maleLearners.map((learner, idx) => {
+                                  const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+                                  return (
+                                    <tr key={`male-${learner.id}`} style={dataRowStyle}>
+                                      <td style={centerCell}>{idx + 1}</td>
+                                      <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
+                                      <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
+                                      <td style={centerCell}>{learner.sex}</td>
+                                      <td style={centerCell}>{learner.birthdate}</td>
+                                      <td style={centerCell}>{learner.age}</td>
+                                      <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
+                                      <td style={centerCell}>{learner.mother_tongue}</td>
+                                      <td style={centerCell}>{learner.ethnic_group}</td>
+                                      <td style={centerCell}>{learner.religion}</td>
+                                      <td style={leftCell}>{learner.house_street}</td>
+                                      <td style={leftCell}>{learner.barangay}</td>
+                                      <td style={leftCell}>{learner.municipality_city}</td>
+                                      <td style={leftCell}>{learner.province}</td>
+                                      <td style={leftCell}>{learner.father_name}</td>
+                                      <td style={leftCell}>{learner.mother_maiden_name}</td>
+                                      <td style={leftCell}>{gName}</td>
+                                      <td style={centerCell}>{gRel}</td>
+                                      <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
+                                      <td style={centerCell}>{learner.remarks}</td>
+                                    </tr>
+                                  );
+                                })}
+                                <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                                  <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 800 }}>
+                                    TOTAL MALE
+                                  </td>
+                                  <td style={centerCell}>{maleCount}</td>
+                                  <td colSpan={16} style={centerCell}></td>
+                                </tr>
+                              </>
+                            )}
+
+                            {femaleLearners.length > 0 && (
+                              <>
+                                <tr style={{ backgroundColor: '#fdf2f8', fontWeight: 800 }}>
+                                  <td colSpan={20} style={{ padding: '2px 8px', fontSize: fontSizes.header, textAlign: 'left', color: '#db2777' }}>
+                                    FEMALE
+                                  </td>
+                                </tr>
+                                {femaleLearners.map((learner, idx) => {
+                                  const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+                                  return (
+                                    <tr key={`female-${learner.id}`} style={dataRowStyle}>
+                                      <td style={centerCell}>{idx + 1}</td>
+                                      <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
+                                      <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
+                                      <td style={centerCell}>{learner.sex}</td>
+                                      <td style={centerCell}>{learner.birthdate}</td>
+                                      <td style={centerCell}>{learner.age}</td>
+                                      <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
+                                      <td style={centerCell}>{learner.mother_tongue}</td>
+                                      <td style={centerCell}>{learner.ethnic_group}</td>
+                                      <td style={centerCell}>{learner.religion}</td>
+                                      <td style={leftCell}>{learner.house_street}</td>
+                                      <td style={leftCell}>{learner.barangay}</td>
+                                      <td style={leftCell}>{learner.municipality_city}</td>
+                                      <td style={leftCell}>{learner.province}</td>
+                                      <td style={leftCell}>{learner.father_name}</td>
+                                      <td style={leftCell}>{learner.mother_maiden_name}</td>
+                                      <td style={leftCell}>{gName}</td>
+                                      <td style={centerCell}>{gRel}</td>
+                                      <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
+                                      <td style={centerCell}>{learner.remarks}</td>
+                                    </tr>
+                                  );
+                                })}
+                                <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                                  <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 800 }}>
+                                    TOTAL FEMALE
+                                  </td>
+                                  <td style={centerCell}>{femaleCount}</td>
+                                  <td colSpan={16} style={centerCell}></td>
+                                </tr>
+                              </>
+                            )}
+
+                            {page.showFooter && (
+                              <tr style={{ backgroundColor: '#e2e8f0', fontWeight: 900, borderTop: '1.5px solid #000' }}>
+                                <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 900 }}>
+                                  COMBINED TOTAL
+                                </td>
+                                <td style={{ ...centerCell, fontWeight: 900 }}>{totalCount}</td>
+                                <td colSpan={16} style={centerCell}></td>
+                              </tr>
+                            )}
+                          </>
                         )}
                       </tbody>
                     </table>
@@ -1057,7 +1290,9 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                       </div>
                       <div>
                         <span>Date and Time Printed: <strong>{auditMeta.printedAt}</strong></span>
-                        <span> &bull; Page {page.pageNumber} of {page.totalPages}</span>
+                        {page.totalPages && page.totalPages > 1 && (
+                          <span> &bull; Page {page.pageNumber} of {page.totalPages}</span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1084,12 +1319,11 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         reportTitle="SF1 School Register"
       />
 
-      {/* Global Print Engine CSS */}
       <style>{`
         @media print {
           @page {
-            size: landscape;
-            margin: 0.15in 0.20in !important;
+            size: ${pageWidthInches}in ${pageHeightInches}in;
+            margin: 0 !important;
           }
           
           .no-print,
@@ -1141,18 +1375,18 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
           }
 
           .sf1-page-sheet {
-            width: 100% !important;
-            max-width: 100% !important;
-            min-width: 100% !important;
+            width: ${pageWidthInches}in !important;
+            min-width: ${pageWidthInches}in !important;
+            max-width: ${pageWidthInches}in !important;
+            min-height: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`} !important;
             box-sizing: border-box !important;
             margin: 0 auto !important;
-            padding: 0.1in 0.15in !important;
+            padding: ${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in !important;
             box-shadow: none !important;
             border: none !important;
-            background: #ffffff !important;
-            background-color: #ffffff !important;
-            page-break-after: always !important;
-            break-after: page !important;
+            background-color: ${activePageConfig.pageColor || '#ffffff'} !important;
+            page-break-after: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : 'always'} !important;
+            break-after: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : 'page'} !important;
           }
 
           .sf1-page-sheet:last-child {
@@ -1177,9 +1411,63 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   );
 };
 
-// ==========================================
-// STYLES
-// ==========================================
+export default SF1ReportTab;
+
+const republicStyle: React.CSSProperties = {
+  fontFamily: "'Old English Text MT', 'Old English Text MT Fallback', 'UnifrakturMaguntia', serif",
+  fontSize: '12pt',
+  fontWeight: 'bold',
+  color: '#000000',
+  lineHeight: 1.15,
+};
+
+const depedTitleStyle: React.CSSProperties = {
+  fontFamily: "'Old English Text MT', 'Old English Text MT Fallback', 'UnifrakturMaguntia', serif",
+  fontSize: '18pt',
+  fontWeight: 'bold',
+  color: '#000000',
+  lineHeight: 1.15,
+  marginTop: '1px',
+};
+
+const regionalOfficeStyle: React.CSSProperties = {
+  fontFamily: 'Tahoma, Arial, sans-serif',
+  fontSize: '10pt',
+  fontWeight: 'bold',
+  color: '#000000',
+  lineHeight: 1.2,
+  marginTop: '3px',
+};
+
+const officeStyle: React.CSSProperties = {
+  fontFamily: 'Tahoma, Arial, sans-serif',
+  fontSize: '10pt',
+  fontWeight: 'bold',
+  color: '#000000',
+  lineHeight: 1.2,
+  marginTop: '1px',
+};
+
+const dmosFooterStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-start',
+  gap: '12px',
+  width: '100%',
+  marginTop: '10px',
+  paddingTop: '6px',
+  borderTop: '1px solid #000000',
+  boxSizing: 'border-box',
+};
+
+const dmosFooterDetailsStyle: React.CSSProperties = {
+  fontFamily: 'Calibri, "Segoe UI", Arial, sans-serif',
+  fontSize: '10pt',
+  color: '#000000',
+  lineHeight: 1.3,
+  textAlign: 'left',
+};
+
 const controlStripStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -1187,6 +1475,8 @@ const controlStripStyle: React.CSSProperties = {
   padding: '8px 24px',
   backgroundColor: '#ffffff',
   borderBottom: '1px solid #e2e8f0',
+  flexWrap: 'wrap',
+  gap: 10,
 };
 
 const dateInputStyle: React.CSSProperties = {
@@ -1195,6 +1485,19 @@ const dateInputStyle: React.CSSProperties = {
   border: '1px solid #cbd5e1',
   fontSize: '0.80rem',
   color: '#0f172a',
+};
+
+const formatToggleBtn: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '4px 9px',
+  borderRadius: 5,
+  border: 'none',
+  fontSize: '0.72rem',
+  fontWeight: 700,
+  cursor: 'pointer',
+  transition: 'all 0.15s ease',
 };
 
 const toggleBtnStyle: React.CSSProperties = {
@@ -1421,5 +1724,3 @@ const errorStateStyle: React.CSSProperties = {
   borderRadius: 8,
   border: '1px solid #fecaca',
 };
-
-export default SF1ReportTab;

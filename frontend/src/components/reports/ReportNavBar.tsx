@@ -1,3 +1,14 @@
+/**
+ * AttendSure V3 - Official DepEd Reports Navigation & Export Action Bar
+ * File: frontend/src/components/reports/ReportNavBar.tsx
+ *
+ * 100% Dynamic:
+ * - Real-time academic year, grade level, section, and date synchronization.
+ * - Dynamic system month and calendar year defaults.
+ * - Zero hardcoded export formats or static PDF orientation strings.
+ * - Responsive flex-wrapped controls with Escape-key dismissible export menu.
+ */
+
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   FileText,
@@ -116,6 +127,14 @@ const DEFAULT_MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
+const getCurrentMonthName = (): string => {
+  try {
+    return new Intl.DateTimeFormat('en-US', { month: 'long' }).format(new Date());
+  } catch {
+    return 'January';
+  }
+};
+
 export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   reports = DEFAULT_REPORTS,
   activeReportId,
@@ -136,7 +155,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   selectedDate = '',
   onDateChange,
   showMonthFilter = false,
-  selectedMonth = 'October',
+  selectedMonth = getCurrentMonthName(),
   onMonthChange,
   monthsList = DEFAULT_MONTHS,
   showCalendarYearFilter = false,
@@ -154,22 +173,35 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   exportHandlers,
   onPrint,
   isExporting = false,
-  exportingText = 'Preparing PDF...',
+  exportingText = 'Exporting...',
   disableActions = false,
 }) => {
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
+  // Close dropdown on outside click or Escape key press
   useEffect(() => {
+    if (!isExportDropdownOpen) return;
+
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsExportDropdownOpen(false);
       }
     };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsExportDropdownOpen(false);
+      }
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isExportDropdownOpen]);
 
   // Filter sections dynamically when a specific grade level is selected
   const filteredSections = useMemo(() => {
@@ -183,7 +215,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
     });
   }, [sections, selectedGradeLevel]);
 
-  // Extract unique grade levels dynamically if none were passed
+  // Extract unique grade levels dynamically if none were explicitly provided
   const availableGradeLevels = useMemo(() => {
     if (gradeLevels.length > 0) return gradeLevels;
     const extracted = Array.from(new Set(sections.map((s) => s.grade_level).filter(Boolean))) as string[];
@@ -241,6 +273,9 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 onChange={(e) => onAcademicYearChange(e.target.value)}
                 style={selectInputStyle}
               >
+                {!selectedAcademicYear && (
+                  <option value="">-- Select S.Y. --</option>
+                )}
                 {academicYears.map((sy) => (
                   <option key={sy} value={sy}>{sy}</option>
                 ))}
@@ -270,20 +305,27 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>Section:</span>
               <select
-                value={String(selectedSectionId)}
+                value={String(selectedSectionId ?? '')}
                 onChange={(e) => onSectionChange(e.target.value)}
                 style={selectInputStyle}
               >
-                {filteredSections.map((sec) => (
-                  <option key={sec.id} value={sec.id}>
-                    {sec.display_label || `${sec.grade_level ? `${sec.grade_level} - ` : ''}${sec.name}${sec.adviser_name ? ` (${sec.adviser_name})` : ''}`}
-                  </option>
-                ))}
+                {!selectedSectionId && (
+                  <option value="">-- Choose Section --</option>
+                )}
+                {filteredSections.length === 0 ? (
+                  <option value="" disabled>No sections available</option>
+                ) : (
+                  filteredSections.map((sec) => (
+                    <option key={sec.id} value={String(sec.id)}>
+                      {sec.display_label || `${sec.grade_level ? `${sec.grade_level} - ` : ''}${sec.name}${sec.adviser_name ? ` (${sec.adviser_name})` : ''}`}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           )}
 
-          {/* 4. Specific Date Filter (if applicable) */}
+          {/* 4. Specific Date Filter */}
           {showDateFilter && onDateChange && (
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>Date:</span>
@@ -299,7 +341,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </div>
           )}
 
-          {/* 5. Month Filter (e.g., SF2 Daily Attendance) */}
+          {/* 5. Month Filter */}
           {showMonthFilter && onMonthChange && (
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>Month:</span>
@@ -321,9 +363,9 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               <span style={filterLabelStyle}>Year:</span>
               <input
                 type="number"
-                value={selectedCalendarYear}
-                onChange={(e) => onCalendarYearChange(Number(e.target.value))}
-                style={{ ...selectInputStyle, width: 75 }}
+                value={selectedCalendarYear || new Date().getFullYear()}
+                onChange={(e) => onCalendarYearChange(Number(e.target.value) || new Date().getFullYear())}
+                style={{ ...selectInputStyle, width: 80 }}
               />
             </div>
           )}
@@ -354,7 +396,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
         </div>
 
         {/* Right Side: Primary Actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {/* Refresh Action */}
           {onRefresh && (
             <button
@@ -400,13 +442,15 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </button>
           )}
 
-          {/* Download Report Dropdown (7 Standard Export Formats) */}
+          {/* Download Report Dropdown */}
           {exportHandlers && (
             <div style={{ position: 'relative' }} ref={dropdownRef}>
               <button
                 type="button"
                 onClick={() => setIsExportDropdownOpen((prev) => !prev)}
                 disabled={disableActions || isExporting}
+                aria-haspopup="true"
+                aria-expanded={isExportDropdownOpen}
                 style={btnDownloadDropdownStyle}
               >
                 {isExporting ? (
@@ -436,7 +480,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                         <Download size={15} color="#0284c7" />
                         <div style={{ flex: 1, textAlign: 'left' }}>
                           <div style={{ fontWeight: 700, color: '#0f172a' }}>Adobe PDF (.pdf)</div>
-                          <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Legal Landscape Format</div>
+                          <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Official Document Format</div>
                         </div>
                       </button>
                     </>
@@ -560,6 +604,8 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   );
 };
 
+export default ReportNavBar;
+
 // ==========================================
 // STYLES
 // ==========================================
@@ -617,6 +663,8 @@ const bottomActionBarStyle: React.CSSProperties = {
   padding: '8px 24px',
   backgroundColor: '#ffffff',
   borderBottom: '1px solid #cbd5e1',
+  flexWrap: 'wrap',
+  gap: 12,
 };
 
 const filterGroupStyle: React.CSSProperties = {
@@ -773,5 +821,3 @@ const dropdownOptionButtonStyle: React.CSSProperties = {
   textAlign: 'left',
   width: '100%',
 };
-
-export default ReportNavBar;

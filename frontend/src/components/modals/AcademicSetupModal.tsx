@@ -1,4 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+/**
+ * AttendSure V3 - Academic Setup & Institutional Structure Modal
+ * File: frontend/src/components/modals/AcademicSetupModal.tsx
+ *
+ * Capabilities:
+ * - Schedules: Live conflict checking, duplicate detection, and full Create/Edit/Delete lifecycle.
+ * - Sections: Double-booking prevention for class advisers and homerooms.
+ * - Subjects: Code uniqueness validation and unit classification.
+ * - Rooms: Capacity tracking and facility classification.
+ * - Year Levels: Automated stage progression (Elementary, JHS, SHS).
+ * - Safe rendering: Unwraps nested DRF serializer objects to avoid React child crashes.
+ * - Modal controls: Escape key and backdrop dismissal.
+ */
+
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import apiClient from '../../api/client';
 import { 
   X, 
@@ -20,7 +34,7 @@ import {
 
 export type TabType = 'SCHEDULE' | 'SECTION' | 'SUBJECT' | 'ROOM' | 'YEAR_LEVEL';
 
-interface ModalProps {
+export interface ModalProps {
   isOpen: boolean;
   initialTab?: TabType;
   onClose: () => void;
@@ -43,7 +57,7 @@ export function formatTime12Hour(timeStr?: string): string {
 
 function getErrorMessage(err: any): string {
   const data = err?.response?.data;
-  if (!err.response) return 'Cannot reach server. Please check your connection.';
+  if (!err.response) return 'Cannot reach server. Please check your network connection.';
   if (typeof data === 'string') return data.slice(0, 120);
   if (data?.detail) return data.detail;
   if (data?.error) return data.error;
@@ -68,11 +82,29 @@ export const AcademicSetupModal: React.FC<ModalProps> = ({
     }
   }, [isOpen, initialTab]);
 
+  // Keyboard shortcut (Escape to dismiss)
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div style={backdropStyle}>
-      <div style={boxStyle}>
+    <div
+      style={backdropStyle}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="academic-setup-title"
+    >
+      <div style={boxStyle} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div style={headerStyle}>
           <div>
@@ -80,11 +112,18 @@ export const AcademicSetupModal: React.FC<ModalProps> = ({
               <div style={iconBadgeStyle}>
                 <Database size={16} color="#0284c7" />
               </div>
-              <h3 style={titleStyle}>Academic Setup</h3>
+              <h3 id="academic-setup-title" style={titleStyle}>
+                Academic Setup
+              </h3>
             </div>
             <p style={subtitleStyle}>Manage schedules, sections, subjects, rooms, and year levels</p>
           </div>
-          <button onClick={onClose} style={closeButtonStyle} type="button">
+          <button
+            onClick={onClose}
+            style={closeButtonStyle}
+            type="button"
+            aria-label="Close dialog"
+          >
             <X size={18} />
           </button>
         </div>
@@ -145,6 +184,7 @@ export const AcademicSetupModal: React.FC<ModalProps> = ({
 // 1. SCHEDULE FORM
 // ===========================================================================
 const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [code, setCode] = useState('');
   const [sectionId, setSectionId] = useState('');
   const [subjectId, setSubjectId] = useState('');
@@ -166,7 +206,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [clashList, setClashList] = useState<string[]>([]);
   const [checkingClash, setCheckingClash] = useState(false);
 
-  const loadAllData = async () => {
+  const loadAllData = useCallback(async () => {
     try {
       const [secRes, subRes, teachRes, roomRes, schedRes] = await Promise.all([
         apiClient.get('/sections/'),
@@ -181,24 +221,25 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       setRooms(Array.isArray(roomRes.data) ? roomRes.data : roomRes.data.results || []);
       setAllSchedules(Array.isArray(schedRes.data) ? schedRes.data : schedRes.data.results || []);
     } catch (err) {
-      console.error('Cannot load data:', err);
+      console.error('Cannot load schedule metadata:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadAllData();
-  }, []);
+  }, [loadAllData]);
 
   const isCodeDuplicate = useMemo(() => {
     const clean = code.trim().toLowerCase();
     if (!clean) return false;
     return allSchedules.some(
-      (s) => (s.code || s.schedule_code)?.trim().toLowerCase() === clean
+      (s) => (editingId ? s.id !== editingId : true) && (s.code || s.schedule_code)?.trim().toLowerCase() === clean
     );
-  }, [code, allSchedules]);
+  }, [code, editingId, allSchedules]);
 
+  // Live conflict checking with debounce
   useEffect(() => {
     if (startTime && endTime && startTime >= endTime) {
       setClashList(['Start time must be before end time.']);
@@ -214,6 +255,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       setCheckingClash(true);
       try {
         const res = await apiClient.post('/schedules/validate-conflict/', {
+          exclude_id: editingId || null,
           section_id: sectionId ? parseInt(sectionId, 10) : null,
           faculty_id: facultyId ? parseInt(facultyId, 10) : null,
           room_id: roomId ? parseInt(roomId, 10) : null,
@@ -227,25 +269,60 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
         } else {
           setClashList([]);
         }
-      } catch (err) {
-        console.error('Check failed:', err);
+      } catch {
+        setClashList([]);
       } finally {
         setCheckingClash(false);
       }
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [sectionId, facultyId, roomId, daysOfWeek, startTime, endTime]);
+  }, [sectionId, facultyId, roomId, daysOfWeek, startTime, endTime, editingId]);
 
-  const sectionClasses = allSchedules.filter((s) => {
-    if (!sectionId) return false;
-    return String(s.section) === String(sectionId) || String(s.section_id) === String(sectionId);
-  });
+  // Safe Section filtering across object and ID references
+  const sectionClasses = useMemo(() => {
+    if (!sectionId) return [];
+    return allSchedules.filter((s) => {
+      const secVal = typeof s.section === 'object' ? s.section?.id : s.section;
+      return String(secVal) === String(sectionId) || String(s.section_id) === String(sectionId);
+    });
+  }, [sectionId, allSchedules]);
+
+  const handleEdit = (item: any) => {
+    setEditingId(item.id);
+    setCode(item.code || item.schedule_code || '');
+    const secVal = typeof item.section === 'object' ? item.section?.id : (item.section_id || item.section);
+    setSectionId(secVal ? String(secVal) : '');
+    const subVal = typeof item.subject === 'object' ? item.subject?.id : (item.subject_id || item.subject);
+    setSubjectId(subVal ? String(subVal) : '');
+    const facVal = typeof item.faculty === 'object' ? item.faculty?.id : (item.faculty_id || item.teacher || item.faculty);
+    setFacultyId(facVal ? String(facVal) : '');
+    const rmVal = typeof item.room === 'object' ? item.room?.id : (item.room_id || item.room);
+    setRoomId(rmVal ? String(rmVal) : '');
+    setDaysOfWeek(item.days_of_week || 'MON-FRI');
+    setStartTime(item.start_time ? item.start_time.slice(0, 5) : '07:30');
+    setEndTime(item.end_time ? item.end_time.slice(0, 5) : '08:30');
+    setServerError('');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setCode('');
+    setSectionId('');
+    setSubjectId('');
+    setFacultyId('');
+    setRoomId('');
+    setDaysOfWeek('MON-FRI');
+    setStartTime('07:30');
+    setEndTime('08:30');
+    setServerError('');
+  };
 
   const handleDeleteSchedule = async (id: number) => {
     if (!window.confirm('Are you sure you want to delete this schedule period?')) return;
     try {
       await apiClient.delete(`/schedules/${id}/`);
+      if (editingId === id) handleCancelEdit();
       await loadAllData();
       onSuccess();
     } catch (err: any) {
@@ -285,8 +362,12 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     };
 
     try {
-      await apiClient.post('/schedules/', payload);
-      setCode('');
+      if (editingId) {
+        await apiClient.put(`/schedules/${editingId}/`, payload);
+      } else {
+        await apiClient.post('/schedules/', payload);
+      }
+      handleCancelEdit();
       await loadAllData();
       onSuccess();
     } catch (err: any) {
@@ -362,11 +443,14 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             style={inputStyle}
           >
             <option value="">-- Choose Section --</option>
-            {sections.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} {s.grade_level ? `(${s.grade_level})` : ''}
-              </option>
-            ))}
+            {sections.map((s) => {
+              const glName = typeof s.grade_level === 'object' ? s.grade_level?.name : (s.grade_level_name || s.grade_level);
+              return (
+                <option key={s.id} value={s.id}>
+                  {s.name} {glName ? `(${glName})` : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
       </div>
@@ -397,9 +481,12 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             style={inputStyle}
           >
             <option value="">-- Choose Teacher --</option>
-            {teachers.map((t) => (
-              <option key={t.id} value={t.id}>{t.full_name || t.name}</option>
-            ))}
+            {teachers.map((t) => {
+              const tName = t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name;
+              return (
+                <option key={t.id} value={t.id}>{tName}</option>
+              );
+            })}
           </select>
         </div>
       </div>
@@ -462,17 +549,26 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
         </div>
       </div>
 
-      <button 
-        type="submit" 
-        disabled={saving || hasClash || checkingClash || isCodeDuplicate || !code.trim()} 
-        style={{
-          ...saveButtonStyle,
-          backgroundColor: (hasClash || isCodeDuplicate || !code.trim()) ? '#94a3b8' : '#0284c7',
-          cursor: (hasClash || isCodeDuplicate || !code.trim()) ? 'not-allowed' : 'pointer'
-        }}
-      >
-        {saving ? <Loader2 size={16} className="animate-spin" /> : 'Save Schedule Period'}
-      </button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button 
+          type="submit" 
+          disabled={saving || hasClash || checkingClash || isCodeDuplicate || !code.trim()} 
+          style={{
+            ...saveButtonStyle,
+            flex: 1,
+            backgroundColor: (hasClash || isCodeDuplicate || !code.trim()) ? '#94a3b8' : '#0284c7',
+            cursor: (hasClash || isCodeDuplicate || !code.trim()) ? 'not-allowed' : 'pointer'
+          }}
+        >
+          {saving ? <Loader2 size={16} className="animate-spin" /> : editingId ? 'Update Schedule Period' : 'Save Schedule Period'}
+        </button>
+
+        {editingId && (
+          <button type="button" onClick={handleCancelEdit} style={cancelBtnStyle}>
+            Cancel
+          </button>
+        )}
+      </div>
 
       {sectionId && (
         <div style={listCardStyle}>
@@ -488,27 +584,39 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             <div style={emptyTextStyle}>No classes yet for this section. All times are open.</div>
           ) : (
             <div style={gridStyle}>
-              {sectionClasses.map((item) => (
-                <div key={item.id} style={itemCardStyle}>
-                  <div>
-                    {/* 12-Hour AM/PM Formatted Slot Display */}
-                    <div style={{ fontWeight: 700, color: '#0f172a' }}>
-                      {formatTime12Hour(item.start_time)} - {formatTime12Hour(item.end_time)}
+              {sectionClasses.map((item) => {
+                const subDisplay = item.subject_code || (typeof item.subject === 'object' ? item.subject?.code : '') || item.code;
+                return (
+                  <div key={item.id} style={itemCardStyle}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: '#0f172a' }}>
+                        {formatTime12Hour(item.start_time)} - {formatTime12Hour(item.end_time)}
+                      </div>
+                      <div style={{ fontSize: '0.70rem', color: '#64748b' }}>
+                        {subDisplay} • {item.days_of_week || 'MON-FRI'}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.70rem', color: '#64748b' }}>
-                      {item.subject_code || item.code} • {item.days_of_week || 'MON-FRI'}
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => handleEdit(item)}
+                        style={iconActionBtn}
+                        title="Edit schedule period"
+                      >
+                        <Pencil size={13} color="#0284c7" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSchedule(item.id)}
+                        style={iconActionBtn}
+                        title="Delete period"
+                      >
+                        <Trash2 size={13} color="#ef4444" />
+                      </button>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteSchedule(item.id)}
-                    style={iconActionBtn}
-                    title="Delete period"
-                  >
-                    <Trash2 size={13} color="#ef4444" />
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -518,7 +626,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 };
 
 // ===========================================================================
-// 2. SECTION FORM (LIVE VALIDATION)
+// 2. SECTION FORM
 // ===========================================================================
 const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -536,7 +644,7 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const loadAllData = async () => {
+  const loadAllData = useCallback(async () => {
     try {
       const [glRes, teachRes, roomRes, secRes] = await Promise.all([
         apiClient.get('/grade-levels/'),
@@ -553,11 +661,11 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadAllData();
-  }, []);
+  }, [loadAllData]);
 
   const isNameDuplicate = useMemo(() => {
     const clean = name.trim().toLowerCase();
@@ -565,9 +673,8 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     return existingSections.some((s) => {
       if (editingId && s.id === editingId) return false;
       const sameName = s.name?.trim().toLowerCase() === clean;
-      const sameLevel = gradeLevelId
-        ? String(s.grade_level_id || s.grade_level) === String(gradeLevelId)
-        : true;
+      const sLevel = typeof s.grade_level === 'object' ? s.grade_level?.id : (s.grade_level_id || s.grade_level);
+      const sameLevel = gradeLevelId ? String(sLevel) === String(gradeLevelId) : true;
       return sameName && sameLevel;
     });
   }, [name, gradeLevelId, editingId, existingSections]);
@@ -576,11 +683,12 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     if (!adviserId) return '';
     const busy = existingSections.find((s) => {
       if (editingId && s.id === editingId) return false;
-      return String(s.adviser_id) === String(adviserId);
+      const sAdvId = typeof s.adviser === 'object' ? s.adviser?.id : (s.adviser_id || s.adviser);
+      return String(sAdvId) === String(adviserId);
     });
     if (busy) {
       const teacherObj = teachers.find((t) => String(t.id) === String(adviserId));
-      const tName = teacherObj ? (teacherObj.full_name || teacherObj.name) : 'Selected Teacher';
+      const tName = teacherObj ? (teacherObj.full_name || `${teacherObj.first_name || ''} ${teacherObj.last_name || ''}`.trim() || teacherObj.name) : 'Selected Teacher';
       return `Teacher conflict: ${tName} is already adviser for "${busy.name}".`;
     }
     return '';
@@ -589,9 +697,11 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const handleEdit = (sec: any) => {
     setEditingId(sec.id);
     setName(sec.name || '');
-    setGradeLevelId(String(sec.grade_level_id || ''));
-    setAdviserId(String(sec.adviser_id || ''));
-    setRoomId(sec.room_number || '');
+    const glVal = typeof sec.grade_level === 'object' ? sec.grade_level?.id : (sec.grade_level_id || sec.grade_level);
+    setGradeLevelId(glVal ? String(glVal) : '');
+    const advVal = typeof sec.adviser === 'object' ? sec.adviser?.id : (sec.adviser_id || sec.adviser);
+    setAdviserId(advVal ? String(advVal) : '');
+    setRoomId(sec.room_number || sec.room_name || '');
     setError('');
   };
 
@@ -729,9 +839,12 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             style={adviserBusyError ? badInputStyle : inputStyle}
           >
             <option value="">-- Optional: Choose Teacher --</option>
-            {teachers.map((t) => (
-              <option key={t.id} value={t.id}>{t.full_name || t.name}</option>
-            ))}
+            {teachers.map((t) => {
+              const tName = t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name;
+              return (
+                <option key={t.id} value={t.id}>{tName}</option>
+              );
+            })}
           </select>
         </div>
         <div style={{ flex: 1 }}>
@@ -783,24 +896,27 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
           <div style={emptyTextStyle}>No sections saved yet.</div>
         ) : (
           <div style={gridStyle}>
-            {existingSections.map((sec) => (
-              <div key={sec.id} style={itemCardStyle}>
-                <div>
-                  <span style={{ fontWeight: 700, color: '#0f172a' }}>{sec.name}</span>
-                  {sec.grade_level && (
-                    <span style={{ ...blueTagStyle, marginLeft: 6 }}>{sec.grade_level}</span>
-                  )}
+            {existingSections.map((sec) => {
+              const glDisplayName = typeof sec.grade_level === 'object' ? sec.grade_level?.name : (sec.grade_level_name || sec.grade_level);
+              return (
+                <div key={sec.id} style={itemCardStyle}>
+                  <div>
+                    <span style={{ fontWeight: 700, color: '#0f172a' }}>{sec.name}</span>
+                    {glDisplayName && (
+                      <span style={{ ...blueTagStyle, marginLeft: 6 }}>{String(glDisplayName)}</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button type="button" onClick={() => handleEdit(sec)} style={iconActionBtn} title="Edit section">
+                      <Pencil size={13} color="#0284c7" />
+                    </button>
+                    <button type="button" onClick={() => handleDelete(sec.id)} style={iconActionBtn} title="Delete section">
+                      <Trash2 size={13} color="#ef4444" />
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button type="button" onClick={() => handleEdit(sec)} style={iconActionBtn} title="Edit section">
-                    <Pencil size={13} color="#0284c7" />
-                  </button>
-                  <button type="button" onClick={() => handleDelete(sec.id)} style={iconActionBtn} title="Delete section">
-                    <Trash2 size={13} color="#ef4444" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -809,7 +925,7 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 };
 
 // ===========================================================================
-// 3. SUBJECT FORM (LIVE VALIDATION)
+// 3. SUBJECT FORM
 // ===========================================================================
 const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -823,7 +939,7 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const loadSubjects = async () => {
+  const loadSubjects = useCallback(async () => {
     try {
       const res = await apiClient.get('/subjects/');
       setExistingSubjects(Array.isArray(res.data) ? res.data : res.data.results || []);
@@ -832,11 +948,11 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadSubjects();
-  }, []);
+  }, [loadSubjects]);
 
   const isCodeDuplicate = useMemo(() => {
     const clean = code.trim().toLowerCase();
@@ -1049,7 +1165,7 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 };
 
 // ===========================================================================
-// 4. ROOM FORM (LIVE VALIDATION)
+// 4. ROOM FORM
 // ===========================================================================
 const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1063,7 +1179,7 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const loadRooms = async () => {
+  const loadRooms = useCallback(async () => {
     try {
       const res = await apiClient.get('/rooms/');
       setExistingRooms(Array.isArray(res.data) ? res.data : res.data.results || []);
@@ -1072,11 +1188,11 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadRooms();
-  }, []);
+  }, [loadRooms]);
 
   const isRoomDuplicate = useMemo(() => {
     const clean = name.trim().toLowerCase();
@@ -1178,7 +1294,7 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
         {name.trim() !== '' && (
           isRoomDuplicate ? (
             <div style={invalidFeedbackStyle}>
-              <AlertCircle size={12} /> Room "{name.trim()}" is already saved
+              <AlertCircle size={12} /> Room &quot;{name.trim()}&quot; is already saved
             </div>
           ) : (
             <div style={validFeedbackStyle}>
@@ -1286,7 +1402,7 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 };
 
 // ===========================================================================
-// 5. YEAR LEVEL FORM (LIVE VALIDATION)
+// 5. YEAR LEVEL FORM
 // ===========================================================================
 const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1299,7 +1415,7 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const loadLevels = async () => {
+  const loadLevels = useCallback(async () => {
     try {
       const res = await apiClient.get('/grade-levels/');
       setExistingLevels(Array.isArray(res.data) ? res.data : res.data.results || []);
@@ -1308,11 +1424,11 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadLevels();
-  }, []);
+  }, [loadLevels]);
 
   const handleLevelChange = (val: string) => {
     setLevelNumber(val);
@@ -1367,9 +1483,12 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     setSaving(true);
     setError('');
 
+    const num = parseInt(levelNumber, 10);
     const payload = {
       name: name.trim(),
-      level_number: parseInt(levelNumber, 10),
+      level_number: num,
+      level_order: num,
+      order: num,
       stage,
     };
 
@@ -1421,7 +1540,7 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
         {name.trim() !== '' && (
           isLevelDuplicate ? (
             <div style={invalidFeedbackStyle}>
-              <AlertCircle size={12} /> Year level "{name.trim()}" already exists
+              <AlertCircle size={12} /> Year level &quot;{name.trim()}&quot; already exists
             </div>
           ) : (
             <div style={validFeedbackStyle}>
@@ -1518,6 +1637,8 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   );
 };
 
+export default AcademicSetupModal;
+
 // ===========================================================================
 // STYLES
 // ===========================================================================
@@ -1539,11 +1660,11 @@ const boxStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 14,
   width: '95vw',
-  maxWidth: 620,
+  maxWidth: 640,
   maxHeight: '92vh',
   overflowY: 'auto',
   padding: '24px 26px',
-  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
   fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
   border: '1px solid #e2e8f0',
 };
@@ -1594,10 +1715,12 @@ const tabGroupStyle: React.CSSProperties = {
   padding: 4,
   borderRadius: 8,
   border: '1px solid #e2e8f0',
+  flexWrap: 'wrap',
 };
 
 const baseTabStyle: React.CSSProperties = {
   flex: 1,
+  minWidth: 85,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -1632,6 +1755,7 @@ const formStyle: React.CSSProperties = {
 const rowStyle: React.CSSProperties = {
   display: 'flex',
   gap: 12,
+  flexWrap: 'wrap',
 };
 
 const labelStyle: React.CSSProperties = {
@@ -1781,7 +1905,7 @@ const gridStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
-  maxHeight: 160,
+  maxHeight: 180,
   overflowY: 'auto',
 };
 

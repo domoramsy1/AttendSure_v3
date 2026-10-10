@@ -1,8 +1,22 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+/**
+ * AttendSure V3 - Campus Gate Passes & Exit Clearances
+ * File: frontend/src/components/tabs/GatePassesTab.tsx
+ *
+ * Key Highlights:
+ * 1. DEFAULT USER ICON: Uses <User /> from lucide-react as the neutral fallback for all profiles.
+ * 2. LIVE DATABASE POLLING: Silent 3-second polling syncs active and used exit clearances in real time.
+ * 3. MODERN MODALS: Replaces window.confirm/alert with AlertContext (showAlert and showConfirm).
+ * 4. INSTITUTIONAL PASS PRINTING: Generates printable exit slips with dynamic school branding and turnstile QR codes.
+ * 5. SERVER PAGINATION: Full pagination controls with dynamic count summaries and items-per-page selectors.
+ */
+
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import apiClient from '../../api/client';
+import { useSchoolContext as useSchool } from '../../context/SchoolContext';
 import { ModuleTableLayout } from './ModuleTableLayout';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { useAlert } from '../../context/AlertContext';
 import {
   ShieldCheck,
   CheckCircle2,
@@ -17,22 +31,35 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Building2,
+  Plus,
 } from 'lucide-react';
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
 
 interface GatePass {
   id: number;
-  pass_id: string;
-  bearer_name: string;
+  pass_number?: string;
+  pass_id?: string;
+  bearer_name?: string;
+  student_name?: string;
+  faculty_name?: string;
   bearer_type?: 'STUDENT' | 'FACULTY' | 'VISITOR';
   student?: number | null;
   faculty?: number | null;
+  pass_type?: string;
   reason: string;
   valid_from: string;
   valid_to: string;
   status: 'ACTIVE' | 'USED' | 'EXPIRED' | 'REVOKED';
+  issued_by?: number | null;
+  issued_by_name?: string;
   approved_by?: string;
   remarks?: string;
   created_at?: string;
+  photo?: string | null;
 }
 
 interface LearnerOption {
@@ -54,7 +81,75 @@ interface PaginatedResponse<T> {
   results: T[];
 }
 
+// ============================================================================
+// REUSABLE DEFAULT USER AVATAR COMPONENT
+// ============================================================================
+
+interface ProfileAvatarProps {
+  photoUrl?: string | null;
+  name?: string;
+  size?: number;
+  iconSize?: number;
+}
+
+const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
+  photoUrl,
+  name = 'Bearer',
+  size = 38,
+  iconSize = 19,
+}) => {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [photoUrl]);
+
+  const hasPhoto = Boolean(
+    photoUrl &&
+    typeof photoUrl === 'string' &&
+    photoUrl.trim() !== '' &&
+    photoUrl.trim().toLowerCase() !== 'null' &&
+    photoUrl.trim().toLowerCase() !== 'undefined'
+  );
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        backgroundColor: '#f1f5f9',
+        border: '1px solid #e2e8f0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        flexShrink: 0,
+      }}
+      title={name}
+    >
+      {hasPhoto && !imageFailed ? (
+        <img
+          src={photoUrl!}
+          alt={name}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <User size={iconSize} color="#94a3b8" />
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export const GatePassesTab: React.FC = () => {
+  const { school } = useSchool();
+  const { showAlert, showConfirm } = useAlert();
+
   const [passes, setPasses] = useState<GatePass[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +167,7 @@ export const GatePassesTab: React.FC = () => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Real database dropdown options
+  // Dropdown options
   const [learners, setLearners] = useState<LearnerOption[]>([]);
   const [facultyMembers, setFacultyMembers] = useState<FacultyOption[]>([]);
   const [loadingOptions, setLoadingOptions] = useState(false);
@@ -86,51 +181,75 @@ export const GatePassesTab: React.FC = () => {
     custom_reason: '',
     valid_from: '',
     valid_to: '',
-    approved_by: 'Office of the Principal',
+    approved_by: '',
     remarks: '',
   });
 
-  // 1. Fetch real passes from database
-  const fetchPasses = useCallback(async (page = 1, size = 25, query = '', status = 'ALL') => {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await apiClient.get<PaginatedResponse<GatePass> | GatePass[]>('/gate-passes/', {
-        params: {
-          page,
-          page_size: size,
-          search: query.trim() || undefined,
-          status: status !== 'ALL' ? status : undefined,
-        },
-      });
+  // Guard flag: prevents silent background polling from interrupting open modals
+  const isInteracting = useRef(false);
+  isInteracting.current = isCreateModalOpen || Boolean(selectedPass) || saving;
 
-      if (res.data && 'results' in res.data) {
-        setPasses(res.data.results);
-        setTotalCount(res.data.count);
-        setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size) || 1);
-        setCurrentPage(res.data.current_page || page);
-      } else if (Array.isArray(res.data)) {
-        setPasses(res.data);
-        setTotalCount(res.data.length);
-        setTotalPages(1);
-        setCurrentPage(1);
+  // ============================================================================
+  // DATABASE DATA FETCHING & LIVE POLLING
+  // ============================================================================
+
+  const fetchPasses = useCallback(
+    async (page = 1, size = 25, query = '', status = 'ALL', silent = false) => {
+      try {
+        if (!silent) setLoading(true);
+        setError(null);
+        const res = await apiClient.get<PaginatedResponse<GatePass> | GatePass[]>('/gate-passes/', {
+          params: {
+            page,
+            page_size: size,
+            search: query.trim() || undefined,
+            status: status !== 'ALL' ? status : undefined,
+          },
+        });
+
+        if (res.data && 'results' in res.data) {
+          setPasses(res.data.results);
+          setTotalCount(res.data.count);
+          setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size) || 1);
+          setCurrentPage(res.data.current_page || page);
+        } else if (Array.isArray(res.data)) {
+          setPasses(res.data);
+          setTotalCount(res.data.length);
+          setTotalPages(1);
+          setCurrentPage(1);
+        }
+      } catch (err: any) {
+        if (!silent) {
+          setError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to fetch gate pass records from database.');
+        }
+      } finally {
+        if (!silent) setLoading(false);
       }
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to fetch gate pass records from database.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
+  // Debounced search watcher
   useEffect(() => {
     const timer = setTimeout(() => {
       setCurrentPage(1);
-      fetchPasses(1, pageSize, search, statusFilter);
+      fetchPasses(1, pageSize, search, statusFilter, false);
     }, 300);
     return () => clearTimeout(timer);
   }, [search, statusFilter, pageSize, fetchPasses]);
 
-  // 2. Fetch real students and faculty for the create modal
+  // LIVE ZERO-REFRESH POLLING: Syncs changes from PostgreSQL every 3 seconds
+  useEffect(() => {
+    const liveInterval = setInterval(() => {
+      if (!isInteracting.current) {
+        fetchPasses(currentPage, pageSize, search, statusFilter, true);
+      }
+    }, 3000);
+
+    return () => clearInterval(liveInterval);
+  }, [currentPage, pageSize, search, statusFilter, fetchPasses]);
+
+  // Load students and faculty options for pass creation
   const fetchBearerOptions = async () => {
     setLoadingOptions(true);
     try {
@@ -158,11 +277,11 @@ export const GatePassesTab: React.FC = () => {
         facultyList.map((f: any) => ({
           id: f.id,
           full_name: f.full_name || `${f.last_name}, ${f.first_name}`,
-          department: f.department || f.designation,
+          department: f.department || f.position,
         }))
       );
     } catch {
-      // Keep lists empty if loading fails
+      // Retain fallback empty states
     } finally {
       setLoadingOptions(false);
     }
@@ -171,16 +290,16 @@ export const GatePassesTab: React.FC = () => {
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return;
     setCurrentPage(newPage);
-    fetchPasses(newPage, pageSize, search, statusFilter);
+    fetchPasses(newPage, pageSize, search, statusFilter, false);
   };
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
     setCurrentPage(1);
-    fetchPasses(1, newSize, search, statusFilter);
+    fetchPasses(1, newSize, search, statusFilter, false);
   };
 
-  // Metrics from current database records
+  // Metrics calculation
   const metrics = useMemo(() => {
     const safePasses = Array.isArray(passes) ? passes : [];
     const active = safePasses.filter((p) => p.status === 'ACTIVE').length;
@@ -189,7 +308,10 @@ export const GatePassesTab: React.FC = () => {
     return { active, used, expiredOrRevoked };
   }, [passes]);
 
-  // Open Create Modal
+  // ============================================================================
+  // CRUD ACTIONS
+  // ============================================================================
+
   const handleOpenCreate = () => {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -197,7 +319,7 @@ export const GatePassesTab: React.FC = () => {
       `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
     const defaultStart = new Date(now);
-    const defaultEnd = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours window
+    const defaultEnd = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours validity
 
     setFormData({
       bearer_type: 'STUDENT',
@@ -207,7 +329,7 @@ export const GatePassesTab: React.FC = () => {
       custom_reason: '',
       valid_from: toInputDate(defaultStart),
       valid_to: toInputDate(defaultEnd),
-      approved_by: 'Office of the Principal',
+      approved_by: school.principal_name || 'Administration Office',
       remarks: '',
     });
 
@@ -220,71 +342,127 @@ export const GatePassesTab: React.FC = () => {
     setSaving(true);
 
     try {
-      let bearerName = '';
-      if (formData.bearer_type === 'STUDENT') {
-        const found = learners.find((l) => String(l.id) === String(formData.student_id));
-        bearerName = found ? found.full_name : 'Student';
-      } else {
-        const found = facultyMembers.find((f) => String(f.id) === String(formData.faculty_id));
-        bearerName = found ? found.full_name : 'Faculty Member';
-      }
-
       const finalReason = formData.custom_reason.trim()
         ? `${formData.reason_preset}: ${formData.custom_reason.trim()}`
         : formData.reason_preset;
 
+      const dateNow = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const todayStr = `${dateNow.getFullYear()}${pad(dateNow.getMonth() + 1)}${pad(dateNow.getDate())}`;
+      const uniqueHex = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const generatedPassNum = `GP-${todayStr}-${uniqueHex}`;
+
       const payload = {
-        bearer_name: bearerName,
-        bearer_type: formData.bearer_type,
+        pass_number: generatedPassNum,
         student: formData.bearer_type === 'STUDENT' && formData.student_id ? Number(formData.student_id) : null,
         faculty: formData.bearer_type === 'FACULTY' && formData.faculty_id ? Number(formData.faculty_id) : null,
+        pass_type: formData.reason_preset,
         reason: finalReason,
-        valid_from: formData.valid_from,
-        valid_to: formData.valid_to,
+        valid_from: formData.valid_from ? new Date(formData.valid_from).toISOString() : new Date().toISOString(),
+        valid_to: formData.valid_to ? new Date(formData.valid_to).toISOString() : new Date(Date.now() + 4 * 3600000).toISOString(),
         status: 'ACTIVE',
-        approved_by: formData.approved_by.trim() || 'Principal Office',
         remarks: formData.remarks.trim() || undefined,
       };
 
       await apiClient.post('/gate-passes/', payload);
       setIsCreateModalOpen(false);
-      fetchPasses(1, pageSize, search, statusFilter);
+      showAlert({
+        title: 'Gate Pass Issued',
+        message: `Clearance pass ${generatedPassNum} successfully created and registered.`,
+        type: 'success',
+      });
+      fetchPasses(1, pageSize, search, statusFilter, true);
     } catch (err: any) {
-      alert(err?.response?.data?.detail || err?.response?.data?.error || 'Failed to issue gate pass.');
+      showAlert({
+        title: 'Issuance Error',
+        message:
+          err?.response?.data?.detail ||
+          (typeof err?.response?.data === 'object' ? JSON.stringify(err.response.data) : null) ||
+          'Failed to issue gate pass.',
+        type: 'error',
+      });
     } finally {
       setSaving(false);
     }
   };
 
-  // Revoke / Cancel a pass
-  const handleRevoke = async (pass: GatePass) => {
-    if (!window.confirm(`REVOKE PASS: Do you want to cancel Gate Pass "${pass.pass_id}" for ${pass.bearer_name}? It will no longer be accepted at the gate.`)) {
-      return;
-    }
+  const handleRevoke = (pass: GatePass) => {
+    const passCode = pass.pass_number || pass.pass_id || `ID #${pass.id}`;
+    const bearer = pass.bearer_name || pass.student_name || pass.faculty_name || 'bearer';
+
+    showConfirm({
+      title: 'Revoke Gate Clearance',
+      message: `Cancel Gate Pass "${passCode}" for ${bearer}? It will be invalidated at all campus turnstiles and security kiosks immediately.`,
+      confirmLabel: 'Revoke Pass',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await apiClient.patch(`/gate-passes/${pass.id}/`, { status: 'REVOKED' });
+          showAlert({
+            title: 'Pass Revoked',
+            message: `Gate pass ${passCode} has been canceled.`,
+            type: 'info',
+          });
+          fetchPasses(currentPage, pageSize, search, statusFilter, true);
+        } catch {
+          showAlert({
+            title: 'Revoke Failed',
+            message: 'Failed to revoke the selected gate pass.',
+            type: 'error',
+          });
+        }
+      },
+    });
+  };
+
+  const handleMarkUsed = async (pass: GatePass) => {
     try {
-      await apiClient.put(`/gate-passes/${pass.id}/`, { ...pass, status: 'REVOKED' });
-      fetchPasses(currentPage, pageSize, search, statusFilter);
+      await apiClient.patch(`/gate-passes/${pass.id}/`, { status: 'USED' });
+      showAlert({
+        title: 'Status Updated',
+        message: 'Pass marked as used (bearer cleared through gate).',
+        type: 'success',
+      });
+      fetchPasses(currentPage, pageSize, search, statusFilter, true);
     } catch {
-      alert('Failed to revoke gate pass.');
+      showAlert({
+        title: 'Update Error',
+        message: 'Failed to update gate pass status.',
+        type: 'error',
+      });
     }
   };
 
-  // Mark Pass as Used (when student leaves gate)
-  const handleMarkUsed = async (pass: GatePass) => {
-    try {
-      await apiClient.put(`/gate-passes/${pass.id}/`, { ...pass, status: 'USED' });
-      fetchPasses(currentPage, pageSize, search, statusFilter);
-    } catch {
-      alert('Failed to update pass status.');
-    }
-  };
+  const getPassNumber = (p: GatePass) => p.pass_number || p.pass_id || `GP-${p.id}`;
+  const getBearerName = (p: GatePass) =>
+    p.bearer_name || p.student_name || p.faculty_name || (p.student ? 'Student' : p.faculty ? 'Faculty' : 'Authorized Bearer');
 
   const startRecord = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
   const endRecord = Math.min(currentPage * pageSize, totalCount);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      
+      {/* Print isolation styles */}
+      <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          #printable-gate-pass, #printable-gate-pass * {
+            visibility: visible;
+          }
+          #printable-gate-pass {
+            position: fixed;
+            left: 50%;
+            top: 20px;
+            transform: translateX(-50%);
+            width: 320px !important;
+            box-shadow: none !important;
+            border: 2px solid #000000 !important;
+          }
+        }
+      `}</style>
+
       {/* 1. Metric Overview Cards */}
       <div style={statsGrid}>
         <div style={statCard}>
@@ -326,28 +504,41 @@ export const GatePassesTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Status Filter Tabs */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        {['ALL', 'ACTIVE', 'USED', 'EXPIRED', 'REVOKED'].map((st) => (
-          <button
-            key={st}
-            type="button"
-            onClick={() => setStatusFilter(st)}
-            style={{
-              padding: '6px 14px',
-              borderRadius: 6,
-              fontSize: '0.78rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              border: '1px solid',
-              backgroundColor: statusFilter === st ? '#0284c7' : '#ffffff',
-              borderColor: statusFilter === st ? '#0284c7' : '#cbd5e1',
-              color: statusFilter === st ? '#ffffff' : '#475569',
-            }}
-          >
-            {st}
-          </button>
-        ))}
+      {/* 2. Control & Filter Bar */}
+      <div style={controlBar}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {['ALL', 'ACTIVE', 'USED', 'EXPIRED', 'REVOKED'].map((st) => (
+            <button
+              key={st}
+              type="button"
+              onClick={() => setStatusFilter(st)}
+              style={{
+                padding: '5px 12px',
+                borderRadius: 20,
+                fontSize: '0.74rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: '1px solid',
+                backgroundColor: statusFilter === st ? '#0284c7' : 'transparent',
+                borderColor: statusFilter === st ? '#0284c7' : '#cbd5e1',
+                color: statusFilter === st ? '#ffffff' : '#475569',
+              }}
+            >
+              {st}
+            </button>
+          ))}
+        </div>
+
+        <Button
+          variant="primary"
+          size="md"
+          type="button"
+          onClick={handleOpenCreate}
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <Plus size={16} />
+          Issue Gate Pass
+        </Button>
       </div>
 
       {/* 3. Main Data Table */}
@@ -358,22 +549,20 @@ export const GatePassesTab: React.FC = () => {
           searchPlaceholder="Search pass number, bearer name, reason..."
           searchValue={search}
           onSearchChange={setSearch}
-          addButtonLabel="Issue Gate Pass"
-          onAdd={handleOpenCreate}
           loading={loading}
           error={error}
           data={passes}
-          keyExtractor={(p) => p.id || p.pass_id}
+          keyExtractor={(p) => p.id || getPassNumber(p)}
           columns={[
             {
               header: 'Pass Reference #',
               render: (p) => (
                 <div>
                   <div style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0f172a', fontSize: '0.86rem' }}>
-                    {p.pass_id}
+                    {getPassNumber(p)}
                   </div>
                   <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
-                    DepEd Official Exit Slip
+                    Institutional Exit Clearance
                   </div>
                 </div>
               ),
@@ -381,13 +570,18 @@ export const GatePassesTab: React.FC = () => {
             {
               header: 'Bearer Name',
               render: (p) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={userIconBox}>
-                    <User size={14} color="#0284c7" />
-                  </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {/* Default User Icon / Real Photo Avatar */}
+                  <ProfileAvatar
+                    photoUrl={p.photo}
+                    name={getBearerName(p)}
+                    size={36}
+                    iconSize={18}
+                  />
+
                   <div>
-                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.84rem' }}>
-                      {p.bearer_name}
+                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.84rem' }}>
+                      {getBearerName(p)}
                     </div>
                     <span style={roleBadge}>
                       {p.bearer_type || (p.student ? 'STUDENT' : p.faculty ? 'FACULTY' : 'BEARER')}
@@ -572,7 +766,6 @@ export const GatePassesTab: React.FC = () => {
         title="Issue Campus Gate Clearance Pass"
       >
         <form onSubmit={handleCreateSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          
           <div>
             <label style={labelStyle}>Bearer Role *</label>
             <div style={{ display: 'flex', gap: 12 }}>
@@ -584,7 +777,7 @@ export const GatePassesTab: React.FC = () => {
                   checked={formData.bearer_type === 'STUDENT'}
                   onChange={() => setFormData({ ...formData, bearer_type: 'STUDENT' })}
                 />
-                <span>Student / Learner</span>
+                <span>Student</span>
               </label>
 
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', cursor: 'pointer' }}>
@@ -595,12 +788,11 @@ export const GatePassesTab: React.FC = () => {
                   checked={formData.bearer_type === 'FACULTY'}
                   onChange={() => setFormData({ ...formData, bearer_type: 'FACULTY' })}
                 />
-                <span>Teacher / Faculty Member</span>
+                <span>Faculty / Staff</span>
               </label>
             </div>
           </div>
 
-          {/* Select Real Student or Faculty from database */}
           <div>
             <label style={labelStyle}>
               {formData.bearer_type === 'STUDENT' ? 'Select Student Learner *' : 'Select Faculty Member *'}
@@ -608,7 +800,7 @@ export const GatePassesTab: React.FC = () => {
             {loadingOptions ? (
               <div style={{ fontSize: '0.76rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Loader2 className="animate-spin" size={14} />
-                <span>Loading members from database...</span>
+                <span>Loading options...</span>
               </div>
             ) : formData.bearer_type === 'STUDENT' ? (
               <select
@@ -617,7 +809,7 @@ export const GatePassesTab: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
                 style={inputStyle}
               >
-                <option value="">-- Choose Learner from Database --</option>
+                <option value="">-- Choose Learner --</option>
                 {learners.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.full_name} (LRN: {l.lrn})
@@ -631,7 +823,7 @@ export const GatePassesTab: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, faculty_id: e.target.value })}
                 style={inputStyle}
               >
-                <option value="">-- Choose Teacher from Database --</option>
+                <option value="">-- Choose Faculty Member --</option>
                 {facultyMembers.map((f) => (
                   <option key={f.id} value={f.id}>
                     {f.full_name} {f.department ? `(${f.department})` : ''}
@@ -642,17 +834,17 @@ export const GatePassesTab: React.FC = () => {
           </div>
 
           <div>
-            <label style={labelStyle}>Reason / Clearance Purpose *</label>
+            <label style={labelStyle}>Clearance Category *</label>
             <select
               value={formData.reason_preset}
               onChange={(e) => setFormData({ ...formData, reason_preset: e.target.value })}
               style={inputStyle}
             >
               <option value="Medical / Health Emergency">Medical / Clinic Referral / Health Emergency</option>
-              <option value="Official DepEd School Business">Official DepEd School Business / Off-Campus Contest</option>
-              <option value="Parent / Guardian Fetching">Parent / Guardian Fetching</option>
+              <option value="Official Institutional Business">Official Institutional / School Business</option>
+              <option value="Parent / Guardian Fetching">Authorized Parent / Guardian Fetching</option>
               <option value="Early Dismissal Approval">Authorized Early Dismissal</option>
-              <option value="Family Emergency">Family Urgent Matter</option>
+              <option value="Family Urgent Matter">Family Urgent Matter</option>
               <option value="Other Official Reason">Other Official Reason</option>
             </select>
           </div>
@@ -661,7 +853,7 @@ export const GatePassesTab: React.FC = () => {
             <label style={labelStyle}>Specific Reason Details (Optional)</label>
             <input
               type="text"
-              placeholder="e.g. Toothache, Division Science Quiz Bee, Fetch by mother"
+              placeholder="e.g. Clinic checkup, Quiz Bee Competition, Parent pickup"
               value={formData.custom_reason}
               onChange={(e) => setFormData({ ...formData, custom_reason: e.target.value })}
               style={inputStyle}
@@ -692,14 +884,13 @@ export const GatePassesTab: React.FC = () => {
           </div>
 
           <div>
-            <label style={labelStyle}>Approving Official *</label>
+            <label style={labelStyle}>Approving Authority</label>
             <input
               type="text"
-              required
               value={formData.approved_by}
               onChange={(e) => setFormData({ ...formData, approved_by: e.target.value })}
               style={inputStyle}
-              placeholder="e.g. Principal / Prefect of Discipline"
+              placeholder={school.principal_name || 'Principal / Admin Office'}
             />
           </div>
 
@@ -715,7 +906,7 @@ export const GatePassesTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 5. Official Printable Gate Pass Slip Modal */}
+      {/* 5. Official Printable Gate Pass Slip Modal with Dynamic Branding */}
       {selectedPass && (
         <Modal
           isOpen={Boolean(selectedPass)}
@@ -723,8 +914,6 @@ export const GatePassesTab: React.FC = () => {
           title="Official Campus Exit Clearance Pass"
         >
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-            
-            {/* The printable slip container */}
             <div
               id="printable-gate-pass"
               style={{
@@ -738,27 +927,46 @@ export const GatePassesTab: React.FC = () => {
                 boxSizing: 'border-box',
               }}
             >
-              <div style={{ fontSize: '0.64rem', fontWeight: 800, color: '#64748b', letterSpacing: '0.5px' }}>
-                DEPARTMENT OF EDUCATION &bull; DIVISION OF CDO
+              {/* Dynamic Institutional Logo */}
+              {(school.school_logo || school.left_logo) ? (
+                <div style={{ height: 44, display: 'flex', justifyContent: 'center', marginBottom: 6 }}>
+                  <img
+                    src={school.school_logo || school.left_logo || ''}
+                    alt="School Logo"
+                    style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
+                  />
+                </div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 4 }}>
+                  <Building2 size={24} color="#0284c7" />
+                </div>
+              )}
+
+              <div style={{ fontSize: '0.64rem', fontWeight: 800, color: '#64748b', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                {school.region ? `${school.region} • ` : ''}
+                {school.division || 'INSTITUTIONAL ADMINISTRATION'}
               </div>
-              <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#0f172a', marginTop: 2 }}>
+              <div style={{ fontSize: '0.90rem', fontWeight: 900, color: '#0f172a', marginTop: 2, textTransform: 'uppercase' }}>
+                {school.school_name || 'ATTENDSURE CAMPUS PORTAL'}
+              </div>
+              <div style={{ fontSize: '0.74rem', fontWeight: 800, color: '#0284c7', marginTop: 3 }}>
                 CAMPUS GATE EXIT SLIP
               </div>
-              <div style={{ fontSize: '0.66rem', color: '#0284c7', fontWeight: 700, marginTop: 1 }}>
-                Pass #: {selectedPass.pass_id}
+              <div style={{ fontSize: '0.66rem', color: '#64748b', fontWeight: 700, marginTop: 1, fontFamily: 'monospace' }}>
+                Pass #: {getPassNumber(selectedPass)}
               </div>
 
               <div style={{ borderTop: '1px dashed #cbd5e1', borderBottom: '1px dashed #cbd5e1', padding: '10px 0', margin: '10px 0' }}>
-                <div style={{ fontSize: '0.72rem', color: '#64748b' }}>Authorized Bearer</div>
+                <div style={{ fontSize: '0.70rem', color: '#64748b' }}>Authorized Bearer</div>
                 <div style={{ fontSize: '1.02rem', fontWeight: 800, color: '#0f172a' }}>
-                  {selectedPass.bearer_name}
+                  {getBearerName(selectedPass)}
                 </div>
                 <div style={{ fontSize: '0.74rem', color: '#475569', marginTop: 4 }}>
                   <strong>Reason:</strong> {selectedPass.reason}
                 </div>
               </div>
 
-              {/* QR Code for security guard to scan */}
+              {/* Turnstile / Kiosk Security QR */}
               <div
                 style={{
                   margin: '8px auto',
@@ -775,7 +983,7 @@ export const GatePassesTab: React.FC = () => {
               >
                 <img
                   src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(
-                    `ATTENDSURE-GATEPASS:${selectedPass.pass_id}:${selectedPass.bearer_name}`
+                    `ATTENDSURE-GATEPASS:${getPassNumber(selectedPass)}:${getBearerName(selectedPass)}`
                   )}`}
                   alt="Gate Pass QR"
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
@@ -783,13 +991,13 @@ export const GatePassesTab: React.FC = () => {
               </div>
 
               <div style={{ fontSize: '0.66rem', color: '#64748b' }}>
-                Scan at turnstile kiosk or present to Gate Guard
+                Scan at kiosk scanner or present to Gate Guard
               </div>
 
               <div style={{ marginTop: 10, textAlign: 'left', fontSize: '0.66rem', color: '#334155', borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
                 <div><strong>Valid From:</strong> {new Date(selectedPass.valid_from).toLocaleString()}</div>
                 <div><strong>Valid Until:</strong> {new Date(selectedPass.valid_to).toLocaleString()}</div>
-                <div><strong>Approved by:</strong> {selectedPass.approved_by || 'Principal Office'}</div>
+                <div><strong>Issued By:</strong> {selectedPass.issued_by_name || selectedPass.approved_by || school.principal_name || 'Administration'}</div>
                 <div><strong>Status:</strong> <span style={{ fontWeight: 800, color: selectedPass.status === 'ACTIVE' ? '#059669' : '#dc2626' }}>{selectedPass.status}</span></div>
               </div>
             </div>
@@ -806,12 +1014,14 @@ export const GatePassesTab: React.FC = () => {
           </div>
         </Modal>
       )}
-
     </div>
   );
 };
 
-// Styles
+// ============================================================================
+// STYLES
+// ============================================================================
+
 const statsGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(4, 1fr)',
@@ -847,15 +1057,14 @@ const statSub: React.CSSProperties = {
   marginTop: 4,
 };
 
-const userIconBox: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 6,
-  backgroundColor: '#f0f9ff',
+const controlBar: React.CSSProperties = {
   display: 'flex',
+  justifyContent: 'space-between',
   alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
+  padding: '10px 14px',
+  backgroundColor: '#ffffff',
+  borderRadius: 10,
+  border: '1px solid #e2e8f0',
 };
 
 const roleBadge: React.CSSProperties = {

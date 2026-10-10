@@ -5,7 +5,7 @@ import { Sidebar, type NavItemKey } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { ProfileModal } from './components/profile/ProfileModal';
 import { DashboardView } from './components/dashboard/DashboardView';
-import { SchoolProvider, useSchoolProfile } from './context/SchoolContext';
+import { SchoolProvider, useSchool } from './context/SchoolContext';
 import type { UserSession } from './types/section';
 import { ShieldAlert, ArrowLeft, Radio, Database } from 'lucide-react';
 import { AlertProvider } from './context/AlertContext';
@@ -25,9 +25,10 @@ import {
   GeofenceTab,
   UsersTab,
   SettingsTab,
+  SmsTab,
 } from './components/tabs';
 
-// Strictly ADMIN and TEACHER roles
+// Strictly ADMIN and TEACHER roles with 'sms' enabled for ADMIN
 const ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   ADMIN: [
     'dashboard',
@@ -40,6 +41,7 @@ const ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'dtr',
     'geofence',
     'scanners',
+    'sms',
     'reports',
     'settings',
   ],
@@ -54,7 +56,13 @@ const ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
 };
 
 const AppContent: React.FC = () => {
-  const { profile } = useSchoolProfile();
+  const schoolContext = useSchool() as any;
+  const profile = schoolContext?.profile || {
+    school_name: '',
+    school_id: '',
+    division: '',
+    school_logo: null,
+  };
 
   // User Session & Avatar State
   const [session, setSession] = useState<UserSession | null>(() => {
@@ -83,6 +91,8 @@ const AppContent: React.FC = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
 
+  const userRole = (session?.role || '').toUpperCase();
+
   // Sync profile & photo from database on mount or session start
   useEffect(() => {
     if (!session?.token) return;
@@ -108,9 +118,12 @@ const AppContent: React.FC = () => {
           }
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.warn('[AppContent] User session sync warning:', err);
+      });
   }, [session?.token]);
 
+  // Global Auth Expiration & Event-Driven Subscriptions
   useEffect(() => {
     const handleAuthExpired = () => {
       localStorage.removeItem('attendsure_token');
@@ -122,17 +135,42 @@ const AppContent: React.FC = () => {
       setUserPhoto(null);
     };
 
+    const handleNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<string | { tab: NavItemKey; report?: 'sf1' | 'sf2' | 'sf4' }>;
+      if (!customEvent.detail) return;
+
+      if (typeof customEvent.detail === 'string') {
+        const targetTab = customEvent.detail as NavItemKey;
+        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['TEACHER'];
+        if (allowedTabs.includes(targetTab)) {
+          setActiveTab(targetTab);
+        }
+      } else if (typeof customEvent.detail === 'object') {
+        const { tab, report } = customEvent.detail;
+        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['TEACHER'];
+        if (allowedTabs.includes(tab)) {
+          setActiveTab(tab);
+          if (report) {
+            setSelectedReport(report);
+          }
+        }
+      }
+    };
+
     window.addEventListener('attendsure:auth-expired', handleAuthExpired);
-    return () => window.removeEventListener('attendsure:auth-expired', handleAuthExpired);
-  }, []);
+    window.addEventListener('attendsure:navigate', handleNavigate);
+
+    return () => {
+      window.removeEventListener('attendsure:auth-expired', handleAuthExpired);
+      window.removeEventListener('attendsure:navigate', handleNavigate);
+    };
+  }, [userRole]);
 
   const handleLogout = () => {
     localStorage.clear();
     setSession(null);
     setUserPhoto(null);
   };
-
-  const userRole = (session?.role || '').toUpperCase();
 
   const isAllowedToAccess = useMemo(() => {
     if (!userRole) return false;
@@ -183,6 +221,8 @@ const AppContent: React.FC = () => {
         return 'Campus Perimeter Boundary';
       case 'scanners':
         return 'Gate Scanners & Readers';
+      case 'sms':
+        return 'SMS Gateway & Hardware Outbox';
       case 'reports':
         if (selectedReport === 'sf1') return 'School Register (Form 1)';
         if (selectedReport === 'sf2') return 'Daily Attendance Register (Form 2)';
@@ -227,8 +267,17 @@ const AppContent: React.FC = () => {
           <h2 style={{ fontSize: '1.20rem', fontWeight: 800, color: '#0f172a', margin: '0 0 6px 0' }}>
             Access Restricted
           </h2>
-          <p style={{ fontSize: '0.82rem', color: '#64748b', maxWidth: 440, margin: '0 0 20px 0', lineHeight: 1.5 }}>
-            Your account role (<strong style={{ color: '#0f172a' }}>{userRole}</strong>) does not have permission to access this screen.
+          <p
+            style={{
+              fontSize: '0.82rem',
+              color: '#64748b',
+              maxWidth: 440,
+              margin: '0 0 20px 0',
+              lineHeight: 1.5,
+            }}
+          >
+            Your account role (<strong style={{ color: '#0f172a' }}>{userRole}</strong>) does not have permission to
+            access this screen.
           </p>
           <button
             onClick={() => setActiveTab('dashboard')}
@@ -245,6 +294,7 @@ const AppContent: React.FC = () => {
               fontWeight: 700,
               cursor: 'pointer',
             }}
+            type="button"
           >
             <ArrowLeft size={14} />
             <span>Return to Dashboard</span>
@@ -297,6 +347,8 @@ const AppContent: React.FC = () => {
         return <DTRTab />;
       case 'scanners':
         return <ScannersTab />;
+      case 'sms':
+        return <SmsTab />;
       case 'gate-passes':
         return <GatePassesTab />;
       case 'schedules':
@@ -330,7 +382,7 @@ const AppContent: React.FC = () => {
         textAlign: 'left',
       }}
     >
-      {/* 1. Sidebar with User Avatar */}
+      {/* 1. Sidebar */}
       <Sidebar
         activeTab={activeTab}
         onSelectTab={handleTabSelection}
@@ -353,7 +405,7 @@ const AppContent: React.FC = () => {
           overflow: 'hidden',
         }}
       >
-        {/* 2. Global Header with User Avatar */}
+        {/* 2. Global Header */}
         <Header
           title={getPageTitle()}
           isGateNodeOnline={isGateOnline}
@@ -423,14 +475,23 @@ const AppContent: React.FC = () => {
               <Database size={12} />
               <span>Database Connected</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: isGateOnline ? '#0284c7' : '#e11d48', fontWeight: 600 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+                color: isGateOnline ? '#0284c7' : '#e11d48',
+                fontWeight: 600,
+              }}
+            >
               <Radio size={12} />
               <span>Gate System {isGateOnline ? 'Online' : 'Offline'}</span>
             </div>
           </div>
 
           <div>
-            &copy; 2026 AttendSure V3 &bull; Developed by <strong style={{ color: '#0284c7' }}>TechBlazer</strong>. All rights reserved.
+            &copy; 2026 AttendSure V3 &bull; Developed by <strong style={{ color: '#0284c7' }}>TechBlazer</strong>. All
+            rights reserved.
           </div>
         </footer>
       </div>
@@ -465,4 +526,5 @@ export const App: React.FC = () => (
     </AlertProvider>
   </SchoolProvider>
 );
+
 export default App;

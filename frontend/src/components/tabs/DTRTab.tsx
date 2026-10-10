@@ -1,7 +1,20 @@
+/**
+ * AttendSure V3 - Faculty Daily Time Record (Civil Service Form No. 48)
+ * File: frontend/src/components/tabs/DTRTab.tsx
+ *
+ * Exact implementation based on CSC Form No. 48 template:
+ * - Front: Exact CSC Form 48 layout with 31 days, Undertimes, Certification, In-Charge, and "(See Instructions on back)"
+ * - Back: Official CSC Form 48 instructions and legal citations
+ * - Real-time database sync: Silent 3-second polling ensures fresh attendance logs without manual refresh
+ * - Modern Alert modals: All confirmations handled through AlertContext
+ * - Default avatar: Profile displays neutral <User /> icon when no photo is uploaded
+ */
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import apiClient from '../../api/client';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
+import { useAlert } from '../../context/AlertContext';
 import {
   Printer,
   Download,
@@ -19,6 +32,10 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
 interface FacultyMember {
   id: number;
   employee_id: string;
@@ -28,6 +45,7 @@ interface FacultyMember {
   full_name?: string;
   department?: string;
   designation?: string;
+  photo?: string | null;
 }
 
 interface DailyDTRRow {
@@ -68,16 +86,86 @@ interface DTRReportData {
   days_present: number;
 }
 
+// ============================================================================
+// REUSABLE DEFAULT USER AVATAR COMPONENT
+// ============================================================================
+
+interface ProfileAvatarProps {
+  photoUrl?: string | null;
+  name?: string;
+  size?: number;
+  iconSize?: number;
+}
+
+const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
+  photoUrl,
+  name = 'Faculty Member',
+  size = 36,
+  iconSize = 18,
+}) => {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [photoUrl]);
+
+  const hasPhoto = Boolean(
+    photoUrl &&
+    typeof photoUrl === 'string' &&
+    photoUrl.trim() !== '' &&
+    photoUrl.trim().toLowerCase() !== 'null' &&
+    photoUrl.trim().toLowerCase() !== 'undefined'
+  );
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        backgroundColor: '#f1f5f9',
+        border: '1px solid #e2e8f0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        flexShrink: 0,
+      }}
+      title={name}
+    >
+      {hasPhoto && !imageFailed ? (
+        <img
+          src={photoUrl!}
+          alt={name}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <User size={iconSize} color="#94a3b8" />
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export const DTRTab: React.FC = () => {
+  const { showAlert, showConfirm } = useAlert();
+
+  // Selection & Period Filters
   const [facultyList, setFacultyList] = useState<FacultyMember[]>([]);
   const [selectedFacultyId, setSelectedFacultyId] = useState<string>('');
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
 
-  const [regularHours, setRegularHours] = useState('8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM');
+  // Prescribed Working Hours
+  const [regularHours, setRegularHours] = useState('8:00 to 12:00 and 1:00 to 5:00');
   const [saturdayHours, setSaturdayHours] = useState('As Required');
   const [viewSide, setViewSide] = useState<'BOTH' | 'FRONT' | 'BACK'>('BOTH');
 
+  // Report Data & Action States
   const [dtrData, setDtrData] = useState<DTRReportData | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionProcessing, setActionProcessing] = useState(false);
@@ -86,10 +174,21 @@ export const DTRTab: React.FC = () => {
 
   // Principal Review Modal State
   const [selectedViolationRow, setSelectedViolationRow] = useState<DailyDTRRow | null>(null);
+  const [pardonRemarks, setPardonRemarks] = useState('Official school assignment / DepEd duty authorized');
 
   const printAreaRef = useRef<HTMLDivElement>(null);
 
-  // 1. Fetch real faculty records from database
+  // Prevent background polling from overriding inputs when modal is active
+  const isInteracting = useRef(false);
+  isInteracting.current = Boolean(selectedViolationRow) || actionProcessing;
+
+  const activeFaculty = facultyList.find((f) => String(f.id) === selectedFacultyId);
+
+  // ============================================================================
+  // DATABASE DATA FETCHING
+  // ============================================================================
+
+  // 1. Fetch real faculty records from PostgreSQL
   useEffect(() => {
     let isMounted = true;
 
@@ -124,7 +223,7 @@ export const DTRTab: React.FC = () => {
           setError(
             err?.response?.data?.detail ||
             err?.response?.data?.error ||
-            'Could not load faculty profiles. Please check backend API routing.'
+            'Could not load faculty profiles. Please verify backend routing.'
           );
         }
       }
@@ -138,88 +237,123 @@ export const DTRTab: React.FC = () => {
   }, [selectedFacultyId]);
 
   // 2. Fetch real DTR attendance logs from database
-  const fetchDTR = useCallback(async () => {
-    if (!selectedFacultyId) return;
-    setLoading(true);
-    setError(null);
+  const fetchDTR = useCallback(
+    async (silent = false) => {
+      if (!selectedFacultyId) return;
+      if (!silent) setLoading(true);
+      setError(null);
 
-    try {
-      const res = await apiClient.get<DTRReportData>(`/reports/dtr/${selectedFacultyId}/`, {
-        params: {
-          month: selectedMonth,
-          year: selectedYear,
-        },
-      });
+      try {
+        const res = await apiClient.get<DTRReportData>(`/reports/dtr/${selectedFacultyId}/`, {
+          params: {
+            month: selectedMonth,
+            year: selectedYear,
+          },
+        });
 
-      const loadedData = res.data;
-      const rows31: DailyDTRRow[] = [];
-      const currentRows = loadedData.rows || [];
+        const loadedData = res.data;
+        const rows31: DailyDTRRow[] = [];
+        const currentRows = loadedData.rows || [];
 
-      for (let dayNum = 1; dayNum <= 31; dayNum++) {
-        const found = currentRows.find((r) => r.day === dayNum);
-        if (found) {
-          rows31.push(found);
-        } else {
-          rows31.push({
-            day: dayNum,
-            date_str: '',
-            day_of_week: '',
-            is_weekend: false,
-            am_arrival: '',
-            am_departure: '',
-            pm_arrival: '',
-            pm_departure: '',
-            undertime_hours: '',
-            undertime_minutes: '',
-            is_loafing: false,
-            loafing_excused: false,
-          });
+        // Build complete 31-day timesheet
+        for (let dayNum = 1; dayNum <= 31; dayNum++) {
+          const found = currentRows.find((r) => r.day === dayNum);
+          if (found) {
+            rows31.push(found);
+          } else {
+            rows31.push({
+              day: dayNum,
+              date_str: '',
+              day_of_week: '',
+              is_weekend: false,
+              am_arrival: '',
+              am_departure: '',
+              pm_arrival: '',
+              pm_departure: '',
+              undertime_hours: '',
+              undertime_minutes: '',
+              is_loafing: false,
+              loafing_excused: false,
+            });
+          }
         }
-      }
 
-      setDtrData({
-        ...loadedData,
-        rows: rows31,
-      });
-    } catch (err: any) {
-      setError(
-        err?.response?.data?.detail ||
-        err?.response?.data?.error ||
-        'Failed to retrieve DTR data for the selected faculty member.'
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedFacultyId, selectedMonth, selectedYear]);
+        setDtrData({
+          ...loadedData,
+          rows: rows31,
+        });
+      } catch (err: any) {
+        if (!silent) {
+          setError(
+            err?.response?.data?.detail ||
+            err?.response?.data?.error ||
+            'Failed to retrieve DTR data for the selected faculty member.'
+          );
+        }
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [selectedFacultyId, selectedMonth, selectedYear]
+  );
 
   useEffect(() => {
-    fetchDTR();
+    fetchDTR(false);
   }, [fetchDTR]);
 
-  // 3. Department Head Approval Action
-  const handleApproveByDeptHead = async () => {
-    if (!dtrData) return;
-    if (!window.confirm(`Approve official DTR for ${dtrData.faculty_name} (${dtrData.month} ${dtrData.year})? Once approved, the DRAFT watermark will be removed and official hard-copy printing will be unlocked.`)) {
-      return;
-    }
+  // LIVE ZERO-REFRESH POLLING: Silent 3-second database check
+  useEffect(() => {
+    const liveHeartbeat = setInterval(() => {
+      if (!isInteracting.current && selectedFacultyId) {
+        fetchDTR(true);
+      }
+    }, 3000);
 
-    setActionProcessing(true);
-    try {
-      await apiClient.post(`/reports/dtr/${dtrData.faculty_id}/`, {
-        action: 'APPROVE_DEPT_HEAD',
-        faculty_id: dtrData.faculty_id,
-        month: dtrData.month_number,
-        year: dtrData.year,
-      });
-      fetchDTR();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Failed to submit Department Head approval.');
-    } finally {
-      setActionProcessing(false);
-    }
+    return () => clearInterval(liveHeartbeat);
+  }, [fetchDTR, selectedFacultyId]);
+
+  // ============================================================================
+  // GOVERNANCE & APPROVAL ACTIONS
+  // ============================================================================
+
+  // 3. Department Head Digital Endorsement
+  const handleApproveByDeptHead = () => {
+    if (!dtrData) return;
+
+    showConfirm({
+      title: 'Approve Official DTR',
+      message: `Approve official Form 48 for ${dtrData.faculty_name} (${dtrData.month} ${dtrData.year})? This will endorse records, remove the DRAFT watermark, and unlock official hard-copy printing.`,
+      confirmLabel: 'Approve & Endorse',
+      isDestructive: false,
+      onConfirm: async () => {
+        setActionProcessing(true);
+        try {
+          await apiClient.post(`/reports/dtr/${dtrData.faculty_id}/`, {
+            action: 'APPROVE_DEPT_HEAD',
+            faculty_id: dtrData.faculty_id,
+            month: dtrData.month_number,
+            year: dtrData.year,
+          });
+          showAlert({
+            title: 'DTR Endorsed',
+            message: `Official Form 48 for ${dtrData.faculty_name} has been verified and cleared for printing.`,
+            type: 'success',
+          });
+          fetchDTR(true);
+        } catch (err: any) {
+          showAlert({
+            title: 'Approval Failed',
+            message: err?.response?.data?.error || 'Failed to submit Department Head endorsement.',
+            type: 'error',
+          });
+        } finally {
+          setActionProcessing(false);
+        }
+      },
+    });
   };
 
-  // 4. Principal Pardon / Excuse Loafing Violation Action
+  // 4. Principal Pardon for Loafing Violation
   const handleExcuseLoafingByPrincipal = async () => {
     if (!dtrData || !selectedViolationRow) return;
 
@@ -229,21 +363,38 @@ export const DTRTab: React.FC = () => {
         action: 'EXCUSE_LOAFING',
         faculty_id: dtrData.faculty_id,
         date_str: selectedViolationRow.date_str,
+        remarks: pardonRemarks.trim(),
+      });
+      showAlert({
+        title: 'Violation Excused',
+        message: `Loafing record on ${selectedViolationRow.date_str} has been excused by the Principal. Salary deduction removed.`,
+        type: 'success',
       });
       setSelectedViolationRow(null);
-      fetchDTR();
+      fetchDTR(true);
     } catch (err: any) {
-      alert(err?.response?.data?.error || 'Only the Principal can excuse loafing violations.');
+      showAlert({
+        title: 'Action Denied',
+        message: err?.response?.data?.error || 'Only authorized leadership can excuse loafing records.',
+        type: 'error',
+      });
     } finally {
       setActionProcessing(false);
     }
   };
 
-  // Export as PDF via html2pdf
+  // ============================================================================
+  // EXPORT & PRINT HANDLING
+  // ============================================================================
+
   const handleDownloadPdf = async () => {
     if (!printAreaRef.current || !dtrData) return;
     if (!dtrData.dept_head_approved) {
-      alert('RESTRICTED: DTR must be approved by the Department Head before exporting official copies. Current view contains DRAFT watermark.');
+      showAlert({
+        title: 'Approval Required',
+        message: 'This DTR must be approved by the Department Head before exporting official copies. Current view contains the DRAFT watermark.',
+        type: 'warning',
+      });
       return;
     }
 
@@ -290,19 +441,27 @@ export const DTRTab: React.FC = () => {
 
   const handlePrint = () => {
     if (!dtrData?.dept_head_approved) {
-      alert('RESTRICTED: DTR must be approved by the Department Head before printing official copies.');
+      showAlert({
+        title: 'Printing Locked',
+        message: 'Official hard-copy printing is locked until the Department Head endorses this record.',
+        type: 'warning',
+      });
       return;
     }
     window.print();
   };
 
-  // Render Single CSC Form No. 48 Front Copy
+  // ============================================================================
+  // EXACT CSC FORM NO. 48 TEMPLATE RENDERERS
+  // ============================================================================
+
+  // Front Side: Exact reproduction of CSC Form No. 48 front layout
   const renderDTRCopy = () => {
     if (!dtrData) return null;
 
     return (
       <div style={formCardContainer}>
-        {/* BIG DRAFT WATERMARK (Rendered when Department Head approval is pending) */}
+        {/* DRAFT WATERMARK (Rendered when Department Head approval is pending) */}
         {!dtrData.dept_head_approved && (
           <div style={draftWatermarkStyle}>
             <div style={{ transform: 'rotate(-32deg)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -312,32 +471,32 @@ export const DTRTab: React.FC = () => {
           </div>
         )}
 
-        {/* Header Block */}
-        <div style={{ textAlign: 'center', marginBottom: 4 }}>
-          <div style={{ fontSize: '7.2pt', fontStyle: 'italic', fontFamily: "'Times New Roman', Times, serif" }}>
+        {/* Top Header Block */}
+        <div style={{ textAlign: 'center', marginBottom: 2 }}>
+          <div style={{ fontSize: '7.5pt', fontStyle: 'italic', fontFamily: "'Times New Roman', Times, serif" }}>
             Civil Service Form No. 48
           </div>
-          <div style={{ fontSize: '11.5pt', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.8px', marginTop: 1 }}>
+          <div style={{ fontSize: '11.5pt', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.6px', marginTop: 1 }}>
             DAILY TIME RECORD
           </div>
-          <div style={{ marginTop: 6, borderBottom: '1.2px solid #000', paddingBottom: 1, minHeight: 18 }}>
+
+          {/* Name Field */}
+          <div style={{ marginTop: 8, borderBottom: '1.2px solid #000', paddingBottom: 1, minHeight: 18 }}>
             <span style={{ fontSize: '9.2pt', fontWeight: 800, textTransform: 'uppercase' }}>
               {dtrData.faculty_name}
             </span>
           </div>
-          <div style={{ fontSize: '6.4pt', fontStyle: 'italic', marginTop: 1 }}>(Name)</div>
+          <div style={{ fontSize: '6.5pt', fontStyle: 'italic', marginTop: 1 }}>(Name)</div>
         </div>
 
         {/* Period & Official Hours Block */}
         <div style={{ fontSize: '6.8pt', marginBottom: 4, lineHeight: 1.25 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '0.8px solid #000', paddingBottom: 2 }}>
+          <div style={{ borderBottom: '0.8px solid #000', paddingBottom: 2 }}>
             <span>
               For the month of <u>&nbsp;<strong>{dtrData.month}</strong>&nbsp;</u>, 20<u>&nbsp;<strong>{String(dtrData.year).slice(-2)}</strong>&nbsp;</u>
             </span>
-            <span style={{ fontSize: '6.2pt', color: '#475569' }}>
-              Dept: <strong>{dtrData.department || 'Academic'}</strong>
-            </span>
           </div>
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 3 }}>
             <div style={{ width: '46%', fontSize: '6.2pt', lineHeight: 1.15 }}>
               Official hours of arrival<br />
@@ -350,7 +509,7 @@ export const DTRTab: React.FC = () => {
           </div>
         </div>
 
-        {/* 31-Day Attendance Table */}
+        {/* 31-Day Attendance Table matching CSC Form 48 */}
         <table style={dtrTable}>
           <thead>
             <tr>
@@ -391,7 +550,7 @@ export const DTRTab: React.FC = () => {
                     {row.is_loafing && (
                       <span
                         onClick={() => dtrData.can_clear_loafing && setSelectedViolationRow(row)}
-                        title={isViolating ? 'Loafing Violation (Deducted). Click for Principal Review.' : 'Excused by Principal'}
+                        title={isViolating ? 'Loafing flag. Click for review.' : 'Excused by Principal'}
                         style={{
                           marginLeft: 2,
                           fontSize: '5.2pt',
@@ -437,42 +596,40 @@ export const DTRTab: React.FC = () => {
           </tbody>
         </table>
 
-        {/* Certification Statement */}
+        {/* Certification Oath Statement */}
         <div style={{ marginTop: 6, fontSize: '5.8pt', textAlign: 'justify', lineHeight: 1.25 }}>
           I CERTIFY on my honor that the above is a true and correct report of the hours of work performed, record of which was made daily at the time of arrival and departure from office.
         </div>
 
-        {/* Employee Signature */}
-        <div style={{ marginTop: 14, textAlign: 'center' }}>
+        {/* Employee Signature Line */}
+        <div style={{ marginTop: 16, textAlign: 'center' }}>
           <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto' }}></div>
           <div style={{ fontSize: '5.6pt', fontStyle: 'italic', marginTop: 1 }}>
             (Signature of Teacher / Employee)
           </div>
         </div>
 
-        {/* Verification Lines: Dept Head + Principal */}
-        <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, textAlign: 'center' }}>
-          <div>
-            <div style={{ fontSize: '5.2pt', textAlign: 'left', marginBottom: 6 }}>Verified by Dept Head:</div>
-            <div style={{ borderBottom: '0.8px solid #000', width: '90%', margin: '0 auto', fontWeight: 800, fontSize: '6.5pt' }}>
-              {dtrData.dept_head_approved ? 'APPROVED & ENDORSED' : 'PENDING APPROVAL'}
-            </div>
-            <div style={{ fontSize: '5.4pt', fontWeight: 600 }}>Department Head</div>
-          </div>
-
-          <div>
-            <div style={{ fontSize: '5.2pt', textAlign: 'left', marginBottom: 6 }}>Attested by Principal:</div>
-            <div style={{ borderBottom: '0.8px solid #000', width: '90%', margin: '0 auto', fontWeight: 800, fontSize: '6.5pt' }}>
+        {/* In-Charge Line matching CSC Form 48 Template */}
+        <div style={{ marginTop: 10, textAlign: 'center' }}>
+          <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto', minHeight: 14 }}>
+            <span style={{ fontSize: '7.5pt', fontWeight: 800, textTransform: 'uppercase' }}>
               {dtrData.school_head || 'JACQUELINE GALUPO'}
-            </div>
-            <div style={{ fontSize: '5.4pt', fontWeight: 700 }}>In-Charge</div>
+            </span>
           </div>
+          <div style={{ fontSize: '6.4pt', fontWeight: 700, marginTop: 1 }}>
+            In-Charge
+          </div>
+        </div>
+
+        {/* Instructions Back Pointer */}
+        <div style={{ textAlign: 'center', marginTop: 4, fontSize: '5.6pt', fontStyle: 'italic' }}>
+          (See Instructions on back)
         </div>
       </div>
     );
   };
 
-  // Render Single Instructions Copy (Side 2 - Back)
+  // Back Side: Exact reproduction of CSC Form No. 48 Instructions
   const renderInstructionsCopy = () => (
     <div style={formCardContainer}>
       <div style={{ textAlign: 'center', marginBottom: 8, borderBottom: '1px solid #000', paddingBottom: 4 }}>
@@ -515,8 +672,14 @@ export const DTRTab: React.FC = () => {
       {/* 1. Control Header Bar */}
       <div style={controlBar}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <User size={15} color="#0284c7" />
+          {/* Default User Icon / Real Photo Avatar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ProfileAvatar
+              photoUrl={activeFaculty?.photo}
+              name={activeFaculty?.full_name || 'Faculty Profile'}
+              size={36}
+              iconSize={18}
+            />
             <select
               value={selectedFacultyId}
               onChange={(e) => setSelectedFacultyId(e.target.value)}
@@ -539,7 +702,7 @@ export const DTRTab: React.FC = () => {
             >
               {[
                 'January', 'February', 'March', 'April', 'May', 'June',
-                'July', 'August', 'September', 'October', 'November', 'December'
+                'July', 'August', 'September', 'October', 'November', 'December',
               ].map((m, idx) => (
                 <option key={m} value={idx + 1}>{m}</option>
               ))}
@@ -569,13 +732,13 @@ export const DTRTab: React.FC = () => {
             </select>
           </div>
 
-          <Button variant="secondary" size="md" onClick={fetchDTR} disabled={loading}>
+          <Button variant="secondary" size="md" onClick={() => fetchDTR(false)} disabled={loading}>
             {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
             <span style={{ marginLeft: 6 }}>Refresh</span>
           </Button>
         </div>
 
-        {/* Action Controls & Department Head Gate */}
+        {/* Action Controls & Department Head Approval */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {dtrData?.can_approve_dept && !dtrData?.dept_head_approved && (
             <Button
@@ -595,7 +758,7 @@ export const DTRTab: React.FC = () => {
             size="md"
             onClick={handleDownloadPdf}
             disabled={exportingPdf || !dtrData || !dtrData.dept_head_approved}
-            title={!dtrData?.dept_head_approved ? 'Locked: Department Head approval required. Document marked DRAFT.' : 'Export Form 48 PDF'}
+            title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before exporting.' : 'Export Form 48 PDF'}
           >
             {exportingPdf ? <Loader2 className="animate-spin" size={14} /> : !dtrData?.dept_head_approved ? <Lock size={14} color="#dc2626" /> : <Download size={14} />}
             <span style={{ marginLeft: 6 }}>Export PDF</span>
@@ -606,7 +769,7 @@ export const DTRTab: React.FC = () => {
             size="md"
             onClick={handlePrint}
             disabled={!dtrData || !dtrData.dept_head_approved}
-            title={!dtrData?.dept_head_approved ? 'Locked: Department Head approval required. Document marked DRAFT.' : 'Print Hard Copy Form 48'}
+            title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before printing.' : 'Print Hard Copy Form 48'}
           >
             {!dtrData?.dept_head_approved ? <Lock size={14} /> : <Printer size={14} />}
             <span style={{ marginLeft: 6 }}>Print Form 48</span>
@@ -646,7 +809,8 @@ export const DTRTab: React.FC = () => {
           </div>
 
           <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#334155' }}>
-            Status: <span style={{ color: dtrData.dept_head_approved ? '#059669' : '#d97706' }}>
+            Status:{' '}
+            <span style={{ color: dtrData.dept_head_approved ? '#059669' : '#d97706' }}>
               {dtrData.dept_head_approved ? 'APPROVED & CLEARED' : 'DRAFT / PENDING'}
             </span>
           </div>
@@ -688,7 +852,7 @@ export const DTRTab: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Official Printable Sheets Container */}
+      {/* 4. Official Printable Sheets Container (2-Up Side-by-Side) */}
       <div style={{ overflowX: 'auto', paddingBottom: 24 }}>
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 320, gap: 10 }}>
@@ -729,18 +893,39 @@ export const DTRTab: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, backgroundColor: '#fef2f2', borderRadius: 8, border: '1px solid #fee2e2' }}>
               <AlertTriangle size={24} color="#dc2626" style={{ flexShrink: 0 }} />
               <div style={{ fontSize: '0.78rem', color: '#991b1b', lineHeight: 1.35 }}>
-                A loafing / unauthorized departure was recorded for <strong>{dtrData?.faculty_name}</strong> on <strong>{selectedViolationRow.date_str}</strong>.
-                If not excused by the Principal, this date will result in a salary deduction as an unexcused absence.
+                An unexcused departure or loafing flag was recorded for <strong>{dtrData?.faculty_name}</strong> on <strong>{selectedViolationRow.date_str}</strong>.
+                If not excused by the Principal, this date will incur a salary deduction.
               </div>
             </div>
 
             <div style={{ fontSize: '0.80rem', color: '#334155' }}>
-              <strong>Violation Notes:</strong> {selectedViolationRow.loafing_remarks || 'Teacher scanned OUT without authorized Gate Pass during school hours.'}
+              <strong>Recorded Gate Note:</strong> {selectedViolationRow.loafing_remarks || 'Teacher scanned OUT without authorized Gate Pass.'}
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
+                Principal Pardon Reason / Official Remarks:
+              </label>
+              <input
+                type="text"
+                value={pardonRemarks}
+                onChange={(e) => setPardonRemarks(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  border: '1px solid #cbd5e1',
+                  fontSize: '0.84rem',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+                placeholder="Enter justification for excusing departure..."
+              />
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
               <Button variant="secondary" size="md" onClick={() => setSelectedViolationRow(null)}>
-                Leave as Salary Deduction
+                Leave as Deduction
               </Button>
               <Button
                 variant="primary"
@@ -750,7 +935,7 @@ export const DTRTab: React.FC = () => {
                 style={{ backgroundColor: '#059669', borderColor: '#059669' }}
               >
                 {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
-                <span style={{ marginLeft: 6 }}>Consider / Excuse Violation</span>
+                <span style={{ marginLeft: 6 }}>Pardon &amp; Clear Deduction</span>
               </Button>
             </div>
           </div>
@@ -798,7 +983,10 @@ export const DTRTab: React.FC = () => {
   );
 };
 
-// Styles
+// ============================================================================
+// STYLES
+// ============================================================================
+
 const controlBar: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
@@ -881,7 +1069,6 @@ const formCardContainer: React.CSSProperties = {
   overflow: 'hidden',
 };
 
-// Watermark Overlay Styles
 const draftWatermarkStyle: React.CSSProperties = {
   position: 'absolute',
   top: '50%',
