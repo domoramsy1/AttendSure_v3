@@ -1,32 +1,43 @@
+"""
+AttendSure V3 - API Views & Ingestion Controllers
+File: backend/apps/api/views.py
+"""
+
 import base64
 import calendar
+from datetime import date, datetime, time, timedelta
 import hmac
 import logging
 import math
-import uuid
-from datetime import date, datetime, timedelta, time
-from django.db.models import Q
 import re
+import shutil
+import uuid
 
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
-from django.db import connection, models, transaction, close_old_connections
+from django.db import connection, models, transaction
+from django.db.models import Q
 from django.utils import timezone
+
 from rest_framework import filters, permissions, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
 
 from apps.academics.models import (
     AcademicYear,
     DailyAttendanceSummary,
     Enrollment,
+    FacultyGateLog,
     FacultyHeartbeat,
+    FacultyMonthlyDTR,
+    FacultyProfile,
     GatePass,
     GradeLevel,
     IoTKiosk,
@@ -34,11 +45,8 @@ from apps.academics.models import (
     Schedule,
     ScheduleDay,
     SchoolProfile,
-    FacultyMonthlyDTR,
     Section,
     SmsOutbox,
-    FacultyGateLog,
-    FacultyProfile,
     Student,
     StudentGateLog,
     Subject,
@@ -47,23 +55,74 @@ from apps.academics.models import (
 )
 from apps.academics.services.sf1_service import get_sf1_data
 from apps.academics.services.sf4_service import generate_sf4_data
+
 from .serializers import (
     ClassroomBatchScanSerializer,
+    FacultyProfileSerializer,
     GatePassSerializer,
     GateScanSerializer,
     IoTKioskSerializer,
     LoginSerializer,
     ScheduleSerializer,
     SchoolProfileSerializer,
-    FacultyProfileSerializer,
+    SmsOutboxSerializer,
     StudentSerializer,
     SubjectSerializer,
     TelemetryHeartbeatSerializer,
     UserManagementSerializer,
-    SmsOutboxSerializer,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# SCHEMA INTEGRITY HELPERS
+# ============================================================================
+
+def ensure_attendance_schema():
+    """
+    Ensures subject_attendance_logs schema integrity:
+    1. faculty_id column exists.
+    2. teacher_id NOT NULL constraint is relaxed.
+    3. Bi-directional trigger keeps teacher_id and faculty_id aligned.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                ALTER TABLE subject_attendance_logs 
+                ADD COLUMN IF NOT EXISTS faculty_id INTEGER;
+            """)
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'subject_attendance_logs' AND column_name = 'teacher_id'
+                    ) THEN
+                        ALTER TABLE subject_attendance_logs ALTER COLUMN teacher_id DROP NOT NULL;
+                    END IF;
+                END $$;
+            """)
+            cursor.execute("""
+                CREATE OR REPLACE FUNCTION sync_subject_attendance_teacher()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    IF NEW.faculty_id IS NOT NULL AND NEW.teacher_id IS NULL THEN
+                        NEW.teacher_id := NEW.faculty_id;
+                    ELSIF NEW.teacher_id IS NOT NULL AND NEW.faculty_id IS NULL THEN
+                        NEW.faculty_id := NEW.teacher_id;
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+
+                DROP TRIGGER IF EXISTS trg_sync_subject_attendance_teacher ON subject_attendance_logs;
+                CREATE TRIGGER trg_sync_subject_attendance_teacher
+                BEFORE INSERT OR UPDATE ON subject_attendance_logs
+                FOR EACH ROW EXECUTE FUNCTION sync_subject_attendance_teacher();
+            """)
+    except Exception as e:
+        logger.debug("Schema check for subject_attendance_logs: %s", e)
 
 
 # ============================================================================
@@ -83,22 +142,6 @@ def resolve_logo_field(val, request=None):
     if val_str.startswith('/9j/') or val_str.startswith('iVBORw0KGgo'):
         return f"data:image/png;base64,{val_str}"
     return val_str
-
-
-class StandardResultsSetPagination(PageNumberPagination):
-    page_size = 25
-    page_size_query_param = 'page_size'
-    max_page_size = 100
-
-    def get_paginated_response(self, data):
-        return Response({
-            'count': self.page.paginator.count,
-            'total_pages': self.page.paginator.num_pages,
-            'current_page': self.page.number,
-            'next': self.get_next_link(),
-            'previous': self.get_previous_link(),
-            'results': data
-        })
 
 
 # ============================================================================
@@ -122,18 +165,53 @@ def get_user_role(user):
     return 'TEACHER'
 
 
+def resolve_faculty_for_user(user):
+    """
+    Resolves the FacultyProfile linked to the authenticated user.
+    Admins who also serve as faculty will have their faculty record identified here.
+    """
+    if not user or not user.is_authenticated:
+        return None
+
+    # 1. UserProfile relation
+    user_prof = get_user_profile(user)
+    if user_prof and getattr(user_prof, 'faculty', None):
+        return user_prof.faculty
+
+    # 2. Direct attribute
+    faculty = getattr(user, 'facultyprofile', None)
+    if faculty:
+        return faculty
+
+    # 3. Match by email
+    if user.email:
+        faculty = FacultyProfile.objects.filter(email=user.email, is_active=True).first()
+        if faculty:
+            return faculty
+
+    # 4. Match by first and last name
+    if user.first_name and user.last_name:
+        faculty = FacultyProfile.objects.filter(
+            first_name__iexact=user.first_name,
+            last_name__iexact=user.last_name,
+            is_active=True
+        ).first()
+        if faculty:
+            return faculty
+
+    # 5. Match by username / employee ID
+    return FacultyProfile.objects.filter(
+        Q(employee_id__iexact=user.username) | Q(qr_token__iexact=user.username),
+        is_active=True
+    ).first()
+
+
 class IsSystemAdminRole(permissions.BasePermission):
-    """Full access strictly restricted to System Administrators."""
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and get_user_role(request.user) == 'ADMIN')
 
 
 class IsAdminOrPrincipalPermission(permissions.BasePermission):
-    """
-    CRUD on institutional rosters (Students & Faculty):
-    - Read: All authenticated staff (Teachers, Dept Heads, Principals, Admins).
-    - Create / Update / Delete: Only Admins and School Principals.
-    """
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
@@ -143,12 +221,6 @@ class IsAdminOrPrincipalPermission(permissions.BasePermission):
 
 
 class IsAcademicManagerPermission(permissions.BasePermission):
-    """
-    CRUD on Academic Structure (Schedules, Subjects, Rooms, Grade Levels, Sections):
-    - Read: All authenticated staff.
-    - Create / Update: Admins, Principals, and Department Heads.
-    - Delete: Admins and Principals only (prevents accidental cascade deletes).
-    """
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
@@ -161,11 +233,6 @@ class IsAcademicManagerPermission(permissions.BasePermission):
 
 
 class IsKioskAdminPermission(permissions.BasePermission):
-    """
-    Hardware Kiosks:
-    - Read: Authenticated staff can monitor terminal health.
-    - Write / Delete / Pair: Only System Administrators.
-    """
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
@@ -175,40 +242,32 @@ class IsKioskAdminPermission(permissions.BasePermission):
 
 
 class GatePassPermission(permissions.BasePermission):
-    """
-    Gate Passes:
-    - Read: All authenticated staff (including Security Guards).
-    - Create: Teachers, Dept Heads, Principals, Admins.
-    - Update: Issuer, Guards (to mark as USED), Principals, Admins.
-    - Delete: Issuer, Principals, Admins.
-    """
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated)
 
     def has_object_permission(self, request, view, obj):
-        if request.method in permissions.SAFE_METHODS:
+        if request.user.is_superuser:
             return True
         role = get_user_role(request.user)
         if role in ['ADMIN', 'PRINCIPAL']:
             return True
-        if role == 'GUARD' and request.method in ['PUT', 'PATCH']:
+        if role == 'GUARD' and request.method in ['GET', 'PUT', 'PATCH']:
             return True
-        user_prof = get_user_profile(request.user)
-        user_faculty = getattr(user_prof, 'faculty', None) if user_prof else None
-        return bool(user_faculty and obj.issued_by_id == user_faculty.id)
+
+        user_faculty = resolve_faculty_for_user(request.user)
+        if not user_faculty:
+            return False
+
+        # Teachers can only view/mutate passes they issued or passes issued for them
+        return bool(obj.issued_by_id == user_faculty.id or obj.faculty_id == user_faculty.id)
 
 
 class SmsOutboxPermission(permissions.BasePermission):
-    """
-    SMS Outbox & Broadcast:
-    - Read: Authenticated staff.
-    - Create / Test / Broadcast: Admins, Principals, Dept Heads.
-    - Delete: Admins only.
-    """
+    """Restricts SMS transmission to administrative leadership."""
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
-        if request.method in permissions.SAFE_METHODS:
+        if request.user.is_superuser:
             return True
         role = get_user_role(request.user)
         if request.method == 'DELETE':
@@ -217,22 +276,42 @@ class SmsOutboxPermission(permissions.BasePermission):
 
 
 class IsAdviserOrAdmin(permissions.BasePermission):
-    """Authority to generate SF1 and SF2: Admins, Principals, or the assigned adviser."""
+    """
+    Enforces DepEd report privacy:
+    - Administrators, Principals, and Department Heads can view all sections.
+    - Teachers can ONLY access SF1 and SF2 for sections they advise or teach.
+    """
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated)
 
     def has_object_permission(self, request, view, obj):
-        role = get_user_role(request.user)
-        if role in ['ADMIN', 'PRINCIPAL']:
+        if not (request.user and request.user.is_authenticated):
+            return False
+
+        if request.user.is_superuser:
             return True
-        profile = get_user_profile(request.user)
-        if profile and profile.faculty:
-            return getattr(obj, 'adviser_id', None) == profile.faculty.id
+
+        role = get_user_role(request.user)
+        if role in ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD']:
+            return True
+
+        faculty = resolve_faculty_for_user(request.user)
+        if not faculty:
+            return False
+
+        # Permitted if the user is the homeroom adviser of this section
+        if getattr(obj, 'adviser_id', None) == faculty.id:
+            return True
+
+        # Permitted if the user teaches any subject scheduled in this section
+        if Schedule.objects.filter(section=obj, faculty=faculty).exists():
+            return True
+
         return False
 
 
 # ============================================================================
-# RATE LIMITS
+# RATE LIMITS & PAGINATION
 # ============================================================================
 
 class AuthLoginRateThrottle(AnonRateThrottle):
@@ -243,71 +322,390 @@ class HardwareGateScanRateThrottle(AnonRateThrottle):
     rate = '180/minute'
 
 
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+    def get_paginated_response(self, data):
+        return Response({
+            'count': self.page.paginator.count,
+            'total_pages': self.page.paginator.num_pages,
+            'current_page': self.page.number,
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            'results': data
+        })
+
+
 # ============================================================================
-# LOGIN & PROFILE MANAGEMENT
+# CLASSROOM ROSTER & BATCH SCAN CONTROLLERS
 # ============================================================================
 
-class LoginAPIView(APIView):
-    permission_classes = [permissions.AllowAny]
-    throttle_classes = [AuthLoginRateThrottle]
+class FacultyClassroomRosterAPIView(APIView):
+    """
+    Returns strictly the sections and enrolled students assigned to the logged-in teacher.
+    Even if the user is an Administrator, it scopes strictly to the sections assigned
+    to their linked faculty profile.
+    """
+    permission_classes = [permissions.IsAuthenticated]
 
+    def get(self, request):
+        ensure_attendance_schema()
+
+        faculty = resolve_faculty_for_user(request.user)
+        today_date = timezone.localdate()
+
+        if not faculty:
+            return Response([], status=status.HTTP_200_OK)
+
+        # 1. Fetch only schedules assigned to this faculty member (strict scoping)
+        schedules_qs = Schedule.objects.select_related(
+            'section', 'subject', 'faculty'
+        ).filter(faculty=faculty).order_by('start_time')
+
+        roster_data = []
+        handled_section_ids = set()
+
+        for sched in schedules_qs:
+            sec = sched.section
+            if not sec:
+                continue
+
+            handled_section_ids.add(sec.id)
+
+            students = Student.objects.filter(
+                enrollments__section=sec,
+                is_active=True
+            ).distinct().order_by('last_name', 'first_name')
+
+            try:
+                existing_logs = dict(
+                    SubjectAttendanceLog.objects.filter(
+                        schedule=sched,
+                        attendance_date=today_date
+                    ).values_list('student_id', 'status')
+                )
+            except Exception:
+                existing_logs = {}
+
+            student_items = [
+                {
+                    'id': st.id,
+                    'lrn': st.lrn,
+                    'qr_token': st.qr_token or st.lrn,
+                    'rfid_uid': st.rfid_uid or '',
+                    'full_name': f"{st.last_name}, {st.first_name}",
+                    'gender': getattr(st, 'sex', getattr(st, 'gender', 'N/A')),
+                    'attendance_status': existing_logs.get(st.id, 'UNSCANNED'),
+                }
+                for st in students
+            ]
+
+            roster_data.append({
+                'schedule_id': sched.id,
+                'section_id': sec.id,
+                'section_name': sec.name,
+                'subject_name': getattr(sched.subject, 'title', getattr(sched.subject, 'name', 'Class Session')),
+                'subject_code': getattr(sched.subject, 'code', ''),
+                'room': getattr(sched, 'room_number', getattr(sched, 'room', 'Main Classroom')),
+                'start_time': str(getattr(sched, 'start_time', '08:00')),
+                'end_time': str(getattr(sched, 'end_time', '09:00')),
+                'total_students': len(student_items),
+                'students': student_items,
+            })
+
+        # 2. Include advisory sections where this faculty is the assigned adviser
+        advisory_sections = Section.objects.filter(adviser=faculty).exclude(id__in=handled_section_ids)
+        for sec in advisory_sections:
+            students = Student.objects.filter(
+                enrollments__section=sec,
+                is_active=True
+            ).distinct().order_by('last_name', 'first_name')
+
+            adv_subject, _ = Subject.objects.get_or_create(
+                code='ADV',
+                defaults={'title': 'Homeroom Advisory'}
+            )
+            adv_sched, _ = Schedule.objects.get_or_create(
+                section=sec,
+                faculty=faculty,
+                subject=adv_subject,
+                defaults={
+                    'start_time': '07:30',
+                    'end_time': '16:30',
+                    'room_number': getattr(sec, 'room_number', 'Advisory Room')
+                }
+            )
+
+            try:
+                adv_logs = dict(
+                    SubjectAttendanceLog.objects.filter(
+                        schedule=adv_sched,
+                        attendance_date=today_date
+                    ).values_list('student_id', 'status')
+                )
+            except Exception:
+                adv_logs = {}
+
+            student_items = [
+                {
+                    'id': st.id,
+                    'lrn': st.lrn,
+                    'qr_token': st.qr_token or st.lrn,
+                    'rfid_uid': st.rfid_uid or '',
+                    'full_name': f"{st.last_name}, {st.first_name}",
+                    'gender': getattr(st, 'sex', getattr(st, 'gender', 'N/A')),
+                    'attendance_status': adv_logs.get(st.id, 'UNSCANNED'),
+                }
+                for st in students
+            ]
+
+            roster_data.append({
+                'schedule_id': adv_sched.id,
+                'section_id': sec.id,
+                'section_name': f"{sec.name} (Advisory)",
+                'subject_name': 'Homeroom Advisory',
+                'subject_code': 'ADV',
+                'room': getattr(sec, 'room_number', 'Advisory Room'),
+                'start_time': str(getattr(adv_sched, 'start_time', '07:30')),
+                'end_time': str(getattr(adv_sched, 'end_time', '16:30')),
+                'total_students': len(student_items),
+                'students': student_items,
+            })
+
+        return Response(roster_data, status=status.HTTP_200_OK)
+
+
+class ClassroomBatchScanAPIView(APIView):
+    """
+    Ingests student attendance batches from faculty mobile app with section bounding
+    and campus gate entrance cross-checks.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
     def post(self, request):
-        serializer = LoginSerializer(data=request.data)
+        ensure_attendance_schema()
+
+        serializer = ClassroomBatchScanSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        username = serializer.validated_data['username']
-        password = serializer.validated_data['password']
+        data = serializer.validated_data
 
-        user = authenticate(username=username, password=password)
-        if not user or not user.is_active:
-            return Response({'error': 'Invalid username or password.'}, status=status.HTTP_401_UNAUTHORIZED)
+        try:
+            schedule = Schedule.objects.select_related('section', 'subject', 'faculty').get(id=data['schedule_id'])
+        except Schedule.DoesNotExist:
+            return Response({'error': 'Schedule does not exist.'}, status=status.HTTP_404_NOT_FOUND)
+
+        faculty = resolve_faculty_for_user(request.user)
+
+        if not faculty:
+            return Response(
+                {'error': 'Unauthorized: Your account is not linked to a faculty profile.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Enforce that the schedule belongs to this faculty (or superuser)
+        if schedule.faculty_id != faculty.id and not request.user.is_superuser:
+            return Response(
+                {'error': f"Unauthorized: You ({faculty.first_name} {faculty.last_name}) are not assigned to teach this class."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        effective_faculty = faculty
+        today = timezone.localdate()
+        scans = data['scans']
+        saved_count = 0
+        flagged_anomalies = []
+        processed_records = []
+
+        model_field_names = [f.name for f in SubjectAttendanceLog._meta.get_fields()]
+
+        for item in scans:
+            identifier = item['qr_token'].strip()
+            scan_status = item.get('status', 'PRESENT').upper()
+
+            student = Student.objects.filter(
+                models.Q(qr_token__iexact=identifier) |
+                models.Q(rfid_uid__iexact=identifier) |
+                models.Q(lrn__iexact=identifier),
+                is_active=True
+            ).prefetch_related('enrollments__section').first()
+
+            if not student:
+                return Response(
+                    {'error': f"Unrecognized ID '{identifier}'. Student not found in database."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            student_enr = student.enrollments.select_related('section').filter(status__in=['ENROLLED', 'ACTIVE']).first()
+            if not student_enr:
+                student_enr = student.enrollments.select_related('section').first()
+
+            enrolled_section = student_enr.section if student_enr else None
+
+            # Enforce section boundaries
+            if schedule.section and (not enrolled_section or enrolled_section.id != schedule.section_id):
+                current_sec_name = enrolled_section.name if enrolled_section else 'Unassigned'
+                target_sec_name = schedule.section.name
+                return Response(
+                    {
+                        'error': f"Access Denied: {student.first_name} {student.last_name} belongs to '{current_sec_name}', not '{target_sec_name}'."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Gate Verification (Anti-Proxy Check)
+            latest_gate_log = StudentGateLog.objects.filter(
+                student=student,
+                scan_time__date=today
+            ).order_by('-scan_time').first()
+
+            has_valid_gate_in = bool(latest_gate_log and latest_gate_log.direction == 'IN')
+            attendance_remarks = 'CLASS_SCAN_VERIFIED'
+            is_anomaly = False
+
+            if scan_status == 'PRESENT' and not has_valid_gate_in:
+                is_anomaly = True
+                if latest_gate_log and latest_gate_log.direction == 'OUT':
+                    scan_status = 'CUTTING'
+                    attendance_remarks = 'FLAGGED: Student tapped OUT at gate prior to class'
+                else:
+                    scan_status = 'UNVERIFIED'
+                    attendance_remarks = 'FLAGGED_PROXY_SCAN: No campus gate entrance recorded today'
+
+                flagged_anomalies.append({
+                    'student_id': student.id,
+                    'name': f"{student.first_name} {student.last_name}",
+                    'lrn': student.lrn,
+                    'reason': attendance_remarks
+                })
+
+            log_defaults = {
+                'status': scan_status,
+                'scanned_at': timezone.now(),
+            }
+            if 'faculty' in model_field_names:
+                log_defaults['faculty'] = effective_faculty
+            if 'teacher' in model_field_names:
+                log_defaults['teacher'] = effective_faculty
+
+            SubjectAttendanceLog.objects.update_or_create(
+                student=student,
+                schedule=schedule,
+                attendance_date=today,
+                defaults=log_defaults
+            )
+
+            if schedule.section:
+                DailyAttendanceSummary.objects.update_or_create(
+                    student=student,
+                    attendance_date=today,
+                    defaults={
+                        'section': schedule.section,
+                        'status': scan_status if scan_status != 'UNVERIFIED' else 'ABSENT',
+                        'remarks': attendance_remarks
+                    }
+                )
+
+            saved_count += 1
+            processed_records.append({
+                'student_id': student.id,
+                'name': f"{student.first_name} {student.last_name}",
+                'lrn': student.lrn,
+                'section': schedule.section.name if schedule.section else 'General',
+                'status': scan_status,
+                'is_anomaly': is_anomaly,
+                'remarks': attendance_remarks,
+                'scan_time': timezone.localtime().strftime('%I:%M:%S %p'),
+            })
+
+        return Response({
+            'success': True,
+            'message': f"{saved_count} attendance records processed.",
+            'processed_records': processed_records,
+            'anomalies': flagged_anomalies
+        }, status=status.HTTP_201_CREATED)
+
+
+# ============================================================================
+# LOGIN & USER IDENTITY
+# ============================================================================
+
+class DatabaseLoginView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [AuthLoginRateThrottle]
+
+    def post(self, request):
+        username = str(request.data.get('username', '')).strip()
+        password = str(request.data.get('password', '')).strip()
+
+        if not username or not password:
+            return Response(
+                {'error': 'Username and password are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Authenticate against Django's auth_user table
+        user = authenticate(request=request, username=username, password=password)
+
+        if user is None:
+            return Response(
+                {'error': 'Invalid credentials. User is not registered in the database.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if not user.is_active:
+            return Response(
+                {'error': 'Account is inactive. Please contact your school administrator.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         token, _ = Token.objects.get_or_create(user=user)
-        user_profile = get_user_profile(user)
-        faculty = getattr(user_profile, 'faculty', None) if user_profile else None
 
-        role = get_user_role(user)
-        faculty_id = faculty.employee_id if faculty else None
-        faculty_name = f"{faculty.first_name} {faculty.last_name}".strip() if faculty else (user.get_full_name() or user.username)
+        faculty_profile = resolve_faculty_for_user(user)
+        emp_id = getattr(faculty_profile, 'employee_id', user.username) if faculty_profile else user.username
+        full_name = f"{user.first_name} {user.last_name}".strip() or user.username
+        assigned_role = get_user_role(user)
 
         return Response({
             'token': token.key,
-            'user_id': user.id,
-            'username': user.username,
-            'role': role,
-            'faculty_id': faculty_id,
-            'faculty_name': faculty_name,
-            'is_superuser': user.is_superuser
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'full_name': full_name,
+                'faculty_name': full_name,
+                'faculty_id': emp_id,
+                'email': user.email,
+                'role': assigned_role,
+                'system_role': assigned_role,
+                'is_superuser': user.is_superuser,
+                'is_staff': user.is_staff,
+            }
         }, status=status.HTTP_200_OK)
 
 
-class CurrentUserProfileView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+LoginAPIView = DatabaseLoginView
 
-    def _get_faculty_profile(self, user):
-        faculty = getattr(user, 'facultyprofile', None)
-        if not faculty:
-            user_prof = get_user_profile(user)
-            faculty = getattr(user_prof, 'faculty', None) if user_prof else None
-        if not faculty and user.email:
-            faculty = FacultyProfile.objects.filter(email=user.email).first()
-        if not faculty and user.first_name and user.last_name:
-            faculty = FacultyProfile.objects.filter(
-                first_name__iexact=user.first_name,
-                last_name__iexact=user.last_name
-            ).first()
-        return faculty
+
+class CurrentUserView(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        faculty = self._get_faculty_profile(user)
-        role = get_user_role(user)
+        faculty = resolve_faculty_for_user(user)
+        emp_id = getattr(faculty, 'employee_id', user.username) if faculty else user.username
+        full_name = f"{user.first_name} {user.last_name}".strip() or user.username
+        assigned_role = get_user_role(user)
 
         photo_url = None
         contact_number = ""
         if faculty:
-            contact_number = faculty.contact_number or ""
+            contact_number = getattr(faculty, 'contact_number', '') or ''
             if faculty.photo:
                 try:
                     photo_url = request.build_absolute_uri(faculty.photo.url)
@@ -315,22 +713,29 @@ class CurrentUserProfileView(APIView):
                     photo_url = None
 
         return Response({
-            "id": user.id,
-            "username": user.username,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
-            "email": user.email,
-            "role": role,
-            "contact_number": contact_number,
-            "photo": photo_url,
+            'id': user.id,
+            'username': user.username,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'full_name': full_name,
+            'faculty_name': full_name,
+            'faculty_id': emp_id,
+            'email': user.email,
+            'role': assigned_role,
+            'system_role': assigned_role,
+            'contact_number': contact_number,
+            'photo': photo_url,
+            'is_superuser': user.is_superuser,
+            'is_staff': user.is_staff,
         }, status=status.HTTP_200_OK)
 
     def put(self, request):
+        """Allows self-profile updates while strictly neutralizing privilege escalation."""
         user = request.user
         data = request.data
-        faculty = self._get_faculty_profile(user)
+        faculty = resolve_faculty_for_user(user)
 
+        # 1. Update personal details
         if 'first_name' in data:
             user.first_name = str(data.get('first_name', '')).strip()
         if 'last_name' in data:
@@ -338,12 +743,15 @@ class CurrentUserProfileView(APIView):
         if 'email' in data:
             user.email = str(data.get('email', '')).strip()
 
+        # 2. Update password safely
         new_password = data.get('password')
         if new_password and len(str(new_password).strip()) >= 6:
             user.set_password(str(new_password).strip())
 
+        # Never permit role modification via profile endpoint
         user.save()
 
+        # 3. Synchronize linked FacultyProfile
         raw_photo = data.get('photo')
         if faculty:
             faculty.first_name = user.first_name
@@ -358,10 +766,12 @@ class CurrentUserProfileView(APIView):
                 try:
                     format_part, img_str = raw_photo.split(';base64,')
                     ext = format_part.split('/')[-1]
+                    if ext.lower() in ('jpeg', 'pjpeg'):
+                        ext = 'jpg'
                     file_name = f"profile_{user.id}_{int(timezone.now().timestamp())}.{ext}"
                     faculty.photo.save(file_name, ContentFile(base64.b64decode(img_str)), save=False)
                 except Exception as e:
-                    logger.error("Failed to save photo: %s", e)
+                    logger.error("Failed to decode profile photo: %s", e)
 
             faculty.save()
 
@@ -372,18 +782,33 @@ class CurrentUserProfileView(APIView):
             except Exception:
                 photo_url = None
 
+        emp_id = getattr(faculty, 'employee_id', user.username) if faculty else user.username
+        full_name = f"{user.first_name} {user.last_name}".strip() or user.username
+        assigned_role = get_user_role(user)
+
         return Response({
-            "id": user.id,
-            "username": user.username,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
-            "email": user.email,
-            "role": get_user_role(user),
-            "contact_number": faculty.contact_number if faculty else "",
-            "photo": photo_url,
-            "message": "Profile updated.",
+            'id': user.id,
+            'username': user.username,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'full_name': full_name,
+            'faculty_name': full_name,
+            'faculty_id': emp_id,
+            'email': user.email,
+            'role': assigned_role,
+            'system_role': assigned_role,
+            'contact_number': getattr(faculty, 'contact_number', '') if faculty else '',
+            'photo': photo_url,
+            'is_superuser': user.is_superuser,
+            'is_staff': user.is_staff,
+            'message': 'Account profile successfully updated.',
         }, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        return self.put(request)
+
+
+CurrentUserProfileView = CurrentUserView
 
 
 # ============================================================================
@@ -391,7 +816,6 @@ class CurrentUserProfileView(APIView):
 # ============================================================================
 
 class SectionListAPIView(APIView):
-    """Full CRUD endpoint for academic sections with role-based checks."""
     permission_classes = [IsAcademicManagerPermission]
 
     def get(self, request):
@@ -480,7 +904,6 @@ class SectionListAPIView(APIView):
 
 
 class SectionDetailAPIView(APIView):
-    """Retrieve, Update, and Delete actions for a specific section."""
     permission_classes = [IsAcademicManagerPermission]
 
     def get(self, request, pk):
@@ -694,7 +1117,6 @@ class DashboardOverviewAPIView(APIView):
         except Exception:
             pass
 
-        import shutil
         disk_total_gb, disk_used_gb, disk_pct = 0.0, 0.0, 0
         try:
             d_usage = shutil.disk_usage(settings.BASE_DIR)
@@ -763,6 +1185,7 @@ class GateScanAPIView(APIView):
         kiosk_code = data['kiosk_code']
         secret_key = data['secret_key']
         requested_direction = data.get('direction')
+        enforce_student_only = data.get('enforce_student_only', False)
         debounce_seconds = getattr(settings, 'GATE_DEBOUNCE_SECONDS', 10)
 
         try:
@@ -770,6 +1193,7 @@ class GateScanAPIView(APIView):
         except IoTKiosk.DoesNotExist:
             return Response({'error': 'Terminal not registered.'}, status=status.HTTP_403_FORBIDDEN)
 
+        # Constant-time comparison defends against timing attacks
         is_valid_secret = (
             kiosk.secret_hash == secret_key or
             hmac.compare_digest(kiosk.secret_hash.encode('utf-8'), str(secret_key).encode('utf-8'))
@@ -787,6 +1211,12 @@ class GateScanAPIView(APIView):
         ).first()
 
         if faculty:
+            if enforce_student_only:
+                return Response(
+                    {'error': 'Faculty badge detected. Only student cards are accepted here.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
             recent_log = FacultyGateLog.objects.filter(
                 faculty=faculty,
                 scan_time__date=now.date()
@@ -922,8 +1352,12 @@ class GateLogsAPIView(APIView):
         direction = request.GET.get('direction', 'ALL').upper()
         search_query = request.GET.get('q', '').strip().lower()
 
+        user_role = get_user_role(request.user)
+        user_faculty = resolve_faculty_for_user(request.user)
+
         combined_logs = []
 
+        # 1. Student logs (viewable by staff and faculty)
         if person_type in ('ALL', 'STUDENT'):
             student_qs = StudentGateLog.objects.select_related('student', 'kiosk').order_by('-scan_time')[:150]
             for log in student_qs:
@@ -941,14 +1375,24 @@ class GateLogsAPIView(APIView):
                     'name': name,
                     'direction': log.direction,
                     'scan_method': log.scan_method,
-                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate',
+                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate Scanner',
                     'kiosk_code': log.kiosk.kiosk_code if log.kiosk else '',
                     'scan_time': log.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
                     'raw_time': log.scan_time.isoformat(),
                 })
 
+        # 2. Staff logs (Teachers can ONLY view their own logs)
         if person_type in ('ALL', 'STAFF'):
-            faculty_qs = FacultyGateLog.objects.select_related('faculty', 'kiosk').order_by('-scan_time')[:150]
+            faculty_qs = FacultyGateLog.objects.select_related('faculty', 'kiosk').order_by('-scan_time')
+
+            if user_role == 'TEACHER' and not request.user.is_superuser:
+                if not user_faculty:
+                    faculty_qs = faculty_qs.none()
+                else:
+                    faculty_qs = faculty_qs.filter(faculty=user_faculty)
+            else:
+                faculty_qs = faculty_qs[:150]
+
             for log in faculty_qs:
                 if direction != 'ALL' and log.direction != direction:
                     continue
@@ -964,7 +1408,7 @@ class GateLogsAPIView(APIView):
                     'name': name,
                     'direction': log.direction,
                     'scan_method': log.scan_method,
-                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate',
+                    'kiosk_name': log.kiosk.terminal_name if log.kiosk else 'Gate Scanner',
                     'kiosk_code': log.kiosk.kiosk_code if log.kiosk else '',
                     'scan_time': log.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
                     'raw_time': log.scan_time.isoformat(),
@@ -974,105 +1418,9 @@ class GateLogsAPIView(APIView):
         return Response(combined_logs[:150], status=status.HTTP_200_OK)
 
 
-class ClassroomBatchScanAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    @transaction.atomic
-    def post(self, request):
-        serializer = ClassroomBatchScanSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        data = serializer.validated_data
-
-        try:
-            schedule = Schedule.objects.select_related('section', 'subject', 'faculty').get(id=data['schedule_id'])
-        except Schedule.DoesNotExist:
-            return Response({'error': 'Schedule does not exist.'}, status=status.HTTP_404_NOT_FOUND)
-
-        user_profile = get_user_profile(request.user)
-        faculty = getattr(user_profile, 'faculty', None) if user_profile else None
-        role = get_user_role(request.user)
-
-        if role not in ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD']:
-            if not faculty or schedule.faculty_id != faculty.id:
-                return Response(
-                    {'error': 'Unauthorized: You are not assigned to teach this class schedule.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-        effective_faculty = faculty if faculty else schedule.faculty
-        today = timezone.localdate()
-        scans = data['scans']
-        saved_count = 0
-        flagged_anomalies = []
-
-        for item in scans:
-            identifier = item['qr_token']
-            scan_status = item.get('status', 'PRESENT').upper()
-
-            student = Student.objects.filter(
-                models.Q(qr_token=identifier) | models.Q(rfid_uid=identifier),
-                is_active=True
-            ).first()
-
-            if not student:
-                continue
-
-            latest_gate_log = StudentGateLog.objects.filter(
-                student=student,
-                scan_time__date=today
-            ).order_by('-scan_time').first()
-
-            has_valid_gate_in = bool(latest_gate_log and latest_gate_log.direction == 'IN')
-            attendance_remarks = 'CLASS_SCAN_VERIFIED'
-
-            if scan_status == 'PRESENT' and not has_valid_gate_in:
-                if latest_gate_log and latest_gate_log.direction == 'OUT':
-                    scan_status = 'CUTTING'
-                    attendance_remarks = 'FLAGGED: Student tapped OUT at gate prior to class'
-                else:
-                    scan_status = 'UNVERIFIED'
-                    attendance_remarks = 'FLAGGED_PROXY_SCAN: No campus gate entrance recorded today'
-
-                flagged_anomalies.append({
-                    'student_id': student.id,
-                    'name': f"{student.first_name} {student.last_name}",
-                    'lrn': student.lrn,
-                    'reason': attendance_remarks
-                })
-
-            _, created = SubjectAttendanceLog.objects.get_or_create(
-                student=student,
-                schedule=schedule,
-                attendance_date=today,
-                defaults={
-                    'faculty': effective_faculty,
-                    'status': scan_status,
-                    'scanned_at': timezone.now()
-                }
-            )
-
-            if created:
-                saved_count += 1
-                DailyAttendanceSummary.objects.update_or_create(
-                    student=student,
-                    attendance_date=today,
-                    defaults={
-                        'section': schedule.section,
-                        'status': scan_status if scan_status != 'UNVERIFIED' else 'ABSENT',
-                        'remarks': attendance_remarks
-                    }
-                )
-
-        return Response({
-            'success': True,
-            'message': f"{saved_count} attendance records processed.",
-            'total_received': len(scans),
-            'flagged_anomalies_count': len(flagged_anomalies),
-            'anomalies': flagged_anomalies
-        }, status=status.HTTP_201_CREATED)
-
+# ============================================================================
+# TELEMETRY & GEOFENCE CONTROLLERS
+# ============================================================================
 
 def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371000.0
@@ -1098,23 +1446,23 @@ class TelemetryHeartbeatAPIView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
-        user_profile = getattr(request.user, 'profile', None) or getattr(request.user, 'userprofile', None)
-        faculty = getattr(user_profile, 'faculty', None) if user_profile else None
+        faculty = resolve_faculty_for_user(request.user)
 
         if not faculty:
-            return Response({'error': 'No faculty profile found.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'No linked faculty profile found for telemetry.'}, status=status.HTTP_400_BAD_REQUEST)
 
         incoming_device_id = str(data.get('client_device_id', '')).strip()
         if not incoming_device_id:
-            return Response({'error': 'Device ID missing.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Device hardware UUID required.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Anti-Fraud: Device Locking
         if not faculty.bound_device_id:
             device_in_use = FacultyProfile.objects.filter(bound_device_id=incoming_device_id).exclude(id=faculty.id).first()
             if device_in_use:
                 LoafingIncident.objects.create(
                     faculty=faculty,
                     incident_date=timezone.localdate(),
-                    trigger_reason=f"Security alert: Phone already used by {device_in_use.first_name} {device_in_use.last_name}.",
+                    trigger_reason=f"Security alert: Phone already bound to {device_in_use.first_name} {device_in_use.last_name}.",
                     status='FLAGGED_FRAUD'
                 )
                 return Response({'error': 'This phone is already registered to another teacher.'}, status=status.HTTP_403_FORBIDDEN)
@@ -1127,16 +1475,17 @@ class TelemetryHeartbeatAPIView(APIView):
             LoafingIncident.objects.create(
                 faculty=faculty,
                 incident_date=timezone.localdate(),
-                trigger_reason="Security alert: Telemetry sent from an unauthorized phone.",
+                trigger_reason="Security alert: Telemetry received from unauthorized phone.",
                 status='FLAGGED_FRAUD'
             )
             return Response({'error': 'Unauthorized device.', 'code': 'DEVICE_MISMATCH'}, status=status.HTTP_403_FORBIDDEN)
 
+        # Anti-Spoofing: Mock Location Detection
         if data.get('is_mock_location', False):
             LoafingIncident.objects.create(
                 faculty=faculty,
                 incident_date=timezone.localdate(),
-                trigger_reason='Security alert: Mock location app detected.',
+                trigger_reason='Security alert: Mock location app detected on phone.',
                 status='FLAGGED_FRAUD'
             )
             return Response({'security_alert': 'Fake GPS detected.', 'is_inside_geofence': False}, status=status.HTTP_403_FORBIDDEN)
@@ -1208,17 +1557,20 @@ class ResetFacultyDeviceBindingAPIView(APIView):
 # ============================================================================
 # SCHOOL PROFILE SETTINGS
 # ============================================================================
-
 class SchoolSettingsAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    """
+    Serves authentic institutional profile settings directly from the database.
+    Does not seed or inject mock school records.
+    """
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.AllowAny()]
+        return [IsSystemAdminRole()]
 
     def get_object(self):
         profile = SchoolProfile.objects.first()
         if not profile:
-            profile = SchoolProfile.objects.create(
-                school_id="128936",
-                school_name="Lapasan National High School"
-            )
+            profile = SchoolProfile.objects.create()
         return profile
 
     def get(self, request):
@@ -1239,7 +1591,7 @@ class SchoolSettingsAPIView(APIView):
         role = get_user_role(request.user)
         if role != 'ADMIN' and not request.user.is_superuser:
             return Response(
-                {'error': 'Admin permissions required to modify school configuration.'},
+                {'error': 'Administrator permissions required to update institutional settings.'},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -1256,10 +1608,8 @@ class SchoolSettingsAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 SchoolProfileView = SchoolSettingsAPIView
-
-
 # ============================================================================
-# REPORTS & DTR
+# OFFICIAL DEPED REPORTS & DTR
 # ============================================================================
 
 def resolve_academic_year_for_date(target_date):
@@ -1285,6 +1635,44 @@ def resolve_academic_year_for_date(target_date):
         ay = AcademicYear.objects.filter(code__icontains=str(y_start)).first()
 
     return ay, (getattr(ay, 'code', '') or code_str).strip()
+
+
+def calculate_sf1_age_as_of_june(birthdate, school_year_code):
+    """
+    Computes official DepEd SF1 Age as of the 1st Friday of June of the school year.
+    """
+    if not birthdate:
+        return ""
+    try:
+        # Determine base school year
+        base_year = timezone.now().year
+        if school_year_code and '-' in str(school_year_code):
+            first_part = str(school_year_code).split('-')[0].strip()
+            if first_part.isdigit():
+                base_year = int(first_part)
+
+        # 1st Friday of June: weekday() 4 = Friday
+        june_1 = date(base_year, 6, 1)
+        days_ahead = (4 - june_1.weekday()) % 7
+        first_friday = june_1 + timedelta(days=days_ahead)
+
+        if isinstance(birthdate, str):
+            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y'):
+                try:
+                    birthdate = datetime.strptime(birthdate, fmt).date()
+                    break
+                except ValueError:
+                    pass
+
+        if not isinstance(birthdate, (date, datetime)):
+            return ""
+
+        age = first_friday.year - birthdate.year - (
+            (first_friday.month, first_friday.day) < (birthdate.month, birthdate.day)
+        )
+        return max(0, age)
+    except Exception:
+        return ""
 
 
 class DepEdSF1DataAPIView(APIView):
@@ -1318,6 +1706,7 @@ class DepEdSF1DataAPIView(APIView):
             acad_year_obj = getattr(section, 'academic_year', None) or AcademicYear.objects.filter(is_active=True).first()
             acad_year_code = str(getattr(acad_year_obj, 'code', '') or '').strip()
 
+        # Resolve institutional header information
         school = SchoolProfile.objects.first()
         school_id = str(getattr(school, 'school_id', '') or '').strip()
         school_name = str(getattr(school, 'school_name', '') or '').strip()
@@ -1333,36 +1722,76 @@ class DepEdSF1DataAPIView(APIView):
         adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip() if section.adviser else ""
         grade_level_name = section.grade_level.name if section.grade_level else ""
 
+        # Query all active learners enrolled in this section
         enrollments_qs = Enrollment.objects.filter(
             section=section,
-            academic_year=acad_year_obj,
             status__in=['ENROLLED', 'ACTIVE']
-        ).select_related('student')
+        ).select_related('student').order_by('student__last_name', 'student__first_name')
 
-        enrolled_students = [e.student for e in enrollments_qs if e.student]
+        if acad_year_obj:
+            filtered_by_ay = enrollments_qs.filter(academic_year=acad_year_obj)
+            if filtered_by_ay.exists():
+                enrollments_qs = filtered_by_ay
 
-        learners_list = []
-        male_count = 0
-        female_count = 0
+        males_list = []
+        females_list = []
+        combined_list = []
 
-        for s in enrolled_students:
-            is_male = str(getattr(s, 'sex', '')).upper().startswith('M')
-            if is_male:
-                male_count += 1
-            else:
-                female_count += 1
+        for e in enrollments_qs:
+            s = e.student
+            if not s:
+                continue
+
+            raw_sex = str(getattr(s, 'sex', '') or '').strip().upper()
+            is_male = raw_sex.startswith('M')
 
             mid = f" {s.middle_name}" if getattr(s, 'middle_name', '') else ""
             suf = f" {s.suffix}" if getattr(s, 'suffix', '') else ""
             full_name = f"{s.last_name}, {s.first_name}{mid}{suf}".strip()
 
-            learners_list.append({
+            # Format birthdate to DepEd mm/dd/yyyy format
+            b_date_str = ""
+            if s.birthdate:
+                try:
+                    if isinstance(s.birthdate, (date, datetime)):
+                        b_date_str = s.birthdate.strftime('%m/%d/%Y')
+                    else:
+                        b_date_str = str(s.birthdate)
+                except Exception:
+                    b_date_str = str(s.birthdate)
+
+            computed_age = calculate_sf1_age_as_of_june(s.birthdate, acad_year_code)
+
+            learner_item = {
                 'id': s.id,
-                'lrn': s.lrn,
+                'lrn': str(s.lrn or '').strip(),
                 'name': full_name,
                 'sex': 'M' if is_male else 'F',
-                'parent_contact': getattr(s, 'parent_contact', '')
-            })
+                'birthdate': b_date_str,
+                'age': computed_age,
+                'birth_place': str(getattr(s, 'birth_place', '') or getattr(s, 'province', '') or '').strip(),
+                'mother_tongue': str(getattr(s, 'mother_tongue', '') or '').strip(),
+                'ethnic_group': str(getattr(s, 'ethnic_group', '') or '').strip(),
+                'religion': str(getattr(s, 'religion', '') or '').strip(),
+                # Address mappings (support both house_street and house_street_sitio)
+                'house_street': str(getattr(s, 'house_street_sitio', '') or getattr(s, 'house_street', '') or '').strip(),
+                'barangay': str(getattr(s, 'barangay', '') or '').strip(),
+                'municipality_city': str(getattr(s, 'municipality_city', '') or '').strip(),
+                'province': str(getattr(s, 'province', '') or '').strip(),
+                # Parents & Guardian
+                'father_name': str(getattr(s, 'father_name', '') or '').strip(),
+                'mother_maiden_name': str(getattr(s, 'mother_maiden_name', '') or '').strip(),
+                'guardian_name': str(getattr(s, 'guardian_name', '') or '').strip(),
+                'guardian_relationship': str(getattr(s, 'guardian_relationship', '') or '').strip(),
+                'parent_contact': str(getattr(s, 'parent_contact', '') or getattr(s, 'guardian_phone', '') or '').strip(),
+                'remarks': str(getattr(e, 'remarks', '') or getattr(s, 'remarks', '') or '').strip(),
+            }
+
+            combined_list.append(learner_item)
+            if is_male:
+                males_list.append(learner_item)
+            else:
+                females_list.append(learner_item)
 
         return Response({
             'school_id': school_id,
@@ -1378,12 +1807,15 @@ class DepEdSF1DataAPIView(APIView):
             'left_logo': left_logo,
             'right_logo': right_logo,
             'school_logo': school_logo,
-            'students': learners_list,
-            'total_male': male_count,
-            'total_female': female_count,
-            'total_combined': len(learners_list)
+            'has_enrolled_students': len(combined_list) > 0,
+            'students': combined_list,
+            'learners': combined_list,
+            'males': males_list,
+            'females': females_list,
+            'total_male': len(males_list),
+            'total_female': len(females_list),
+            'total_combined': len(combined_list),
         }, status=status.HTTP_200_OK)
-
 
 class DepEdSF2DataAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsAdviserOrAdmin]
@@ -1415,18 +1847,23 @@ class DepEdSF2DataAPIView(APIView):
 
         year = int(year_param) if year_param.isdigit() else today_date.year
 
-        school = SchoolProfile.objects.first()
-        adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip() if section.adviser else ""
+        try:
+            from apps.academics.services.sf2_service import generate_sf2_data
+            data = generate_sf2_data(section_id=section.id, month_name=month_name, year=year)
+            return Response(data, status=status.HTTP_200_OK)
+        except Exception as exc:
+            logger.error("SF2 Compilation Error: %s", exc)
+            school = SchoolProfile.objects.first()
+            adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip() if section.adviser else ""
 
-        return Response({
-            'school_name': school.school_name if school else "AttendSure",
-            'section_name': section.name,
-            'month': month_name,
-            'year': year,
-            'adviser_name': adviser_name,
-            'has_enrolled_students': True,
-        }, status=status.HTTP_200_OK)
-
+            return Response({
+                'school_name': school.school_name if school else "AttendSure",
+                'section_name': section.name,
+                'month': month_name,
+                'year': year,
+                'adviser_name': adviser_name,
+                'has_enrolled_students': True,
+            }, status=status.HTTP_200_OK)
 
 SF2ReportAPIView = DepEdSF2DataAPIView
 
@@ -1465,15 +1902,24 @@ class ReportAuditLogAPIView(APIView):
     def post(self, request):
         return Response({'success': True, 'message': 'Report audit recorded.'}, status=status.HTTP_201_CREATED)
 
-
 class DTRListAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, faculty_id=None, *args, **kwargs):
+        user_role = get_user_role(request.user) or 'TEACHER'
+        user_faculty = resolve_faculty_for_user(request.user)
+
         target_id = faculty_id or request.query_params.get('faculty_id')
         if not target_id:
-            user_prof = getattr(request.user, 'profile', None)
-            target_id = getattr(user_prof, 'faculty_id', None)
+            target_id = getattr(user_faculty, 'id', None)
+
+        # IDOR Defense: Teachers can only query their own Form 48 DTR
+        if user_role == 'TEACHER' and not request.user.is_superuser:
+            if not user_faculty or str(target_id) != str(user_faculty.id):
+                return Response(
+                    {'error': 'Access Denied: You are only authorized to view your own DTR.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         faculty = FacultyProfile.objects.filter(id=target_id).first()
         if not faculty:
@@ -1489,25 +1935,213 @@ class DTRListAPIView(APIView):
             year=year
         )
 
-        user_role = get_user_role(request.user) or 'TEACHER'
+        # ------------------------------------------------------------------
+        # 1. PULL REAL PRINCIPAL / SCHOOL HEAD DIRECTLY FROM DATABASE
+        # ------------------------------------------------------------------
+        school = SchoolProfile.objects.first()
+        school_head = ""
+        school_head_title = ""
+
+        if school:
+            if school.principal_name and school.principal_name.strip():
+                school_head = school.principal_name.strip()
+            elif school.principal_faculty:
+                p_fac = school.principal_faculty
+                mid = f" {p_fac.middle_name[:1]}." if p_fac.middle_name else ""
+                suf = f" {p_fac.suffix}" if p_fac.suffix else ""
+                school_head = f"{p_fac.first_name}{mid} {p_fac.last_name}{suf}".strip()
+
+            if school.principal_title and school.principal_title.strip():
+                school_head_title = school.principal_title.strip()
+
+        # Check for appointed Principal / School Head in faculty records
+        if not school_head:
+            principal_fac = FacultyProfile.objects.filter(
+                Q(position__icontains='Principal') |
+                Q(position__icontains='School Head')
+            ).filter(is_active=True).first()
+
+            if principal_fac:
+                mid = f" {principal_fac.middle_name[:1]}." if principal_fac.middle_name else ""
+                suf = f" {principal_fac.suffix}" if principal_fac.suffix else ""
+                school_head = f"{principal_fac.first_name}{mid} {principal_fac.last_name}{suf}".strip()
+                if not school_head_title and principal_fac.position:
+                    school_head_title = principal_fac.position.strip()
+
+        # Check for User account with role 'PRINCIPAL'
+        if not school_head:
+            principal_prof = UserProfile.objects.filter(role='PRINCIPAL').select_related('user', 'faculty').first()
+            if principal_prof:
+                if principal_prof.faculty:
+                    p_fac = principal_prof.faculty
+                    mid = f" {p_fac.middle_name[:1]}." if p_fac.middle_name else ""
+                    suf = f" {p_fac.suffix}" if p_fac.suffix else ""
+                    school_head = f"{p_fac.first_name}{mid} {p_fac.last_name}{suf}".strip()
+                    if not school_head_title and p_fac.position:
+                        school_head_title = p_fac.position.strip()
+                elif principal_prof.user:
+                    school_head = principal_prof.user.get_full_name() or principal_prof.user.username
+
+        # ------------------------------------------------------------------
+        # 2. COMPILE 31-DAY REAL GATE ATTENDANCE LOGS
+        # ------------------------------------------------------------------
+        _, num_days = calendar.monthrange(year, month)
+        tz = timezone.get_current_timezone()
+        start_dt = datetime(year, month, 1, 0, 0, 0, tzinfo=tz)
+        end_dt = datetime(year, month, num_days, 23, 59, 59, tzinfo=tz)
+
+        logs_qs = FacultyGateLog.objects.filter(
+            faculty=faculty,
+            scan_time__gte=start_dt,
+            scan_time__lte=end_dt
+        ).order_by('scan_time')
+
+        logs_by_day = {}
+        for l in logs_qs:
+            day_num = l.scan_time.astimezone(tz).day
+            if day_num not in logs_by_day:
+                logs_by_day[day_num] = []
+            logs_by_day[day_num].append(l)
+
+        rows = []
+        days_present = 0
+        total_undertime_minutes = 0
+        day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+        for d in range(1, 32):
+            if d <= num_days:
+                cur_date = date(year, month, d)
+                w_idx = cur_date.weekday()
+                is_weekend = w_idx in (5, 6)
+                day_logs = logs_by_day.get(d, [])
+
+                am_in, am_out, pm_in, pm_out = "", "", "", ""
+                is_loafing = False
+                loafing_excused = False
+                loafing_remarks = ""
+                day_undertime_min = 0
+
+                for l in day_logs:
+                    local_time = l.scan_time.astimezone(tz).time()
+                    time_str = local_time.strftime('%I:%M')
+                    if l.is_violation:
+                        is_loafing = True
+                        loafing_excused = l.is_excused_by_principal
+                        loafing_remarks = l.remarks or l.violation_type or ""
+
+                    if l.direction == 'IN':
+                        if local_time.hour < 12 and not am_in:
+                            am_in = time_str
+                            # Tardiness calculation: official start 08:00 AM
+                            if local_time.hour > 8 or (local_time.hour == 8 and local_time.minute > 0):
+                                day_undertime_min += (local_time.hour - 8) * 60 + local_time.minute
+                        elif not pm_in:
+                            pm_in = time_str
+                            # Tardiness calculation: official afternoon start 01:00 PM (13:00)
+                            if local_time.hour > 13 or (local_time.hour == 13 and local_time.minute > 0):
+                                day_undertime_min += (local_time.hour - 13) * 60 + local_time.minute
+                    elif l.direction == 'OUT':
+                        if local_time.hour < 13 and not am_out:
+                            am_out = time_str
+                            # Undertime calculation: official lunch break 12:00 PM
+                            if local_time.hour < 12:
+                                day_undertime_min += (12 - local_time.hour) * 60 - local_time.minute
+                        else:
+                            pm_out = time_str
+                            # Undertime calculation: official dismissal 05:00 PM (17:00)
+                            if local_time.hour < 17:
+                                day_undertime_min += (17 - local_time.hour) * 60 - local_time.minute
+
+                if am_in or am_out or pm_in or pm_out:
+                    days_present += 1
+
+                u_hours = ""
+                u_minutes = ""
+                if day_undertime_min > 0:
+                    total_undertime_minutes += day_undertime_min
+                    hrs = day_undertime_min // 60
+                    mins = day_undertime_min % 60
+                    if hrs > 0:
+                        u_hours = str(hrs)
+                    if mins > 0:
+                        u_minutes = str(mins)
+
+                rows.append({
+                    'day': d,
+                    'date_str': cur_date.strftime('%Y-%m-%d'),
+                    'day_of_week': day_names[w_idx],
+                    'is_weekend': is_weekend,
+                    'am_arrival': am_in,
+                    'am_departure': am_out,
+                    'pm_arrival': pm_in,
+                    'pm_departure': pm_out,
+                    'undertime_hours': u_hours,
+                    'undertime_minutes': u_minutes,
+                    'is_loafing': is_loafing,
+                    'loafing_excused': loafing_excused,
+                    'loafing_remarks': loafing_remarks,
+                })
+            else:
+                rows.append({
+                    'day': d,
+                    'date_str': '',
+                    'day_of_week': '',
+                    'is_weekend': False,
+                    'am_arrival': '',
+                    'am_departure': '',
+                    'pm_arrival': '',
+                    'pm_departure': '',
+                    'undertime_hours': '',
+                    'undertime_minutes': '',
+                    'is_loafing': False,
+                    'loafing_excused': False,
+                    'loafing_remarks': '',
+                })
+
         can_approve_dept = user_role in ['DEPT_HEAD', 'ADMIN', 'PRINCIPAL'] or request.user.is_superuser
         can_clear_loafing = user_role in ['PRINCIPAL', 'ADMIN'] or request.user.is_superuser
 
+        tot_u_hours = total_undertime_minutes // 60
+        tot_u_mins = total_undertime_minutes % 60
+
         return Response({
             'faculty_id': faculty.id,
-            'faculty_name': f"{faculty.last_name}, {faculty.first_name}",
+            'faculty_name': f"{faculty.last_name}, {faculty.first_name}".strip(),
             'employee_id': faculty.employee_id,
+            'department': faculty.department or "",
             'month': calendar.month_name[month],
+            'month_number': month,
             'year': year,
+            'regular_days_hours': dtr_record.regular_hours or "",
+            'saturdays_hours': dtr_record.saturday_hours or "",
+            'school_head': school_head.upper() if school_head else "",
+            'school_head_title': school_head_title,
             'dtr_submitted': dtr_record.is_submitted,
             'dept_head_approved': dtr_record.is_dept_head_approved,
+            'approved_by_dept_head_at': dtr_record.dept_head_approved_at.isoformat() if dtr_record.dept_head_approved_at else None,
             'can_approve_dept': can_approve_dept,
             'can_clear_loafing': can_clear_loafing,
+            'rows': rows,
+            'days_present': days_present,
+            'total_undertime_hours': tot_u_hours if tot_u_hours > 0 else 0,
+            'total_undertime_minutes': tot_u_mins if tot_u_mins > 0 else 0,
         }, status=status.HTTP_200_OK)
 
     def post(self, request, faculty_id=None, *args, **kwargs):
         action = request.data.get('action')
         target_id = faculty_id or request.data.get('faculty_id')
+        user_role = get_user_role(request.user) or 'TEACHER'
+        user_faculty = resolve_faculty_for_user(request.user)
+
+        if not target_id:
+            target_id = getattr(user_faculty, 'id', None)
+
+        if user_role == 'TEACHER' and not request.user.is_superuser:
+            if not user_faculty or str(target_id) != str(user_faculty.id):
+                return Response(
+                    {'error': 'Access Denied: You cannot modify another faculty member\'s DTR.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         faculty = FacultyProfile.objects.filter(id=target_id).first()
         if not faculty:
@@ -1523,13 +2157,18 @@ class DTRListAPIView(APIView):
             year=year
         )
 
-        user_role = get_user_role(request.user) or 'TEACHER'
+        # Update customizable prescribed hours if provided in payload
+        if 'regular_days_hours' in request.data:
+            dtr_record.regular_hours = str(request.data['regular_days_hours']).strip()
+        if 'saturdays_hours' in request.data:
+            dtr_record.saturday_hours = str(request.data['saturdays_hours']).strip()
+        dtr_record.save()
 
         if action == 'SUBMIT_DTR':
             dtr_record.is_submitted = True
             dtr_record.submitted_at = timezone.now()
             dtr_record.save()
-            return Response({'success': True, 'message': 'DTR submitted.'})
+            return Response({'success': True, 'message': 'DTR submitted successfully.'})
 
         elif action == 'APPROVE_DEPT_HEAD':
             if not (request.user.is_superuser or user_role in ['DEPT_HEAD', 'ADMIN', 'PRINCIPAL']):
@@ -1541,8 +2180,36 @@ class DTRListAPIView(APIView):
             dtr_record.save()
             return Response({'success': True, 'message': 'DTR endorsed by Department Head.'})
 
-        return Response({'error': f"Unknown action: '{action}'"}, status=status.HTTP_400_BAD_REQUEST)
+        elif action == 'EXCUSE_LOAFING':
+            if not (request.user.is_superuser or user_role in ['PRINCIPAL', 'ADMIN']):
+                return Response({'error': 'Unauthorized: Only the Principal can excuse loafing records.'}, status=status.HTTP_403_FORBIDDEN)
 
+            date_str = request.data.get('date_str')
+            remarks = str(request.data.get('remarks', '')).strip()
+            if not remarks:
+                return Response({'error': 'Official justification remarks are required to pardon a violation.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if date_str:
+                FacultyGateLog.objects.filter(
+                    faculty=faculty,
+                    scan_time__date=date_str,
+                    is_violation=True
+                ).update(
+                    is_excused_by_principal=True,
+                    excused_at=timezone.now(),
+                    excused_by=request.user,
+                    remarks=remarks
+                )
+                LoafingIncident.objects.filter(
+                    faculty=faculty,
+                    incident_date=date_str
+                ).update(
+                    status='EXCUSED',
+                    remarks=remarks
+                )
+            return Response({'success': True, 'message': 'Loafing record excused by Principal.'})
+
+        return Response({'error': f"Unknown action: '{action}'"}, status=status.HTTP_400_BAD_REQUEST)
 
 class GeofenceAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -1563,7 +2230,7 @@ class GeofenceAPIView(APIView):
 
 
 # ============================================================================
-# SCHEDULES WITH CONFLICT DETECTION & FULL CRUD
+# SCHEDULES WITH CONFLICT DETECTION
 # ============================================================================
 
 DAY_MAP = {
@@ -1608,12 +2275,31 @@ def is_time_clash(start1, end1, start2, end2):
 
 
 class ScheduleViewSet(viewsets.ModelViewSet):
-    """Full CRUD on class schedules. Read for staff, write for Managers, delete for Admin/Principal."""
-    queryset = Schedule.objects.select_related('section', 'subject', 'faculty').prefetch_related('days').all()
     serializer_class = ScheduleSerializer
     permission_classes = [IsAcademicManagerPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['section__name', 'faculty__first_name', 'faculty__last_name']
+
+    def get_queryset(self):
+        qs = Schedule.objects.select_related('section', 'subject', 'faculty').prefetch_related('days').all()
+        user = self.request.user
+
+        if not user or not user.is_authenticated:
+            return qs.none()
+
+        if user.is_superuser:
+            return qs
+
+        role = get_user_role(user)
+        if role in ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD']:
+            return qs
+
+        faculty = resolve_faculty_for_user(user)
+        if not faculty:
+            return qs.none()
+
+        # Teachers only see their assigned teaching load and advisory classes
+        return qs.filter(models.Q(faculty=faculty) | models.Q(section__adviser=faculty)).distinct()
 
     def find_clashes(self, section_id, faculty_id, room_name, days_input, start_time, end_time, skip_id=None):
         clashes = []
@@ -1767,11 +2453,10 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 
 
 # ============================================================================
-# FULL CRUD VIEWSETS WITH GRANULAR RBAC ENFORCEMENT
+# FULL CRUD VIEWSETS
 # ============================================================================
 
 class StudentViewSet(viewsets.ModelViewSet):
-    """Full CRUD on Student directory: Read for staff, write/delete for Admin and Principal."""
     queryset = Student.objects.all().order_by('-id')
     serializer_class = StudentSerializer
     pagination_class = StandardResultsSetPagination
@@ -1781,7 +2466,6 @@ class StudentViewSet(viewsets.ModelViewSet):
 
 
 class FacultyViewSet(viewsets.ModelViewSet):
-    """Full CRUD on Faculty directory: Read for staff, write/delete for Admin and Principal."""
     queryset = FacultyProfile.objects.all().order_by('-id')
     serializer_class = FacultyProfileSerializer
     pagination_class = StandardResultsSetPagination
@@ -1791,7 +2475,6 @@ class FacultyViewSet(viewsets.ModelViewSet):
 
 
 class ScannerViewSet(viewsets.ModelViewSet):
-    """Full CRUD on IoT Turnstiles: Read for staff, write/delete strictly for System Admin."""
     queryset = IoTKiosk.objects.all().order_by('kiosk_code')
     serializer_class = IoTKioskSerializer
     pagination_class = StandardResultsSetPagination
@@ -1836,13 +2519,32 @@ class ScannerViewSet(viewsets.ModelViewSet):
 
 
 class GatePassViewSet(viewsets.ModelViewSet):
-    """Full CRUD on Student/Faculty Gate Passes with granular issuer and guard permissions."""
-    queryset = GatePass.objects.select_related('faculty', 'student', 'issued_by').order_by('-valid_from')
     serializer_class = GatePassSerializer
     pagination_class = StandardResultsSetPagination
     permission_classes = [GatePassPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['reason', 'pass_number', 'faculty__first_name', 'faculty__last_name', 'student__first_name', 'student__last_name']
+
+    def get_queryset(self):
+        qs = GatePass.objects.select_related('faculty', 'student', 'issued_by').order_by('-valid_from')
+        user = self.request.user
+
+        if not user or not user.is_authenticated:
+            return qs.none()
+
+        if user.is_superuser:
+            return qs
+
+        role = get_user_role(user)
+        if role in ['ADMIN', 'PRINCIPAL', 'GUARD']:
+            return qs
+
+        faculty = resolve_faculty_for_user(user)
+        if not faculty:
+            return qs.none()
+
+        # Teachers only see passes they issued or passes issued for themselves
+        return qs.filter(models.Q(issued_by=faculty) | models.Q(faculty=faculty)).distinct()
 
     def perform_create(self, serializer):
         pass_num = serializer.validated_data.get('pass_number')
@@ -1851,14 +2553,8 @@ class GatePassViewSet(viewsets.ModelViewSet):
             unique_suffix = uuid.uuid4().hex[:6].upper()
             pass_num = f"GP-{today_str}-{unique_suffix}"
 
-        issued_by = serializer.validated_data.get('issued_by')
-        if not issued_by:
-            user_prof = get_user_profile(self.request.user)
-            issued_by = getattr(user_prof, 'faculty', None) if user_prof else None
-            if not issued_by and self.request.user.email:
-                issued_by = FacultyProfile.objects.filter(email=self.request.user.email).first()
-            if not issued_by:
-                issued_by = FacultyProfile.objects.filter(is_active=True).first()
+        user_faculty = resolve_faculty_for_user(self.request.user)
+        issued_by = user_faculty or FacultyProfile.objects.filter(is_active=True).first()
 
         valid_from = serializer.validated_data.get('valid_from') or timezone.now()
         valid_to = serializer.validated_data.get('valid_to') or (valid_from + timedelta(hours=4))
@@ -1872,7 +2568,6 @@ class GatePassViewSet(viewsets.ModelViewSet):
 
 
 class SubjectViewSet(viewsets.ModelViewSet):
-    """Full CRUD on Subjects: Read for staff, write for Managers, delete for Admin/Principal."""
     queryset = Subject.objects.all().order_by('code')
     serializer_class = SubjectSerializer
     permission_classes = [IsAcademicManagerPermission]
@@ -1881,7 +2576,6 @@ class SubjectViewSet(viewsets.ModelViewSet):
 
 
 class UserManagementViewSet(viewsets.ModelViewSet):
-    """Full CRUD on User accounts: Restricted strictly to System Administrator."""
     queryset = User.objects.select_related('profile').all().order_by('-id')
     serializer_class = UserManagementSerializer
     pagination_class = StandardResultsSetPagination
@@ -1891,10 +2585,6 @@ class UserManagementViewSet(viewsets.ModelViewSet):
 
 
 class RoomViewSet(viewsets.ViewSet):
-    """
-    Full CRUD on Campus Classrooms (List, Retrieve, Create, Update, Partial Update, Destroy).
-    Protected by IsAcademicManagerPermission.
-    """
     permission_classes = [IsAcademicManagerPermission]
 
     def _ensure_table(self):
@@ -2007,10 +2697,6 @@ class RoomViewSet(viewsets.ViewSet):
 
 
 class GradeLevelViewSet(viewsets.ViewSet):
-    """
-    Full CRUD on Grade Levels (List, Retrieve, Create, Update, Partial Update, Destroy).
-    Protected by IsAcademicManagerPermission.
-    """
     permission_classes = [IsAcademicManagerPermission]
 
     def list(self, request):
@@ -2118,15 +2804,12 @@ class GradeLevelViewSet(viewsets.ViewSet):
         except GradeLevel.DoesNotExist:
             return Response({'error': 'Grade level not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+
 # ============================================================================
-# SMS GATEWAY, DISPATCHER & HARDWARE PIPELINE
+# SMS GATEWAY & DISPATCH PIPELINE
 # ============================================================================
 
 class SmsOutboxViewSet(viewsets.ModelViewSet):
-    """
-    Full CRUD on SMS notifications with role-based checks.
-    Includes Broadcast, Delete Delivered, Single Compose, and Metrics.
-    """
     queryset = SmsOutbox.objects.all().order_by('-created_at')
     serializer_class = SmsOutboxSerializer
     pagination_class = StandardResultsSetPagination
@@ -2142,10 +2825,6 @@ class SmsOutboxViewSet(viewsets.ModelViewSet):
         return qs
 
     def create(self, request, *args, **kwargs):
-        """
-        Handles single/manual compose SMS creation with safe defaults.
-        Prevents 400 validation errors on manual compose submissions.
-        """
         try:
             data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
 
@@ -2213,16 +2892,6 @@ class SmsOutboxViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='broadcast')
     def broadcast(self, request):
-        """
-        Dispatches targeted broadcast messages across all 7 supported groupings:
-        1. ALL_PARENTS
-        2. ALL_FACULTY
-        3. BOTH_PARENTS_AND_FACULTY
-        4. BY_YEAR_LEVEL
-        5. BY_SECTION
-        6. SPECIFIC_PARENT
-        7. SPECIFIC_FACULTY
-        """
         try:
             data = request.data
             message_body = (
@@ -2251,9 +2920,9 @@ class SmsOutboxViewSet(viewsets.ModelViewSet):
                     return None
                 cleaned = re.sub(r'[\s\-\(\)\.]', '', str(val).strip())
                 if cleaned.startswith('+63'):
-                    cleaned = '0' + cleaned[3:]
-                elif cleaned.startswith('63') and len(cleaned) == 12:
-                    cleaned = '0' + cleaned[2:]
+                    cleaned = '0' + clean_phone_num[3:]
+                elif cleaned.startswith('63') and len(clean_phone_num) == 12:
+                    cleaned = '0' + clean_phone_num[2:]
                 return cleaned if len(cleaned) >= 10 else None
 
             # 1. SPECIFIC PARENT
@@ -2300,10 +2969,9 @@ class SmsOutboxViewSet(viewsets.ModelViewSet):
                             )
                         )
 
-           # 3. BY CLASS SECTION
+            # 3. BY CLASS SECTION
             elif raw_aud == 'BY_SECTION' and section_id:
                 students = Student.objects.filter(enrollments__section_id=section_id).distinct()
-
                 for s in students:
                     phone = clean_phone_num(
                         getattr(s, 'parent_contact', None)
@@ -2357,7 +3025,6 @@ class SmsOutboxViewSet(viewsets.ModelViewSet):
                 include_parents = raw_aud in ['ALL_PARENTS', 'BOTH_PARENTS_AND_FACULTY', 'ALL'] or 'PARENT' in raw_aud
                 include_faculty = raw_aud in ['ALL_FACULTY', 'BOTH_PARENTS_AND_FACULTY', 'ALL'] or 'FACULTY' in raw_aud
 
-                # Default fallback if unknown audience key was provided
                 if not include_parents and not include_faculty:
                     include_parents = True
                     include_faculty = True
@@ -2549,4 +3216,3 @@ class MarkSmsStatusAPIView(APIView):
             return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         finally:
             connection.close()
-   

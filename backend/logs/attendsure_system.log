@@ -42109,3 +42109,1248 @@ django.db.utils.OperationalError: connection to server at "127.0.0.1", port 5432
 [2026-10-10 21:10:28] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
 [2026-10-10 21:10:29] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
 [2026-10-10 21:12:40] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-10 23:19:41] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-10 23:25:58] [ERROR] [django.request:249] - Internal Server Error: /api/sms-outbox/delete-delivered/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 117, in view
+    handler = getattr(self, action)
+AttributeError: 'SmsOutboxViewSet' object has no attribute 'delete_delivered'. Did you mean: 'delete_delivered'?
+[2026-10-10 23:26:10] [ERROR] [django.request:249] - Internal Server Error: /api/sms-outbox/delete-delivered/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 117, in view
+    handler = getattr(self, action)
+AttributeError: 'SmsOutboxViewSet' object has no attribute 'delete_delivered'. Did you mean: 'delete_delivered'?
+[2026-10-10 23:26:21] [ERROR] [django.request:249] - Internal Server Error: /api/sms-outbox/delete-delivered/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 117, in view
+    handler = getattr(self, action)
+AttributeError: 'SmsOutboxViewSet' object has no attribute 'delete_delivered'. Did you mean: 'delete_delivered'?
+[2026-10-10 23:26:31] [ERROR] [django.request:249] - Internal Server Error: /api/sms-outbox/delete-delivered/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 117, in view
+    handler = getattr(self, action)
+AttributeError: 'SmsOutboxViewSet' object has no attribute 'delete_delivered'. Did you mean: 'delete_delivered'?
+[2026-10-10 23:42:45] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-10 23:43:27] [ERROR] [django.request:249] - Internal Server Error: /api/sms-outbox/delete-delivered/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 117, in view
+    handler = getattr(self, action)
+AttributeError: 'SmsOutboxViewSet' object has no attribute 'delete_delivered'. Did you mean: 'delete_delivered'?
+[2026-10-10 23:43:38] [ERROR] [django.request:249] - Internal Server Error: /api/sms-outbox/delete-delivered/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 117, in view
+    handler = getattr(self, action)
+AttributeError: 'SmsOutboxViewSet' object has no attribute 'delete_delivered'. Did you mean: 'delete_delivered'?
+[2026-10-10 23:45:29] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-10 23:45:30] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 01:05:45] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 01:08:36] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 01:25:25] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 11:40:19] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 11:41:19] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 12:29:29] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\attendsure_core\__init__.py changed, reloading.
+[2026-10-11 12:53:24] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 13:48:06] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 14:16:55] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 14:27:40] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 15:04:11] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:10:09] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:36:51] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:36:53] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:37:01] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:37:02] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:38:01] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:38:03] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:38:17] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:38:18] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:38:22] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:38:24] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:38:29] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:38:31] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:38:33] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:38:35] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:53:45] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:53:46] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:54:21] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:54:23] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:54:27] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:54:29] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:54:33] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:54:35] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:54:37] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:54:39] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:54:53] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:54:55] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 19:56:18] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 19:56:20] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 20:00:43] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 20:07:15] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 20:15:18] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 20:15:19] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 20:18:31] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\attendsure_core\settings.py changed, reloading.
+[2026-10-11 20:34:34] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 20:40:34] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-11 20:40:36] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-11 20:40:51] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 05:11:23] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 05:11:26] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 05:11:51] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 05:11:52] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 05:17:21] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 05:17:24] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 05:17:27] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 05:17:29] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 05:34:29] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 05:50:50] [ERROR] [django.request:249] - Internal Server Error: /api/classroom/roster/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+psycopg2.errors.UndefinedColumn: column subject_attendance_logs.faculty_id does not exist
+LINE 1: ...ent_id", "subject_attendance_logs"."schedule_id", "subject_a...
+                                                             ^
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\generic\base.py", line 106, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "D:\AttendSure_V3\backend\apps\api\views.py", line 305, in get
+    for log in SubjectAttendanceLog.objects.filter(
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        schedule=sched,
+        ^^^^^^^^^^^^^^^
+        attendance_date=today_date
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 390, in __iter__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 2000, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 95, in __iter__
+    results = compiler.execute_sql(
+        chunked_fetch=self.chunked_fetch, chunk_size=self.chunk_size
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\sql\compiler.py", line 1624, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+django.db.utils.ProgrammingError: column subject_attendance_logs.faculty_id does not exist
+LINE 1: ...ent_id", "subject_attendance_logs"."schedule_id", "subject_a...
+                                                             ^
+
+[2026-10-12 05:51:20] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 05:52:09] [ERROR] [django.request:249] - Internal Server Error: /api/classroom/roster/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+psycopg2.errors.UndefinedColumn: column subject_attendance_logs.faculty_id does not exist
+LINE 1: ...ent_id", "subject_attendance_logs"."schedule_id", "subject_a...
+                                                             ^
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\generic\base.py", line 106, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "D:\AttendSure_V3\backend\apps\api\views.py", line 305, in get
+    for log in SubjectAttendanceLog.objects.filter(
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        schedule=sched,
+        ^^^^^^^^^^^^^^^
+        attendance_date=today_date
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 390, in __iter__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 2000, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 95, in __iter__
+    results = compiler.execute_sql(
+        chunked_fetch=self.chunked_fetch, chunk_size=self.chunk_size
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\sql\compiler.py", line 1624, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+django.db.utils.ProgrammingError: column subject_attendance_logs.faculty_id does not exist
+LINE 1: ...ent_id", "subject_attendance_logs"."schedule_id", "subject_a...
+                                                             ^
+
+[2026-10-12 05:52:21] [ERROR] [django.request:249] - Internal Server Error: /api/classroom/roster/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+psycopg2.errors.UndefinedColumn: column subject_attendance_logs.faculty_id does not exist
+LINE 1: ...ent_id", "subject_attendance_logs"."schedule_id", "subject_a...
+                                                             ^
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\generic\base.py", line 106, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "D:\AttendSure_V3\backend\apps\api\views.py", line 305, in get
+    for log in SubjectAttendanceLog.objects.filter(
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        schedule=sched,
+        ^^^^^^^^^^^^^^^
+        attendance_date=today_date
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 390, in __iter__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 2000, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 95, in __iter__
+    results = compiler.execute_sql(
+        chunked_fetch=self.chunked_fetch, chunk_size=self.chunk_size
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\sql\compiler.py", line 1624, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+django.db.utils.ProgrammingError: column subject_attendance_logs.faculty_id does not exist
+LINE 1: ...ent_id", "subject_attendance_logs"."schedule_id", "subject_a...
+                                                             ^
+
+[2026-10-12 05:54:18] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 06:00:16] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 06:00:18] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 06:05:19] [ERROR] [django.request:249] - Internal Server Error: /api/classroom/batch-scan/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 987, in get_or_create
+    return self.get(**kwargs), False
+           ~~~~~~~~^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 639, in get
+    raise self.model.DoesNotExist(
+        "%s matching query does not exist." % self.model._meta.object_name
+    )
+apps.academics.models.SubjectAttendanceLog.DoesNotExist: SubjectAttendanceLog matching query does not exist.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+psycopg2.errors.NotNullViolation: null value in column "teacher_id" of relation "subject_attendance_logs" violates not-null constraint
+DETAIL:  Failing row contains (2, 2026-10-12, 2026-10-11 22:05:19.159748+00, UNVERIFIED, 196, 3178, null, 1).
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\generic\base.py", line 106, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\contextlib.py", line 85, in inner
+    return func(*args, **kwds)
+  File "D:\AttendSure_V3\backend\apps\api\views.py", line 499, in post
+    SubjectAttendanceLog.objects.update_or_create(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        student=student,
+        ^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        }
+        ^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 1029, in update_or_create
+    obj, created = self.select_for_update().get_or_create(
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        create_defaults, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 994, in get_or_create
+    return self.create(**params), True
+           ~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 669, in create
+    obj.save(force_insert=True, using=self.db)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 874, in save
+    self.save_base(
+    ~~~~~~~~~~~~~~^
+        using=using,
+        ^^^^^^^^^^^^
+    ...<2 lines>...
+        update_fields=update_fields,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 966, in save_base
+    updated = self._save_table(
+        raw,
+    ...<4 lines>...
+        update_fields,
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 1169, in _save_table
+    results = self._do_insert(
+        cls._base_manager, using, insert_fields, returning_fields, raw
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 1220, in _do_insert
+    return manager._insert(
+           ~~~~~~~~~~~~~~~^
+        [self],
+        ^^^^^^^
+    ...<3 lines>...
+        raw=raw,
+        ^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 1918, in _insert
+    return query.get_compiler(using=using).execute_sql(returning_fields)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\sql\compiler.py", line 1925, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+django.db.utils.IntegrityError: null value in column "teacher_id" of relation "subject_attendance_logs" violates not-null constraint
+DETAIL:  Failing row contains (2, 2026-10-12, 2026-10-11 22:05:19.159748+00, UNVERIFIED, 196, 3178, null, 1).
+
+[2026-10-12 06:22:30] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 06:22:34] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 06:28:29] [ERROR] [django.request:249] - Internal Server Error: /api/classroom/batch-scan/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 987, in get_or_create
+    return self.get(**kwargs), False
+           ~~~~~~~~^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 639, in get
+    raise self.model.DoesNotExist(
+        "%s matching query does not exist." % self.model._meta.object_name
+    )
+apps.academics.models.SubjectAttendanceLog.DoesNotExist: SubjectAttendanceLog matching query does not exist.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+psycopg2.errors.NotNullViolation: null value in column "teacher_id" of relation "subject_attendance_logs" violates not-null constraint
+DETAIL:  Failing row contains (3, 2026-10-12, 2026-10-11 22:28:29.118924+00, UNVERIFIED, 209, 913, null, 1).
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\generic\base.py", line 106, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\contextlib.py", line 85, in inner
+    return func(*args, **kwds)
+  File "D:\AttendSure_V3\backend\apps\api\views.py", line 530, in post
+    SubjectAttendanceLog.objects.update_or_create(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        student=student,
+        ^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        }
+        ^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 1029, in update_or_create
+    obj, created = self.select_for_update().get_or_create(
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        create_defaults, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 994, in get_or_create
+    return self.create(**params), True
+           ~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 669, in create
+    obj.save(force_insert=True, using=self.db)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 874, in save
+    self.save_base(
+    ~~~~~~~~~~~~~~^
+        using=using,
+        ^^^^^^^^^^^^
+    ...<2 lines>...
+        update_fields=update_fields,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 966, in save_base
+    updated = self._save_table(
+        raw,
+    ...<4 lines>...
+        update_fields,
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 1169, in _save_table
+    results = self._do_insert(
+        cls._base_manager, using, insert_fields, returning_fields, raw
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 1220, in _do_insert
+    return manager._insert(
+           ~~~~~~~~~~~~~~~^
+        [self],
+        ^^^^^^^
+    ...<3 lines>...
+        raw=raw,
+        ^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 1918, in _insert
+    return query.get_compiler(using=using).execute_sql(returning_fields)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\sql\compiler.py", line 1925, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+django.db.utils.IntegrityError: null value in column "teacher_id" of relation "subject_attendance_logs" violates not-null constraint
+DETAIL:  Failing row contains (3, 2026-10-12, 2026-10-11 22:28:29.118924+00, UNVERIFIED, 209, 913, null, 1).
+
+[2026-10-12 06:28:58] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 06:29:14] [ERROR] [django.request:249] - Internal Server Error: /api/classroom/batch-scan/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 987, in get_or_create
+    return self.get(**kwargs), False
+           ~~~~~~~~^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 639, in get
+    raise self.model.DoesNotExist(
+        "%s matching query does not exist." % self.model._meta.object_name
+    )
+apps.academics.models.SubjectAttendanceLog.DoesNotExist: SubjectAttendanceLog matching query does not exist.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+psycopg2.errors.NotNullViolation: null value in column "teacher_id" of relation "subject_attendance_logs" violates not-null constraint
+DETAIL:  Failing row contains (4, 2026-10-12, 2026-10-11 22:29:14.714209+00, UNVERIFIED, 209, 913, null, 1).
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\generic\base.py", line 106, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\contextlib.py", line 85, in inner
+    return func(*args, **kwds)
+  File "D:\AttendSure_V3\backend\apps\api\views.py", line 530, in post
+    SubjectAttendanceLog.objects.update_or_create(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        student=student,
+        ^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        }
+        ^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 1029, in update_or_create
+    obj, created = self.select_for_update().get_or_create(
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        create_defaults, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 994, in get_or_create
+    return self.create(**params), True
+           ~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 669, in create
+    obj.save(force_insert=True, using=self.db)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 874, in save
+    self.save_base(
+    ~~~~~~~~~~~~~~^
+        using=using,
+        ^^^^^^^^^^^^
+    ...<2 lines>...
+        update_fields=update_fields,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 966, in save_base
+    updated = self._save_table(
+        raw,
+    ...<4 lines>...
+        update_fields,
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 1169, in _save_table
+    results = self._do_insert(
+        cls._base_manager, using, insert_fields, returning_fields, raw
+    )
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 1220, in _do_insert
+    return manager._insert(
+           ~~~~~~~~~~~~~~~^
+        [self],
+        ^^^^^^^
+    ...<3 lines>...
+        raw=raw,
+        ^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 1918, in _insert
+    return query.get_compiler(using=using).execute_sql(returning_fields)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\sql\compiler.py", line 1925, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+django.db.utils.IntegrityError: null value in column "teacher_id" of relation "subject_attendance_logs" violates not-null constraint
+DETAIL:  Failing row contains (4, 2026-10-12, 2026-10-11 22:29:14.714209+00, UNVERIFIED, 209, 913, null, 1).
+
+[2026-10-12 06:47:03] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 06:47:06] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 07:11:27] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 07:42:55] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 08:39:02] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:12:30] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:22:55] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 09:22:56] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:23:04] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 09:23:06] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:23:08] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 09:23:09] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:23:23] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 09:23:25] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:23:48] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 09:23:49] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:23:56] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 09:23:58] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:24:22] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:25:10] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 09:25:12] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:25:21] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:26:06] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 09:26:07] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:26:17] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 09:26:18] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:26:23] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 09:26:24] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:26:46] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 09:26:47] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:27:02] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 09:27:03] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:38:17] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 09:50:11] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 09:50:13] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:28:20] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:28:25] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:28:28] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:28:30] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:29:01] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:29:04] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:29:18] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:29:19] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:29:23] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:29:25] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:30:19] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:30:21] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:30:25] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:30:26] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:30:40] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:30:42] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:33:00] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 13:33:01] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:40:59] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:41:01] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:41:25] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 13:41:26] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:42:04] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 13:42:06] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:42:08] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-12 13:42:10] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 13:46:36] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 14:05:35] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 14:05:36] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 14:17:54] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 14:17:56] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 14:18:16] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 14:18:18] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 14:18:35] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 14:23:46] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 1011, in create
+    instance = ModelClass._default_manager.create(**validated_data)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 667, in create
+    obj = self.model(**kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 590, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: User() got unexpected keyword arguments: 'role'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 19, in create
+    self.perform_create(serializer)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 24, in perform_create
+    serializer.save()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 210, in save
+    self.instance = self.create(validated_data)
+                    ~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 1030, in create
+    raise TypeError(msg)
+TypeError: Got a `TypeError` when calling `User.objects.create()`. This may be because you have a writable field on the serializer class that is not a valid argument to `User.objects.create()`. You may need to make the field read-only, or override the UserManagementSerializer.create() method to handle this correctly.
+Original exception was:
+ Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 1011, in create
+    instance = ModelClass._default_manager.create(**validated_data)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\query.py", line 667, in create
+    obj = self.model(**kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\db\models\base.py", line 590, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: User() got unexpected keyword arguments: 'role'
+
+[2026-10-12 14:28:27] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\serializers.py changed, reloading.
+[2026-10-12 14:28:29] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 14:31:17] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 15:10:58] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 15:11:01] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 15:11:06] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 15:11:08] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 15:11:19] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 15:11:21] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 15:11:23] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 15:11:25] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 15:11:27] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 15:11:29] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 15:13:50] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 15:13:52] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 15:15:52] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 15:15:54] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 18:37:10] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 19:06:26] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 19:06:31] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 19:12:30] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\serializers.py changed, reloading.
+[2026-10-12 19:12:33] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 19:13:01] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\serializers.py changed, reloading.
+[2026-10-12 19:13:04] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 19:20:32] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 43, in list
+    return self.get_paginated_response(serializer.data)
+                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 809, in data
+    ret = super().data
+          ^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 251, in data
+    self._data = self.to_representation(self.instance)
+                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 728, in to_representation
+    self.child.to_representation(item) for item in iterable
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 552, in to_representation
+    ret[field.field_name] = field.to_representation(attribute)
+                            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\fields.py", line 1928, in to_representation
+    method = getattr(self.parent, self.method_name)
+AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_url'
+[2026-10-12 19:20:35] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 43, in list
+    return self.get_paginated_response(serializer.data)
+                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 809, in data
+    ret = super().data
+          ^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 251, in data
+    self._data = self.to_representation(self.instance)
+                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 728, in to_representation
+    self.child.to_representation(item) for item in iterable
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 552, in to_representation
+    ret[field.field_name] = field.to_representation(attribute)
+                            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\fields.py", line 1928, in to_representation
+    method = getattr(self.parent, self.method_name)
+AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_url'
+[2026-10-12 19:20:38] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 43, in list
+    return self.get_paginated_response(serializer.data)
+                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 809, in data
+    ret = super().data
+          ^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 251, in data
+    self._data = self.to_representation(self.instance)
+                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 728, in to_representation
+    self.child.to_representation(item) for item in iterable
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 552, in to_representation
+    ret[field.field_name] = field.to_representation(attribute)
+                            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\fields.py", line 1928, in to_representation
+    method = getattr(self.parent, self.method_name)
+AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_url'
+[2026-10-12 19:20:41] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 43, in list
+    return self.get_paginated_response(serializer.data)
+                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 809, in data
+    ret = super().data
+          ^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 251, in data
+    self._data = self.to_representation(self.instance)
+                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 728, in to_representation
+    self.child.to_representation(item) for item in iterable
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 552, in to_representation
+    ret[field.field_name] = field.to_representation(attribute)
+                            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\fields.py", line 1928, in to_representation
+    method = getattr(self.parent, self.method_name)
+AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_url'
+[2026-10-12 19:20:44] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 43, in list
+    return self.get_paginated_response(serializer.data)
+                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 809, in data
+    ret = super().data
+          ^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 251, in data
+    self._data = self.to_representation(self.instance)
+                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 728, in to_representation
+    self.child.to_representation(item) for item in iterable
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 552, in to_representation
+    ret[field.field_name] = field.to_representation(attribute)
+                            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\fields.py", line 1928, in to_representation
+    method = getattr(self.parent, self.method_name)
+AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_url'
+[2026-10-12 19:20:54] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:03:17] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:04:20] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 43, in list
+    return self.get_paginated_response(serializer.data)
+                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 809, in data
+    ret = super().data
+          ^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 251, in data
+    self._data = self.to_representation(self.instance)
+                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 728, in to_representation
+    self.child.to_representation(item) for item in iterable
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 552, in to_representation
+    ret[field.field_name] = field.to_representation(attribute)
+                            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\fields.py", line 1928, in to_representation
+    method = getattr(self.parent, self.method_name)
+AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_url'
+[2026-10-12 23:04:22] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 43, in list
+    return self.get_paginated_response(serializer.data)
+                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 809, in data
+    ret = super().data
+          ^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 251, in data
+    self._data = self.to_representation(self.instance)
+                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 728, in to_representation
+    self.child.to_representation(item) for item in iterable
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 552, in to_representation
+    ret[field.field_name] = field.to_representation(attribute)
+                            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\fields.py", line 1928, in to_representation
+    method = getattr(self.parent, self.method_name)
+AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_url'
+[2026-10-12 23:04:25] [ERROR] [django.request:249] - Internal Server Error: /api/users/
+Traceback (most recent call last):
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\core\handlers\base.py", line 198, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\viewsets.py", line 125, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\mixins.py", line 43, in list
+    return self.get_paginated_response(serializer.data)
+                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 809, in data
+    ret = super().data
+          ^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 251, in data
+    self._data = self.to_representation(self.instance)
+                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 728, in to_representation
+    self.child.to_representation(item) for item in iterable
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\serializers.py", line 552, in to_representation
+    ret[field.field_name] = field.to_representation(attribute)
+                            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\vc\AppData\Local\Programs\Python\Python314\Lib\site-packages\rest_framework\fields.py", line 1928, in to_representation
+    method = getattr(self.parent, self.method_name)
+AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_url'
+[2026-10-12 23:08:11] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\serializers.py changed, reloading.
+[2026-10-12 23:08:15] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:08:19] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\serializers.py changed, reloading.
+[2026-10-12 23:08:21] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:08:59] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:34:56] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 23:35:02] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:35:07] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 23:35:09] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:35:16] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 23:35:19] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:39:17] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 23:39:21] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:39:31] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 23:39:33] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:40:08] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 23:40:11] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-12 23:59:12] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-12 23:59:18] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 00:00:06] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\academics\services\sf1_service.py changed, reloading.
+[2026-10-13 00:00:10] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader

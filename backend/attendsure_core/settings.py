@@ -15,7 +15,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment file (.env) from backend root
+# Load environment file (.env) from backend root directory
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 # Security: Refuse to boot in production if SECRET_KEY is missing
@@ -29,7 +29,7 @@ if not SECRET_KEY and not DEBUG:
 if not SECRET_KEY:
     SECRET_KEY = 'django-insecure-attendsure-dev-key-never-use-in-production'
 
-# Ensure dedicated logs directory exists for SysAdmin maintenance
+# Ensure dedicated logs directory exists for SysAdmin maintenance and audit trails
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
 os.makedirs(LOGS_DIR, exist_ok=True)
 
@@ -45,10 +45,14 @@ if env_hosts:
 else:
     ALLOWED_HOSTS = []
 
-# Core infrastructure hosts required for local, school LAN, and domain routing
+# Core infrastructure hosts required for local, school LAN, and domain routing:
+# - lapasan.attendsure.com.ph / wildcard: Official multi-school domain routing
+# - 10.16.115.49: Current active Wi-Fi IP for direct mobile phone testing
+# - 172.20.140.221: Dedicated school campus server IP
 REQUIRED_HOSTS = [
     'lapasan.attendsure.com.ph',
     '.attendsure.com.ph',        # Wildcard matching all school subdomains
+    '10.16.115.49',              # Active Wi-Fi test interface
     '172.20.140.221',            # School Local Server IP
     'localhost',
     '127.0.0.1',
@@ -59,7 +63,7 @@ for host in REQUIRED_HOSTS:
     if host not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(host)
 
-# Permit all hosts in local development / debugging
+# Permit all hosts in local development / debugging to avoid mobile connection drops
 if DEBUG and '*' not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append('*')
 
@@ -68,12 +72,15 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
 
-# CSRF Trusted Origins for Web Portals, Gate Kiosks, and Subdomains
+# CSRF Trusted Origins for Web Portals, Gate Kiosks, and Mobile API Handshakes
 CSRF_TRUSTED_ORIGINS = [
     'http://lapasan.attendsure.com.ph:8000',
     'http://lapasan.attendsure.com.ph:5173',
     'http://lapasan.attendsure.com.ph',
     'https://lapasan.attendsure.com.ph',
+    'http://10.16.115.49:8000',
+    'http://10.16.115.49:8081',
+    'http://10.16.115.49',
     'http://172.20.140.221:8000',
     'http://172.20.140.221:5173',
     'http://172.20.140.221',
@@ -98,15 +105,17 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    # Third-party tools
+    # Third-party scalable extensions
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
 
-    # AttendSure V3 local modules
+    # AttendSure V3 local domain modules
     'apps.core',
     'apps.academics.apps.AcademicsConfig',
     'apps.api.apps.ApiConfig',
+    'apps.scanners.apps.ScannersConfig',
+    'apps.telemetry.apps.TelemetryConfig',
 ]
 
 
@@ -152,6 +161,8 @@ WSGI_APPLICATION = 'attendsure_core.wsgi.application'
 # 5. DATABASE ARCHITECTURE (POSTGRESQL & CONNECTION POOLING)
 # ==============================================================================
 
+# CONN_MAX_AGE keeps database connections open for 60 seconds.
+# This eliminates TCP reconnect overhead on thousands of simultaneous requests.
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -160,16 +171,67 @@ DATABASES = {
         'PASSWORD': os.getenv('DB_PASSWORD', ''),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
-        'CONN_MAX_AGE': 0,  # Persistent connection pooling (60s)
+        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', 60)),  # Persistent connection pooling
         'OPTIONS': {
             'connect_timeout': 5,
         },
     }
 }
 
+# ==============================================================================
+# 6. IN-MEMORY CACHE (REDIS WITH LOCAL RAM FALLBACK)
+# ==============================================================================
+
+REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
+
+if DEBUG:
+    # Local Development: Uses your laptop RAM directly (no Redis server needed)
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "attendsure-local-ram-cache",
+        }
+    }
+else:
+    # Production / High-Scale: Uses fast external Redis server
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "CONNECTION_POOL_KWARGS": {"max_connections": 100},
+                "SOCKET_CONNECT_TIMEOUT": 5,
+                "SOCKET_TIMEOUT": 5,
+            },
+            "KEY_PREFIX": "attendsure",
+        }
+    }
+
 
 # ==============================================================================
-# 6. REST API & HARDWARE RATE LIMITING (THROTTLING)
+# 7. ASYNCHRONOUS BACKGROUND TASKS (CELERY & REDIS QUEUE)
+# ==============================================================================
+
+# Celery handles heavy operations in the background:
+# - Batch writes for gate RFID taps
+# - Processing high-frequency GPS telemetry
+# - SMS dispatch to parents
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Manila'
+CELERY_ENABLE_UTC = False
+
+# Rate limiting and worker concurrency settings
+CELERY_WORKER_CONCURRENCY = int(os.getenv('CELERY_WORKER_CONCURRENCY', 4))
+CELERY_WORKER_PREFETCH_MULTIPLIER = 4  # Prefetches tasks for fast throughput
+
+
+# ==============================================================================
+# 8. REST API & HARDWARE RATE LIMITING (THROTTLING)
 # ==============================================================================
 
 REST_FRAMEWORK = {
@@ -187,8 +249,8 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '180/minute',       # Gate turnstiles and unauthenticated hardware
-        'user': '1200/minute',      # Authenticated staff and web portal requests
+        'anon': '300/minute',       # High capacity for hardware gate turnstiles
+        'user': '1800/minute',      # High capacity for authenticated teacher telemetry pings
     },
 }
 
@@ -202,6 +264,9 @@ else:
         'https://lapasan.attendsure.com.ph',
         'http://lapasan.attendsure.com.ph:5173',
         'http://lapasan.attendsure.com.ph:8000',
+        'http://10.16.115.49:8000',
+        'http://10.16.115.49:8081',
+        'http://10.16.115.49',
         'http://172.20.140.221',
         'http://172.20.140.221:5173',
         'http://172.20.140.221:8000',
@@ -211,10 +276,10 @@ CORS_ALLOW_CREDENTIALS = True
 
 
 # ==============================================================================
-# 7. ATTENDSURE HARDWARE, SMS & IOT PARAMETERS
+# 9. ATTENDSURE HARDWARE, SMS & IOT PARAMETERS
 # ==============================================================================
 
-# Hardware Anti-Passback Cooldown (Seconds and Minutes)
+# Hardware Anti-Passback Cooldown (Prevents duplicate taps on turnstiles)
 GATE_DEBOUNCE_SECONDS = int(os.getenv('GATE_DEBOUNCE_SECONDS', 10))
 GATE_DEBOUNCE_MINUTES = int(os.getenv('GATE_DEBOUNCE_MINUTES', 3))
 
@@ -230,7 +295,7 @@ GSM_MODEM_BAUDRATE = int(os.getenv('GSM_MODEM_BAUDRATE', 9600))
 
 
 # ==============================================================================
-# 8. SYSTEM MAINTENANCE & ROTATING LOGGERS (SYSADMIN AUDIT TRAIL)
+# 10. SYSTEM MAINTENANCE & ROTATING LOGGERS (SYSADMIN AUDIT TRAIL)
 # ==============================================================================
 
 LOGGING = {
@@ -316,7 +381,7 @@ LOGGING = {
 
 
 # ==============================================================================
-# 9. LOCALIZATION & REGIONAL STANDARDS
+# 11. LOCALIZATION & REGIONAL STANDARDS
 # ==============================================================================
 
 # Time Localization: Philippine Standard Time (PST, UTC+8) for DepEd SF2 and CSC 48
@@ -327,7 +392,7 @@ USE_TZ = True
 
 
 # ==============================================================================
-# 10. MEDIA & STATIC STORAGE
+# 12. MEDIA & STATIC STORAGE
 # ==============================================================================
 
 STATIC_URL = '/static/'
@@ -336,7 +401,7 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# File upload restrictions (2.5 MB maximum payload)
+# File upload restrictions (5 MB maximum payload)
 DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 2621440  # 2.5 MB
 
@@ -344,7 +409,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # ==============================================================================
-# 11. PRODUCTION SECURITY HEADERS
+# 13. PRODUCTION SECURITY HEADERS
 # ==============================================================================
 
 if not DEBUG:

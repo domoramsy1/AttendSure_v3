@@ -13,24 +13,31 @@ class IsSystemAdmin(permissions.BasePermission):
 
 class IsAdviserOrAdmin(permissions.BasePermission):
     """
-    Restricts DepEd SF1 and sensitive learner records:
-    - Admins have full access.
-    - Facultys can only view learners enrolled in their advisory section.
+    Grants access to DepEd SF1, SF2, and learner records:
+    - Admins, Principals, and Department Heads have full access.
+    - Teachers have read-only access (GET, HEAD, OPTIONS) to view DepEd reports across sections.
     """
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated)
 
     def has_object_permission(self, request, view, obj):
+        if not (request.user and request.user.is_authenticated):
+            return False
         if request.user.is_superuser:
             return True
+
         profile = getattr(request.user, 'profile', None)
-        if not profile:
-            return False
-        if profile.role == 'ADMIN':
+        role = getattr(profile, 'role', 'TEACHER') if profile else 'TEACHER'
+
+        if role in ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD']:
             return True
-        if profile.role == 'TEACHER' and profile.faculty:
-            # Check if faculty is the registered adviser of the section
+
+        if request.method in permissions.SAFE_METHODS and role == 'TEACHER':
+            return True
+
+        if role == 'TEACHER' and getattr(profile, 'faculty', None):
             return getattr(obj, 'adviser_id', None) == profile.faculty.id
+
         return False
 
 

@@ -1,103 +1,118 @@
-from datetime import date
-from django.utils import timezone
-from apps.academics.models import Section, Enrollment, SchoolProfile, Student, FacultyProfile
+# D:\AttendSure_V3\backend\apps\academics\services\sf1_service.py
 
-def calculate_age(birthdate, ref_date=None):
+from datetime import date, datetime, timedelta
+from apps.academics.models import Section, Enrollment, SchoolProfile, AcademicYear
+
+
+def calculate_age_as_of_june(birthdate, year):
     if not birthdate:
         return ""
-    if not ref_date:
-        ref_date = timezone.now().date()
-    age = ref_date.year - birthdate.year - (
-        (ref_date.month, ref_date.day) < (birthdate.month, birthdate.day)
-    )
-    return max(0, age)
+    try:
+        june_1 = date(int(year), 6, 1)
+        days_ahead = (4 - june_1.weekday()) % 7
+        first_friday = june_1 + timedelta(days=days_ahead)
 
-def format_full_name(student):
-    last = student.last_name.strip().upper() if student.last_name else ""
-    first = student.first_name.strip().upper() if student.first_name else ""
-    suffix = f" {student.suffix.strip().upper()}" if student.suffix else ""
-    mid = f" {student.middle_name.strip().upper()}" if student.middle_name else ""
-    return f"{last}, {first}{suffix}{mid}".strip()
+        if isinstance(birthdate, str):
+            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y'):
+                try:
+                    birthdate = datetime.strptime(birthdate, fmt).date()
+                    break
+                except ValueError:
+                    pass
 
-def get_sf1_data(section_id):
-    section = Section.objects.select_related('grade_level', 'academic_year', 'adviser').get(id=section_id)
+        if not isinstance(birthdate, (date, datetime)):
+            return ""
+
+        age = first_friday.year - birthdate.year - (
+            (first_friday.month, first_friday.day) < (birthdate.month, birthdate.day)
+        )
+        return max(0, age)
+    except Exception:
+        return ""
+
+
+def get_sf1_data(section_id, school_year=None, as_of_date=None):
+    section = Section.objects.select_related('grade_level', 'academic_year', 'adviser').filter(id=section_id).first()
+    if not section:
+        raise ValueError(f"Section {section_id} not found.")
+
     school = SchoolProfile.objects.first()
-    sy = section.academic_year
+    sy_code = str(school_year or (section.academic_year.code if section.academic_year else "2026-2027"))
+    target_year = int(sy_code.split('-')[0]) if '-' in sy_code else 2026
 
-    # 100% Dynamic Database Fetch
     enrollments = Enrollment.objects.filter(
         section=section,
-        status='ENROLLED'
+        status__in=['ENROLLED', 'ACTIVE']
     ).select_related('student').order_by('student__last_name', 'student__first_name')
 
-    students = [e.student for e in enrollments if e.student and e.student.is_active]
-
-    if not students:
-        students = list(Student.objects.filter(is_active=True).order_by('last_name', 'first_name'))
-
+    combined = []
     males = []
     females = []
 
-    for s in students:
-        raw_sex = str(getattr(s, 'sex', getattr(s, 'sex', '')) or '').strip().upper()
-        is_male = raw_sex in ['M', 'MALE']
+    for e in enrollments:
+        s = e.student
+        if not s:
+            continue
 
-        learner_dict = {
+        raw_sex = str(getattr(s, 'sex', '') or '').strip().upper()
+        is_m = raw_sex.startswith('M')
+
+        mid = f" {s.middle_name}" if getattr(s, 'middle_name', '') else ""
+        suf = f" {s.suffix}" if getattr(s, 'suffix', '') else ""
+        full_name = f"{s.last_name}, {s.first_name}{mid}{suf}".strip()
+
+        b_str = ""
+        if s.birthdate:
+            try:
+                b_str = s.birthdate.strftime('%m/%d/%Y') if isinstance(s.birthdate, (date, datetime)) else str(s.birthdate)
+            except Exception:
+                b_str = str(s.birthdate)
+
+        learner = {
             'id': s.id,
-            'lrn': s.lrn or '',
-            'name': format_full_name(s),
-            'last_name': s.last_name.upper() if s.last_name else '',
-            'first_name': s.first_name.upper() if s.first_name else '',
-            'sex': 'M' if is_male else 'F',
-            'birthdate': s.birthdate.strftime('%m/%d/%Y') if s.birthdate else '',
-            'age': calculate_age(s.birthdate) if s.birthdate else '',
-            'mother_tongue': s.mother_tongue or '',
-            'ethnic_group': s.ethnic_group or '',
-            'religion': s.religion or '',
-            'house_street': s.house_street_sitio or '',
-            'barangay': s.barangay or '',
-            'municipality_city': s.municipality_city or '',
-            'province': s.province or '',
-            'father_name': s.father_name.upper() if s.father_name else '',
-            'mother_maiden_name': s.mother_maiden_name.upper() if s.mother_maiden_name else '',
-            'guardian_name': s.guardian_name.upper() if s.guardian_name else '',
-            'guardian_relationship': s.guardian_relationship or '',
-            'parent_contact': s.parent_contact or '',
-            'remarks': ''
+            'lrn': str(s.lrn or '').strip(),
+            'name': full_name,
+            'sex': 'M' if is_m else 'F',
+            'birthdate': b_str,
+            'age': calculate_age_as_of_june(s.birthdate, target_year),
+            'birth_place': str(getattr(s, 'birth_place', '') or getattr(s, 'province', '') or '').strip(),
+            'mother_tongue': str(getattr(s, 'mother_tongue', '') or '').strip(),
+            'ethnic_group': str(getattr(s, 'ethnic_group', '') or '').strip(),
+            'religion': str(getattr(s, 'religion', '') or '').strip(),
+            'house_street': str(getattr(s, 'house_street_sitio', '') or getattr(s, 'house_street', '') or '').strip(),
+            'barangay': str(getattr(s, 'barangay', '') or '').strip(),
+            'municipality_city': str(getattr(s, 'municipality_city', '') or '').strip(),
+            'province': str(getattr(s, 'province', '') or '').strip(),
+            'father_name': str(getattr(s, 'father_name', '') or '').strip(),
+            'mother_maiden_name': str(getattr(s, 'mother_maiden_name', '') or '').strip(),
+            'guardian_name': str(getattr(s, 'guardian_name', '') or '').strip(),
+            'guardian_relationship': str(getattr(s, 'guardian_relationship', '') or '').strip(),
+            'parent_contact': str(getattr(s, 'parent_contact', '') or getattr(s, 'guardian_phone', '') or '').strip(),
+            'remarks': str(getattr(e, 'remarks', '') or getattr(s, 'remarks', '') or '').strip(),
         }
 
-        if is_male:
-            males.append(learner_dict)
+        combined.append(learner)
+        if is_m:
+            males.append(learner)
         else:
-            females.append(learner_dict)
-
-    males.sort(key=lambda x: (x['last_name'], x['first_name']))
-    females.sort(key=lambda x: (x['last_name'], x['first_name']))
-
-    adviser_name = ""
-    if section.adviser:
-        adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip().upper()
-
-    school_head_name = ""
-    if school and school.principal_name:
-        school_head_name = school.principal_name.strip().upper()
+            females.append(learner)
 
     return {
-        'school_id': school.school_id if school else '',
-        'school_name': school.school_name if school else '',
-        'region': school.region if school else '',
-        'division': school.division if school else '',
-        'district': school.district if school else '',
-        'left_logo': school.left_logo if (school and school.left_logo) else None,
-        'right_logo': school.right_logo if (school and school.right_logo) else None,
-        'academic_year': sy.code if sy else '',
-        'section_name': section.name if section else '',
-        'grade_level': section.grade_level.name if (section and section.grade_level) else '',
-        'adviser_name': adviser_name,
-        'school_head': school_head_name,
+        'school_id': str(school.school_id or '') if school else '',
+        'school_name': str(school.school_name or '') if school else '',
+        'region': str(school.region or '') if school else '',
+        'division': str(school.division or '') if school else '',
+        'district': str(school.district or '') if school else '',
+        'academic_year': sy_code,
+        'grade_level': section.grade_level.name if section.grade_level else '',
+        'section_name': section.name,
+        'adviser_name': f"{section.adviser.first_name} {section.adviser.last_name}".strip() if section.adviser else '',
+        'school_head': str(school.principal_name or '').upper() if school else '',
+        'students': combined,
+        'learners': combined,
         'males': males,
         'females': females,
         'total_male': len(males),
         'total_female': len(females),
-        'total_combined': len(males) + len(females)
+        'total_combined': len(combined),
     }

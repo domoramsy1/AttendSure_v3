@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7.2-alpine
+    container_name: attendsure_redis
+    command: redis-server --appendonly yes --requirepass attendsure_redis_secret
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+
+  db:
+    image: postgres:16-alpine
+    container_name: attendsure_db
+    environment:
+      POSTGRES_DB: attendsure_db
+      POSTGRES_USER: attendsure_user
+      POSTGRES_PASSWORD: attendsure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: always
+
+  web_blue:
+    build: ./backend
+    container_name: attendsure_web_blue
+    command: gunicorn attendsure_core.wsgi:application --bind 0.0.0.0:8001 --workers 4 --threads 2
+    ports:
+      - "8001:8001"
+    environment:
+      - DB_HOST=db
+      - REDIS_URL=redis://:attendsure_redis_secret@redis:6379/0
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+  web_green:
+    build: ./backend
+    container_name: attendsure_web_green
+    command: gunicorn attendsure_core.wsgi:application --bind 0.0.0.0:8002 --workers 4 --threads 2
+    ports:
+      - "8002:8002"
+    environment:
+      - DB_HOST=db
+      - REDIS_URL=redis://:attendsure_redis_secret@redis:6379/0
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+  celery_worker:
+    build: ./backend
+    container_name: attendsure_celery_worker
+    command: celery -A attendsure_core worker -l info --concurrency=4
+    environment:
+      - DB_HOST=db
+      - REDIS_URL=redis://:attendsure_redis_secret@redis:6379/0
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+  celery_beat:
+    build: ./backend
+    container_name: attendsure_celery_beat
+    command: celery -A attendsure_core beat -l info
+    environment:
+      - DB_HOST=db
+      - REDIS_URL=redis://:attendsure_redis_secret@redis:6379/0
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+volumes:
+  redis_data:
+  postgres_data:

@@ -8,13 +8,12 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from django.utils import timezone
-from apps.gate.models import Kiosk  # adjust import according to your app structure
+import hmac
+
+from apps.academics.models import IoTKiosk
 
 class KioskHeartbeatView(APIView):
-    """
-    Accepts periodic keep-alive telemetry from physical gate kiosks (Raspberry Pi / ESP32).
-    Authenticates via kiosk_code and secret_key.
-    """
+    """Accepts keep-alive telemetry from physical gate kiosks (Raspberry Pi / ESP32)."""
     permission_classes = [AllowAny]
     authentication_classes = []
 
@@ -28,22 +27,31 @@ class KioskHeartbeatView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        kiosk = Kiosk.objects.filter(kiosk_code=kiosk_code, secret_key=secret_key).first()
-        if not kiosk:
+        try:
+            kiosk = IoTKiosk.objects.get(kiosk_code=kiosk_code, is_active=True)
+        except IoTKiosk.DoesNotExist:
             return Response(
-                {"error": "Terminal not registered or invalid secret key."},
+                {"error": "Terminal not registered or inactive."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        kiosk.status = request.data.get('status', 'ONLINE')
-        kiosk.last_heartbeat = timezone.now()
-        if 'ip_address' in request.data:
-            kiosk.ip_address = request.data['ip_address']
-        kiosk.save(update_fields=['status', 'last_heartbeat', 'ip_address'])
+        is_valid_secret = (
+            kiosk.secret_hash == secret_key or
+            hmac.compare_digest(kiosk.secret_hash.encode('utf-8'), str(secret_key).encode('utf-8'))
+        )
+        if not is_valid_secret:
+            return Response(
+                {"error": "Hardware authentication key invalid."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        now = timezone.now()
+        kiosk.last_ping = now
+        kiosk.save(update_fields=['last_ping'])
 
         return Response({
-            "status": "OK",
+            "status": "ONLINE",
             "kiosk_code": kiosk.kiosk_code,
-            "kiosk_name": kiosk.name,
-            "server_time": timezone.now().isoformat()
+            "terminal_name": kiosk.terminal_name,
+            "server_time": now.isoformat()
         }, status=status.HTTP_200_OK)

@@ -1,8 +1,14 @@
+"""
+AttendSure V3 - API Serializers & Schema Validators
+File: backend/apps/api/serializers.py
+"""
+
 import base64
 import os
-import uuid
 import re
+import uuid
 from datetime import date, timedelta
+
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.utils import timezone
@@ -11,19 +17,20 @@ from rest_framework import serializers
 from apps.academics.models import (
     AuditLog,
     Enrollment,
+    FacultyProfile,
     GatePass,
     GradeLevel,
     IoTKiosk,
     Schedule,
     SchoolProfile,
     Section,
-    FacultyProfile,
+    SmsOutbox,
     Student,
     Subject,
     UserProfile,
-    SmsOutbox,
     USER_ROLE_CHOICES,
 )
+
 
 # ============================================================================
 # SAFE IMAGE FIELD & STORAGE VALIDATION
@@ -48,91 +55,22 @@ def safe_photo_url(photo_field, request=None):
     return None
 
 
-
-class SmsOutboxSerializer(serializers.ModelSerializer):
-    """
-    Serializes SmsOutbox records. Normalizes incoming field names
-    and assigns sensible defaults for single/manual dispatches.
-    """
-    recipient_name = serializers.CharField(required=False, default='Authorized Contact', allow_blank=True)
-    trigger_event = serializers.CharField(required=False, default='MANUAL', allow_blank=True)
-    category = serializers.CharField(required=False, default='MANUAL', allow_blank=True)
-    priority = serializers.CharField(required=False, default='HIGH', allow_blank=True)
-    status = serializers.CharField(required=False, default='PENDING', allow_blank=True)
-
-    class Meta:
-        model = SmsOutbox
-        fields = '__all__'
-
-    def to_internal_value(self, data):
-        normalized = {}
-        for key, val in data.items():
-            if val is not None:
-                normalized[key] = val
-
-        # 1. Normalize recipient phone number
-        raw_phone = (
-            normalized.get('recipient_number')
-            or normalized.get('phone')
-            or normalized.get('recipient')
-            or normalized.get('number')
-            or normalized.get('contact_number')
-            or ''
-        )
-        if raw_phone:
-            # Strip spaces, hyphens, and parenthesis
-            clean_phone = re.sub(r'[\s\-\(\)]', '', str(raw_phone).strip())
-            # Convert +639 to 09 format
-            if clean_phone.startswith('+63'):
-                clean_phone = '0' + clean_phone[3:]
-            elif clean_phone.startswith('63') and len(clean_phone) == 12:
-                clean_phone = '0' + clean_phone[2:]
-            normalized['recipient_number'] = clean_phone
-
-        # 2. Normalize message body
-        msg_text = (
-            normalized.get('message_body')
-            or normalized.get('message')
-            or normalized.get('text')
-            or normalized.get('content')
-            or normalized.get('body')
-            or ''
-        )
-        if msg_text:
-            normalized['message_body'] = str(msg_text).strip()
-
-        # 3. Normalize recipient name
-        name = (
-            normalized.get('recipient_name')
-            or normalized.get('name')
-            or normalized.get('student_name')
-            or 'Authorized Contact'
-        )
-        normalized['recipient_name'] = str(name).strip()
-
-        # 4. Fill defaults for required system fields
-        normalized.setdefault('trigger_event', 'MANUAL')
-        normalized.setdefault('category', normalized['trigger_event'])
-        normalized.setdefault('priority', 'HIGH')
-        normalized.setdefault('status', 'PENDING')
-
-        return super().to_internal_value(normalized)
-
-
 class Base64ImageField(serializers.ImageField):
     """
     Accepts base64 image strings from frontend uploads.
     If the frontend sends an existing file path or URL,
-    it keeps the current image without failing validation.
+    it retains the current image without failing validation.
     """
     def to_internal_value(self, data):
         if isinstance(data, str):
             if data.startswith('data:image'):
                 try:
                     header, base64_str = data.split(';base64,')
-                    ext = header.split('/')[-1]
-                    if ext == 'jpeg':
+                    ext = header.split(';')[0].split('/')[-1]
+                    if ext.lower() in ('jpeg', 'pjpeg'):
                         ext = 'jpg'
+                    elif ext.lower() == 'svg+xml':
+                        ext = 'svg'
                     file_name = f"{uuid.uuid4().hex[:10]}.{ext}"
                     data = ContentFile(base64.b64decode(base64_str), name=file_name)
                 except Exception:
@@ -153,6 +91,8 @@ class Base64ImageField(serializers.ImageField):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(required=True)
     password = serializers.CharField(required=True, write_only=True)
+    client_device_id = serializers.CharField(required=False, allow_blank=True, default='')
+
 
 class SchoolProfileSerializer(serializers.ModelSerializer):
     school_logo = serializers.CharField(required=False, allow_null=True, allow_blank=True)
@@ -201,22 +141,42 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
         }
 
 
-
 class GateScanSerializer(serializers.Serializer):
+    """Validates real-time attendance scans at campus gate scanner terminals."""
     kiosk_code = serializers.CharField(required=True)
     secret_key = serializers.CharField(required=True)
     raw_identifier = serializers.CharField(required=True)
     scan_method = serializers.CharField(required=False, default='RFID')
+    direction = serializers.CharField(required=False, allow_blank=True, allow_null=True, default=None)
+    enforce_student_only = serializers.BooleanField(required=False, default=False)
 
 
 class SingleScanItemSerializer(serializers.Serializer):
-    qr_token = serializers.CharField(required=True)
+    qr_token = serializers.CharField(required=False, allow_blank=True, default='')
+    rfid_uid = serializers.CharField(required=False, allow_blank=True, default='')
+    raw_identifier = serializers.CharField(required=False, allow_blank=True, default='')
     status = serializers.CharField(required=False, default='PRESENT')
+
+    def to_internal_value(self, data):
+        normalized = super().to_internal_value(data)
+        # Ensure qr_token holds the identifier regardless of field naming
+        token = (
+            normalized.get('qr_token')
+            or normalized.get('raw_identifier')
+            or normalized.get('rfid_uid')
+            or ''
+        ).strip()
+
+        if not token:
+            raise serializers.ValidationError({"qr_token": "Student identifier or QR token is required."})
+
+        normalized['qr_token'] = token
+        return normalized
 
 
 class ClassroomBatchScanSerializer(serializers.Serializer):
     schedule_id = serializers.IntegerField(required=True)
-    scans = SingleScanItemSerializer(many=True, required=True)
+    scans = SingleScanItemSerializer(many=True, required=True, allow_empty=False)
 
 
 class TelemetryHeartbeatSerializer(serializers.Serializer):
@@ -229,7 +189,7 @@ class TelemetryHeartbeatSerializer(serializers.Serializer):
 
 
 # ============================================================================
-# FULL CRUD MODEL SERIALIZERS
+# CORE ACADEMIC ENTITY SERIALIZERS
 # ============================================================================
 
 class StudentSerializer(serializers.ModelSerializer):
@@ -285,12 +245,10 @@ class StudentSerializer(serializers.ModelSerializer):
         }
 
     def get_full_name(self, obj):
-        parts = [obj.last_name, f"{obj.first_name}"]
-        if obj.middle_name:
-            parts.append(obj.middle_name)
-        if obj.suffix:
-            parts.append(obj.suffix)
-        return f"{obj.last_name}, {' '.join(filter(None, [obj.first_name, obj.middle_name, obj.suffix]))}".strip()
+        first_parts = " ".join(filter(None, [obj.first_name, obj.middle_name, obj.suffix])).strip()
+        if obj.last_name:
+            return f"{obj.last_name}, {first_parts}".strip(" ,")
+        return first_parts or "Unnamed Student"
 
     def get_current_section(self, obj):
         enrollment = obj.enrollments.filter(academic_year__is_active=True).first()
@@ -304,22 +262,30 @@ class StudentSerializer(serializers.ModelSerializer):
         return safe_photo_url(obj.photo, request)
 
     def validate_sex(self, value):
-        if value in ['Male', 'M', 'm', 'male']:
+        if not value:
             return 'Male'
-        if value in ['Female', 'F', 'f', 'female']:
+        val = str(value).strip().lower()
+        if val in ['male', 'm']:
+            return 'Male'
+        if val in ['female', 'f']:
             return 'Female'
         raise serializers.ValidationError("Sex must be either Male or Female.")
 
     def validate_rfid_uid(self, value):
         if not value or str(value).strip() == '':
             return None
-        clean_value = str(value).strip()
+        clean_value = str(value).strip().upper()
         instance = getattr(self, 'instance', None)
-        qs = Student.objects.filter(rfid_uid=clean_value)
+
+        qs = Student.objects.filter(rfid_uid__iexact=clean_value)
         if instance:
             qs = qs.exclude(id=instance.id)
         if qs.exists():
             raise serializers.ValidationError("This RFID card is already assigned to another student.")
+
+        if FacultyProfile.objects.filter(rfid_uid__iexact=clean_value).exists():
+            raise serializers.ValidationError("This RFID card is already assigned to a faculty member.")
+
         return clean_value
 
     def to_representation(self, instance):
@@ -392,13 +358,18 @@ class FacultyProfileSerializer(serializers.ModelSerializer):
     def validate_rfid_uid(self, value):
         if not value or str(value).strip() == '':
             return None
-        clean_value = str(value).strip()
+        clean_value = str(value).strip().upper()
         instance = getattr(self, 'instance', None)
-        qs = FacultyProfile.objects.filter(rfid_uid=clean_value)
+
+        qs = FacultyProfile.objects.filter(rfid_uid__iexact=clean_value)
         if instance:
             qs = qs.exclude(id=instance.id)
         if qs.exists():
             raise serializers.ValidationError("This RFID card is already assigned to another faculty member.")
+
+        if Student.objects.filter(rfid_uid__iexact=clean_value).exists():
+            raise serializers.ValidationError("This RFID card is already assigned to a student.")
+
         return clean_value
 
     def create(self, validated_data):
@@ -446,7 +417,34 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         return "Unknown"
 
 
+class SectionSerializer(serializers.ModelSerializer):
+    grade_level_name = serializers.CharField(source='grade_level.name', read_only=True)
+    academic_year_code = serializers.CharField(source='academic_year.code', read_only=True)
+    adviser_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Section
+        fields = [
+            'id',
+            'name',
+            'grade_level',
+            'grade_level_name',
+            'academic_year',
+            'academic_year_code',
+            'adviser',
+            'adviser_name',
+            'room_number',
+            'capacity',
+        ]
+
+    def get_adviser_name(self, obj):
+        if obj.adviser:
+            return f"{obj.adviser.first_name} {obj.adviser.last_name}".strip()
+        return "Unassigned"
+
+
 class IoTKioskSerializer(serializers.ModelSerializer):
+    """Serializes Campus Gate Scanner Kiosks and IoT terminals."""
     is_online = serializers.SerializerMethodField(read_only=True)
     secret_key = serializers.CharField(required=False, allow_blank=True)
 
@@ -462,6 +460,7 @@ class IoTKioskSerializer(serializers.ModelSerializer):
             'last_ping',
             'is_online',
         ]
+        read_only_fields = ['id', 'last_ping']
 
     def get_is_online(self, obj):
         if not obj.last_ping:
@@ -470,7 +469,6 @@ class IoTKioskSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
-        # Expose stored hardware key to authenticated administrators
         ret['secret_key'] = getattr(instance, 'secret_hash', '') or ''
         return ret
 
@@ -485,8 +483,9 @@ class IoTKioskSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         secret = validated_data.pop('secret_key', None)
         if secret and str(secret).strip():
-            instance.secret_hash = str(secret).strip()
+            validated_data['secret_hash'] = str(secret).strip()
         return super().update(instance, validated_data)
+
 
 class GatePassSerializer(serializers.ModelSerializer):
     pass_number = serializers.CharField(required=False, allow_blank=True, default='')
@@ -611,6 +610,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
     subject_title = serializers.CharField(source='subject.title', read_only=True)
     faculty_name = serializers.SerializerMethodField(read_only=True)
     time_slot = serializers.SerializerMethodField(read_only=True)
+    days_of_week = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Schedule
@@ -629,6 +629,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
             'start_time',
             'end_time',
             'time_slot',
+            'days_of_week',
         ]
         extra_kwargs = {
             'room_number': {'required': False, 'allow_blank': True},
@@ -648,11 +649,92 @@ class ScheduleSerializer(serializers.ModelSerializer):
             return f"{obj.start_time.strftime('%I:%M %p')} - {obj.end_time.strftime('%I:%M %p')}"
         return "TBD"
 
+    def get_days_of_week(self, obj):
+        if hasattr(obj, 'days'):
+            day_map = {1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat', 7: 'Sun'}
+            day_nums = sorted([d.day_of_week for d in obj.days.all()])
+            if day_nums:
+                return [day_map.get(d, str(d)) for d in day_nums]
+        return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+
+
+# ============================================================================
+# MESSAGING & COMMUNICATION SERIALIZERS
+# ============================================================================
+
+class SmsOutboxSerializer(serializers.ModelSerializer):
+    """
+    Serializes SmsOutbox records. Normalizes phone numbers
+    and assigns defaults for single and manual dispatches.
+    """
+    recipient_name = serializers.CharField(required=False, default='Authorized Contact', allow_blank=True)
+    trigger_event = serializers.CharField(required=False, default='MANUAL', allow_blank=True)
+    category = serializers.CharField(required=False, default='MANUAL', allow_blank=True)
+    priority = serializers.CharField(required=False, default='HIGH', allow_blank=True)
+    status = serializers.CharField(required=False, default='PENDING', allow_blank=True)
+
+    class Meta:
+        model = SmsOutbox
+        fields = '__all__'
+
+    def to_internal_value(self, data):
+        normalized = {}
+        for key, val in data.items():
+            if val is not None:
+                normalized[key] = val
+
+        raw_phone = (
+            normalized.get('recipient_number')
+            or normalized.get('phone')
+            or normalized.get('recipient')
+            or normalized.get('number')
+            or normalized.get('contact_number')
+            or ''
+        )
+        if raw_phone:
+            clean_phone = re.sub(r'[\s\-\(\)\.]', '', str(raw_phone).strip())
+            if clean_phone.startswith('+63'):
+                clean_phone = '0' + clean_phone[3:]
+            elif clean_phone.startswith('63') and len(clean_phone) == 12:
+                clean_phone = '0' + clean_phone[2:]
+            normalized['recipient_number'] = clean_phone
+
+        msg_text = (
+            normalized.get('message_body')
+            or normalized.get('message')
+            or normalized.get('text')
+            or normalized.get('content')
+            or normalized.get('body')
+            or ''
+        )
+        if msg_text:
+            normalized['message_body'] = str(msg_text).strip()
+
+        name = (
+            normalized.get('recipient_name')
+            or normalized.get('name')
+            or normalized.get('student_name')
+            or 'Authorized Contact'
+        )
+        normalized['recipient_name'] = str(name).strip()
+
+        normalized.setdefault('trigger_event', 'MANUAL')
+        normalized.setdefault('category', normalized['trigger_event'])
+        normalized.setdefault('priority', 'HIGH')
+        normalized.setdefault('status', 'PENDING')
+
+        return super().to_internal_value(normalized)
+
+
+# ============================================================================
+# USER MANAGEMENT & AUDIT LOG SERIALIZERS
+# ============================================================================
 
 class UserManagementSerializer(serializers.ModelSerializer):
-    role = serializers.ChoiceField(choices=USER_ROLE_CHOICES, write_only=True)
-    role_display = serializers.CharField(source='profile.get_role_display', read_only=True)
-    current_role = serializers.CharField(source='profile.role', read_only=True)
+    role = serializers.ChoiceField(choices=USER_ROLE_CHOICES, write_only=True, required=False)
+    role_display = serializers.SerializerMethodField(read_only=True)
+    current_role = serializers.SerializerMethodField(read_only=True)
+    password = serializers.CharField(write_only=True, required=False, allow_blank=True)
     photo_url = serializers.SerializerMethodField(read_only=True)
     photo = Base64ImageField(required=False, allow_null=True, write_only=True)
 
@@ -661,6 +743,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'username',
+            'password',
             'email',
             'first_name',
             'last_name',
@@ -672,17 +755,30 @@ class UserManagementSerializer(serializers.ModelSerializer):
             'photo_url',
         ]
 
+    def get_current_role(self, obj):
+        profile = getattr(obj, 'profile', None) or getattr(obj, 'userprofile', None)
+        if profile and hasattr(profile, 'role') and profile.role:
+            return str(profile.role).upper()
+        return 'ADMIN' if (obj.is_superuser or obj.is_staff) else 'TEACHER'
+
+    def get_role_display(self, obj):
+        profile = getattr(obj, 'profile', None) or getattr(obj, 'userprofile', None)
+        if profile and hasattr(profile, 'get_role_display'):
+            return profile.get_role_display()
+        return 'System Administrator' if (obj.is_superuser or obj.is_staff) else 'Teacher / Adviser'
+
     def _get_linked_faculty(self, obj):
         faculty = getattr(obj, 'facultyprofile', None)
         if not faculty:
             profile = getattr(obj, 'profile', None) or getattr(obj, 'userprofile', None)
             faculty = getattr(profile, 'faculty', None) if profile else None
         if not faculty and obj.email:
-            faculty = FacultyProfile.objects.filter(email=obj.email).first()
+            faculty = FacultyProfile.objects.filter(email=obj.email, is_active=True).first()
         if not faculty and obj.first_name and obj.last_name:
             faculty = FacultyProfile.objects.filter(
                 first_name__iexact=obj.first_name,
-                last_name__iexact=obj.last_name
+                last_name__iexact=obj.last_name,
+                is_active=True
             ).first()
         return faculty
 
@@ -693,13 +789,57 @@ class UserManagementSerializer(serializers.ModelSerializer):
             return safe_photo_url(faculty.photo, request)
         return None
 
+    def create(self, validated_data):
+        role = validated_data.pop('role', 'TEACHER')
+        uploaded_photo = validated_data.pop('photo', None)
+        raw_password = validated_data.pop('password', None) or 'AttendSure2026!'
+
+        # 1. Create Django User
+        user = User.objects.create_user(**validated_data)
+        user.set_password(raw_password)
+
+        if role == 'ADMIN':
+            user.is_staff = True
+            user.is_superuser = True
+        else:
+            user.is_staff = False
+            user.is_superuser = False
+        user.save()
+
+        # 2. Attach AttendSure Profile Role
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.role = role
+        profile.save(update_fields=['role'])
+
+        # 3. Attach Photo if uploaded
+        if uploaded_photo is not None:
+            faculty = self._get_linked_faculty(user)
+            if faculty:
+                faculty.photo = uploaded_photo
+                faculty.save(update_fields=['photo'])
+
+        return user
+
     def update(self, instance, validated_data):
         new_role = validated_data.pop('role', None)
         uploaded_photo = validated_data.pop('photo', None)
+        new_password = validated_data.pop('password', None)
 
         user = super().update(instance, validated_data)
 
+        if new_password and str(new_password).strip():
+            user.set_password(str(new_password).strip())
+            user.save()
+
         if new_role:
+            if new_role == 'ADMIN':
+                user.is_staff = True
+                user.is_superuser = True
+            else:
+                user.is_staff = False
+                user.is_superuser = False
+            user.save()
+
             profile, _ = UserProfile.objects.get_or_create(user=user)
             profile.role = new_role
             profile.save(update_fields=['role'])
@@ -711,7 +851,6 @@ class UserManagementSerializer(serializers.ModelSerializer):
                 faculty.save(update_fields=['photo'])
 
         return user
-
 
 class AuditLogSerializer(serializers.ModelSerializer):
     performed_by_name = serializers.SerializerMethodField(read_only=True)
@@ -750,7 +889,7 @@ class AuditLogSerializer(serializers.ModelSerializer):
     def get_performed_by_name(self, obj):
         if obj.performed_by:
             return obj.performed_by.get_full_name() or obj.performed_by.username
-        return "System / Device Kiosk"
+        return "System / Gate Scanner"
 
 
 class SF2StudentSerializer(serializers.ModelSerializer):
