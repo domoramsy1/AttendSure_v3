@@ -168,7 +168,7 @@ export const GeofenceTab: React.FC = () => {
   const isInteracting = useRef(false);
   isInteracting.current = saving || resettingId !== null;
 
-  const userRole = (localStorage.getItem('attendsure_role') || 'TEACHER').toUpperCase();
+  const userRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const isAdmin = userRole === 'ADMIN';
 
   // Load Leaflet dynamically
@@ -403,7 +403,7 @@ export const GeofenceTab: React.FC = () => {
 
     showConfirm({
       title: 'Reset Hardware Device Binding',
-      message: `Unbind the registered mobile device for ${facultyName}? This will permit the staff member to pair a new device during their next check-in.`,
+      message: `Unbind the registered mobile device for ${facultyName}? This will permit the employee member to pair a new device during their next check-in.`,
       confirmLabel: 'Reset Device',
       isDestructive: true,
       onConfirm: async () => {

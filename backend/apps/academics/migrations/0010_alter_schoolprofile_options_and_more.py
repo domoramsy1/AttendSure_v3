@@ -435,7 +435,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('TEACHER', 'Teacher')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('FACULTY', 'Faculty')], default='FACULTY', max_length=20),
         ),
         migrations.RemoveField(
             model_name='dailyattendancesummary',

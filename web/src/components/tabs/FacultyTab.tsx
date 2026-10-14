@@ -8,7 +8,7 @@
  * 3. LIVE POLLING: Silent 3-second background polling keeps attendance and roster up to date without refresh.
  * 4. TELEMETRY CARDS: Live summary counters for Total Faculty, Active Status, RFID Paired, and Departments.
  * 5. SERVER PAGINATION: Full page controls with record counts and per-page limits.
- * 6. DIGITAL ID PRINTING: Print-ready staff credential preview.
+ * 6. DIGITAL ID PRINTING: Print-ready employee credential preview.
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -75,25 +75,25 @@ const FACULTY_POSITIONS = [
   {
     category: 'Classroom Teachers',
     ranks: [
-      'Teacher I',
-      'Teacher II',
-      'Teacher III',
-      'Special Science Teacher I',
-      'Master Teacher I',
-      'Master Teacher II',
-      'Master Teacher III',
-      'Master Teacher IV',
+      'Faculty I',
+      'Faculty II',
+      'Faculty III',
+      'Special Science Faculty I',
+      'Master Faculty I',
+      'Master Faculty II',
+      'Master Faculty III',
+      'Master Faculty IV',
     ],
   },
   {
     category: 'Department Heads',
     ranks: [
-      'Head Teacher I',
-      'Head Teacher II',
-      'Head Teacher III',
-      'Head Teacher IV',
-      'Head Teacher V',
-      'Head Teacher VI',
+      'Head Faculty I',
+      'Head Faculty II',
+      'Head Faculty III',
+      'Head Faculty IV',
+      'Head Faculty V',
+      'Head Faculty VI',
     ],
   },
   {
@@ -143,7 +143,7 @@ const INITIAL_FORM_DATA = {
   middle_name: '',
   last_name: '',
   suffix: '',
-  position: 'Teacher I',
+  position: 'Faculty I',
   department: 'Junior High School',
   contact_number: '',
   email: '',
@@ -422,7 +422,7 @@ export const FacultyTab: React.FC = () => {
       middle_name: faculty.middle_name || '',
       last_name: faculty.last_name || '',
       suffix: faculty.suffix || '',
-      position: faculty.position || 'Teacher I',
+      position: faculty.position || 'Faculty I',
       department: faculty.department || 'Junior High School',
       contact_number: faculty.contact_number || '',
       email: faculty.email || '',
@@ -511,7 +511,7 @@ export const FacultyTab: React.FC = () => {
         <div style={statCard}>
           <div style={statLabel}>TOTAL REGISTERED FACULTY</div>
           <div style={statValue}>{totalCount || facultys.length}</div>
-          <div style={statHelp}>Permanent and contractual staff</div>
+          <div style={statHelp}>Permanent and contractual employee</div>
         </div>
 
         <div style={statCard}>
@@ -961,7 +961,7 @@ export const FacultyTab: React.FC = () => {
               </label>
               <input
                 type="email"
-                placeholder="teacher@attendsure.edu.ph"
+                placeholder="faculty@attendsure.edu.ph"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 style={inputStyle}

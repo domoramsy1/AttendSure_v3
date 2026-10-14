@@ -50,7 +50,7 @@ interface ScheduleItem {
   faculty?: any;
   faculty_name?: string;
   faculty_id?: number;
-  teacher?: any;
+  faculty?: any;
   teacher_name?: string;
   room?: any;
   room_name?: string;
@@ -267,7 +267,7 @@ export const SchedulesTab: React.FC = () => {
       photo = item.faculty.photo_url || item.faculty.photo || null;
     }
 
-    const rawId = item.faculty || item.faculty_id || item.teacher;
+    const rawId = item.faculty || item.faculty_id || item.faculty;
     if (rawId) {
       const matched = facultyList.find((f) => f.id === rawId || f.user_id === rawId);
       if (matched) {
@@ -442,7 +442,7 @@ export const SchedulesTab: React.FC = () => {
             <Search size={15} color="#94a3b8" />
             <input
               type="text"
-              placeholder="Search by section, subject code, teacher, room..."
+              placeholder="Search by section, subject code, faculty, room..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={searchInputStyle}

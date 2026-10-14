@@ -1,42 +1,51 @@
 // mobile/src/api/client.ts
 
-import axios from 'axios';
+import axios, { InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getServerBaseUrl } from '../services/configService';
 
-export const BASE_URL = 'http://192.168.1.10:8000'; // Replace with your computer's local IP
+export const AUTH_TOKEN_KEY = 'attendsure_auth_token';
 
 export const apiClient = axios.create({
-  baseURL: BASE_URL,
-  timeout: 10000,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
+    Accept: 'application/json',
   },
 });
 
-// 1. Attach Auth Token to Every Outgoing Request
+/**
+ * Request Interceptor:
+ * 1. Dynamically loads the current server base URL from storage.
+ * 2. Normalizes `/api` prefixes so paths work whether baseURL ends in `/api` or not.
+ * 3. Attaches the Django DRF Token from storage.
+ */
 apiClient.interceptors.request.use(
-  async (config) => {
-    const token = await AsyncStorage.getItem('auth_token');
-    if (token) {
-      // Use 'Bearer ' or 'Token ' depending on your Django auth setup
+  async (config: InternalAxiosRequestConfig) => {
+    const rawBaseUrl = await getServerBaseUrl();
+    // Strip trailing slashes and any trailing `/api` so we have a clean origin host
+    const cleanHost = rawBaseUrl.trim().replace(/\/+$/, '').replace(/\/api$/i, '');
+
+    let requestPath = config.url || '';
+    if (!requestPath.startsWith('http://') && !requestPath.startsWith('https://')) {
+      if (!requestPath.startsWith('/')) {
+        requestPath = `/${requestPath}`;
+      }
+      if (!requestPath.startsWith('/api/')) {
+        requestPath = `/api${requestPath}`;
+      }
+      config.baseURL = cleanHost;
+      config.url = requestPath;
+    }
+
+    const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+    if (token && config.headers) {
       config.headers.Authorization = `Token ${token}`;
     }
+
     return config;
   },
   (error) => Promise.reject(error)
-);
-
-// 2. Intercept 401 Responses and Force Logout
-apiClient.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    if (error.response && error.response.status === 401) {
-      // Token is expired, invalid, or missing
-      await AsyncStorage.removeItem('auth_token');
-      await AsyncStorage.removeItem('auth_user');
-    }
-    return Promise.reject(error);
-  }
 );
 
 export default apiClient;

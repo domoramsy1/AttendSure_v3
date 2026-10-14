@@ -37,7 +37,7 @@ export const UI_TEXT = {
         subtext: "Card taps and backup QR scans",
       },
       facultyDtr: {
-        title: "TEACHER DTR (FORM 48)",
+        title: "FACULTY DTR (FORM 48)",
         badge: "Form 48",
         waitingSubtext: "No facultys checked in yet",
       },

@@ -13,7 +13,7 @@ def auto_sync_superuser_to_attendsure_admin(sender, instance, created, **kwargs)
     """
     # Safely check for is_faculty without crashing standard Django User objects
     is_faculty = getattr(instance, 'is_faculty', False)
-    target_role = 'ADMIN' if (instance.is_superuser or is_faculty) else 'TEACHER'
+    target_role = 'ADMIN' if (instance.is_superuser or is_faculty) else 'FACULTY'
 
     if created:
         UserProfile.objects.get_or_create(

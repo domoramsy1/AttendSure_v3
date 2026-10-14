@@ -74,7 +74,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
   if (!isOpen) return null;
 
   const userName = session?.faculty_name || session?.username || 'User';
-  const userRole = (session?.role || localStorage.getItem('attendsure_role') || 'TEACHER').toUpperCase();
+  const userRole = (session?.role || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const userInitial = userName ? userName.charAt(0).toUpperCase() : '?';
 
   const handleAction = (tab?: NavItemKey) => {
@@ -223,7 +223,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
 
       <div style={{ height: 1, backgroundColor: '#f1f5f9', margin: '0 8px' }} />
 
-      {/* 3. Sign Out */}
+      {/* 3. Log Out */}
       <div style={{ padding: '6px' }}>
         <button
           type="button"
@@ -240,7 +240,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
           </div>
           <div style={{ flex: 1, textAlign: 'left' }}>
             <div style={{ fontSize: '0.80rem', fontWeight: 700, color: '#dc2626' }}>
-              Sign Out
+              Log Out
             </div>
             <div style={{ fontSize: '0.68rem', color: '#b91c1c' }}>
               End current session safely

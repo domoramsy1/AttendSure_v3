@@ -46,7 +46,7 @@ export type NavItemKey =
   | 'reports'
   | 'settings';
 
-export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'TEACHER' | 'GUARD';
+export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'GUARD';
 
 interface NavItem {
   id: NavItemKey;
@@ -128,13 +128,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const rawRole = (
     session?.role ||
     localStorage.getItem('attendsure_role') ||
-    'TEACHER'
+    'FACULTY'
   ).toUpperCase();
 
   const userRole: UserRole = (
-    ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'].includes(rawRole)
+    ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'].includes(rawRole)
       ? rawRole
-      : 'TEACHER'
+      : 'FACULTY'
   ) as UserRole;
 
   const userName =
@@ -178,7 +178,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'dashboard',
           label: 'Dashboard',
           icon: LayoutDashboard,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'],
         },
         {
           id: 'gate-logs',
@@ -195,7 +195,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'students',
           label: 'Students',
           icon: GraduationCap,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
         },
         {
           id: 'facultys',
@@ -207,7 +207,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'schedules',
           label: 'Schedules & Sections',
           icon: CalendarDays,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
         },
       ],
     },
@@ -224,7 +224,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'gate-passes',
           label: 'Gate Passes',
           icon: Ticket,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'],
         },
         {
           id: 'scanners',
@@ -236,7 +236,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'dtr',
           label: 'DTR',
           icon: Clock,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
         },
         {
           id: 'geofence',
@@ -253,7 +253,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'reports',
           label: 'Reports',
           icon: FileSpreadsheet,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
         },
         {
           id: 'users',

@@ -486,7 +486,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('REGISTRAR', 'Registrar / Academic Faculty'), ('TEACHER', 'Faculty / Faculty Adviser'), ('STAFF', 'School Faculty')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('REGISTRAR', 'Registrar / Academic Faculty'), ('FACULTY', 'Faculty / Faculty Adviser'), ('STAFF', 'School Faculty')], default='FACULTY', max_length=20),
         ),
         migrations.AlterModelTable(
             name='schoolprofile',

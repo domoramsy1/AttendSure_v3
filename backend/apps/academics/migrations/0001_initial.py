@@ -271,7 +271,7 @@ class Migration(migrations.Migration):
             name='UserProfile',
             fields=[
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
-                ('role', models.CharField(choices=[('ADMIN', 'Admin'), ('REGISTRAR', 'Registrar'), ('TEACHER', 'Faculty')], default='TEACHER', max_length=20)),
+                ('role', models.CharField(choices=[('ADMIN', 'Admin'), ('REGISTRAR', 'Registrar'), ('FACULTY', 'Faculty')], default='FACULTY', max_length=20)),
                 ('avatar', models.ImageField(blank=True, default='avatars/default_user.png', upload_to='avatars/')),
                 ('failed_attempts', models.IntegerField(default=0)),
                 ('locked_until', models.DateTimeField(blank=True, null=True)),

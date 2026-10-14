@@ -138,8 +138,8 @@ export const DTRTab: React.FC = () => {
   const schoolContext = useSchool() as any;
   const schoolProfile = schoolContext?.profile;
 
-  const currentUserRole = (localStorage.getItem('attendsure_role') || 'TEACHER').toUpperCase();
-  const isTeacher = currentUserRole === 'TEACHER';
+  const currentUserRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
+  const isTeacher = currentUserRole === 'FACULTY';
 
   // Selection & Period Filters
   const [facultyList, setFacultyList] = useState<FacultyMember[]>([]);
@@ -640,7 +640,7 @@ export const DTRTab: React.FC = () => {
         <div style={{ marginTop: 16, textAlign: 'center' }}>
           <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto' }}></div>
           <div style={{ fontSize: '5.6pt', fontStyle: 'italic', marginTop: 1 }}>
-            (Signature of Teacher / Employee)
+            (Signature of Faculty / Employee)
           </div>
         </div>
 

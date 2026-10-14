@@ -249,7 +249,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   className="w-full px-4 py-2 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition-colors"
                 >
                   <LogOut size={14} className="text-rose-500" />
-                  <span>Sign Out of Portal</span>
+                  <span>Log Out</span>
                 </button>
               </div>
             </div>

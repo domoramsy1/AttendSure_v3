@@ -64,7 +64,7 @@ const RBAC_ROLES = [
   { value: 'ADMIN', label: 'System Administrator', color: '#6366f1', bg: '#e0e7ff' },
   { value: 'PRINCIPAL', label: 'School Principal', color: '#059669', bg: '#d1fae5' },
   { value: 'DEPT_HEAD', label: 'Department Head', color: '#0284c7', bg: '#e0f2fe' },
-  { value: 'TEACHER', label: 'Faculty / Teacher', color: '#0d9488', bg: '#ccfbf1' },
+  { value: 'FACULTY', label: 'Faculty / Faculty', color: '#0d9488', bg: '#ccfbf1' },
   { value: 'GUARD', label: 'Gate Security / Guard', color: '#d97706', bg: '#fef3c7' },
 ];
 
@@ -73,7 +73,7 @@ const INITIAL_FORM = {
   email: '',
   first_name: '',
   last_name: '',
-  role: 'TEACHER',
+  role: 'FACULTY',
   password: '',
   photo: null as string | null,
 };
@@ -276,7 +276,7 @@ export const UsersTab: React.FC = () => {
       email: user.email || '',
       first_name: user.first_name || '',
       last_name: user.last_name || '',
-      role: user.current_role || user.role || 'TEACHER',
+      role: user.current_role || user.role || 'FACULTY',
       password: '',
       photo: user.photo || null,
     });
@@ -442,7 +442,7 @@ export const UsersTab: React.FC = () => {
       <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
           title="User Accounts & Security"
-          subtitle="Manage access roles, credentials, and institutional staff identity."
+          subtitle="Manage access roles, credentials, and institutional employee identity."
           searchPlaceholder="Search by username, full name, or email..."
           searchValue={search}
           onSearchChange={setSearch}

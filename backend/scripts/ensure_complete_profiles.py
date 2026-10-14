@@ -144,7 +144,7 @@ def sync_faculty():
             
         # 2. Fill baseline required employment details
         if 'position' in faculty_fields and not f.position:
-            f.position = "Teacher III"
+            f.position = "Faculty III"
             changed = True
             
         if 'department' in faculty_fields and not f.department:
@@ -199,7 +199,7 @@ def sync_users():
             changed = True
             
         if 'role' in user_profile_fields and not profile.role:
-            profile.role = 'ADMIN' if u.is_superuser else 'TEACHER'
+            profile.role = 'ADMIN' if u.is_superuser else 'FACULTY'
             profile.save(update_fields=['role'])
             changed = True
             

@@ -1,59 +1,126 @@
-import * as Location from 'expo-location';
-import * as Battery from 'expo-battery';
-import * as Crypto from 'expo-crypto';
-import { apiClient } from '../api/client';
-import { ENDPOINTS } from '../api/endpoints';
-import { enqueueOfflineTelemetry, flushOfflineTelemetryQueue } from './offlineQueue';
+// mobile/src/services/telemetryService.ts
 
-export async function sendLiveHeartbeat(deviceId: string) {
-  // Check location permission
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== Location.PermissionStatus.GRANTED) {
-    throw new Error('Location permission is required for campus telemetry.');
+import { Platform } from 'react-native';
+import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { apiClient } from '../api/client';
+import { enqueueOfflineHeartbeat, QueuedTelemetryPayload } from './offlineQueue';
+
+const DEVICE_UUID_STORAGE_KEY = 'attendsure_hardware_device_uuid';
+
+export interface HeartbeatResponse {
+  status?: string;
+  device_bound?: boolean;
+  distance_meters?: number;
+  is_inside_perimeter?: boolean;
+  server_time?: string;
+  isQueuedOffline?: boolean;
+}
+
+/**
+ * Retrieves the persistent hardware UUID for this phone so Django's
+ * TelemetryHeartbeatAPIView can lock the account to one physical device.
+ */
+export const getHardwareDeviceUuid = async (fallbackId?: string): Promise<string> => {
+  try {
+    const existing = await AsyncStorage.getItem(DEVICE_UUID_STORAGE_KEY);
+    if (existing) return existing;
+
+    const randomHex = () =>
+      Math.floor((1 + Math.random()) * 0x10000)
+        .toString(16)
+        .substring(1)
+        .toUpperCase();
+
+    const generated = `DEV-${Platform.OS.toUpperCase()}-${randomHex()}${randomHex()}-${randomHex()}`;
+    await AsyncStorage.setItem(DEVICE_UUID_STORAGE_KEY, generated);
+    return generated;
+  } catch {
+    return fallbackId || `DEV-${Platform.OS.toUpperCase()}-DEFAULT`;
+  }
+};
+
+/**
+ * Reads GPS coordinates on both Android/iOS (via expo-location) and Web (via browser Geolocation).
+ */
+const getCurrentCoordinates = async (): Promise<{
+  latitude: number;
+  longitude: number;
+  mocked: boolean;
+}> => {
+  if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          resolve({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            mocked: false,
+          });
+        },
+        (err) => {
+          reject(new Error(err.message || 'Browser location permission denied.'));
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
   }
 
-  // 1. Read real device sensors
+  const { status } = await Location.requestForegroundPermissionsAsync();
+  if (status !== 'granted') {
+    throw new Error('Location permission is required to verify campus presence.');
+  }
+
   const location = await Location.getCurrentPositionAsync({
     accuracy: Location.Accuracy.High,
   });
 
-  const batteryFraction = await Battery.getBatteryLevelAsync();
-  const batteryLevel = batteryFraction >= 0 ? Math.round(batteryFraction * 100) : 100;
-  const isMock = Boolean(location.mocked);
-
-  const payload = {
-    client_device_id: deviceId,
+  return {
     latitude: location.coords.latitude,
     longitude: location.coords.longitude,
-    battery_level: batteryLevel,
-    is_mock_location: isMock,
+    mocked: Boolean(location.mocked),
+  };
+};
+
+/**
+ * Captures real GPS coordinates and sends a live heartbeat to `/api/telemetry/heartbeat/`.
+ * Automatically queues the ping in offline storage if the server cannot be reached.
+ */
+export const sendLiveHeartbeat = async (facultyIdentifier?: string): Promise<HeartbeatResponse> => {
+  const coords = await getCurrentCoordinates();
+  const hardwareUuid = await getHardwareDeviceUuid(facultyIdentifier);
+
+  const payload: QueuedTelemetryPayload = {
+    client_device_id: hardwareUuid,
+    latitude: coords.latitude,
+    longitude: coords.longitude,
+    battery_level: 100,
+    is_mock_location: coords.mocked,
   };
 
-  const requestId = Crypto.randomUUID();
-
   try {
-    // Attempt real-time push to the ingestion endpoint
-    const response = await apiClient.post(ENDPOINTS.TELEMETRY_HEARTBEAT, {
-      ...payload,
-      request_id: requestId,
-    });
-
-    // Check for and flush any previously saved offline items
-    flushOfflineTelemetryQueue().catch(() => {});
-
+    const res = await apiClient.post('/api/telemetry/heartbeat/', payload);
     return {
-      status: response.data.status,
+      ...res.data,
       isQueuedOffline: false,
-      requestId,
     };
-  } catch {
-    // Save to phone storage if network is offline or server is unreachable
-    await enqueueOfflineTelemetry(payload);
+  } catch (err: any) {
+    const httpStatus = err?.response?.status;
 
+    // If the server actively rejected the request (400/403 Device Mismatch or Mock GPS), throw the exact server message
+    if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+      const backendError =
+        err?.response?.data?.error ||
+        err?.response?.data?.security_alert ||
+        err?.response?.data?.detail ||
+        'Telemetry rejected by server.';
+      throw new Error(backendError);
+    }
+
+    // If the network timed out or server is unreachable, save to offline queue
+    await enqueueOfflineHeartbeat(payload);
     return {
-      status: 'STORED_OFFLINE',
       isQueuedOffline: true,
-      requestId,
     };
   }
-}
+};

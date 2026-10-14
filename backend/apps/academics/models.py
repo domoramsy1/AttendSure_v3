@@ -57,7 +57,7 @@ USER_ROLE_CHOICES = [
     ('ADMIN', 'System Administrator'),
     ('PRINCIPAL', 'School Principal'),
     ('DEPT_HEAD', 'Department Head'),
-    ('TEACHER', 'Teacher / Adviser'),
+    ('FACULTY', 'Faculty / Adviser'),
     ('GUARD', 'Security Guard'),
 ]
 
@@ -253,7 +253,7 @@ class UserProfile(models.Model):
     id = models.BigAutoField(primary_key=True)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     faculty = models.OneToOneField(FacultyProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='account')
-    role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default='TEACHER')
+    role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default='FACULTY')
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
     failed_attempts = models.IntegerField(default=0)
     locked_until = models.DateTimeField(null=True, blank=True)
@@ -429,7 +429,7 @@ class ScheduleDay(models.Model):
 
 class FacultyGateLog(models.Model):
     """
-    Main gate scan record for teachers and staff.
+    Main gate scan record for teachers and employee.
     Includes anti-cheating, loafing violation flags, and Principal pardon fields.
     """
     id = models.BigAutoField(primary_key=True)

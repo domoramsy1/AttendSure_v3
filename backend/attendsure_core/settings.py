@@ -250,7 +250,7 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '300/minute',       # High capacity for hardware gate turnstiles
-        'user': '1800/minute',      # High capacity for authenticated teacher telemetry pings
+        'user': '1800/minute',      # High capacity for authenticated faculty telemetry pings
     },
 }
 

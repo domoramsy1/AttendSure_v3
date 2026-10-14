@@ -1,158 +1,171 @@
-// mobile/src/context/AuthContext.tsx
+// D:\AttendSure_V3\mobile\src\context\AuthContext.tsx
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { apiClient } from '../api/client';
+import * as SecureStore from 'expo-secure-store';
+import { apiClient, AUTH_TOKEN_KEY } from '../api/client';
 
-export interface UserAccount {
-  id?: number;
-  user_id?: number;
+const USER_CACHE_KEY = 'attendsure_user_profile';
+
+export interface AuthenticatedUser {
+  id: number;
   username: string;
-  first_name?: string;
-  last_name?: string;
-  full_name?: string;
-  faculty_name?: string;
-  faculty_id?: string;
-  email?: string;
-  role?: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  faculty_name: string;
+  faculty_id: string;
+  email: string;
+  role: string;
+  system_role: string;
   contact_number?: string;
-  qr_token?: string;
-  bound_device_id?: string;
+  photo?: string | null;
   school_name?: string;
-  division?: string;
-  department?: string;
-  is_superuser?: boolean;
+  is_superuser: boolean;
+  is_staff: boolean;
 }
 
 interface AuthContextType {
-  user: UserAccount | null;
+  user: AuthenticatedUser | null;
   token: string | null;
+  loading: boolean;
   isLoading: boolean;
-  deviceIdentity: { deviceId: string };
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  updateUser: (updatedFields: Partial<UserAccount>) => Promise<void>;
   refreshUser: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType>({} as AuthContextType);
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const saveTokenSafely = async (token: string): Promise<void> => {
+  await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
+  if (Platform.OS !== 'web') {
+    try {
+      await SecureStore.setItemAsync(AUTH_TOKEN_KEY, token);
+    } catch {
+      // Ignore native keychain write errors
+    }
+  }
+};
+
+const clearTokenSafely = async (): Promise<void> => {
+  await AsyncStorage.multiRemove([AUTH_TOKEN_KEY, USER_CACHE_KEY]);
+  if (Platform.OS !== 'web') {
+    try {
+      await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+    } catch {
+      // Ignore native keychain delete errors
+    }
+  }
+};
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<UserAccount | null>(null);
+  const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(true);
+  const isRefreshingRef = useRef<boolean>(false);
 
-  const deviceIdentity = {
-    deviceId: user?.bound_device_id || '',
-  };
+  const refreshUser = useCallback(async () => {
+    if (isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
 
-  // 1. Startup: Test stored token against Django before permitting entry
+    try {
+      const storedToken = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+      if (!storedToken) {
+        setUser(null);
+        setToken(null);
+        return;
+      }
+
+      const res = await apiClient.get('/api/me/');
+      if (res.data && res.data.id) {
+        setUser(res.data);
+        setToken(storedToken);
+        await AsyncStorage.setItem(USER_CACHE_KEY, JSON.stringify(res.data));
+      }
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 401 || status === 403) {
+        await clearTokenSafely();
+        setUser(null);
+        setToken(null);
+      }
+    } finally {
+      isRefreshingRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
-    const loadSession = async () => {
+    const restoreSession = async () => {
       try {
-        const storedToken = await AsyncStorage.getItem('auth_token');
-        if (!storedToken) {
-          setUser(null);
-          setToken(null);
-          return;
+        const storedToken = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+        const cachedUserStr = await AsyncStorage.getItem(USER_CACHE_KEY);
+
+        if (storedToken && cachedUserStr) {
+          setToken(storedToken);
+          setUser(JSON.parse(cachedUserStr));
         }
 
-        // Validate token with Django database
-        const res = await apiClient.get('/api/me/', {
-          headers: { Authorization: `Token ${storedToken}` },
-        });
-
-        if (res.data && res.data.username) {
-          setToken(storedToken);
-          setUser(res.data);
-          await AsyncStorage.setItem('auth_user', JSON.stringify(res.data));
-        } else {
-          throw new Error('Unverified session token');
+        if (storedToken) {
+          await refreshUser();
         }
       } catch {
-        // Clear unverified/stale sessions so user stays on Login
-        await AsyncStorage.removeItem('auth_token');
-        await AsyncStorage.removeItem('auth_user');
-        setToken(null);
+        await clearTokenSafely();
         setUser(null);
+        setToken(null);
       } finally {
-        setIsLoading(false);
+        setLoading(false);
       }
     };
 
-    loadSession();
-  }, []);
+    restoreSession();
+  }, [refreshUser]);
 
-  // 2. Strict Database Verification
-  const login = async (username: string, password: string) => {
-    // This MUST reject if Django rejects the credentials
-    const res = await apiClient.post('/api/auth/login/', {
-      username: username.trim(),
-      password: password.trim(),
-    });
+  const login = async (username: string, password: string): Promise<void> => {
+    const cleanUsername = username.trim();
+    const cleanPassword = password.trim();
 
-    const receivedToken = res.data?.token;
-    const userData = res.data?.user;
-
-    // Fail immediately if the backend did not confirm a user
-    if (!receivedToken || !userData || !userData.username) {
-      throw new Error('Server rejected credentials: User not found in database.');
+    if (!cleanUsername || !cleanPassword) {
+      throw new Error('Username and password are required.');
     }
 
-    // Only set state after receiving a valid 200 OK from Django
+    const res = await apiClient.post('/api/auth/login/', {
+      username: cleanUsername,
+      password: cleanPassword,
+    });
+
+    const receivedToken: string | undefined = res.data?.token;
+    const receivedUser: AuthenticatedUser | undefined = res.data?.user;
+
+    if (!receivedToken || !receivedUser) {
+      throw new Error('Invalid response received from authentication server.');
+    }
+
+    await saveTokenSafely(receivedToken);
+    await AsyncStorage.setItem(USER_CACHE_KEY, JSON.stringify(receivedUser));
+
     setToken(receivedToken);
-    setUser(userData);
-    await AsyncStorage.setItem('auth_token', receivedToken);
-    await AsyncStorage.setItem('auth_user', JSON.stringify(userData));
+    setUser(receivedUser);
+
+    await refreshUser();
   };
 
-  const logout = async () => {
+  const logout = async (): Promise<void> => {
+    await clearTokenSafely();
     setToken(null);
     setUser(null);
-    await AsyncStorage.removeItem('auth_token');
-    await AsyncStorage.removeItem('auth_user');
   };
-
-  const updateUser = async (updatedFields: Partial<UserAccount>) => {
-    setUser((prev) => {
-      if (!prev) return null;
-      const firstName = updatedFields.first_name ?? prev.first_name ?? '';
-      const lastName = updatedFields.last_name ?? prev.last_name ?? '';
-      const fullName = `${firstName} ${lastName}`.trim() || prev.username;
-
-      const merged: UserAccount = {
-        ...prev,
-        ...updatedFields,
-        faculty_name: fullName,
-        full_name: fullName,
-      };
-
-      AsyncStorage.setItem('auth_user', JSON.stringify(merged));
-      return merged;
-    });
-  };
-
-  const refreshUser = useCallback(async () => {
-    try {
-      const res = await apiClient.get('/api/me/');
-      if (res.data) {
-        await updateUser(res.data);
-      }
-    } catch {
-      // Ignore background refresh errors
-    }
-  }, []);
 
   return (
     <AuthContext.Provider
       value={{
         user,
         token,
-        isLoading,
-        deviceIdentity,
+        loading,
+        isLoading: loading,
         login,
         logout,
-        updateUser,
         refreshUser,
       }}
     >
@@ -161,4 +174,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 };
 
-export const useAuth = () => useContext(AuthContext);
+export const useAuth = (): AuthContextType => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};

@@ -27,15 +27,15 @@ class IsAdviserOrAdmin(permissions.BasePermission):
             return True
 
         profile = getattr(request.user, 'profile', None)
-        role = getattr(profile, 'role', 'TEACHER') if profile else 'TEACHER'
+        role = getattr(profile, 'role', 'FACULTY') if profile else 'FACULTY'
 
         if role in ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD']:
             return True
 
-        if request.method in permissions.SAFE_METHODS and role == 'TEACHER':
+        if request.method in permissions.SAFE_METHODS and role == 'FACULTY':
             return True
 
-        if role == 'TEACHER' and getattr(profile, 'faculty', None):
+        if role == 'FACULTY' and getattr(profile, 'faculty', None):
             return getattr(obj, 'adviser_id', None) == profile.faculty.id
 
         return False

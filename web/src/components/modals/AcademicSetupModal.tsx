@@ -279,7 +279,6 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     return () => clearTimeout(timer);
   }, [sectionId, facultyId, roomId, daysOfWeek, startTime, endTime, editingId]);
 
-  // Safe Section filtering across object and ID references
   const sectionClasses = useMemo(() => {
     if (!sectionId) return [];
     return allSchedules.filter((s) => {
@@ -295,7 +294,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     setSectionId(secVal ? String(secVal) : '');
     const subVal = typeof item.subject === 'object' ? item.subject?.id : (item.subject_id || item.subject);
     setSubjectId(subVal ? String(subVal) : '');
-    const facVal = typeof item.faculty === 'object' ? item.faculty?.id : (item.faculty_id || item.teacher || item.faculty);
+    const facVal = typeof item.faculty === 'object' ? item.faculty?.id : (item.faculty_id || item.faculty);
     setFacultyId(facVal ? String(facVal) : '');
     const rmVal = typeof item.room === 'object' ? item.room?.id : (item.room_id || item.room);
     setRoomId(rmVal ? String(rmVal) : '');
@@ -352,7 +351,6 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       subject_id: subNum,
       faculty: facNum,
       faculty_id: facNum,
-      teacher: facNum,
       room: rmNum,
       room_id: rmNum,
       room_number: roomObj ? (roomObj.name || roomObj.room_number) : '',
@@ -473,14 +471,14 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
           </select>
         </div>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Teacher *</label>
+          <label style={labelStyle}>Faculty *</label>
           <select 
             required 
             value={facultyId} 
             onChange={(e) => setFacultyId(e.target.value)} 
             style={inputStyle}
           >
-            <option value="">-- Choose Teacher --</option>
+            <option value="">-- Choose Faculty --</option>
             {teachers.map((t) => {
               const tName = t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name;
               return (
@@ -688,8 +686,8 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     });
     if (busy) {
       const teacherObj = teachers.find((t) => String(t.id) === String(adviserId));
-      const tName = teacherObj ? (teacherObj.full_name || `${teacherObj.first_name || ''} ${teacherObj.last_name || ''}`.trim() || teacherObj.name) : 'Selected Teacher';
-      return `Teacher conflict: ${tName} is already adviser for "${busy.name}".`;
+      const tName = teacherObj ? (teacherObj.full_name || `${teacherObj.first_name || ''} ${teacherObj.last_name || ''}`.trim() || teacherObj.name) : 'Selected Faculty';
+      return `Faculty conflict: ${tName} is already adviser for "${busy.name}".`;
     }
     return '';
   }, [adviserId, editingId, existingSections, teachers]);
@@ -838,7 +836,7 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             onChange={(e) => setAdviserId(e.target.value)} 
             style={adviserBusyError ? badInputStyle : inputStyle}
           >
-            <option value="">-- Optional: Choose Teacher --</option>
+            <option value="">-- Optional: Choose Faculty --</option>
             {teachers.map((t) => {
               const tName = t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name;
               return (

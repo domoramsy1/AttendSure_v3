@@ -75,7 +75,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
     first_name: '',
     last_name: '',
     employee_id: '',
-    role: 'TEACHER',
+    role: 'FACULTY',
     password: '',
     confirm_password: '',
   });
@@ -219,7 +219,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
         first_name: '',
         last_name: '',
         employee_id: '',
-        role: 'TEACHER',
+        role: 'FACULTY',
         password: '',
         confirm_password: '',
       });
@@ -674,7 +674,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                     onChange={(e) => setRegForm({ ...regForm, role: e.target.value as any })}
                     style={{ width: '100%' }}
                   >
-                    <option value="TEACHER">Faculty</option>
+                    <option value="FACULTY">Faculty</option>
                     <option value="REGISTRAR">Registrar</option>
                     <option value="ADMIN">Administrator</option>
                   </Select>

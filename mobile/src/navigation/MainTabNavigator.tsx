@@ -1,3 +1,5 @@
+// D:\AttendSure_V3\mobile\src\navigation\MainTabNavigator.tsx
+
 import React, { useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,10 +9,11 @@ import { COLORS } from '../constants/theme';
 import HomeScreen from '../screens/HomeScreen';
 import CalendarScreen from '../screens/CalendarScreen';
 import ScannerScreen from '../screens/ScannerScreen';
+import ReportsScreen from '../screens/ReportsScreen';
 import SmsLogsScreen from '../screens/SmsLogsScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 
-type TabType = 'home' | 'calendar' | 'scanner' | 'sms' | 'settings';
+export type TabType = 'home' | 'calendar' | 'scanner' | 'reports' | 'sms' | 'settings';
 
 export const MainTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -22,21 +25,22 @@ export const MainTabNavigator: React.FC = () => {
         {activeTab === 'home' && <HomeScreen />}
         {activeTab === 'calendar' && <CalendarScreen />}
         {activeTab === 'scanner' && <ScannerScreen />}
+        {activeTab === 'reports' && <ReportsScreen />}
         {activeTab === 'sms' && <SmsLogsScreen />}
         {activeTab === 'settings' && <SettingsScreen />}
       </View>
 
-      {/* Floating Bottom Tab Bar */}
+      {/* Bottom Navigation Bar */}
       <View
         style={[
           styles.bottomBar,
           {
             paddingBottom: Math.max(insets.bottom, 8),
-            height: 60 + Math.max(insets.bottom, 8),
+            height: 62 + Math.max(insets.bottom, 8),
           },
         ]}
       >
-        {/* Tab 1: Faculty Dashboard & Analytics */}
+        {/* Tab 1: Dashboard & Live Analytics */}
         <TouchableOpacity
           style={styles.tabItem}
           onPress={() => setActiveTab('home')}
@@ -44,10 +48,13 @@ export const MainTabNavigator: React.FC = () => {
         >
           <Ionicons
             name={activeTab === 'home' ? 'grid' : 'grid-outline'}
-            size={22}
+            size={20}
             color={activeTab === 'home' ? COLORS.primary : COLORS.textMuted}
           />
-          <Text style={[styles.tabLabel, activeTab === 'home' && styles.tabLabelActive]}>
+          <Text
+            style={[styles.tabLabel, activeTab === 'home' && styles.tabLabelActive]}
+            numberOfLines={1}
+          >
             Dashboard
           </Text>
         </TouchableOpacity>
@@ -60,22 +67,44 @@ export const MainTabNavigator: React.FC = () => {
         >
           <Ionicons
             name={activeTab === 'calendar' ? 'calendar' : 'calendar-outline'}
-            size={22}
+            size={20}
             color={activeTab === 'calendar' ? COLORS.primary : COLORS.textMuted}
           />
-          <Text style={[styles.tabLabel, activeTab === 'calendar' && styles.tabLabelActive]}>
+          <Text
+            style={[styles.tabLabel, activeTab === 'calendar' && styles.tabLabelActive]}
+            numberOfLines={1}
+          >
             Calendar
           </Text>
         </TouchableOpacity>
 
-        {/* Tab 3: Center Elevated Scanner FAB */}
+        {/* Tab 3: Official Reports (DTR Form 48, DepEd SF1 & SF2) */}
+        <TouchableOpacity
+          style={styles.tabItem}
+          onPress={() => setActiveTab('reports')}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={activeTab === 'reports' ? 'document-text' : 'document-text-outline'}
+            size={20}
+            color={activeTab === 'reports' ? COLORS.primary : COLORS.textMuted}
+          />
+          <Text
+            style={[styles.tabLabel, activeTab === 'reports' && styles.tabLabelActive]}
+            numberOfLines={1}
+          >
+            Reports
+          </Text>
+        </TouchableOpacity>
+
+        {/* Center Elevated QR Scanner Button */}
         <TouchableOpacity
           style={styles.centerFab}
           onPress={() => setActiveTab('scanner')}
           activeOpacity={0.85}
         >
           <View style={[styles.fabBox, activeTab === 'scanner' && styles.fabBoxActive]}>
-            <Ionicons name="qr-code" size={26} color="#ffffff" />
+            <Ionicons name="qr-code" size={24} color="#ffffff" />
           </View>
         </TouchableOpacity>
 
@@ -87,15 +116,18 @@ export const MainTabNavigator: React.FC = () => {
         >
           <Ionicons
             name={activeTab === 'sms' ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
-            size={22}
+            size={20}
             color={activeTab === 'sms' ? COLORS.primary : COLORS.textMuted}
           />
-          <Text style={[styles.tabLabel, activeTab === 'sms' && styles.tabLabelActive]}>
+          <Text
+            style={[styles.tabLabel, activeTab === 'sms' && styles.tabLabelActive]}
+            numberOfLines={1}
+          >
             SMS Logs
           </Text>
         </TouchableOpacity>
 
-        {/* Tab 5: Application Settings */}
+        {/* Tab 5: Account & System Settings */}
         <TouchableOpacity
           style={styles.tabItem}
           onPress={() => setActiveTab('settings')}
@@ -103,10 +135,13 @@ export const MainTabNavigator: React.FC = () => {
         >
           <Ionicons
             name={activeTab === 'settings' ? 'settings' : 'settings-outline'}
-            size={22}
+            size={20}
             color={activeTab === 'settings' ? COLORS.primary : COLORS.textMuted}
           />
-          <Text style={[styles.tabLabel, activeTab === 'settings' && styles.tabLabelActive]}>
+          <Text
+            style={[styles.tabLabel, activeTab === 'settings' && styles.tabLabelActive]}
+            numberOfLines={1}
+          >
             Settings
           </Text>
         </TouchableOpacity>
@@ -126,11 +161,12 @@ const styles = StyleSheet.create({
   bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
+    justifyContent: 'space-between',
     backgroundColor: COLORS.surface,
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
     paddingTop: 6,
+    paddingHorizontal: 4,
     ...Platform.select({
       ios: {
         shadowColor: COLORS.primaryDark,
@@ -147,9 +183,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
+    paddingHorizontal: 2,
   },
   tabLabel: {
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '600',
     color: COLORS.textMuted,
     marginTop: 3,
@@ -159,15 +196,15 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   centerFab: {
-    top: -16,
+    top: -14,
     alignItems: 'center',
     justifyContent: 'center',
-    width: 60,
+    width: 56,
   },
   fabBox: {
-    width: 54,
-    height: 54,
-    borderRadius: 18,
+    width: 50,
+    height: 50,
+    borderRadius: 16,
     backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',

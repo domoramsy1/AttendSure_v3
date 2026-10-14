@@ -9,7 +9,7 @@ export interface RegisterPayload {
   first_name: string;
   last_name: string;
   employee_id: string;
-  role: 'TEACHER' | 'REGISTRAR' | 'ADMIN';
+  role: 'FACULTY' | 'REGISTRAR' | 'ADMIN';
   password: string;
   confirm_password: string;
 }

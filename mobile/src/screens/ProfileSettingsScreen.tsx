@@ -133,11 +133,11 @@ export const ProfileSettingsScreen: React.FC = () => {
 
   const confirmSignOut = () => {
     Alert.alert(
-      'Sign Out Account',
-      'Are you sure you want to sign out from this smartphone?',
+      'Log Out ',
+      'Are you sure you want to log out from this smartphone?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign Out', style: 'destructive', onPress: logout },
+        { text: 'Log Out', style: 'destructive', onPress: logout },
       ]
     );
   };
@@ -245,7 +245,7 @@ export const ProfileSettingsScreen: React.FC = () => {
                   style={styles.textInput}
                   value={email}
                   onChangeText={setEmail}
-                  placeholder="teacher@deped.gov.ph"
+                  placeholder="faculty@deped.gov.ph"
                   placeholderTextColor="#94a3b8"
                   keyboardType="email-address"
                   autoCapitalize="none"
@@ -358,11 +358,11 @@ export const ProfileSettingsScreen: React.FC = () => {
           ) : null}
         </View>
 
-        {/* 5. Sign Out */}
+        {/* 5. Log Out */}
         <View style={[styles.card, { backgroundColor: '#fffafa', borderColor: '#fecaca' }]}>
           <TouchableOpacity style={styles.logoutBtn} onPress={confirmSignOut} activeOpacity={0.8}>
             <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-            <Text style={styles.logoutBtnText}>Sign Out from this Device</Text>
+            <Text style={styles.logoutBtnText}>Log Out from this Device</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

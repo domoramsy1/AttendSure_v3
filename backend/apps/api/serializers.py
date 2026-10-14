@@ -7,7 +7,7 @@ import base64
 import os
 import re
 import uuid
-from datetime import date, timedelta
+from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
@@ -19,7 +19,6 @@ from apps.academics.models import (
     Enrollment,
     FacultyProfile,
     GatePass,
-    GradeLevel,
     IoTKiosk,
     Schedule,
     SchoolProfile,
@@ -159,7 +158,6 @@ class SingleScanItemSerializer(serializers.Serializer):
 
     def to_internal_value(self, data):
         normalized = super().to_internal_value(data)
-        # Ensure qr_token holds the identifier regardless of field naming
         token = (
             normalized.get('qr_token')
             or normalized.get('raw_identifier')
@@ -248,14 +246,16 @@ class StudentSerializer(serializers.ModelSerializer):
         first_parts = " ".join(filter(None, [obj.first_name, obj.middle_name, obj.suffix])).strip()
         if obj.last_name:
             return f"{obj.last_name}, {first_parts}".strip(" ,")
-        return first_parts or "Unnamed Student"
+        return first_parts or obj.lrn or ""
 
     def get_current_section(self, obj):
         enrollment = obj.enrollments.filter(academic_year__is_active=True).first()
+        if not enrollment:
+            enrollment = obj.enrollments.select_related('section', 'section__grade_level').first()
         if enrollment and enrollment.section:
             grade = enrollment.section.grade_level.name if enrollment.section.grade_level else ""
             return f"{grade} - {enrollment.section.name}".strip(" - ")
-        return "Unassigned"
+        return ""
 
     def get_photo_url(self, obj):
         request = self.context.get('request')
@@ -295,12 +295,8 @@ class StudentSerializer(serializers.ModelSerializer):
         return ret
 
     def create(self, validated_data):
-        if 'birthdate' not in validated_data or not validated_data['birthdate']:
-            validated_data['birthdate'] = date(2010, 1, 1)
-
         if 'qr_token' not in validated_data or not validated_data['qr_token']:
             validated_data['qr_token'] = f"STU-{uuid.uuid4().hex}"
-
         return super().create(validated_data)
 
 
@@ -414,7 +410,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     def get_student_name(self, obj):
         if obj.student:
             return f"{obj.student.last_name}, {obj.student.first_name}".strip()
-        return "Unknown"
+        return ""
 
 
 class SectionSerializer(serializers.ModelSerializer):
@@ -440,7 +436,7 @@ class SectionSerializer(serializers.ModelSerializer):
     def get_adviser_name(self, obj):
         if obj.adviser:
             return f"{obj.adviser.first_name} {obj.adviser.last_name}".strip()
-        return "Unassigned"
+        return ""
 
 
 class IoTKioskSerializer(serializers.ModelSerializer):
@@ -551,12 +547,12 @@ class GatePassSerializer(serializers.ModelSerializer):
             request = self.context.get('request')
             if request and request.user.is_authenticated:
                 user_prof = getattr(request.user, 'profile', None) or getattr(request.user, 'userprofile', None)
-                staff = getattr(user_prof, 'faculty', None) if user_prof else None
-                if not staff and request.user.email:
-                    staff = FacultyProfile.objects.filter(email=request.user.email).first()
-                if not staff:
-                    staff = FacultyProfile.objects.filter(is_active=True).first()
-                validated_data['issued_by'] = staff
+                employee = getattr(user_prof, 'faculty', None) if user_prof else None
+                if not employee and request.user.email:
+                    employee = FacultyProfile.objects.filter(email=request.user.email).first()
+                if not employee:
+                    employee = FacultyProfile.objects.filter(is_active=True).first()
+                validated_data['issued_by'] = employee
             else:
                 validated_data['issued_by'] = FacultyProfile.objects.filter(is_active=True).first()
 
@@ -570,7 +566,7 @@ class GatePassSerializer(serializers.ModelSerializer):
     def get_issued_by_name(self, obj):
         if obj.issued_by:
             return f"{obj.issued_by.first_name} {obj.issued_by.last_name}".strip()
-        return "System Admin"
+        return ""
 
     def get_student_name(self, obj):
         if obj.student:
@@ -642,12 +638,12 @@ class ScheduleSerializer(serializers.ModelSerializer):
     def get_faculty_name(self, obj):
         if obj.faculty:
             return f"{obj.faculty.first_name} {obj.faculty.last_name}".strip()
-        return "Unassigned (TBA)"
+        return ""
 
     def get_time_slot(self, obj):
         if obj.start_time and obj.end_time:
             return f"{obj.start_time.strftime('%I:%M %p')} - {obj.end_time.strftime('%I:%M %p')}"
-        return "TBD"
+        return ""
 
     def get_days_of_week(self, obj):
         if hasattr(obj, 'days'):
@@ -667,7 +663,7 @@ class SmsOutboxSerializer(serializers.ModelSerializer):
     Serializes SmsOutbox records. Normalizes phone numbers
     and assigns defaults for single and manual dispatches.
     """
-    recipient_name = serializers.CharField(required=False, default='Authorized Contact', allow_blank=True)
+    recipient_name = serializers.CharField(required=False, default='', allow_blank=True)
     trigger_event = serializers.CharField(required=False, default='MANUAL', allow_blank=True)
     category = serializers.CharField(required=False, default='MANUAL', allow_blank=True)
     priority = serializers.CharField(required=False, default='HIGH', allow_blank=True)
@@ -714,7 +710,8 @@ class SmsOutboxSerializer(serializers.ModelSerializer):
             normalized.get('recipient_name')
             or normalized.get('name')
             or normalized.get('student_name')
-            or 'Authorized Contact'
+            or normalized.get('recipient_number')
+            or ''
         )
         normalized['recipient_name'] = str(name).strip()
 
@@ -759,13 +756,13 @@ class UserManagementSerializer(serializers.ModelSerializer):
         profile = getattr(obj, 'profile', None) or getattr(obj, 'userprofile', None)
         if profile and hasattr(profile, 'role') and profile.role:
             return str(profile.role).upper()
-        return 'ADMIN' if (obj.is_superuser or obj.is_staff) else 'TEACHER'
+        return 'ADMIN' if (obj.is_superuser or obj.is_staff) else 'FACULTY'
 
     def get_role_display(self, obj):
         profile = getattr(obj, 'profile', None) or getattr(obj, 'userprofile', None)
         if profile and hasattr(profile, 'get_role_display'):
             return profile.get_role_display()
-        return 'System Administrator' if (obj.is_superuser or obj.is_staff) else 'Teacher / Adviser'
+        return 'System Administrator' if (obj.is_superuser or obj.is_staff) else 'Faculty / Adviser'
 
     def _get_linked_faculty(self, obj):
         faculty = getattr(obj, 'facultyprofile', None)
@@ -790,13 +787,13 @@ class UserManagementSerializer(serializers.ModelSerializer):
         return None
 
     def create(self, validated_data):
-        role = validated_data.pop('role', 'TEACHER')
+        role = validated_data.pop('role', 'FACULTY')
         uploaded_photo = validated_data.pop('photo', None)
-        raw_password = validated_data.pop('password', None) or 'AttendSure2026!'
+        raw_password = validated_data.pop('password', None)
 
-        # 1. Create Django User
         user = User.objects.create_user(**validated_data)
-        user.set_password(raw_password)
+        if raw_password and str(raw_password).strip():
+            user.set_password(str(raw_password).strip())
 
         if role == 'ADMIN':
             user.is_staff = True
@@ -806,12 +803,10 @@ class UserManagementSerializer(serializers.ModelSerializer):
             user.is_superuser = False
         user.save()
 
-        # 2. Attach AttendSure Profile Role
         profile, _ = UserProfile.objects.get_or_create(user=user)
         profile.role = role
         profile.save(update_fields=['role'])
 
-        # 3. Attach Photo if uploaded
         if uploaded_photo is not None:
             faculty = self._get_linked_faculty(user)
             if faculty:
@@ -852,6 +847,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
 
         return user
 
+
 class AuditLogSerializer(serializers.ModelSerializer):
     performed_by_name = serializers.SerializerMethodField(read_only=True)
 
@@ -889,7 +885,7 @@ class AuditLogSerializer(serializers.ModelSerializer):
     def get_performed_by_name(self, obj):
         if obj.performed_by:
             return obj.performed_by.get_full_name() or obj.performed_by.username
-        return "System / Gate Scanner"
+        return ""
 
 
 class SF2StudentSerializer(serializers.ModelSerializer):

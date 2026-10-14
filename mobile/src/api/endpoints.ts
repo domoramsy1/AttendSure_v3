@@ -9,7 +9,7 @@ export const ENDPOINTS = {
   GATE_LOGS: '/api/gate/logs/',
   GATE_SCAN: '/api/gate/scan/',
 
-  // Classroom Mobile Scans (Teacher Authenticated)
+  // Classroom Mobile Scans (Faculty Authenticated)
   CLASSROOM_SCAN: '/api/classroom/scan/',
   SMS_OUTBOX: '/api/sms-outbox/',
   FACULTY_DTR: '/api/dtr/',

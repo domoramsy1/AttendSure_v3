@@ -1,531 +1,459 @@
 // mobile/src/screens/LoginScreen.tsx
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
+  StyleSheet,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
   ActivityIndicator,
   Alert,
+  Modal,
+  ScrollView,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
-import { ServerConfigModal } from '../components/ServerConfigModal';
-import { getDeviceHardwareInfo } from '../services/deviceService';
 import { apiClient } from '../api/client';
+import { getServerBaseUrl, setServerBaseUrl } from '../services/configService';
 import { COLORS } from '../constants/theme';
 
-const defaultSchoolLogo = require('../../assets/logo.svg');
+const fallbackLogo = require('../../assets/logo.svg');
+const DEVICE_UUID_STORAGE_KEY = 'attendsure_hardware_device_uuid';
 
-interface SchoolMetadata {
-  schoolName: string;
-  divisionLabel: string;
-  logoUrl: string | null;
+interface PublicSchoolProfile {
+  school_id?: string;
+  school_name?: string;
+  division?: string;
+  region?: string;
+  school_logo?: string | null;
+  left_logo?: string | null;
 }
+
+const showAlert = (title: string, message: string) => {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.alert(`${title}: ${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+};
+
+/**
+ * Generates or retrieves a persistent hardware UUID for zero-trust device binding.
+ */
+export const getOrCreateDeviceUuid = async (): Promise<string> => {
+  const existing = await AsyncStorage.getItem(DEVICE_UUID_STORAGE_KEY);
+  if (existing) return existing;
+
+  const randomHex = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1).toUpperCase();
+  const generated = `DEV-${Platform.OS.toUpperCase()}-${randomHex()}${randomHex()}-${randomHex()}`;
+  await AsyncStorage.setItem(DEVICE_UUID_STORAGE_KEY, generated);
+  return generated;
+};
 
 export const LoginScreen: React.FC = () => {
   const { login } = useAuth();
 
-  // Form State
   const [username, setUsername] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [configVisible, setConfigVisible] = useState<boolean>(false);
+  const [submitting, setSubmitting] = useState<boolean>(false);
 
-  // Focus Highlight States
-  const [userFocused, setUserFocused] = useState<boolean>(false);
-  const [passFocused, setPassFocused] = useState<boolean>(false);
+  const [schoolInfo, setSchoolInfo] = useState<PublicSchoolProfile | null>(null);
+  const [serverReachable, setServerReachable] = useState<boolean | null>(null);
+  const [deviceUuid, setDeviceUuid] = useState<string>('');
+  const [devicePlatform] = useState<string>(
+    `${Platform.OS.toUpperCase()} (${Platform.Version || 'OS'})`
+  );
 
-  // Dynamic Telemetry & School Branding
-  const [deviceModel, setDeviceModel] = useState<string>('');
-  const [hardwareId, setHardwareId] = useState<string>('');
-  const [schoolData, setSchoolData] = useState<SchoolMetadata>({
-    schoolName: '',
-    divisionLabel: '',
-    logoUrl: null,
-  });
+  // Server Configuration Modal State
+  const [configModalVisible, setConfigModalVisible] = useState<boolean>(false);
+  const [serverUrlInput, setServerUrlInput] = useState<string>('');
+  const [testingConnection, setTestingConnection] = useState<boolean>(false);
 
-  useEffect(() => {
-    let isMounted = true;
+  const checkServerAndLoadSchool = useCallback(async () => {
+    try {
+      const storedUrl = await getServerBaseUrl();
+      setServerUrlInput(storedUrl);
 
-    const bootstrapTelemetryAndBranding = async () => {
-      try {
-        const hwInfo = await getDeviceHardwareInfo();
-        if (isMounted) {
-          const displayModel =
-            hwInfo.brand && hwInfo.device_model
-              ? `${hwInfo.brand} ${hwInfo.device_model}`
-              : hwInfo.device_model || '';
-          setDeviceModel(displayModel);
-          setHardwareId(hwInfo.client_device_id || '');
-        }
-      } catch {
-        if (isMounted) {
-          setDeviceModel('');
-          setHardwareId('');
-        }
+      const res = await apiClient.get('/api/settings/school/');
+      if (res.data) {
+        setSchoolInfo(res.data);
+        setServerReachable(true);
       }
-
-      try {
-        const res = await apiClient.get('/api/settings/school/');
-        if (isMounted && res.data) {
-          const name = res.data.school_name || '';
-          const division = res.data.division ? `Division of ${res.data.division}` : '';
-          const region = res.data.region ? `Region ${res.data.region}` : '';
-          const divisionLabel = [division, region].filter(Boolean).join(' • ');
-
-          setSchoolData({
-            schoolName: name,
-            divisionLabel: divisionLabel,
-            logoUrl: res.data.school_logo || null,
-          });
-        }
-      } catch {
-        // Keeps state clean when server has not provided school data yet
-      }
-    };
-
-    bootstrapTelemetryAndBranding();
-
-    return () => {
-      isMounted = false;
-    };
+    } catch {
+      setServerReachable(false);
+    }
   }, []);
 
-  const handleLogin = async () => {
-    const cleanUser = username.trim();
-    const cleanPass = password.trim();
+  useEffect(() => {
+    getOrCreateDeviceUuid().then(setDeviceUuid);
+    checkServerAndLoadSchool();
+  }, [checkServerAndLoadSchool]);
 
-    if (!cleanUser || !cleanPass) {
-      Alert.alert(
-        'Missing Credentials',
-        'Please enter your Employee ID / Username and Password.'
-      );
+  const handleLogin = async () => {
+    if (!username.trim() || !password.trim()) {
+      showAlert('Missing Credentials', 'Please enter your username and password.');
       return;
     }
 
-    setLoading(true);
-
+    setSubmitting(true);
     try {
-      // Must succeed against the Django database to unlock navigation
-      await login(cleanUser, cleanPass);
+      await login(username, password);
     } catch (err: any) {
-      let serverMessage = 'Invalid credentials. Only registered users in the database can sign in.';
-
-      if (err?.response?.data) {
-        serverMessage =
-          err.response.data.error ||
-          err.response.data.detail ||
-          err.response.data.non_field_errors?.[0] ||
-          serverMessage;
-      } else if (err?.message && !err?.response) {
-        serverMessage = 'Cannot connect to backend server. Please verify your host IP address.';
-      }
-
-      setPassword('');
-      Alert.alert('Authentication Denied', serverMessage);
+      const serverError =
+        err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        (err?.code === 'ERR_NETWORK' || err?.message?.includes('Network Error')
+          ? 'Cannot connect to backend server. Tap the gear icon to verify your Server URL.'
+          : err?.message || 'Authentication failed.');
+      showAlert('Login Failed', serverError);
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
+  const handleSaveServerConfig = async () => {
+    const clean = serverUrlInput.trim();
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      showAlert('Invalid URL', 'Server URL must start with http:// or https://');
+      return;
+    }
+
+    setTestingConnection(true);
+    try {
+      await setServerBaseUrl(clean);
+      const res = await apiClient.get('/api/settings/school/');
+      setSchoolInfo(res.data || null);
+      setServerReachable(true);
+      setConfigModalVisible(false);
+      showAlert('Connected', 'Successfully connected to the AttendSure backend server.');
+    } catch {
+      setServerReachable(false);
+      setConfigModalVisible(false);
+      showAlert(
+        'Saved (Offline)',
+        `Server URL saved as:\n${clean}\n\nHowever, the server did not respond. Make sure Django is running on 0.0.0.0:8000.`
+      );
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
+  const logoSource =
+    schoolInfo?.school_logo || schoolInfo?.left_logo
+      ? { uri: (schoolInfo.school_logo || schoolInfo.left_logo) as string }
+      : fallbackLogo;
+
   return (
-    <SafeAreaView style={styles.safeContainer} edges={['top', 'left', 'right', 'bottom']}>
+    <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
 
-      {/* Top Header Navigation */}
-      <View style={styles.topHeader}>
-        <View style={styles.gatewayBadge}>
-          <View style={styles.statusDot} />
-          <Text style={styles.gatewayText}>DEPED TELEMETRY PROTOCOL</Text>
-        </View>
-
-        <TouchableOpacity
-          style={styles.settingsBtn}
-          onPress={() => setConfigVisible(true)}
-          accessibilityLabel="Open Server Host Settings"
-          activeOpacity={0.7}
-        >
-          <Ionicons name="server-outline" size={18} color="#475569" />
-        </TouchableOpacity>
-      </View>
-
       <KeyboardAvoidingView
-        style={styles.keyboardContainer}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
           contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          {/* Institutional Crest & App Identity */}
-          <View style={styles.brandContainer}>
-            <View style={styles.crestCircle}>
-              <Image
-                source={schoolData.logoUrl ? { uri: schoolData.logoUrl } : defaultSchoolLogo}
-                style={styles.crestImage}
-                contentFit="contain"
-                transition={200}
+          {/* Top Bar with Server Status & Gear Button */}
+          <View style={styles.topUtilityBar}>
+            <View
+              style={[
+                styles.connectionPill,
+                serverReachable === true
+                  ? styles.pillOnline
+                  : serverReachable === false
+                  ? styles.pillOffline
+                  : styles.pillChecking,
+              ]}
+            >
+              <View
+                style={[
+                  styles.statusDot,
+                  {
+                    backgroundColor:
+                      serverReachable === true
+                        ? '#16a34a'
+                        : serverReachable === false
+                        ? '#dc2626'
+                        : '#d97706',
+                  },
+                ]}
               />
+              <Text
+                style={[
+                  styles.connectionPillText,
+                  {
+                    color:
+                      serverReachable === true
+                        ? '#15803d'
+                        : serverReachable === false
+                        ? '#b91c1c'
+                        : '#b45309',
+                  },
+                ]}
+              >
+                {serverReachable === true
+                  ? 'DATABASE ONLINE'
+                  : serverReachable === false
+                  ? 'SERVER UNREACHABLE'
+                  : 'CHECKING SERVER...'}
+              </Text>
             </View>
-            <Text style={styles.mainTitle}>AttendSure</Text>
-            {schoolData.schoolName ? (
-              <Text style={styles.schoolTitle}>{schoolData.schoolName}</Text>
-            ) : null}
-            {schoolData.divisionLabel ? (
-              <Text style={styles.divisionSubtitle}>{schoolData.divisionLabel}</Text>
-            ) : null}
+
+            <TouchableOpacity
+              style={styles.configIconBtn}
+              onPress={() => setConfigModalVisible(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="settings-outline" size={20} color="#004b87" />
+            </TouchableOpacity>
           </View>
 
-          {/* Hardware Device Authorization Card */}
-          <View style={styles.hardwareCard}>
-            <View style={styles.hardwareCardHeader}>
-              <View style={styles.hwIconTitle}>
-                <Ionicons name="shield-checkmark" size={16} color={COLORS.accent} />
-                <Text style={styles.hwTitleText}>DEVICE AUTHORIZATION</Text>
-              </View>
-              <View style={styles.activeTag}>
-                <Text style={styles.activeTagText}>ACTIVE</Text>
-              </View>
-            </View>
-
-            {deviceModel ? (
-              <View style={styles.hwDetailRow}>
-                <Text style={styles.hwLabel}>Hardware Model:</Text>
-                <Text style={styles.hwVal}>{deviceModel}</Text>
-              </View>
-            ) : null}
-
-            {hardwareId ? (
-              <View style={styles.hwDetailRow}>
-                <Text style={styles.hwLabel}>Hardware UUID:</Text>
-                <Text style={styles.hwValMono} numberOfLines={1} ellipsizeMode="middle">
-                  {hardwareId}
-                </Text>
-              </View>
-            ) : null}
-
-            <Text style={styles.hwDisclaimer}>
-              Only database-registered personnel can bind this smartphone to official Civil Service records.
+          {/* Institutional Branding Header */}
+          <View style={styles.brandSection}>
+            <Image source={logoSource} style={styles.logoImage} contentFit="contain" />
+            <Text style={styles.schoolNameText}>
+              {schoolInfo?.school_name || 'AttendSure Campus Portal'}
             </Text>
+            {schoolInfo?.division || schoolInfo?.school_id ? (
+              <Text style={styles.schoolSubText}>
+                {[
+                  schoolInfo?.school_id ? `School ID: ${schoolInfo.school_id}` : '',
+                  schoolInfo?.division || '',
+                ]
+                  .filter(Boolean)
+                  .join(' • ')}
+              </Text>
+            ) : (
+              <Text style={styles.schoolSubText}>
+                IoT Gate & Classroom Attendance Management System
+              </Text>
+            )}
           </View>
 
-          {/* Login Card */}
+          {/* Login Form Card */}
           <View style={styles.loginCard}>
-            <Text style={styles.cardHeaderLabel}>DATABASE CREDENTIALS</Text>
+            <Text style={styles.cardHeaderTitle}>FACULTY & ADMIN SIGN IN</Text>
 
-            {/* Username / Employee ID */}
             <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Employee ID or Username</Text>
-              <View style={[styles.inputBox, userFocused && styles.inputBoxFocused]}>
-                <Ionicons
-                  name="person-outline"
-                  size={18}
-                  color={userFocused ? COLORS.primary : '#94a3b8'}
-                  style={styles.inputLeadingIcon}
-                />
+              <Text style={styles.fieldLabel}>Username / Employee ID</Text>
+              <View style={styles.inputBox}>
+                <Ionicons name="person-outline" size={18} color="#64748b" style={{ marginRight: 10 }} />
                 <TextInput
                   style={styles.textInput}
-                  placeholder="Enter registered ID or username"
+                  placeholder="Enter your registered username"
                   placeholderTextColor="#94a3b8"
                   value={username}
                   onChangeText={setUsername}
-                  onFocus={() => setUserFocused(true)}
-                  onBlur={() => setUserFocused(false)}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  autoComplete="username"
-                  textContentType="username"
                 />
               </View>
             </View>
 
-            {/* Password Field */}
             <View style={styles.fieldGroup}>
               <Text style={styles.fieldLabel}>Password</Text>
-              <View style={[styles.inputBox, passFocused && styles.inputBoxFocused]}>
+              <View style={styles.inputBox}>
                 <Ionicons
                   name="lock-closed-outline"
                   size={18}
-                  color={passFocused ? COLORS.primary : '#94a3b8'}
-                  style={styles.inputLeadingIcon}
+                  color="#64748b"
+                  style={{ marginRight: 10 }}
                 />
                 <TextInput
                   style={styles.textInput}
-                  placeholder="Enter database password"
+                  placeholder="Enter your password"
                   placeholderTextColor="#94a3b8"
                   value={password}
                   onChangeText={setPassword}
-                  onFocus={() => setPassFocused(true)}
-                  onBlur={() => setPassFocused(false)}
                   secureTextEntry={!showPassword}
                   autoCapitalize="none"
-                  autoComplete="current-password"
-                  textContentType="password"
                 />
-                <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                  style={styles.eyeBtn}
-                  activeOpacity={0.7}
-                  accessibilityLabel="Toggle password visibility"
-                >
+                <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)}>
                   <Ionicons
                     name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                    size={20}
+                    size={18}
                     color="#64748b"
                   />
                 </TouchableOpacity>
               </View>
             </View>
 
-            {/* Sign In CTA */}
             <TouchableOpacity
-              style={[styles.loginBtn, loading && styles.btnDisabled]}
+              style={[styles.loginBtn, submitting && { opacity: 0.65 }]}
               onPress={handleLogin}
-              disabled={loading}
-              activeOpacity={0.88}
+              disabled={submitting}
+              activeOpacity={0.85}
             >
-              {loading ? (
-                <ActivityIndicator color="#ffffff" size="small" />
+              {submitting ? (
+                <ActivityIndicator size="small" color="#ffffff" />
               ) : (
                 <>
+                  <Ionicons name="shield-checkmark-outline" size={18} color="#ffffff" />
                   <Text style={styles.loginBtnText}>Verify & Authorize Account</Text>
-                  <Ionicons name="arrow-forward" size={17} color="#ffffff" style={{ marginLeft: 6 }} />
                 </>
               )}
             </TouchableOpacity>
           </View>
 
-          {/* Compliance Footnote */}
-          <View style={styles.complianceFooter}>
-            <Text style={styles.footerBrand}>ATTENDSURE INTEGRATED SYSTEM</Text>
-            <Text style={styles.footerNote}>
-              Civil Service Commission Form 48 Standards • Strict Server-Side Authentication
-            </Text>
+          {/* Hardware Identity Card for Telemetry Binding */}
+          <View style={styles.hardwareCard}>
+            <View style={styles.hardwareHeader}>
+              <Ionicons name="hardware-chip-outline" size={15} color="#004b87" />
+              <Text style={styles.hardwareTitle}>REGISTERED HARDWARE IDENTITY</Text>
+            </View>
+            <View style={styles.hardwareRow}>
+              <Text style={styles.hardwareKey}>Runtime Platform:</Text>
+              <Text style={styles.hardwareVal}>{devicePlatform}</Text>
+            </View>
+            <View style={styles.hardwareRow}>
+              <Text style={styles.hardwareKey}>Hardware UUID:</Text>
+              <Text style={styles.hardwareVal}>{deviceUuid || 'Initializing...'}</Text>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Network Host Settings Modal */}
-      <ServerConfigModal visible={configVisible} onClose={() => setConfigVisible(false)} />
+      {/* Server Endpoint Configuration Modal */}
+      <Modal
+        visible={configModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfigModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Backend Server Endpoint</Text>
+              <TouchableOpacity onPress={() => setConfigModalVisible(false)}>
+                <Ionicons name="close" size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSubText}>
+              Enter the active IP address or domain name of your AttendSure Django server:
+            </Text>
+
+            <TextInput
+              style={styles.modalInput}
+              value={serverUrlInput}
+              onChangeText={setServerUrlInput}
+              placeholder="http://172.20.141.220:8000/api"
+              placeholderTextColor="#94a3b8"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            {/* Quick Preset Pills */}
+            <View style={styles.presetRow}>
+              <TouchableOpacity
+                style={styles.presetChip}
+                onPress={() => setServerUrlInput('http://172.20.141.220:8000/api')}
+              >
+                <Text style={styles.presetChipText}>Laptop Wi-Fi IP</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.presetChip}
+                onPress={() => setServerUrlInput('http://lapasan.attendsure.com.ph:8000/api')}
+              >
+                <Text style={styles.presetChipText}>School Domain</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.presetChip}
+                onPress={() => setServerUrlInput('http://localhost:8000/api')}
+              >
+                <Text style={styles.presetChipText}>Localhost / USB</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.saveServerBtn, testingConnection && { opacity: 0.65 }]}
+              onPress={handleSaveServerConfig}
+              disabled={testingConnection}
+            >
+              {testingConnection ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text style={styles.saveServerBtnText}>Save & Test Connection</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  safeContainer: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-  },
-  topHeader: {
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 20, paddingVertical: 16, justifyContent: 'center' },
+  topUtilityBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 10,
+    marginBottom: 20,
   },
-  gatewayBadge: {
+  connectionPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
     paddingVertical: 5,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    paddingHorizontal: 10,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    gap: 7,
-  },
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#059669',
-  },
-  gatewayText: {
-    fontSize: 9.5,
-    fontWeight: '800',
-    color: '#004b87',
-    letterSpacing: 0.5,
-  },
-  settingsBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  keyboardContainer: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 28,
-  },
-  brandContainer: {
-    alignItems: 'center',
-    marginTop: 6,
-    marginBottom: 16,
-  },
-  crestCircle: {
-    width: 86,
-    height: 86,
-    borderRadius: 43,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-    borderWidth: 1.5,
-    borderColor: '#b8d6f0',
-    padding: 6,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#004b87',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.12,
-        shadowRadius: 8,
-      },
-      android: { elevation: 3 },
-    }),
-  },
-  crestImage: {
-    width: '100%',
-    height: '100%',
-  },
-  mainTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#003460',
-    letterSpacing: -0.5,
-  },
-  schoolTitle: {
-    fontSize: 14.5,
-    fontWeight: '700',
-    color: '#004b87',
-    marginTop: 2,
-    textAlign: 'center',
-  },
-  divisionSubtitle: {
-    fontSize: 11.5,
-    color: '#64748b',
-    marginTop: 2,
-    textAlign: 'center',
-  },
-  hardwareCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  hardwareCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-    marginBottom: 8,
-  },
-  hwIconTitle: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 6,
   },
-  hwTitleText: {
-    fontSize: 10.5,
-    fontWeight: '800',
-    color: '#0f172a',
-    letterSpacing: 0.5,
-  },
-  activeTag: {
-    backgroundColor: '#ecfdf5',
-    paddingVertical: 3,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-  },
-  activeTagText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#047857',
-    letterSpacing: 0.4,
-  },
-  hwDetailRow: {
-    flexDirection: 'row',
+  pillOnline: { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' },
+  pillOffline: { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
+  pillChecking: { backgroundColor: '#fffbeb', borderColor: '#fde68a' },
+  statusDot: { width: 7, height: 7, borderRadius: 3.5 },
+  connectionPillText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.4 },
+  configIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#e6f0fa',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 5,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#b8d6f0',
   },
-  hwLabel: {
-    fontSize: 11.5,
-    color: '#64748b',
+  brandSection: { alignItems: 'center', marginBottom: 24 },
+  logoImage: { width: 68, height: 68, borderRadius: 14, marginBottom: 12 },
+  schoolNameText: {
+    fontSize: 19,
+    fontWeight: '900',
+    color: '#003460',
+    textAlign: 'center',
+    letterSpacing: -0.3,
   },
-  hwVal: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  hwValMono: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#004b87',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    maxWidth: '65%',
-  },
-  hwDisclaimer: {
-    fontSize: 9.5,
-    color: '#94a3b8',
-    marginTop: 8,
-    lineHeight: 13,
-  },
+  schoolSubText: { fontSize: 11.5, color: '#64748b', textAlign: 'center', marginTop: 4 },
   loginCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 20,
-    padding: 18,
+    borderRadius: 18,
+    padding: 20,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.05,
-        shadowRadius: 10,
-      },
-      android: { elevation: 2 },
-    }),
+    marginBottom: 16,
   },
-  cardHeaderLabel: {
-    fontSize: 10.5,
+  cardHeaderTitle: {
+    fontSize: 11,
     fontWeight: '800',
-    color: '#64748b',
-    letterSpacing: 0.8,
+    color: '#004b87',
+    letterSpacing: 0.5,
     marginBottom: 14,
   },
-  fieldGroup: {
-    marginBottom: 12,
-  },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#334155',
-    marginBottom: 5,
-  },
+  fieldGroup: { marginBottom: 14 },
+  fieldLabel: { fontSize: 11.5, fontWeight: '700', color: '#334155', marginBottom: 6 },
   inputBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -534,23 +462,9 @@ const styles = StyleSheet.create({
     borderColor: '#cbd5e1',
     borderRadius: 12,
     paddingHorizontal: 12,
-    height: 48,
+    height: 46,
   },
-  inputBoxFocused: {
-    borderColor: '#004b87',
-    backgroundColor: '#ffffff',
-  },
-  inputLeadingIcon: {
-    marginRight: 8,
-  },
-  textInput: {
-    flex: 1,
-    fontSize: 13.5,
-    color: '#0f172a',
-  },
-  eyeBtn: {
-    padding: 6,
-  },
+  textInput: { flex: 1, fontSize: 13.5, color: '#0f172a' },
   loginBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -559,31 +473,69 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 12,
     marginTop: 6,
+    gap: 8,
   },
-  btnDisabled: {
-    opacity: 0.65,
+  loginBtnText: { color: '#ffffff', fontSize: 13.5, fontWeight: '800' },
+  hardwareCard: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
-  loginBtnText: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  complianceFooter: {
+  hardwareHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  hardwareTitle: { fontSize: 9.5, fontWeight: '800', color: '#004b87', letterSpacing: 0.4 },
+  hardwareRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 3 },
+  hardwareKey: { fontSize: 10.5, fontWeight: '600', color: '#64748b' },
+  hardwareVal: { fontSize: 10.5, fontWeight: '800', color: '#334155' },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
     alignItems: 'center',
-    marginTop: 18,
+    justifyContent: 'center',
+    padding: 20,
   },
-  footerBrand: {
-    fontSize: 9.5,
-    fontWeight: '800',
-    color: '#94a3b8',
-    letterSpacing: 0.8,
+  modalContainer: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 20,
   },
-  footerNote: {
-    fontSize: 9.5,
-    color: '#cbd5e1',
-    marginTop: 2,
-    textAlign: 'center',
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+  modalSubText: { fontSize: 11.5, color: '#64748b', lineHeight: 16, marginBottom: 12 },
+  modalInput: {
+    height: 44,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.2,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    color: '#0f172a',
+  },
+  presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10, marginBottom: 16 },
+  presetChip: {
+    backgroundColor: '#e6f0fa',
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 8,
+  },
+  presetChipText: { fontSize: 10, fontWeight: '700', color: '#004b87' },
+  saveServerBtn: {
+    backgroundColor: '#004b87',
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveServerBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '800' },
 });
 
 export default LoginScreen;

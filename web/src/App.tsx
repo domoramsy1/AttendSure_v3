@@ -30,7 +30,7 @@ import {
   SmsTab,
 } from './components/tabs';
 
-// Strictly ADMIN and TEACHER roles with 'sms' enabled for ADMIN
+// Strictly ADMIN and FACULTY roles with 'sms' enabled for ADMIN
 const ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   ADMIN: [
     'dashboard',
@@ -47,7 +47,7 @@ const ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'reports',
     'settings',
   ],
-  TEACHER: [
+  FACULTY: [
     'dashboard',
     'students',
     'schedules',
@@ -116,7 +116,7 @@ const AppContent: React.FC = () => {
         if (res.data) {
           const photo = res.data.photo || null;
           const name = res.data.full_name || res.data.username;
-          const role = (res.data.role || res.data.system_role || session.role || 'TEACHER').toUpperCase();
+          const role = (res.data.role || res.data.system_role || session.role || 'FACULTY').toUpperCase();
 
           if (photo) {
             setUserPhoto(photo);
@@ -160,13 +160,13 @@ const AppContent: React.FC = () => {
 
       if (typeof customEvent.detail === 'string') {
         const targetTab = customEvent.detail as NavItemKey;
-        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['TEACHER'];
+        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['FACULTY'];
         if (allowedTabs.includes(targetTab)) {
           setActiveTab(targetTab);
         }
       } else if (typeof customEvent.detail === 'object') {
         const { tab, report } = customEvent.detail;
-        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['TEACHER'];
+        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['FACULTY'];
         if (allowedTabs.includes(tab)) {
           setActiveTab(tab);
           if (report) {
@@ -191,7 +191,7 @@ const AppContent: React.FC = () => {
 
   const isAllowedToAccess = useMemo(() => {
     if (!userRole) return false;
-    const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['TEACHER'];
+    const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['FACULTY'];
     return allowedTabs.includes(activeTab);
   }, [userRole, activeTab]);
 

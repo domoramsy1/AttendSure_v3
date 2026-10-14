@@ -639,7 +639,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', width: '100%' }}>
             <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>I certify that this is true and correct:</div>
             <div style={sigLineStyle}>{reportData?.adviser_name || '\u00A0'}</div>
-            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, marginBottom: 8, color: '#000000' }}>(Signature of Teacher over Printed Name)</div>
+            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, marginBottom: 8, color: '#000000' }}>(Signature of Faculty over Printed Name)</div>
 
             <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>Attested by:</div>
             <div style={sigLineStyle}>{reportData?.school_head || school.principal_name || '\u00A0'}</div>

@@ -507,7 +507,7 @@ USER_ROLE_CHOICES = [
     ('ADMIN', 'System Administrator'),
     ('PRINCIPAL', 'School Principal'),
     ('DEPT_HEAD', 'Department Head'),
-    ('TEACHER', 'Teacher / Adviser'),
+    ('FACULTY', 'Faculty / Adviser'),
     ('GUARD', 'Security Guard'),
 ]
 
@@ -703,7 +703,7 @@ class UserProfile(models.Model):
     id = models.BigAutoField(primary_key=True)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     faculty = models.OneToOneField(FacultyProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='account')
-    role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default='TEACHER')
+    role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default='FACULTY')
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
     failed_attempts = models.IntegerField(default=0)
     locked_until = models.DateTimeField(null=True, blank=True)
@@ -879,7 +879,7 @@ class ScheduleDay(models.Model):
 
 class FacultyGateLog(models.Model):
     """
-    Main gate scan record for teachers and staff.
+    Main gate scan record for teachers and employee.
     Includes anti-cheating, loafing violation flags, and Principal pardon fields.
     """
     id = models.BigAutoField(primary_key=True)
@@ -1170,7 +1170,7 @@ def auto_sync_superuser_to_attendsure_admin(sender, instance, created, **kwargs)
     """
     # Safely check for is_faculty without crashing standard Django User objects
     is_faculty = getattr(instance, 'is_faculty', False)
-    target_role = 'ADMIN' if (instance.is_superuser or is_faculty) else 'TEACHER'
+    target_role = 'ADMIN' if (instance.is_superuser or is_faculty) else 'FACULTY'
 
     if created:
         UserProfile.objects.get_or_create(
@@ -1476,7 +1476,7 @@ class Migration(migrations.Migration):
             name='UserProfile',
             fields=[
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
-                ('role', models.CharField(choices=[('ADMIN', 'Admin'), ('REGISTRAR', 'Registrar'), ('TEACHER', 'Faculty')], default='TEACHER', max_length=20)),
+                ('role', models.CharField(choices=[('ADMIN', 'Admin'), ('REGISTRAR', 'Registrar'), ('FACULTY', 'Faculty')], default='FACULTY', max_length=20)),
                 ('avatar', models.ImageField(blank=True, default='avatars/default_user.png', upload_to='avatars/')),
                 ('failed_attempts', models.IntegerField(default=0)),
                 ('locked_until', models.DateTimeField(blank=True, null=True)),
@@ -2471,7 +2471,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('REGISTRAR', 'Registrar / Academic Faculty'), ('TEACHER', 'Faculty / Faculty Adviser'), ('STAFF', 'School Faculty')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('REGISTRAR', 'Registrar / Academic Faculty'), ('FACULTY', 'Faculty / Faculty Adviser'), ('STAFF', 'School Faculty')], default='FACULTY', max_length=20),
         ),
         migrations.AlterModelTable(
             name='schoolprofile',
@@ -2537,7 +2537,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('TEACHER', 'Faculty / Faculty Adviser')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('FACULTY', 'Faculty / Faculty Adviser')], default='FACULTY', max_length=20),
         ),
     ]
 
@@ -3037,7 +3037,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('TEACHER', 'Teacher')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('FACULTY', 'Faculty')], default='FACULTY', max_length=20),
         ),
         migrations.RemoveField(
             model_name='dailyattendancesummary',
@@ -3151,7 +3151,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userprofile',
             name='role',
-            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('PRINCIPAL', 'School Principal'), ('DEPT_HEAD', 'Department Head'), ('TEACHER', 'Teacher / Adviser'), ('GUARD', 'Security Guard')], default='TEACHER', max_length=20),
+            field=models.CharField(choices=[('ADMIN', 'System Administrator'), ('PRINCIPAL', 'School Principal'), ('DEPT_HEAD', 'Department Head'), ('FACULTY', 'Faculty / Adviser'), ('GUARD', 'Security Guard')], default='FACULTY', max_length=20),
         ),
     ]
 
@@ -4483,7 +4483,7 @@ class IsAdviserOrAdmin(permissions.BasePermission):
             return False
         if profile.role == 'ADMIN':
             return True
-        if profile.role == 'TEACHER' and profile.faculty:
+        if profile.role == 'FACULTY' and profile.faculty:
             # Check if faculty is the registered adviser of the section
             return getattr(obj, 'adviser_id', None) == profile.faculty.id
         return False
@@ -5050,12 +5050,12 @@ class GatePassSerializer(serializers.ModelSerializer):
             request = self.context.get('request')
             if request and request.user.is_authenticated:
                 user_prof = getattr(request.user, 'profile', None) or getattr(request.user, 'userprofile', None)
-                staff = getattr(user_prof, 'faculty', None) if user_prof else None
-                if not staff and request.user.email:
-                    staff = FacultyProfile.objects.filter(email=request.user.email).first()
-                if not staff:
-                    staff = FacultyProfile.objects.filter(is_active=True).first()
-                validated_data['issued_by'] = staff
+                employee = getattr(user_prof, 'faculty', None) if user_prof else None
+                if not employee and request.user.email:
+                    employee = FacultyProfile.objects.filter(email=request.user.email).first()
+                if not employee:
+                    employee = FacultyProfile.objects.filter(is_active=True).first()
+                validated_data['issued_by'] = employee
             else:
                 validated_data['issued_by'] = FacultyProfile.objects.filter(is_active=True).first()
 
@@ -5477,7 +5477,7 @@ urlpatterns = [
     path('gate/logs/', GateLogsAPIView.as_view(), name='api-gate-logs'),
     path('faculty-gate-logs/', GateLogsAPIView.as_view(), name='api-faculty-gate-logs-alias'),
 
-    # Classroom Mobile Ingestion & Teacher Rosters
+    # Classroom Mobile Ingestion & Faculty Rosters
     path('classroom/roster/', FacultyClassroomRosterAPIView.as_view(), name='api-classroom-roster'),
     path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='api-classroom-batch-scan'),
 
@@ -5685,7 +5685,7 @@ def get_user_role(user):
     profile = get_user_profile(user)
     if profile and hasattr(profile, 'role'):
         return str(profile.role).upper()
-    return 'TEACHER'
+    return 'FACULTY'
 
 
 def resolve_faculty_for_user(user):
@@ -5841,7 +5841,7 @@ class StandardResultsSetPagination(PageNumberPagination):
 
 class FacultyClassroomRosterAPIView(APIView):
     """
-    Returns strictly the sections and enrolled students assigned to the logged-in teacher.
+    Returns strictly the sections and enrolled students assigned to the logged-in faculty.
     Even if the user is an Administrator, it scopes strictly to the sections assigned
     to their linked faculty profile.
     """
@@ -6087,8 +6087,8 @@ class ClassroomBatchScanAPIView(APIView):
             }
             if 'faculty' in model_field_names:
                 log_defaults['faculty'] = effective_faculty
-            if 'teacher' in model_field_names:
-                log_defaults['teacher'] = effective_faculty
+            if 'faculty' in model_field_names:
+                log_defaults['faculty'] = effective_faculty
 
             SubjectAttendanceLog.objects.update_or_create(
                 student=student,
@@ -6895,7 +6895,7 @@ class TelemetryHeartbeatAPIView(APIView):
                     trigger_reason=f"Security alert: Phone already used by {device_in_use.first_name} {device_in_use.last_name}.",
                     status='FLAGGED_FRAUD'
                 )
-                return Response({'error': 'This phone is already registered to another teacher.'}, status=status.HTTP_403_FORBIDDEN)
+                return Response({'error': 'This phone is already registered to another faculty.'}, status=status.HTTP_403_FORBIDDEN)
 
             faculty.bound_device_id = incoming_device_id
             faculty.device_bound_at = timezone.now()
@@ -7266,7 +7266,7 @@ class DTRListAPIView(APIView):
             year=year
         )
 
-        user_role = get_user_role(request.user) or 'TEACHER'
+        user_role = get_user_role(request.user) or 'FACULTY'
         can_approve_dept = user_role in ['DEPT_HEAD', 'ADMIN', 'PRINCIPAL'] or request.user.is_superuser
         can_clear_loafing = user_role in ['PRINCIPAL', 'ADMIN'] or request.user.is_superuser
 
@@ -7300,7 +7300,7 @@ class DTRListAPIView(APIView):
             year=year
         )
 
-        user_role = get_user_role(request.user) or 'TEACHER'
+        user_role = get_user_role(request.user) or 'FACULTY'
 
         if action == 'SUBMIT_DTR':
             dtr_record.is_submitted = True
@@ -7438,9 +7438,9 @@ class ScheduleViewSet(viewsets.ModelViewSet):
                 )
 
             if faculty_id and sched.faculty_id and int(sched.faculty_id) == int(faculty_id):
-                teacher_name = f"{sched.faculty.first_name} {sched.faculty.last_name}".strip() if sched.faculty else "This teacher"
+                teacher_name = f"{sched.faculty.first_name} {sched.faculty.last_name}".strip() if sched.faculty else "This faculty"
                 clashes.append(
-                    f"Teacher conflict: {teacher_name} is already teaching {section_name} on {days_text} at {time_text}."
+                    f"Faculty conflict: {teacher_name} is already teaching {section_name} on {days_text} at {time_text}."
                 )
 
             clean_room = str(room_name).strip() if room_name else ''
@@ -8342,7 +8342,7 @@ class DatabaseLoginView(APIView):
                 'faculty_name': full_name,
                 'faculty_id': emp_id,
                 'email': user.email,
-                'role': 'ADMIN' if user.is_superuser else 'TEACHER',
+                'role': 'ADMIN' if user.is_superuser else 'FACULTY',
                 'is_superuser': user.is_superuser,
             }
         }, status=status.HTTP_200_OK)
@@ -8357,7 +8357,7 @@ class CurrentUserView(APIView):
         full_name = f"{user.first_name} {user.last_name}".strip() or user.username
 
         # Determine single source of truth for the role
-        assigned_role = 'ADMIN' if (user.is_superuser or user.is_staff) else 'TEACHER'
+        assigned_role = 'ADMIN' if (user.is_superuser or user.is_staff) else 'FACULTY'
 
         return Response({
             'id': user.id,
@@ -8390,7 +8390,7 @@ class CurrentUserView(APIView):
             'faculty_name': full_name,
             'faculty_id': emp_id,
             'email': user.email,
-            'role': 'ADMIN' if user.is_superuser else 'TEACHER',
+            'role': 'ADMIN' if user.is_superuser else 'FACULTY',
             'is_superuser': user.is_superuser,
         })
 
@@ -9135,7 +9135,7 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '300/minute',       # High capacity for hardware gate turnstiles
-        'user': '1800/minute',      # High capacity for authenticated teacher telemetry pings
+        'user': '1800/minute',      # High capacity for authenticated faculty telemetry pings
     },
 }
 
@@ -9508,7 +9508,7 @@ def sync_faculty():
             
         # 2. Fill baseline required employment details
         if 'position' in faculty_fields and not f.position:
-            f.position = "Teacher III"
+            f.position = "Faculty III"
             changed = True
             
         if 'department' in faculty_fields and not f.department:
@@ -9563,7 +9563,7 @@ def sync_users():
             changed = True
             
         if 'role' in user_profile_fields and not profile.role:
-            profile.role = 'ADMIN' if u.is_superuser else 'TEACHER'
+            profile.role = 'ADMIN' if u.is_superuser else 'FACULTY'
             profile.save(update_fields=['role'])
             changed = True
             
@@ -10310,7 +10310,7 @@ export const ENDPOINTS = {
   GATE_LOGS: '/api/gate/logs/',
   GATE_SCAN: '/api/gate/scan/',
 
-  // Classroom Mobile Scans (Teacher Authenticated)
+  // Classroom Mobile Scans (Faculty Authenticated)
   CLASSROOM_SCAN: '/api/classroom/scan/',
   SMS_OUTBOX: '/api/sms-outbox/',
   FACULTY_DTR: '/api/dtr/',
@@ -13055,11 +13055,11 @@ export const ProfileSettingsScreen: React.FC = () => {
 
   const confirmSignOut = () => {
     Alert.alert(
-      'Sign Out Account',
+      'Log Out Account',
       'Are you sure you want to sign out from this smartphone?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign Out', style: 'destructive', onPress: logout },
+        { text: 'Log Out', style: 'destructive', onPress: logout },
       ]
     );
   };
@@ -13167,7 +13167,7 @@ export const ProfileSettingsScreen: React.FC = () => {
                   style={styles.textInput}
                   value={email}
                   onChangeText={setEmail}
-                  placeholder="teacher@deped.gov.ph"
+                  placeholder="faculty@deped.gov.ph"
                   placeholderTextColor="#94a3b8"
                   keyboardType="email-address"
                   autoCapitalize="none"
@@ -13280,11 +13280,11 @@ export const ProfileSettingsScreen: React.FC = () => {
           ) : null}
         </View>
 
-        {/* 5. Sign Out */}
+        {/* 5. Log Out */}
         <View style={[styles.card, { backgroundColor: '#fffafa', borderColor: '#fecaca' }]}>
           <TouchableOpacity style={styles.logoutBtn} onPress={confirmSignOut} activeOpacity={0.8}>
             <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-            <Text style={styles.logoutBtnText}>Sign Out from this Device</Text>
+            <Text style={styles.logoutBtnText}>Log Out from this Device</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -13551,7 +13551,7 @@ export const ScannerScreen: React.FC = () => {
     if (myUsername && clean === myUsername) return true;
     if (myQrToken && clean === myQrToken) return true;
 
-    return clean.startsWith('emp-') || clean.startsWith('fac-') || clean.startsWith('staff-');
+    return clean.startsWith('emp-') || clean.startsWith('fac-') || clean.startsWith('employee-');
   };
 
   // 5. Verification & Batch Ingestion
@@ -13569,7 +13569,7 @@ export const ScannerScreen: React.FC = () => {
     if (isFacultyIdentifier(cleanCode)) {
       if (soundEnabled) await playScanErrorSound();
       if (vibrateEnabled) Vibration.vibrate([0, 150, 100, 150]);
-      Alert.alert('Faculty Pass Detected', 'Teacher identification cards cannot be used for student attendance logs.', [
+      Alert.alert('Faculty Pass Detected', 'Faculty identification cards cannot be used for student attendance logs.', [
         { text: 'OK', onPress: unlockScanningDebounce },
       ]);
       return;
@@ -14288,11 +14288,11 @@ export const SettingsScreen: React.FC = () => {
 
   const confirmSignOut = () => {
     Alert.alert(
-      'Sign Out Account',
+      'Log Out Account',
       'Are you sure you want to sign out? Your device credentials will be detached until next sign-in.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign Out', style: 'destructive', onPress: logout },
+        { text: 'Log Out', style: 'destructive', onPress: logout },
       ]
     );
   };
@@ -14492,7 +14492,7 @@ export const SettingsScreen: React.FC = () => {
         <View style={[styles.card, { borderColor: '#fecaca', backgroundColor: '#fffafa' }]}>
           <TouchableOpacity style={styles.logoutBtn} onPress={confirmSignOut} activeOpacity={0.8}>
             <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-            <Text style={styles.logoutBtnText}>Sign Out from this Device</Text>
+            <Text style={styles.logoutBtnText}>Log Out from this Device</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -15965,7 +15965,7 @@ FILE: .\mobile\src\types\index.ts
 // AttendSure V3 - Core Mobile Type Definitions
 // File: mobile/src/types/index.ts
 
-export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'TEACHER' | 'GUARD';
+export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'GUARD';
 
 export interface DeviceIdentity {
   deviceId: string;
@@ -16689,7 +16689,7 @@ import {
   SmsTab,
 } from './components/tabs';
 
-// Strictly ADMIN and TEACHER roles with 'sms' enabled for ADMIN
+// Strictly ADMIN and FACULTY roles with 'sms' enabled for ADMIN
 const ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   ADMIN: [
     'dashboard',
@@ -16706,7 +16706,7 @@ const ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'reports',
     'settings',
   ],
-  TEACHER: [
+  FACULTY: [
     'dashboard',
     'students',
     'schedules',
@@ -16802,13 +16802,13 @@ const AppContent: React.FC = () => {
 
       if (typeof customEvent.detail === 'string') {
         const targetTab = customEvent.detail as NavItemKey;
-        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['TEACHER'];
+        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['FACULTY'];
         if (allowedTabs.includes(targetTab)) {
           setActiveTab(targetTab);
         }
       } else if (typeof customEvent.detail === 'object') {
         const { tab, report } = customEvent.detail;
-        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['TEACHER'];
+        const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['FACULTY'];
         if (allowedTabs.includes(tab)) {
           setActiveTab(tab);
           if (report) {
@@ -16835,7 +16835,7 @@ const AppContent: React.FC = () => {
 
   const isAllowedToAccess = useMemo(() => {
     if (!userRole) return false;
-    const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['TEACHER'];
+    const allowedTabs = ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS['FACULTY'];
     return allowedTabs.includes(activeTab);
   }, [userRole, activeTab]);
 
@@ -17468,7 +17468,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
     first_name: '',
     last_name: '',
     employee_id: '',
-    role: 'TEACHER',
+    role: 'FACULTY',
     password: '',
     confirm_password: '',
   });
@@ -17612,7 +17612,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
         first_name: '',
         last_name: '',
         employee_id: '',
-        role: 'TEACHER',
+        role: 'FACULTY',
         password: '',
         confirm_password: '',
       });
@@ -18067,7 +18067,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                     onChange={(e) => setRegForm({ ...regForm, role: e.target.value as any })}
                     style={{ width: '100%' }}
                   >
-                    <option value="TEACHER">Faculty</option>
+                    <option value="FACULTY">Faculty</option>
                     <option value="REGISTRAR">Registrar</option>
                     <option value="ADMIN">Administrator</option>
                   </Select>
@@ -21979,7 +21979,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   className="w-full px-4 py-2 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition-colors"
                 >
                   <LogOut size={14} className="text-rose-500" />
-                  <span>Sign Out of Portal</span>
+                  <span>Log Out of Portal</span>
                 </button>
               </div>
             </div>
@@ -22071,7 +22071,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
   if (!isOpen) return null;
 
   const userName = session?.faculty_name || session?.username || 'User';
-  const userRole = (session?.role || localStorage.getItem('attendsure_role') || 'TEACHER').toUpperCase();
+  const userRole = (session?.role || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const userInitial = userName ? userName.charAt(0).toUpperCase() : '?';
 
   const handleAction = (tab?: NavItemKey) => {
@@ -22220,7 +22220,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
 
       <div style={{ height: 1, backgroundColor: '#f1f5f9', margin: '0 8px' }} />
 
-      {/* 3. Sign Out */}
+      {/* 3. Log Out */}
       <div style={{ padding: '6px' }}>
         <button
           type="button"
@@ -22237,7 +22237,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
           </div>
           <div style={{ flex: 1, textAlign: 'left' }}>
             <div style={{ fontSize: '0.80rem', fontWeight: 700, color: '#dc2626' }}>
-              Sign Out
+              Log Out
             </div>
             <div style={{ fontSize: '0.68rem', color: '#b91c1c' }}>
               End current session safely
@@ -22423,7 +22423,7 @@ export type NavItemKey =
   | 'reports'
   | 'settings';
 
-export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'TEACHER' | 'GUARD';
+export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'GUARD';
 
 interface NavItem {
   id: NavItemKey;
@@ -22505,13 +22505,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const rawRole = (
     session?.role ||
     localStorage.getItem('attendsure_role') ||
-    'TEACHER'
+    'FACULTY'
   ).toUpperCase();
 
   const userRole: UserRole = (
-    ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'].includes(rawRole)
+    ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'].includes(rawRole)
       ? rawRole
-      : 'TEACHER'
+      : 'FACULTY'
   ) as UserRole;
 
   const userName =
@@ -22555,7 +22555,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'dashboard',
           label: 'Dashboard',
           icon: LayoutDashboard,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'],
         },
         {
           id: 'gate-logs',
@@ -22572,7 +22572,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'students',
           label: 'Students',
           icon: GraduationCap,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
         },
         {
           id: 'facultys',
@@ -22584,7 +22584,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'schedules',
           label: 'Schedules & Sections',
           icon: CalendarDays,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
         },
       ],
     },
@@ -22601,7 +22601,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'gate-passes',
           label: 'Gate Passes',
           icon: Ticket,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER', 'GUARD'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'],
         },
         {
           id: 'scanners',
@@ -22613,7 +22613,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'dtr',
           label: 'DTR',
           icon: Clock,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
         },
         {
           id: 'geofence',
@@ -22630,7 +22630,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'reports',
           label: 'Reports',
           icon: FileSpreadsheet,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'],
+          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
         },
         {
           id: 'users',
@@ -23297,7 +23297,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     setSectionId(secVal ? String(secVal) : '');
     const subVal = typeof item.subject === 'object' ? item.subject?.id : (item.subject_id || item.subject);
     setSubjectId(subVal ? String(subVal) : '');
-    const facVal = typeof item.faculty === 'object' ? item.faculty?.id : (item.faculty_id || item.teacher || item.faculty);
+    const facVal = typeof item.faculty === 'object' ? item.faculty?.id : (item.faculty_id || item.faculty || item.faculty);
     setFacultyId(facVal ? String(facVal) : '');
     const rmVal = typeof item.room === 'object' ? item.room?.id : (item.room_id || item.room);
     setRoomId(rmVal ? String(rmVal) : '');
@@ -23354,7 +23354,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       subject_id: subNum,
       faculty: facNum,
       faculty_id: facNum,
-      teacher: facNum,
+      faculty: facNum,
       room: rmNum,
       room_id: rmNum,
       room_number: roomObj ? (roomObj.name || roomObj.room_number) : '',
@@ -23475,14 +23475,14 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
           </select>
         </div>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Teacher *</label>
+          <label style={labelStyle}>Faculty *</label>
           <select 
             required 
             value={facultyId} 
             onChange={(e) => setFacultyId(e.target.value)} 
             style={inputStyle}
           >
-            <option value="">-- Choose Teacher --</option>
+            <option value="">-- Choose Faculty --</option>
             {teachers.map((t) => {
               const tName = t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name;
               return (
@@ -23690,8 +23690,8 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     });
     if (busy) {
       const teacherObj = teachers.find((t) => String(t.id) === String(adviserId));
-      const tName = teacherObj ? (teacherObj.full_name || `${teacherObj.first_name || ''} ${teacherObj.last_name || ''}`.trim() || teacherObj.name) : 'Selected Teacher';
-      return `Teacher conflict: ${tName} is already adviser for "${busy.name}".`;
+      const tName = teacherObj ? (teacherObj.full_name || `${teacherObj.first_name || ''} ${teacherObj.last_name || ''}`.trim() || teacherObj.name) : 'Selected Faculty';
+      return `Faculty conflict: ${tName} is already adviser for "${busy.name}".`;
     }
     return '';
   }, [adviserId, editingId, existingSections, teachers]);
@@ -23840,7 +23840,7 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             onChange={(e) => setAdviserId(e.target.value)} 
             style={adviserBusyError ? badInputStyle : inputStyle}
           >
-            <option value="">-- Optional: Choose Teacher --</option>
+            <option value="">-- Optional: Choose Faculty --</option>
             {teachers.map((t) => {
               const tName = t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name;
               return (
@@ -27572,7 +27572,7 @@ export const DTRTab: React.FC = () => {
         <div style={{ marginTop: 16, textAlign: 'center' }}>
           <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto' }}></div>
           <div style={{ fontSize: '5.6pt', fontStyle: 'italic', marginTop: 1 }}>
-            (Signature of Teacher / Employee)
+            (Signature of Faculty / Employee)
           </div>
         </div>
 
@@ -27866,7 +27866,7 @@ export const DTRTab: React.FC = () => {
             </div>
 
             <div style={{ fontSize: '0.80rem', color: '#334155' }}>
-              <strong>Recorded Gate Note:</strong> {selectedViolationRow.loafing_remarks || 'Teacher scanned OUT without authorized Gate Pass.'}
+              <strong>Recorded Gate Note:</strong> {selectedViolationRow.loafing_remarks || 'Faculty scanned OUT without authorized Gate Pass.'}
             </div>
 
             <div>
@@ -28124,7 +28124,7 @@ FILE: .\web\src\components\tabs\FacultyTab.tsx
  * 3. LIVE POLLING: Silent 3-second background polling keeps attendance and roster up to date without refresh.
  * 4. TELEMETRY CARDS: Live summary counters for Total Faculty, Active Status, RFID Paired, and Departments.
  * 5. SERVER PAGINATION: Full page controls with record counts and per-page limits.
- * 6. DIGITAL ID PRINTING: Print-ready staff credential preview.
+ * 6. DIGITAL ID PRINTING: Print-ready employee credential preview.
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -28191,25 +28191,25 @@ const FACULTY_POSITIONS = [
   {
     category: 'Classroom Teachers',
     ranks: [
-      'Teacher I',
-      'Teacher II',
-      'Teacher III',
-      'Special Science Teacher I',
-      'Master Teacher I',
-      'Master Teacher II',
-      'Master Teacher III',
-      'Master Teacher IV',
+      'Faculty I',
+      'Faculty II',
+      'Faculty III',
+      'Special Science Faculty I',
+      'Master Faculty I',
+      'Master Faculty II',
+      'Master Faculty III',
+      'Master Faculty IV',
     ],
   },
   {
     category: 'Department Heads',
     ranks: [
-      'Head Teacher I',
-      'Head Teacher II',
-      'Head Teacher III',
-      'Head Teacher IV',
-      'Head Teacher V',
-      'Head Teacher VI',
+      'Head Faculty I',
+      'Head Faculty II',
+      'Head Faculty III',
+      'Head Faculty IV',
+      'Head Faculty V',
+      'Head Faculty VI',
     ],
   },
   {
@@ -28259,7 +28259,7 @@ const INITIAL_FORM_DATA = {
   middle_name: '',
   last_name: '',
   suffix: '',
-  position: 'Teacher I',
+  position: 'Faculty I',
   department: 'Junior High School',
   contact_number: '',
   email: '',
@@ -28538,7 +28538,7 @@ export const FacultyTab: React.FC = () => {
       middle_name: faculty.middle_name || '',
       last_name: faculty.last_name || '',
       suffix: faculty.suffix || '',
-      position: faculty.position || 'Teacher I',
+      position: faculty.position || 'Faculty I',
       department: faculty.department || 'Junior High School',
       contact_number: faculty.contact_number || '',
       email: faculty.email || '',
@@ -28627,7 +28627,7 @@ export const FacultyTab: React.FC = () => {
         <div style={statCard}>
           <div style={statLabel}>TOTAL REGISTERED FACULTY</div>
           <div style={statValue}>{totalCount || facultys.length}</div>
-          <div style={statHelp}>Permanent and contractual staff</div>
+          <div style={statHelp}>Permanent and contractual employee</div>
         </div>
 
         <div style={statCard}>
@@ -29077,7 +29077,7 @@ export const FacultyTab: React.FC = () => {
               </label>
               <input
                 type="email"
-                placeholder="teacher@attendsure.edu.ph"
+                placeholder="faculty@attendsure.edu.ph"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 style={inputStyle}
@@ -31582,7 +31582,7 @@ export const GeofenceTab: React.FC = () => {
   const isInteracting = useRef(false);
   isInteracting.current = saving || resettingId !== null;
 
-  const userRole = (localStorage.getItem('attendsure_role') || 'TEACHER').toUpperCase();
+  const userRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const isAdmin = userRole === 'ADMIN';
 
   // Load Leaflet dynamically
@@ -31817,7 +31817,7 @@ export const GeofenceTab: React.FC = () => {
 
     showConfirm({
       title: 'Reset Hardware Device Binding',
-      message: `Unbind the registered mobile device for ${facultyName}? This will permit the staff member to pair a new device during their next check-in.`,
+      message: `Unbind the registered mobile device for ${facultyName}? This will permit the employee member to pair a new device during their next check-in.`,
       confirmLabel: 'Reset Device',
       isDestructive: true,
       onConfirm: async () => {
@@ -34061,7 +34061,7 @@ interface ScheduleItem {
   faculty?: any;
   faculty_name?: string;
   faculty_id?: number;
-  teacher?: any;
+  faculty?: any;
   teacher_name?: string;
   room?: any;
   room_name?: string;
@@ -34278,7 +34278,7 @@ export const SchedulesTab: React.FC = () => {
       photo = item.faculty.photo_url || item.faculty.photo || null;
     }
 
-    const rawId = item.faculty || item.faculty_id || item.teacher;
+    const rawId = item.faculty || item.faculty_id || item.faculty;
     if (rawId) {
       const matched = facultyList.find((f) => f.id === rawId || f.user_id === rawId);
       if (matched) {
@@ -34453,7 +34453,7 @@ export const SchedulesTab: React.FC = () => {
             <Search size={15} color="#94a3b8" />
             <input
               type="text"
-              placeholder="Search by section, subject code, teacher, room..."
+              placeholder="Search by section, subject code, faculty, room..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={searchInputStyle}
@@ -37908,7 +37908,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', width: '100%' }}>
             <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>I certify that this is true and correct:</div>
             <div style={sigLineStyle}>{reportData?.adviser_name || '\u00A0'}</div>
-            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, marginBottom: 8, color: '#000000' }}>(Signature of Teacher over Printed Name)</div>
+            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, marginBottom: 8, color: '#000000' }}>(Signature of Faculty over Printed Name)</div>
 
             <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>Attested by:</div>
             <div style={sigLineStyle}>{reportData?.school_head || school.principal_name || '\u00A0'}</div>
@@ -43609,7 +43609,7 @@ const RBAC_ROLES = [
   { value: 'ADMIN', label: 'System Administrator', color: '#6366f1', bg: '#e0e7ff' },
   { value: 'PRINCIPAL', label: 'School Principal', color: '#059669', bg: '#d1fae5' },
   { value: 'DEPT_HEAD', label: 'Department Head', color: '#0284c7', bg: '#e0f2fe' },
-  { value: 'TEACHER', label: 'Faculty / Teacher', color: '#0d9488', bg: '#ccfbf1' },
+  { value: 'FACULTY', label: 'Faculty / Faculty', color: '#0d9488', bg: '#ccfbf1' },
   { value: 'GUARD', label: 'Gate Security / Guard', color: '#d97706', bg: '#fef3c7' },
 ];
 
@@ -43618,7 +43618,7 @@ const INITIAL_FORM = {
   email: '',
   first_name: '',
   last_name: '',
-  role: 'TEACHER',
+  role: 'FACULTY',
   password: '',
   photo: null as string | null,
 };
@@ -43821,7 +43821,7 @@ export const UsersTab: React.FC = () => {
       email: user.email || '',
       first_name: user.first_name || '',
       last_name: user.last_name || '',
-      role: user.current_role || user.role || 'TEACHER',
+      role: user.current_role || user.role || 'FACULTY',
       password: '',
       photo: user.photo || null,
     });
@@ -43987,7 +43987,7 @@ export const UsersTab: React.FC = () => {
       <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
           title="User Accounts & Security"
-          subtitle="Manage access roles, credentials, and institutional staff identity."
+          subtitle="Manage access roles, credentials, and institutional employee identity."
           searchPlaceholder="Search by username, full name, or email..."
           searchValue={search}
           onSearchChange={setSearch}
@@ -44987,7 +44987,7 @@ export const UI_TEXT = {
         subtext: "Card taps and backup QR scans",
       },
       facultyDtr: {
-        title: "TEACHER DTR (FORM 48)",
+        title: "FACULTY DTR (FORM 48)",
         badge: "Form 48",
         waitingSubtext: "No facultys checked in yet",
       },
@@ -45642,7 +45642,7 @@ export interface RegisterPayload {
   first_name: string;
   last_name: string;
   employee_id: string;
-  role: 'TEACHER' | 'REGISTRAR' | 'ADMIN';
+  role: 'FACULTY' | 'REGISTRAR' | 'ADMIN';
   password: string;
   confirm_password: string;
 }

@@ -5851,8 +5851,8 @@ django.db.utils.OperationalError: connection to server at "127.0.0.1", port 5432
 [2026-10-09 19:29:22] [INFO] [django.server:249] - "GET /api/students/?page=1&page_size=25 HTTP/1.1" 200 27608
 [2026-10-09 19:29:25] [INFO] [django.server:249] - "GET /api/students/?page=1&page_size=25 HTTP/1.1" 200 27530
 [2026-10-09 19:29:28] [INFO] [django.server:249] - "GET /api/students/?page=1&page_size=25 HTTP/1.1" 200 27374
-[2026-10-09 19:30:33] [WARNING] [django.request:249] - Not Found: /media/staff/profile_1_1791131495.jpeg
-[2026-10-09 19:30:33] [WARNING] [django.server:249] - "GET /media/staff/profile_1_1791131495.jpeg HTTP/1.1" 404 2835
+[2026-10-09 19:30:33] [WARNING] [django.request:249] - Not Found: /media/employee/profile_1_1791131495.jpeg
+[2026-10-09 19:30:33] [WARNING] [django.server:249] - "GET /media/employee/profile_1_1791131495.jpeg HTTP/1.1" 404 2835
 [2026-10-09 19:30:33] [INFO] [django.server:249] - "OPTIONS /api/dashboard/overview/ HTTP/1.1" 200 0
 [2026-10-09 19:30:33] [INFO] [django.server:249] - "OPTIONS /api/me/ HTTP/1.1" 200 0
 [2026-10-09 19:30:33] [INFO] [django.server:249] - "OPTIONS /api/me/ HTTP/1.1" 200 0
@@ -43354,3 +43354,123 @@ AttributeError: 'UserManagementSerializer' object has no attribute 'get_photo_ur
 [2026-10-12 23:59:18] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
 [2026-10-13 00:00:06] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\academics\services\sf1_service.py changed, reloading.
 [2026-10-13 00:00:10] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 11:50:01] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 11:50:34] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 14:33:09] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 14:41:57] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 14:56:50] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 17:55:20] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 18:06:34] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-13 18:45:23] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:00:07] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:36:33] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:45:05] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:45:08] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:46:05] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:46:07] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:47:25] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:51:47] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:51:49] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:51:58] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:51:59] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:52:34] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:52:35] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:52:37] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:52:39] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:53:32] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:53:34] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:53:36] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:53:38] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:54:23] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:54:26] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:54:28] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:54:30] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:54:47] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 09:54:50] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 09:58:28] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:04:46] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:04:50] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:05:33] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:05:35] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:05:44] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:05:46] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:05:49] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:05:51] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:07:26] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:07:38] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:07:40] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:08:00] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:08:02] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:08:07] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:08:08] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:08:21] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:18:50] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:53:27] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:53:29] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:53:32] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:53:33] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 10:53:35] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 10:53:37] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 12:03:10] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:09:42] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\serializers.py changed, reloading.
+[2026-10-14 13:09:49] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:10:22] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-14 13:10:26] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:10:35] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-14 13:10:37] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:10:55] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 13:10:58] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:30:33] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 13:30:36] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:30:43] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 13:30:45] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:30:56] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-14 13:30:58] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:31:15] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\serializers.py changed, reloading.
+[2026-10-14 13:31:18] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:33:10] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 13:33:27] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:34:30] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-14 13:34:32] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:34:58] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-14 13:35:00] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:35:10] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-14 13:35:12] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:35:55] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 13:56:38] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:00:49] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:00:51] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:01:29] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:01:31] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:01:55] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:01:56] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:01:59] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:02:01] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:02:04] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:02:05] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:02:13] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:02:16] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:02:20] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:02:22] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:02:45] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:02:47] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:03:09] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\urls.py changed, reloading.
+[2026-10-14 14:03:11] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:03:21] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:08:17] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:08:19] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:08:53] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:08:55] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:08:58] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\api\views.py changed, reloading.
+[2026-10-14 14:08:59] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:09:10] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:14:31] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\academics\signals.py changed, reloading.
+[2026-10-14 14:14:36] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:15:09] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\academics\migrations\0012_alter_userprofile_role.py changed, reloading.
+[2026-10-14 14:15:12] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:15:25] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\attendsure_core\settings.py changed, reloading.
+[2026-10-14 14:15:28] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:16:55] [INFO] [django.utils.autoreload:265] - D:\AttendSure_V3\backend\apps\academics\models.py changed, reloading.
+[2026-10-14 14:16:57] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:17:21] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
+[2026-10-14 14:18:26] [INFO] [django.utils.autoreload:681] - Watching for file changes with StatReloader
