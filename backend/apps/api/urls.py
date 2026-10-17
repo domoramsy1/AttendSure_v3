@@ -73,13 +73,8 @@ router.register(r'sms-outbox', SmsOutboxViewSet, basename='sms-outbox')
 
 # ============================================================================
 # 2. MAIN URL ROUTING (ORDER OF SPECIFICITY ENFORCED)
-# Cybersecurity Rule: Specific paths MUST be evaluated before wildcard routers
-# to prevent URL shadowing and authorization header loss during redirects.
 # ============================================================================
 urlpatterns = [
-    # ------------------------------------------------------------------------
-    # A. AUTHENTICATION & IDENTITY (ZERO TRUST)
-    # ------------------------------------------------------------------------
     path('auth/login/', DatabaseLoginView.as_view(), name='api-login'),
     path('login/', LoginAPIView.as_view(), name='api-login-alias'),
     path('me/', CurrentUserView.as_view(), name='api-me'),
@@ -87,9 +82,6 @@ urlpatterns = [
     path('profile/me/', CurrentUserProfileView.as_view(), name='api-profile-me'),
     path('validate-field/', LiveFieldValidationAPIView.as_view(), name='api-validate-field'),
 
-    # ------------------------------------------------------------------------
-    # B. EXPLICIT SMS OUTBOX ACTIONS (Precedes router to avoid action collision)
-    # ------------------------------------------------------------------------
     path(
         'sms-outbox/delete-delivered/',
         SmsOutboxViewSet.as_view({'delete': 'delete_delivered', 'post': 'delete_delivered'}),
@@ -119,9 +111,6 @@ urlpatterns = [
     path('sms/pending/', PendingSmsDispatchAPIView.as_view(), name='api-sms-pending'),
     path('sms/<int:pk>/status/', MarkSmsStatusAPIView.as_view(), name='api-sms-status'),
 
-    # ------------------------------------------------------------------------
-    # C. HARDWARE DEVICE BINDING (Specific faculty sub-routes)
-    # ------------------------------------------------------------------------
     path(
         'facultys/<int:faculty_id>/reset-device/',
         ResetFacultyDeviceBindingAPIView.as_view(),
@@ -133,54 +122,34 @@ urlpatterns = [
         name='api-faculty-reset-device-binding',
     ),
 
-    # ------------------------------------------------------------------------
-    # D. DASHBOARD & ACADEMIC SECTIONS
-    # ------------------------------------------------------------------------
     path('dashboard/overview/', DashboardOverviewAPIView.as_view(), name='api-dashboard-overview'),
     path('sections/', SectionListAPIView.as_view(), name='api-sections'),
     path('sections/<int:pk>/', SectionDetailAPIView.as_view(), name='api-section-detail'),
 
-    # ------------------------------------------------------------------------
-    # E. INSTITUTIONAL & CAMPUS SETTINGS
-    # ------------------------------------------------------------------------
     path('settings/school/', SchoolSettingsAPIView.as_view(), name='api-settings-school'),
     path('school/settings/', SchoolSettingsAPIView.as_view(), name='api-school-settings-alias'),
     path('geofence/', GeofenceAPIView.as_view(), name='api-geofence'),
     path('campus/geofence/', GeofenceAPIView.as_view(), name='api-campus-geofence-alias'),
 
-    # ------------------------------------------------------------------------
-    # F. GATE TURNSTILE & HARDWARE LOGS
-    # ------------------------------------------------------------------------
     path('gate/scan/', GateScanAPIView.as_view(), name='api-gate-scan'),
     path('gate/logs/', GateLogsAPIView.as_view(), name='api-gate-logs'),
     path('faculty-gate-logs/', GateLogsAPIView.as_view(), name='api-faculty-gate-logs-alias'),
 
-    # ------------------------------------------------------------------------
-    # G. CLASSROOM ATTENDANCE & TEACHER ASSIGNMENTS
-    # ------------------------------------------------------------------------
     path('classroom/roster/', FacultyClassroomRosterAPIView.as_view(), name='api-classroom-roster'),
     path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='api-classroom-batch-scan'),
-    path('classroom/my-classes/', MyAssignedClassesAPIView.as_view(), name='api-my-classes'),
+    path('classroom/my-classes/', MyAssignedClassesAPIView.as_view(), name='api-classroom-my-classes'),
+    path('my-classes/', MyAssignedClassesAPIView.as_view(), name='api-my-classes-root'),
 
-    # ------------------------------------------------------------------------
-    # H. IOT KIOSK TELEMETRY & HEARTBEATS
-    # ------------------------------------------------------------------------
     path('scanners/heartbeat/', KioskHeartbeatView.as_view(), name='api-kiosk-heartbeat'),
     path('telemetry/heartbeat/', TelemetryHeartbeatAPIView.as_view(), name='api-telemetry-heartbeat'),
     path('telemetry/async-heartbeat/', AsyncTelemetryHeartbeatView.as_view(), name='api-telemetry-async-heartbeat'),
 
-    # ------------------------------------------------------------------------
-    # I. CIVIL SERVICE FORM 48 DTR (Precedes router to avoid /faculty/dtr/ collision)
-    # ------------------------------------------------------------------------
     path('dtr/', DTRListAPIView.as_view(), name='api-dtr'),
     path('dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='api-dtr-detail'),
     path('faculty/dtr/', DTRListAPIView.as_view(), name='api-faculty-dtr-alias'),
     path('reports/dtr/', DTRListAPIView.as_view(), name='api-reports-dtr-root'),
     path('reports/dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='api-reports-dtr'),
 
-    # ------------------------------------------------------------------------
-    # J. DEPED REPORTS & GOVERNANCE AUDIT LOGS
-    # ------------------------------------------------------------------------
     path('reports/sf1/<int:section_id>/', DepEdSF1DataAPIView.as_view(), name='api-sf1-report'),
     path('reports/sf2/<int:section_id>/', DepEdSF2DataAPIView.as_view(), name='api-sf2-report'),
     path('reports/sf4/', DepEdSF4DataAPIView.as_view(), name='api-sf4-report'),
@@ -189,9 +158,6 @@ urlpatterns = [
     path('reports/audit-log/', ReportAuditLogAPIView.as_view(), name='api-report-audit-log'),
     path('reports/audit-logs/', ReportAuditLogAPIView.as_view(), name='api-report-audit-logs'),
 
-    # ------------------------------------------------------------------------
-    # K. CALENDAR EXCEPTIONS & SYSTEM MAINTENANCE
-    # ------------------------------------------------------------------------
     path('calendar/exceptions/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions-list'),
     path('calendar/exceptions/<slug:pk>/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions-detail'),
     path('telemetry/ping-scanners/', ping_scanners, name='ping-scanners'),
@@ -199,8 +165,5 @@ urlpatterns = [
     path('core/maintenance/db-check/', db_check, name='db-check'),
     path('core/maintenance/flush-cache/', flush_cache, name='flush-cache'),
 
-    # ------------------------------------------------------------------------
-    # L. CORE VIEWSET ROUTER (Registered at the bottom)
-    # ------------------------------------------------------------------------
     path('', include(router.urls)),
 ]

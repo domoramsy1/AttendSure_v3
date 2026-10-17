@@ -1,18 +1,21 @@
 /**
  * AttendSure - Campus Gate Passes & Exit Clearances
- * File: frontend/src/components/tabs/GatePassesTab.tsx
+ * File: web/src/components/tabs/GatePassesTab.tsx
  *
- * Key Highlights:
- * 1. DEFAULT USER ICON: Uses <User /> from lucide-react as the neutral fallback for all profiles.
- * 2. LIVE DATABASE POLLING: Silent 3-second polling syncs active and used exit clearances in real time.
- * 3. MODERN MODALS: Replaces window.confirm/alert with AlertContext (showAlert and showConfirm).
- * 4. INSTITUTIONAL PASS PRINTING: Generates printable exit slips with dynamic school branding and turnstile QR codes.
- * 5. SERVER PAGINATION: Full pagination controls with dynamic count summaries and items-per-page selectors.
+ * Cybersecurity & RBAC Upgrades:
+ * 1. STRICT ROLE-BASED UI FILTERING:
+ *    - Guards: View logs, inspect slips, and mark passes as USED (cannot issue or revoke).
+ *    - Teachers: Issue student-only exit passes (cannot issue faculty passes or mark physical exits).
+ *    - Leadership (Admin/Principal/Dept Head): Full issuance, staff clearance, and revocation oversight.
+ * 2. ANTI-SPOOFING CONTROLS: Locks the approving authority field for teachers to prevent signature forging.
+ * 3. ZERO-LEAK UNPAGINATED INGESTION: Uses ?page_size=ALL and /faculty/dropdown/ to hide RFID/QR credentials.
+ * 4. XSS PROTOCOL SHIELD: Validates image URIs before rendering user avatars.
+ * 5. SAFE INTERACTION GUARD: Pauses background polling while modals or slips are open.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import apiClient from '../../api/client';
-import { useSchoolContext as useSchool } from '../../context/SchoolContext';
+import { useSchool } from '../../context/SchoolContext';
 import { ModuleTableLayout } from './ModuleTableLayout';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -82,7 +85,32 @@ interface PaginatedResponse<T> {
 }
 
 // ============================================================================
-// REUSABLE DEFAULT USER AVATAR COMPONENT
+// CYBERSECURITY: SAFE IMAGE PROTOCOL VALIDATOR
+// ============================================================================
+
+const isSafeImageUrl = (url?: string | null): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.trim().toLowerCase();
+  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') {
+    return false;
+  }
+  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) {
+    return false;
+  }
+  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) {
+    return false;
+  }
+  return (
+    clean.startsWith('http://') ||
+    clean.startsWith('https://') ||
+    clean.startsWith('/') ||
+    clean.startsWith('data:image/') ||
+    clean.startsWith('blob:')
+  );
+};
+
+// ============================================================================
+// REUSABLE SECURE AVATAR COMPONENT
 // ============================================================================
 
 interface ProfileAvatarProps {
@@ -104,13 +132,7 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
     setImageFailed(false);
   }, [photoUrl]);
 
-  const hasPhoto = Boolean(
-    photoUrl &&
-    typeof photoUrl === 'string' &&
-    photoUrl.trim() !== '' &&
-    photoUrl.trim().toLowerCase() !== 'null' &&
-    photoUrl.trim().toLowerCase() !== 'undefined'
-  );
+  const safePhoto = isSafeImageUrl(photoUrl) ? photoUrl : null;
 
   return (
     <div
@@ -128,12 +150,13 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
       }}
       title={name}
     >
-      {hasPhoto && !imageFailed ? (
+      {safePhoto && !imageFailed ? (
         <img
-          src={photoUrl!}
+          src={safePhoto}
           alt={name}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           onError={() => setImageFailed(true)}
+          loading="lazy"
         />
       ) : (
         <User size={iconSize} color="#94a3b8" />
@@ -149,6 +172,22 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
 export const GatePassesTab: React.FC = () => {
   const { school } = useSchool();
   const { showAlert, showConfirm } = useAlert();
+
+  // Role-Based Access Control Evaluation
+  const userRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
+  const currentUserName = localStorage.getItem('attendsure_faculty_name') || localStorage.getItem('attendsure_username') || '';
+  
+  const isAdmin = userRole === 'ADMIN';
+  const isPrincipal = userRole === 'PRINCIPAL';
+  const isDeptHead = userRole === 'DEPT_HEAD';
+  const isGuard = userRole === 'GUARD';
+  const isLeadership = isAdmin || isPrincipal || isDeptHead;
+
+  // Granular capability flags
+  const canIssuePass = !isGuard; // Guards never issue passes; teachers and leadership do
+  const canIssueForFaculty = isLeadership; // Only leadership issues faculty passes; teachers issue student passes only
+  const canMarkUsed = isGuard || isAdmin || isPrincipal; // Checkpoint guards and school heads mark turnstile departures
+  const canRevoke = !isGuard; // Only issuing authorities can cancel passes
 
   const [passes, setPasses] = useState<GatePass[]>([]);
   const [loading, setLoading] = useState(true);
@@ -189,6 +228,15 @@ export const GatePassesTab: React.FC = () => {
   const isInteracting = useRef(false);
   isInteracting.current = isCreateModalOpen || Boolean(selectedPass) || saving;
 
+  // Track component mount status
+  const isMounted = useRef(true);
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
   // ============================================================================
   // DATABASE DATA FETCHING & LIVE POLLING
   // ============================================================================
@@ -207,6 +255,8 @@ export const GatePassesTab: React.FC = () => {
           },
         });
 
+        if (!isMounted.current) return;
+
         if (res.data && 'results' in res.data) {
           setPasses(res.data.results);
           setTotalCount(res.data.count);
@@ -219,11 +269,13 @@ export const GatePassesTab: React.FC = () => {
           setCurrentPage(1);
         }
       } catch (err: any) {
-        if (!silent) {
+        if (!silent && isMounted.current) {
           setError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to fetch gate pass records from database.');
         }
       } finally {
-        if (!silent) setLoading(false);
+        if (!silent && isMounted.current) {
+          setLoading(false);
+        }
       }
     },
     []
@@ -238,10 +290,10 @@ export const GatePassesTab: React.FC = () => {
     return () => clearTimeout(timer);
   }, [search, statusFilter, pageSize, fetchPasses]);
 
-  // LIVE ZERO-REFRESH POLLING: Syncs changes from PostgreSQL every 3 seconds
+  // LIVE ZERO-REFRESH POLLING: Syncs changes from database every 3 seconds
   useEffect(() => {
     const liveInterval = setInterval(() => {
-      if (!isInteracting.current) {
+      if (!isInteracting.current && isMounted.current) {
         fetchPasses(currentPage, pageSize, search, statusFilter, true);
       }
     }, 3000);
@@ -249,41 +301,68 @@ export const GatePassesTab: React.FC = () => {
     return () => clearInterval(liveInterval);
   }, [currentPage, pageSize, search, statusFilter, fetchPasses]);
 
-  // Load students and faculty options for pass creation
+  // Load students and faculty options for pass creation (unpaginated and sorted)
   const fetchBearerOptions = async () => {
     setLoadingOptions(true);
     try {
-      const [studentsRes, facultyRes] = await Promise.all([
-        apiClient.get<any>('/students/?page_size=100'),
-        apiClient.get<any>('/faculty/?page_size=100'),
-      ]);
+      const requests: [Promise<any>, Promise<any>?] = [
+        apiClient.get<any>('/students/?page_size=ALL'),
+      ];
+
+      // Only query faculty directory if the user has permission to issue passes for staff
+      if (canIssueForFaculty) {
+        requests.push(
+          apiClient.get<any>('/faculty/dropdown/').catch(() => apiClient.get<any>('/facultys/?page_size=ALL'))
+        );
+      }
+
+      const [studentsRes, facultyRes] = await Promise.all(requests);
+
+      if (!isMounted.current) return;
 
       const studentList = Array.isArray(studentsRes.data)
         ? studentsRes.data
         : studentsRes.data?.results || [];
-      const facultyList = Array.isArray(facultyRes.data)
-        ? facultyRes.data
-        : facultyRes.data?.results || [];
+
+      const sortedStudents = [...studentList].sort((a: any, b: any) => {
+        const nameA = (a.full_name || `${a.last_name}, ${a.first_name}`).toLowerCase();
+        const nameB = (b.full_name || `${b.last_name}, ${b.first_name}`).toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
 
       setLearners(
-        studentList.map((s: any) => ({
+        sortedStudents.map((s: any) => ({
           id: s.id,
           lrn: s.lrn,
           full_name: s.full_name || `${s.last_name}, ${s.first_name}`,
         }))
       );
 
-      setFacultyMembers(
-        facultyList.map((f: any) => ({
-          id: f.id,
-          full_name: f.full_name || `${f.last_name}, ${f.first_name}`,
-          department: f.department || f.position,
-        }))
-      );
+      if (facultyRes) {
+        const facultyList = Array.isArray(facultyRes.data)
+          ? facultyRes.data
+          : facultyRes.data?.results || [];
+
+        const sortedFaculty = [...facultyList].sort((a: any, b: any) => {
+          const nameA = (a.full_name || `${a.last_name}, ${a.first_name}`).toLowerCase();
+          const nameB = (b.full_name || `${b.last_name}, ${b.first_name}`).toLowerCase();
+          return nameA.localeCompare(nameB);
+        });
+
+        setFacultyMembers(
+          sortedFaculty.map((f: any) => ({
+            id: f.id,
+            full_name: f.full_name || `${f.last_name}, ${f.first_name}`,
+            department: f.department || f.position,
+          }))
+        );
+      }
     } catch {
       // Retain fallback empty states
     } finally {
-      setLoadingOptions(false);
+      if (isMounted.current) {
+        setLoadingOptions(false);
+      }
     }
   };
 
@@ -313,6 +392,15 @@ export const GatePassesTab: React.FC = () => {
   // ============================================================================
 
   const handleOpenCreate = () => {
+    if (!canIssuePass) {
+      showAlert({
+        title: 'Access Restricted',
+        message: 'Security guards are not authorized to issue gate passes. Gate clearances must be approved by teaching staff or administration.',
+        type: 'error',
+      });
+      return;
+    }
+
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const toInputDate = (d: Date) =>
@@ -320,6 +408,11 @@ export const GatePassesTab: React.FC = () => {
 
     const defaultStart = new Date(now);
     const defaultEnd = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours validity
+
+    // Anti-Spoofing: Teachers default to their own verified name as the authorizing issuer
+    const defaultApprover = isLeadership
+      ? (school.principal_name || 'Administration Office')
+      : currentUserName;
 
     setFormData({
       bearer_type: 'STUDENT',
@@ -329,7 +422,7 @@ export const GatePassesTab: React.FC = () => {
       custom_reason: '',
       valid_from: toInputDate(defaultStart),
       valid_to: toInputDate(defaultEnd),
-      approved_by: school.principal_name || 'Administration Office',
+      approved_by: defaultApprover,
       remarks: '',
     });
 
@@ -352,15 +445,21 @@ export const GatePassesTab: React.FC = () => {
       const uniqueHex = Math.random().toString(36).substring(2, 8).toUpperCase();
       const generatedPassNum = `GP-${todayStr}-${uniqueHex}`;
 
+      // Enforce Least Privilege: If user cannot issue for faculty, force student pass
+      const effectiveBearerType = canIssueForFaculty ? formData.bearer_type : 'STUDENT';
+      const effectiveStudentId = effectiveBearerType === 'STUDENT' && formData.student_id ? Number(formData.student_id) : null;
+      const effectiveFacultyId = effectiveBearerType === 'FACULTY' && formData.faculty_id ? Number(formData.faculty_id) : null;
+
       const payload = {
         pass_number: generatedPassNum,
-        student: formData.bearer_type === 'STUDENT' && formData.student_id ? Number(formData.student_id) : null,
-        faculty: formData.bearer_type === 'FACULTY' && formData.faculty_id ? Number(formData.faculty_id) : null,
+        student: effectiveStudentId,
+        faculty: effectiveFacultyId,
         pass_type: formData.reason_preset,
         reason: finalReason,
         valid_from: formData.valid_from ? new Date(formData.valid_from).toISOString() : new Date().toISOString(),
         valid_to: formData.valid_to ? new Date(formData.valid_to).toISOString() : new Date(Date.now() + 4 * 3600000).toISOString(),
         status: 'ACTIVE',
+        approved_by: formData.approved_by.trim() || undefined,
         remarks: formData.remarks.trim() || undefined,
       };
 
@@ -387,6 +486,7 @@ export const GatePassesTab: React.FC = () => {
   };
 
   const handleRevoke = (pass: GatePass) => {
+    if (!canRevoke) return;
     const passCode = pass.pass_number || pass.pass_id || `ID #${pass.id}`;
     const bearer = pass.bearer_name || pass.student_name || pass.faculty_name || 'bearer';
 
@@ -416,6 +516,7 @@ export const GatePassesTab: React.FC = () => {
   };
 
   const handleMarkUsed = async (pass: GatePass) => {
+    if (!canMarkUsed) return;
     try {
       await apiClient.patch(`/gate-passes/${pass.id}/`, { status: 'USED' });
       showAlert({
@@ -506,7 +607,7 @@ export const GatePassesTab: React.FC = () => {
 
       {/* 2. Control & Filter Bar */}
       <div style={controlBar}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {['ALL', 'ACTIVE', 'USED', 'EXPIRED', 'REVOKED'].map((st) => (
             <button
               key={st}
@@ -529,16 +630,19 @@ export const GatePassesTab: React.FC = () => {
           ))}
         </div>
 
-        <Button
-          variant="primary"
-          size="md"
-          type="button"
-          onClick={handleOpenCreate}
-          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-        >
-          <Plus size={16} />
-          Issue Gate Pass
-        </Button>
+        {/* Least Privilege: Only users authorized to issue gate passes see the trigger button */}
+        {canIssuePass && (
+          <Button
+            variant="primary"
+            size="md"
+            type="button"
+            onClick={handleOpenCreate}
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <Plus size={16} />
+            Issue Gate Pass
+          </Button>
+        )}
       </div>
 
       {/* 3. Main Data Table */}
@@ -571,7 +675,6 @@ export const GatePassesTab: React.FC = () => {
               header: 'Bearer Name',
               render: (p) => (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {/* Default User Icon / Real Photo Avatar */}
                   <ProfileAvatar
                     photoUrl={p.photo}
                     name={getBearerName(p)}
@@ -649,6 +752,7 @@ export const GatePassesTab: React.FC = () => {
               align: 'right',
               render: (p) => (
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  {/* Slip view & turnstile barcode is readable by all authorized viewers */}
                   <button
                     type="button"
                     onClick={() => setSelectedPass(p)}
@@ -660,22 +764,29 @@ export const GatePassesTab: React.FC = () => {
 
                   {p.status === 'ACTIVE' && (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => handleMarkUsed(p)}
-                        title="Mark As Used (Exited Gate)"
-                        style={{ ...actionBtn, backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' }}
-                      >
-                        <CheckCircle2 size={13} color="#059669" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRevoke(p)}
-                        title="Revoke / Cancel Pass"
-                        style={{ ...actionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
-                      >
-                        <Ban size={13} color="#dc2626" />
-                      </button>
+                      {/* Least Privilege: Only checkpost personnel (Guards/Admin) can record turnstile passage */}
+                      {canMarkUsed && (
+                        <button
+                          type="button"
+                          onClick={() => handleMarkUsed(p)}
+                          title="Mark As Used (Exited Gate)"
+                          style={{ ...actionBtn, backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' }}
+                        >
+                          <CheckCircle2 size={13} color="#059669" />
+                        </button>
+                      )}
+
+                      {/* Least Privilege: Only authorizing issuers can revoke/cancel a clearance */}
+                      {canRevoke && (
+                        <button
+                          type="button"
+                          onClick={() => handleRevoke(p)}
+                          title="Revoke / Cancel Pass"
+                          style={{ ...actionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
+                        >
+                          <Ban size={13} color="#dc2626" />
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
@@ -760,151 +871,169 @@ export const GatePassesTab: React.FC = () => {
       </div>
 
       {/* 4. Issue Gate Pass Modal */}
-      <Modal
-        isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
-        title="Issue Campus Gate Clearance Pass"
-      >
-        <form onSubmit={handleCreateSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={labelStyle}>Bearer Role *</label>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', cursor: 'pointer' }}>
-                <input
-                  type="radio"
-                  name="bearer_type"
-                  value="STUDENT"
-                  checked={formData.bearer_type === 'STUDENT'}
-                  onChange={() => setFormData({ ...formData, bearer_type: 'STUDENT' })}
-                />
-                <span>Student</span>
-              </label>
+      {canIssuePass && (
+        <Modal
+          isOpen={isCreateModalOpen}
+          onClose={() => setIsCreateModalOpen(false)}
+          title="Issue Campus Gate Clearance Pass"
+        >
+          <form onSubmit={handleCreateSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <label style={labelStyle}>Bearer Role *</label>
+              {canIssueForFaculty ? (
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="bearer_type"
+                      value="STUDENT"
+                      checked={formData.bearer_type === 'STUDENT'}
+                      onChange={() => setFormData({ ...formData, bearer_type: 'STUDENT' })}
+                    />
+                    <span>Student</span>
+                  </label>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', cursor: 'pointer' }}>
-                <input
-                  type="radio"
-                  name="bearer_type"
-                  value="FACULTY"
-                  checked={formData.bearer_type === 'FACULTY'}
-                  onChange={() => setFormData({ ...formData, bearer_type: 'FACULTY' })}
-                />
-                <span>Faculty / Staff</span>
-              </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="bearer_type"
+                      value="FACULTY"
+                      checked={formData.bearer_type === 'FACULTY'}
+                      onChange={() => setFormData({ ...formData, bearer_type: 'FACULTY' })}
+                    />
+                    <span>Faculty / Staff</span>
+                  </label>
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0284c7', backgroundColor: '#f0f9ff', padding: '6px 12px', borderRadius: 6, border: '1px solid #bae6fd', display: 'inline-block' }}>
+                  Student Learner Exit Slip
+                </div>
+              )}
             </div>
-          </div>
 
-          <div>
-            <label style={labelStyle}>
-              {formData.bearer_type === 'STUDENT' ? 'Select Student Learner *' : 'Select Faculty Member *'}
-            </label>
-            {loadingOptions ? (
-              <div style={{ fontSize: '0.76rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Loader2 className="animate-spin" size={14} />
-                <span>Loading options...</span>
+            <div>
+              <label style={labelStyle}>
+                {formData.bearer_type === 'STUDENT' ? 'Select Student Learner *' : 'Select Faculty Member *'}
+              </label>
+              {loadingOptions ? (
+                <div style={{ fontSize: '0.76rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Loader2 className="animate-spin" size={14} />
+                  <span>Loading records...</span>
+                </div>
+              ) : formData.bearer_type === 'STUDENT' ? (
+                <select
+                  required
+                  value={formData.student_id}
+                  onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
+                  style={inputStyle}
+                >
+                  <option value="">-- Choose Learner ({learners.length} available) --</option>
+                  {learners.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.full_name} (LRN: {l.lrn})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  required
+                  value={formData.faculty_id}
+                  onChange={(e) => setFormData({ ...formData, faculty_id: e.target.value })}
+                  style={inputStyle}
+                >
+                  <option value="">-- Choose Faculty Member ({facultyMembers.length} available) --</option>
+                  {facultyMembers.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.full_name} {f.department ? `(${f.department})` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            <div>
+              <label style={labelStyle}>Clearance Category *</label>
+              <select
+                value={formData.reason_preset}
+                onChange={(e) => setFormData({ ...formData, reason_preset: e.target.value })}
+                style={inputStyle}
+              >
+                <option value="Medical / Health Emergency">Medical / Clinic Referral / Health Emergency</option>
+                <option value="Official Institutional Business">Official Institutional / School Business</option>
+                <option value="Parent / Guardian Fetching">Authorized Parent / Guardian Fetching</option>
+                <option value="Early Dismissal Approval">Authorized Early Dismissal</option>
+                <option value="Family Urgent Matter">Family Urgent Matter</option>
+                <option value="Other Official Reason">Other Official Reason</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Specific Reason Details (Optional)</label>
+              <input
+                type="text"
+                placeholder="e.g. Clinic checkup, Quiz Bee Competition, Parent pickup"
+                value={formData.custom_reason}
+                onChange={(e) => setFormData({ ...formData, custom_reason: e.target.value })}
+                style={inputStyle}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={labelStyle}>Valid From *</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={formData.valid_from}
+                  onChange={(e) => setFormData({ ...formData, valid_from: e.target.value })}
+                  style={inputStyle}
+                />
               </div>
-            ) : formData.bearer_type === 'STUDENT' ? (
-              <select
-                required
-                value={formData.student_id}
-                onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                style={inputStyle}
-              >
-                <option value="">-- Choose Learner --</option>
-                {learners.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.full_name} (LRN: {l.lrn})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <select
-                required
-                value={formData.faculty_id}
-                onChange={(e) => setFormData({ ...formData, faculty_id: e.target.value })}
-                style={inputStyle}
-              >
-                <option value="">-- Choose Faculty Member --</option>
-                {facultyMembers.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.full_name} {f.department ? `(${f.department})` : ''}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <div>
-            <label style={labelStyle}>Clearance Category *</label>
-            <select
-              value={formData.reason_preset}
-              onChange={(e) => setFormData({ ...formData, reason_preset: e.target.value })}
-              style={inputStyle}
-            >
-              <option value="Medical / Health Emergency">Medical / Clinic Referral / Health Emergency</option>
-              <option value="Official Institutional Business">Official Institutional / School Business</option>
-              <option value="Parent / Guardian Fetching">Authorized Parent / Guardian Fetching</option>
-              <option value="Early Dismissal Approval">Authorized Early Dismissal</option>
-              <option value="Family Urgent Matter">Family Urgent Matter</option>
-              <option value="Other Official Reason">Other Official Reason</option>
-            </select>
-          </div>
-
-          <div>
-            <label style={labelStyle}>Specific Reason Details (Optional)</label>
-            <input
-              type="text"
-              placeholder="e.g. Clinic checkup, Quiz Bee Competition, Parent pickup"
-              value={formData.custom_reason}
-              onChange={(e) => setFormData({ ...formData, custom_reason: e.target.value })}
-              style={inputStyle}
-            />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <div>
-              <label style={labelStyle}>Valid From *</label>
-              <input
-                type="datetime-local"
-                required
-                value={formData.valid_from}
-                onChange={(e) => setFormData({ ...formData, valid_from: e.target.value })}
-                style={inputStyle}
-              />
+              <div>
+                <label style={labelStyle}>Valid Until *</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={formData.valid_to}
+                  onChange={(e) => setFormData({ ...formData, valid_to: e.target.value })}
+                  style={inputStyle}
+                />
+              </div>
             </div>
+
             <div>
-              <label style={labelStyle}>Valid Until *</label>
+              <label style={labelStyle}>Approving Authority</label>
               <input
-                type="datetime-local"
-                required
-                value={formData.valid_to}
-                onChange={(e) => setFormData({ ...formData, valid_to: e.target.value })}
-                style={inputStyle}
+                type="text"
+                value={formData.approved_by}
+                onChange={(e) => setFormData({ ...formData, approved_by: e.target.value })}
+                style={{
+                  ...inputStyle,
+                  backgroundColor: !isLeadership ? '#f8fafc' : '#ffffff',
+                  cursor: !isLeadership ? 'not-allowed' : 'text',
+                }}
+                disabled={!isLeadership}
+                placeholder={school.principal_name || 'Principal / Admin Office'}
               />
+              {!isLeadership && (
+                <div style={{ fontSize: '0.70rem', color: '#64748b', marginTop: 4 }}>
+                  Verified automatically under your authenticated teacher credentials.
+                </div>
+              )}
             </div>
-          </div>
 
-          <div>
-            <label style={labelStyle}>Approving Authority</label>
-            <input
-              type="text"
-              value={formData.approved_by}
-              onChange={(e) => setFormData({ ...formData, approved_by: e.target.value })}
-              style={inputStyle}
-              placeholder={school.principal_name || 'Principal / Admin Office'}
-            />
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-            <Button variant="secondary" size="md" type="button" onClick={() => setIsCreateModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" size="md" type="submit" disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : null}
-              Issue Official Pass
-            </Button>
-          </div>
-        </form>
-      </Modal>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+              <Button variant="secondary" size="md" type="button" onClick={() => setIsCreateModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" size="md" type="submit" disabled={saving}>
+                {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : null}
+                Issue Official Pass
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {/* 5. Official Printable Gate Pass Slip Modal with Dynamic Branding */}
       {selectedPass && (

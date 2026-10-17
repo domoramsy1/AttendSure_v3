@@ -1,16 +1,12 @@
 /**
- * AttendSure - SMS Gateway & Outbox Dispatcher
- * File: frontend/src/components/tabs/SmsTab.tsx
+ * AttendSure - SMS Gateway & Outbox Dispatcher (Full Admin CRUD)
+ * File: web/src/components/tabs/SmsTab.tsx
  *
- * Core Supported Channels:
- * 1. GATE TAPPING: Instant parent SMS notification on every gate IN/OUT scan.
- * 2. CLASSROOM ATTENDANCE (2 Policy Modes):
- *    - Mode A (Instant): Sends SMS to parent on every classroom scan.
- *    - Mode B (Gate-OUT Summary): Compiles all subject attendance and sends 1 summary SMS when learner scans OUT at the gate.
- * 3. SCHOOL ANNOUNCEMENTS (Targeted Groupings):
- *    - All Parents, All Faculty, Both Parents & Faculty, By Year Level, By Class Section, Specific Parent, or Specific Faculty.
- * 4. TWO-FACTOR AUTHENTICATION (2FA):
- *    - High-priority security OTP dispatches for system logins.
+ * Full Admin CRUD Actions:
+ * - CREATE: Compose single SMS (with student directory autofill) & Broadcast Announcements.
+ * - READ: Live outbox ledger, delivery status pills, message details inspector.
+ * - UPDATE: Edit recipient name, phone, message text, category, priority, status; retry single & bulk failed dispatches.
+ * - DELETE: Delete individual message, clear delivered messages, or clear pending queue.
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -50,6 +46,7 @@ import {
   Layers,
   Zap,
   Sliders,
+  Ban,
 } from 'lucide-react';
 
 // ============================================================================
@@ -159,6 +156,9 @@ const SMS_TEMPLATES: Record<SmsCategory, { label: string; text: string }> = {
 
 export const SmsTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
+
+  const userRole = (localStorage.getItem('attendsure_role') || 'ADMIN').toUpperCase();
+  const isAdmin = userRole === 'ADMIN' || userRole === 'PRINCIPAL';
 
   // --- Table Data States ---
   const [messages, setMessages] = useState<SmsRecord[]>([]);
@@ -406,8 +406,8 @@ export const SmsTab: React.FC = () => {
   const loadDirectories = async () => {
     try {
       const [stuRes, facRes, secRes, settingsRes] = await Promise.allSettled([
-        apiClient.get('/students/?page_size=100'),
-        apiClient.get('/facultys/'),
+        apiClient.get('/students/dropdown/').catch(() => apiClient.get('/students/?page_size=ALL')),
+        apiClient.get('/faculty/dropdown/').catch(() => apiClient.get('/facultys/?page_size=ALL')),
         apiClient.get('/sections/'),
         apiClient.get('/settings/school/'),
       ]);
@@ -417,7 +417,7 @@ export const SmsTab: React.FC = () => {
         setStudents(
           raw.map((s: any) => ({
             id: s.id,
-            full_name: `${s.first_name} ${s.last_name}`.trim(),
+            full_name: s.full_name || `${s.first_name || ''} ${s.last_name || ''}`.trim(),
             lrn: s.lrn,
             guardian_name: s.guardian_name || 'Parent/Guardian',
             guardian_phone: s.guardian_phone || s.emergency_contact || s.parent_contact || '',
@@ -433,7 +433,7 @@ export const SmsTab: React.FC = () => {
         setFacultyList(
           raw.map((f: any) => ({
             id: f.id,
-            full_name: `${f.first_name} ${f.last_name}`.trim(),
+            full_name: f.full_name || `${f.first_name || ''} ${f.last_name || ''}`.trim(),
             employee_id: f.employee_id,
             phone_number: f.phone_number || f.contact_number || '',
             department: f.department || f.position || '',
@@ -527,7 +527,7 @@ export const SmsTab: React.FC = () => {
   };
 
   // ============================================================================
-  // BROADCAST ANNOUNCEMENT DISPATCHER
+  // BROADCAST ANNOUNCEMENT DISPATCHER (FULL CRUD - CREATE BULK)
   // ============================================================================
 
   const handleOpenBroadcast = () => {
@@ -585,13 +585,17 @@ export const SmsTab: React.FC = () => {
 
     try {
       setSubmitting(true);
+      // Sends both audience & recipient_group, and message & message_body to prevent 400 parameter errors
       const res = await apiClient.post('/sms-outbox/broadcast/', {
         audience: broadcastForm.audience,
+        recipient_group: broadcastForm.audience,
+        message: broadcastForm.message_body.trim(),
         message_body: broadcastForm.message_body.trim(),
         priority: broadcastForm.priority,
         year_level: broadcastForm.year_level || undefined,
         section_id: broadcastForm.section_id || undefined,
         target_id: broadcastForm.specific_target_id || undefined,
+        specific_target_id: broadcastForm.specific_target_id || undefined,
       });
 
       setIsBroadcastModalOpen(false);
@@ -608,6 +612,7 @@ export const SmsTab: React.FC = () => {
         err?.response?.data?.error ||
         err?.response?.data?.detail ||
         err?.response?.data?.message_body?.[0] ||
+        err?.response?.data?.message?.[0] ||
         'Could not queue broadcast messages.';
       showAlert({
         title: 'Broadcast Error',
@@ -620,7 +625,7 @@ export const SmsTab: React.FC = () => {
   };
 
   // ============================================================================
-  // INDIVIDUAL NOTIFICATION CRUD
+  // INDIVIDUAL NOTIFICATION CRUD (CREATE, UPDATE, DELETE)
   // ============================================================================
 
   const handleOpenCompose = () => {
@@ -677,6 +682,7 @@ export const SmsTab: React.FC = () => {
       await apiClient.post('/sms-outbox/', {
         recipient_name: composeForm.recipient_name.trim() || 'Parent / Guardian',
         recipient_number: cleanNumber,
+        message: composeForm.message_body.trim(),
         message_body: composeForm.message_body.trim(),
         trigger_event: 'MANUAL',
         category: composeForm.category,
@@ -725,6 +731,7 @@ export const SmsTab: React.FC = () => {
       await apiClient.patch(`/sms-outbox/${editingSms.id}/`, {
         recipient_name: editingSms.recipient_name,
         recipient_number: cleanNumber,
+        message: editingSms.message_body,
         message_body: editingSms.message_body,
         category: editingSms.category,
         priority: editingSms.priority,
@@ -804,6 +811,36 @@ export const SmsTab: React.FC = () => {
           showAlert({
             title: 'Delete Failed',
             message: err?.response?.data?.error || 'Could not delete logs.',
+            type: 'error',
+          });
+        } finally {
+          setSubmitting(false);
+        }
+      },
+    });
+  };
+
+  const promptClearPendingQueue = () => {
+    showConfirm({
+      title: 'Clear Outbox Queue',
+      message: 'Cancel and delete all unsent messages currently in the queue? The GSM modem will not dispatch them.',
+      confirmLabel: 'Clear Pending Queue',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          setSubmitting(true);
+          await apiClient.delete('/sms-outbox/clear-pending/');
+          fetchMessages(1, pageSize, search, statusFilter, categoryFilter, true);
+          fetchMetrics();
+          showAlert({
+            title: 'Queue Cleared',
+            message: 'All pending outbox messages have been cleared.',
+            type: 'info',
+          });
+        } catch (err: any) {
+          showAlert({
+            title: 'Clear Failed',
+            message: err?.response?.data?.error || 'Could not clear outbox queue.',
             type: 'error',
           });
         } finally {
@@ -1034,6 +1071,7 @@ export const SmsTab: React.FC = () => {
             Refresh
           </Button>
 
+          {/* Delete Action 1: Delete Delivered */}
           {messages.some((m) => m.status === 'SENT') && (
             <Button
               variant="secondary"
@@ -1046,6 +1084,22 @@ export const SmsTab: React.FC = () => {
             >
               <Eraser size={14} />
               Delete Delivered
+            </Button>
+          )}
+
+          {/* Delete Action 2: Clear In-Queue Messages */}
+          {metrics.pending > 0 && (
+            <Button
+              variant="secondary"
+              size="md"
+              type="button"
+              onClick={promptClearPendingQueue}
+              disabled={submitting}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#dc2626', borderColor: '#fecaca' }}
+              title="Cancel and remove all unsent messages in the queue"
+            >
+              <Ban size={14} />
+              Clear Queue ({metrics.pending})
             </Button>
           )}
 
@@ -1063,6 +1117,7 @@ export const SmsTab: React.FC = () => {
             </Button>
           )}
 
+          {/* Create Action 1: Broadcast */}
           <Button
             variant="secondary"
             size="md"
@@ -1074,6 +1129,7 @@ export const SmsTab: React.FC = () => {
             Broadcast Announcement
           </Button>
 
+          {/* Create Action 2: Compose Single SMS */}
           <Button
             variant="primary"
             size="md"
@@ -1222,6 +1278,7 @@ export const SmsTab: React.FC = () => {
               align: 'right',
               render: (m) => (
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                  {/* Read */}
                   <button
                     type="button"
                     onClick={() => setInspectedSms(m)}
@@ -1231,6 +1288,7 @@ export const SmsTab: React.FC = () => {
                     <Eye size={13} color="#475569" />
                   </button>
 
+                  {/* Update */}
                   <button
                     type="button"
                     onClick={() => handleOpenEdit(m)}
@@ -1240,6 +1298,7 @@ export const SmsTab: React.FC = () => {
                     <Pencil size={13} color="#0284c7" />
                   </button>
 
+                  {/* Retry Single */}
                   {m.status === 'FAILED' && (
                     <button
                       type="button"
@@ -1256,6 +1315,7 @@ export const SmsTab: React.FC = () => {
                     </button>
                   )}
 
+                  {/* Delete Single */}
                   <button
                     type="button"
                     onClick={() => promptDeleteSms(m.id)}
@@ -1350,7 +1410,7 @@ export const SmsTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 5. MODAL: BROADCAST SCHOOL ANNOUNCEMENT */}
+      {/* 5. MODAL: BROADCAST SCHOOL ANNOUNCEMENT (CREATE) */}
       <Modal
         isOpen={isBroadcastModalOpen}
         onClose={() => setIsBroadcastModalOpen(false)}
@@ -1516,7 +1576,7 @@ export const SmsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 6. MODAL: COMPOSE INDIVIDUAL SMS */}
+      {/* 6. MODAL: COMPOSE INDIVIDUAL SMS (CREATE) */}
       <Modal
         isOpen={isComposeModalOpen}
         onClose={() => setIsComposeModalOpen(false)}
@@ -1651,7 +1711,7 @@ export const SmsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 7. MODAL: EDIT SMS */}
+      {/* 7. MODAL: EDIT SMS (UPDATE) */}
       {editingSms && (
         <Modal
           isOpen={Boolean(editingSms)}
@@ -1751,7 +1811,7 @@ export const SmsTab: React.FC = () => {
         </Modal>
       )}
 
-      {/* 8. MODAL: INSPECT FULL SMS DETAILS */}
+      {/* 8. MODAL: INSPECT FULL SMS DETAILS (READ) */}
       {inspectedSms && (
         <Modal
           isOpen={Boolean(inspectedSms)}
@@ -1871,7 +1931,7 @@ export const SmsTab: React.FC = () => {
 export default SmsTab;
 
 // ============================================================================
-// STYLES (PURE PROPERTY COMPLIANT - ZERO SHORTHAND COLLISIONS)
+// STYLES
 // ============================================================================
 
 const statsGrid: React.CSSProperties = {

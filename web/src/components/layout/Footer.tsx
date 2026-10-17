@@ -1,8 +1,8 @@
 /**
  * AttendSure - Institutional Status & Telemetry Footer
- * File: frontend/src/components/layout/Footer.tsx
+ * File: web/src/components/layout/Footer.tsx
  *
- * 100% Dynamic - Derives school identity and hardware status directly from database state.
+ * Clean, dynamic footer displaying school identity, database connection status, and developer branding.
  */
 
 import React from 'react';
@@ -26,96 +26,86 @@ export const Footer: React.FC<FooterProps> = ({
 }) => {
   const { school } = useSchool();
 
-  // Purely dynamic from database context
-  const activeSchoolName = schoolName || school.school_name || '';
-  const activeSchoolId = schoolId || school.school_id || '';
+  const activeSchoolName = schoolName || school.school_name || 'Lapasan National High School';
+  const activeSchoolId = schoolId || school.school_id || '340964';
   const activeDivision = divisionOrCity || school.division || '';
 
   return (
     <footer
       style={{
-        minHeight: 36,
+        height: 38,
+        minHeight: 38,
         backgroundColor: '#ffffff',
         borderTop: '1px solid #e2e8f0',
-        padding: '0 20px',
+        padding: '0 24px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        fontSize: '0.70rem',
+        fontSize: '0.73rem',
         color: '#64748b',
-        position: 'sticky',
-        bottom: 0,
-        zIndex: 30,
         boxSizing: 'border-box',
-        flexWrap: 'wrap',
-        gap: 8,
+        userSelect: 'none',
+        zIndex: 30,
       }}
     >
-      {/* Left: Dynamic Institutional Identity */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        {activeSchoolName && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <Building2 size={13} color="#0284c7" />
-            <span style={{ fontWeight: 700, color: '#1e293b' }}>{activeSchoolName}</span>
-          </div>
-        )}
-        {activeSchoolId && (
-          <>
-            <span style={{ color: '#cbd5e1' }}>&bull;</span>
-            <span>
-              ID:{' '}
-              <strong style={{ color: '#475569', fontFamily: 'monospace', letterSpacing: '0.5px' }}>
-                {activeSchoolId}
-              </strong>
-            </span>
-          </>
-        )}
+      {/* Left: Dynamic School Identity */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <Building2 size={13} color="#0284c7" />
+          <span style={{ fontWeight: 700, color: '#1e293b' }}>{activeSchoolName}</span>
+        </div>
+
+        <span style={{ color: '#cbd5e1' }}>&bull;</span>
+        <span>
+          School ID:{' '}
+          <strong style={{ color: '#334155', fontFamily: 'monospace' }}>
+            {activeSchoolId}
+          </strong>
+        </span>
+
         {activeDivision && (
           <>
             <span style={{ color: '#cbd5e1' }}>&bull;</span>
-            <span className="hidden sm:inline">{activeDivision}</span>
+            <span>{activeDivision}</span>
           </>
         )}
       </div>
 
-      {/* Center: Live Telemetry Badges */}
+      {/* Center: Live System Health */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 4,
+            gap: 5,
             color: isDatabaseConnected ? '#059669' : '#dc2626',
             fontWeight: 600,
           }}
-          title={isDatabaseConnected ? 'PostgreSQL Database Connected' : 'Database Disconnected'}
         >
-          <Database size={11} />
-          <span>{isDatabaseConnected ? 'Database Connected' : 'Database Disconnected'}</span>
+          <Database size={12} />
+          <span>{isDatabaseConnected ? 'Database Live' : 'Database Offline'}</span>
         </div>
 
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 4,
+            gap: 5,
             color: isGateSystemOnline ? '#0284c7' : '#dc2626',
             fontWeight: 600,
           }}
-          title={isGateSystemOnline ? 'Gate Hardware Online' : 'Gate System Offline'}
         >
-          <Radio size={11} />
-          <span>{isGateSystemOnline ? 'Gate System Online' : 'Gate System Offline'}</span>
+          <Radio size={12} />
+          <span>{isGateSystemOnline ? 'Turnstile Active' : 'Turnstile Standby'}</span>
         </div>
       </div>
 
-      {/* Right: Institutional Copyright */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {/* Right: Copyright */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
         <span>&copy; 2026 AttendSure &bull; Developed by</span>
-        <strong style={{ color: '#0284c7', fontWeight: 800 }}>TechBlazer</strong>.
-        <span className="hidden md:inline" style={{ color: '#94a3b8' }}>
-          All rights reserved.
-        </span>
+        <strong style={{ color: '#0A1F3D', letterSpacing: '0.05em', fontWeight: 800 }}>
+          TECHBLAZER
+        </strong>
       </div>
     </footer>
   );
