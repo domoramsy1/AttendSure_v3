@@ -35,13 +35,13 @@ from apps.academics.models import (
 
 User = get_user_model()
 
-# Cybersecurity: 5 MB upload limit to prevent memory exhaustion (DoS)
+# Cybersecurity: 5 MB upload limit to prevent Denial-of-Service (DoS) via memory exhaustion
 MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
 
 def ensure_user_profile_columns():
-    """Ensures PostgreSQL user_profiles table has hybrid teaching and completion columns."""
+    """Database self-healing: ensures PostgreSQL user_profiles table has hybrid flags."""
     try:
         with connection.cursor() as cursor:
             cursor.execute("""
@@ -61,7 +61,7 @@ def ensure_user_profile_columns():
 # ============================================================================
 
 def safe_photo_url(photo_field, request=None):
-    """Safely converts a Django ImageField or string into an absolute URL."""
+    """Safely converts an ImageField or relative URI into an absolute URL."""
     if not photo_field:
         return None
     try:
@@ -90,8 +90,8 @@ def safe_photo_url(photo_field, request=None):
 
 class FlexibleImageField(serializers.Field):
     """
-    Validates and converts incoming Base64 image strings into ContentFiles.
-    Enforces strict file size and extension checks to block malicious uploads.
+    Validates and converts incoming Base64 image payloads into Django ContentFiles.
+    Enforces format whitelisting and strict file size checks.
     """
 
     def to_representation(self, value):
@@ -198,7 +198,9 @@ class StudentSerializer(serializers.ModelSerializer):
         return clean_lrn
 
     def validate_rfid_uid(self, value):
-        return value.strip().upper() if value else None
+        if not value or not str(value).strip():
+            return None
+        return str(value).strip().upper()
 
     def validate_parent_contact(self, value):
         if not value:
@@ -206,6 +208,8 @@ class StudentSerializer(serializers.ModelSerializer):
         return value.strip().replace(" ", "").replace("-", "")
 
     def get_full_name(self, obj):
+        if hasattr(obj, 'full_name') and isinstance(obj.full_name, str):
+            return obj.full_name
         mid = f" {obj.middle_name}" if getattr(obj, 'middle_name', None) else ""
         suf = f" {obj.suffix}" if getattr(obj, 'suffix', None) else ""
         return f"{obj.last_name}, {obj.first_name}{mid}{suf}".strip(" ,")
@@ -281,11 +285,40 @@ class StudentSerializer(serializers.ModelSerializer):
 
 
 # ============================================================================
-# 2. FACULTY PROFILE SERIALIZER
+# 2. FACULTY PROFILE & DROPDOWN SERIALIZERS
 # ============================================================================
 
+class FacultyDropdownSerializer(serializers.ModelSerializer):
+    """
+    Cybersecurity Hardened: Lightweight serializer for scheduling dropdowns.
+    Only exposes non-sensitive academic credentials. Never leaks RFID or device tokens.
+    """
+    full_name = serializers.CharField(read_only=True)
+    photo_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FacultyProfile
+        fields = [
+            'id',
+            'employee_id',
+            'first_name',
+            'last_name',
+            'suffix',
+            'full_name',
+            'department',
+            'position',
+            'can_teach',
+            'is_active',
+            'photo_url',
+        ]
+
+    def get_photo_url(self, obj):
+        request = self.context.get('request')
+        return safe_photo_url(getattr(obj, 'photo', None), request)
+
+
 class FacultyProfileSerializer(serializers.ModelSerializer):
-    full_name = serializers.SerializerMethodField()
+    full_name = serializers.CharField(read_only=True)
     photo = FlexibleImageField(required=False, allow_null=True)
     photo_url = serializers.SerializerMethodField()
 
@@ -303,6 +336,8 @@ class FacultyProfileSerializer(serializers.ModelSerializer):
             'contact_number',
             'position',
             'department',
+            'can_teach',
+            'is_active',
             'rfid_uid',
             'qr_token',
             'bound_device_id',
@@ -310,11 +345,11 @@ class FacultyProfileSerializer(serializers.ModelSerializer):
             'device_bound_at',
             'photo',
             'photo_url',
-            'is_active',
         ]
         extra_kwargs = {
             'qr_token': {'required': False, 'allow_blank': True, 'allow_null': True},
             'rfid_uid': {'required': False, 'allow_blank': True, 'allow_null': True},
+            'bound_device_id': {'required': False, 'allow_blank': True, 'allow_null': True},
             'middle_name': {'required': False, 'allow_blank': True},
             'suffix': {'required': False, 'allow_blank': True},
         }
@@ -323,12 +358,14 @@ class FacultyProfileSerializer(serializers.ModelSerializer):
         return value.strip().upper()
 
     def validate_rfid_uid(self, value):
-        return value.strip().upper() if value else None
+        if not value or not str(value).strip():
+            return None
+        return str(value).strip().upper()
 
-    def get_full_name(self, obj):
-        mid = f" {obj.middle_name}" if getattr(obj, 'middle_name', None) else ""
-        suf = f" {obj.suffix}" if getattr(obj, 'suffix', None) else ""
-        return f"{obj.last_name}, {obj.first_name}{mid}{suf}".strip(" ,")
+    def validate_bound_device_id(self, value):
+        if not value or not str(value).strip():
+            return None
+        return str(value).strip()
 
     def get_photo_url(self, obj):
         request = self.context.get('request')
@@ -337,6 +374,9 @@ class FacultyProfileSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         if not validated_data.get('qr_token'):
             validated_data['qr_token'] = secrets.token_urlsafe(32)
+        # Default can_teach to True on creation if not explicitly specified
+        if 'can_teach' not in validated_data:
+            validated_data['can_teach'] = True
         return super().create(validated_data)
 
 
@@ -386,7 +426,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
     def get_faculty_name(self, obj):
         if obj.faculty:
-            return f"{obj.faculty.first_name} {obj.faculty.last_name}".strip()
+            return obj.faculty.full_name
         return "Unassigned"
 
     def get_days_of_week(self, obj):
@@ -457,12 +497,12 @@ class GatePassSerializer(serializers.ModelSerializer):
 
     def get_faculty_name(self, obj):
         if obj.faculty:
-            return f"{obj.faculty.first_name} {obj.faculty.last_name}".strip()
+            return obj.faculty.full_name
         return ""
 
     def get_student_name(self, obj):
         if obj.student:
-            return f"{obj.student.first_name} {obj.student.last_name}".strip()
+            return obj.student.full_name
         return ""
 
 
@@ -506,14 +546,8 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
 
 class UserManagementSerializer(serializers.ModelSerializer):
     """
-    Manages System Accounts for:
-    - ADMIN (System Administrator)
-    - FACULTY_ADMIN (Dual-Role Faculty + System Administrator)
-    - PRINCIPAL (School Principal, optional teaching load)
-    - DEPT_HEAD (Department Head, optional teaching load)
-    - FACULTY (Classroom Teacher)
-    - GUARD (Gate Security)
-    Automatically creates/updates the linked FacultyProfile so users reflect in the Faculty Tab.
+    Manages Accounts with Zero-Trust Role Boundaries.
+    Automatically links and syncs FacultyProfile teaching clearances.
     """
     role = serializers.SerializerMethodField()
     current_role = serializers.SerializerMethodField()
@@ -572,6 +606,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
         return self.get_role(obj) == 'FACULTY'
 
     def get_can_teach(self, obj):
+        prof = self._get_profile(obj)
+        if prof and hasattr(prof, 'can_teach'):
+            return bool(prof.can_teach)
         return self.get_is_teaching(obj)
 
     def get_is_profile_completed(self, obj):
@@ -645,8 +682,8 @@ class UserManagementSerializer(serializers.ModelSerializer):
 
     def _sync_faculty_and_photo(self, user, prof, final_role, is_teaching, req_data):
         """
-        Ensures every non-guard user is linked to a FacultyProfile so they appear
-        in the Faculty Tab and can complete their profile upon login.
+        Guarantees that newly created or updated accounts synchronize with FacultyProfile,
+        enabling teaching clearances (can_teach=True) and active account states.
         """
         if final_role == 'GUARD' and not is_teaching:
             return
@@ -673,6 +710,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
                 position=default_pos,
                 department=default_dept,
                 qr_token=secrets.token_urlsafe(32),
+                can_teach=is_teaching,
                 is_active=user.is_active,
             )
         else:
@@ -683,8 +721,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
             if user.email:
                 faculty.email = user.email
             faculty.is_active = user.is_active
+            faculty.can_teach = is_teaching
 
-        # Handle Base64 photo upload if provided by Admin
+        # Base64 photo processing
         raw_photo = req_data.get('photo')
         if raw_photo is not None:
             if raw_photo == '':
@@ -717,7 +756,6 @@ class UserManagementSerializer(serializers.ModelSerializer):
         prof, _ = UserProfile.objects.get_or_create(user=user)
         prof.role = final_role
         prof.is_teaching = is_teaching
-        # Require first-time profile completion when created by Admin
         prof.is_profile_completed = False
 
         self._sync_faculty_and_photo(user, prof, final_role, is_teaching, req_data)

@@ -2,12 +2,17 @@
  * AttendSure - Academic Timetables, Sections & Schedules
  * File: frontend/src/components/tabs/SchedulesTab.tsx
  *
- * Key Upgrades:
- * 1. DEFAULT USER ICON: Faculty assignments render real portraits or the neutral <User /> icon fallback.
- * 2. LIVE DATABASE POLLING: Silent 3-second background polling keeps timetables updated without full page reloads.
- * 3. REUSABLE ALERTS: Uses showConfirm and showAlert from AlertContext for schedule removals.
- * 4. TELEMETRY STATS: Live summary metric cards for Periods, Sections, Assigned Teachers, and Classrooms.
- * 5. SAFE INTERACTION GUARD: Polling pauses seamlessly while the AcademicSetupModal is active.
+ * Cybersecurity & Architecture Upgrades Applied:
+ * 1. ZERO-LEAK DROPDOWN INGESTION: Fetches from /faculty/dropdown/ to exclude
+ *    hardware tokens (RFID/QR/Device IDs) and ensure can_teach=True teachers only.
+ * 2. UNPAGINATED RECORD COMPLETION: Queries ?page_size=ALL so schedules and
+ *    sections are never truncated by the default 25-item backend pagination.
+ * 3. OBJECT VS ID TYPE NORMALIZATION: Robustly resolves faculty IDs whether DRF
+ *    returns a nested object, foreign key integer, or serializer method field.
+ * 4. XSS PROTOCOL SHIELD: Sanitizes image URLs to prevent script injection
+ *    via malicious pseudo-protocols (javascript:, vbscript:, data:text/html).
+ * 5. SAFE INTERACTION GUARD: Automatically pauses live 3-second background polling
+ *    while modals are open or when the component unmounts to prevent memory leaks.
  */
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -28,7 +33,7 @@ import {
   Loader2, 
   AlertCircle, 
   RefreshCw,
-  User,
+  User as UserIcon,
   Plus
 } from 'lucide-react';
 import { AcademicSetupModal, type TabType as AcademicTabType } from '../modals/AcademicSetupModal';
@@ -41,17 +46,18 @@ interface ScheduleItem {
   id: number;
   schedule_code?: string;
   code?: string;
-  section?: any;
+  section?: number | { id: number; name: string } | null;
   section_name?: string;
   grade_level_name?: string;
-  subject?: any;
+  subject?: number | { id: number; code?: string; title?: string; name?: string } | null;
   subject_code?: string;
   subject_name?: string; 
+  subject_title?: string;
   faculty_name?: string;
   faculty_id?: number;
-  faculty?: any;
+  faculty?: number | { id: number; full_name?: string; name?: string; photo_url?: string; photo?: string } | null;
   teacher_name?: string;
-  room?: any;
+  room?: number | string | { id?: number; name?: string; room_number?: string } | null;
   room_name?: string;
   room_number?: string;
   start_time: string;
@@ -62,21 +68,54 @@ interface ScheduleItem {
 interface SectionOption {
   id: number;
   name: string;
+  grade_level?: string;
   grade_level_name?: string;
+  display_label?: string;
 }
 
 interface FacultyOption {
   id: number;
   full_name: string;
   name?: string;
-  user_id?: number;
+  employee_id?: string;
   photo?: string | null;
   photo_url?: string | null;
   position?: string;
+  department?: string;
+  can_teach?: boolean;
 }
 
 // ============================================================================
-// REUSABLE DEFAULT USER AVATAR COMPONENT
+// CYBERSECURITY: SAFE IMAGE PROTOCOL VALIDATOR
+// ============================================================================
+
+/**
+ * Validates that an image URL begins with safe web protocols.
+ * Blocks malicious vectors like `javascript:...`, `vbscript:...`, or dangerous data URIs.
+ */
+const isSafeImageUrl = (url?: string | null): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.trim().toLowerCase();
+  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') {
+    return false;
+  }
+  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) {
+    return false;
+  }
+  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) {
+    return false;
+  }
+  return (
+    clean.startsWith('http://') ||
+    clean.startsWith('https://') ||
+    clean.startsWith('/') ||
+    clean.startsWith('data:image/') ||
+    clean.startsWith('blob:')
+  );
+};
+
+// ============================================================================
+// REUSABLE SECURE AVATAR COMPONENT
 // ============================================================================
 
 interface ProfileAvatarProps {
@@ -98,13 +137,7 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
     setImageFailed(false);
   }, [photoUrl]);
 
-  const hasPhoto = Boolean(
-    photoUrl &&
-    typeof photoUrl === 'string' &&
-    photoUrl.trim() !== '' &&
-    photoUrl.trim().toLowerCase() !== 'null' &&
-    photoUrl.trim().toLowerCase() !== 'undefined'
-  );
+  const safePhoto = isSafeImageUrl(photoUrl) ? photoUrl : null;
 
   return (
     <div
@@ -122,15 +155,16 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
       }}
       title={name}
     >
-      {hasPhoto && !imageFailed ? (
+      {safePhoto && !imageFailed ? (
         <img
-          src={photoUrl!}
+          src={safePhoto}
           alt={name}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           onError={() => setImageFailed(true)}
+          loading="lazy"
         />
       ) : (
-        <User size={iconSize} color="#94a3b8" />
+        <UserIcon size={iconSize} color="#94a3b8" />
       )}
     </div>
   );
@@ -155,9 +189,18 @@ export const SchedulesTab: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [modalTab, setModalTab] = useState<AcademicTabType>('SCHEDULE');
 
-  // Guard flag: prevents background polling from interrupting open modal workflows
+  // Guard flag: pauses background polling during active user interactions or modals
   const isInteracting = useRef(false);
   isInteracting.current = isModalOpen;
+
+  // Track component mounted status to avoid state updates after unmount
+  const isMounted = useRef(true);
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   // ============================================================================
   // DATABASE DATA FETCHING & LIVE POLLING
@@ -167,23 +210,44 @@ export const SchedulesTab: React.FC = () => {
     if (!silent) setLoading(true);
     setError('');
     try {
+      // Cybersecurity & Architecture:
+      // 1. /schedules/?page_size=ALL prevents pagination truncation past 25 slots
+      // 2. /sections/?page_size=ALL guarantees all sections populate the filter
+      // 3. /faculty/dropdown/ queries only active teachers and hides hardware tokens
       const [schedRes, secRes, facRes] = await Promise.all([
-        apiClient.get('/schedules/'),
-        apiClient.get('/sections/'),
-        apiClient.get('/facultys/'),
+        apiClient.get('/schedules/?page_size=ALL'),
+        apiClient.get('/sections/?page_size=ALL'),
+        apiClient.get('/faculty/dropdown/'),
       ]);
 
-      setSchedules(Array.isArray(schedRes.data) ? schedRes.data : schedRes.data.results || []);
-      setSections(Array.isArray(secRes.data) ? secRes.data : secRes.data.results || []);
-      setFacultyList(Array.isArray(facRes.data) ? facRes.data : facRes.data.results || []);
+      if (!isMounted.current) return;
+
+      const schedData = Array.isArray(schedRes.data)
+        ? schedRes.data
+        : schedRes.data?.results || [];
+
+      const secData = Array.isArray(secRes.data)
+        ? secRes.data
+        : secRes.data?.results || [];
+
+      const facData = Array.isArray(facRes.data)
+        ? facRes.data
+        : facRes.data?.results || [];
+
+      setSchedules(schedData);
+      setSections(secData);
+      setFacultyList(facData);
     } catch (err: any) {
+      if (!isMounted.current) return;
       if (!silent) {
         const status = err?.response?.status;
-        const detail = err?.response?.data?.detail || err.message;
+        const detail = err?.response?.data?.detail || err?.response?.data?.error || err.message;
         setError(`[HTTP ${status || 'Error'}] Could not load timetable data: ${detail}`);
       }
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && isMounted.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -192,10 +256,10 @@ export const SchedulesTab: React.FC = () => {
     loadData(false);
   }, [loadData]);
 
-  // LIVE ZERO-REFRESH POLLING: Sync timetables every 3 seconds
+  // LIVE ZERO-REFRESH POLLING: Synchronize timetable changes every 3 seconds
   useEffect(() => {
     const liveInterval = setInterval(() => {
-      if (!isInteracting.current) {
+      if (!isInteracting.current && isMounted.current) {
         loadData(true);
       }
     }, 3000);
@@ -210,13 +274,15 @@ export const SchedulesTab: React.FC = () => {
   const handleDelete = (id: number, code: string) => {
     showConfirm({
       title: 'Delete Schedule Period',
-      message: `Permanently delete schedule period "${code}" from the timetable database? This class assignment will be unassigned.`,
+      message: `Permanently delete schedule period "${code}" from the timetable database? This class period will be unassigned.`,
       confirmLabel: 'Delete Schedule',
       isDestructive: true,
       onConfirm: async () => {
         try {
           await apiClient.delete(`/schedules/${id}/`);
-          setSchedules((prev) => prev.filter((item) => item.id !== id));
+          if (isMounted.current) {
+            setSchedules((prev) => prev.filter((item) => item.id !== id));
+          }
           showAlert({
             title: 'Schedule Removed',
             message: `Schedule ${code} was deleted successfully.`,
@@ -226,7 +292,7 @@ export const SchedulesTab: React.FC = () => {
         } catch (err: any) {
           showAlert({
             title: 'Delete Error',
-            message: err?.response?.data?.detail || err.message || 'Failed to delete schedule period.',
+            message: err?.response?.data?.detail || err?.response?.data?.error || err.message || 'Failed to delete schedule period.',
             type: 'error',
           });
         }
@@ -252,23 +318,40 @@ export const SchedulesTab: React.FC = () => {
   };
 
   const getScheduleCode = (item: ScheduleItem) => {
-    return item.schedule_code || item.code || `SCH-${String(item.id).padStart(3, '0')}`;
+    return item.schedule_code || item.code || `SCH-${String(item.id).padStart(4, '0')}`;
   };
 
+  /**
+   * Robustly extracts teacher full name and photo.
+   * Resolves object representations, serializer method fields, and foreign key numbers.
+   */
   const getFacultyInfo = (item: ScheduleItem) => {
     let name = 'Unassigned';
     let photo: string | null = null;
 
-    if (item.faculty_name) name = item.faculty_name;
-    else if (item.teacher_name) name = item.teacher_name;
-    else if (typeof item.faculty === 'object' && item.faculty) {
-      name = item.faculty.full_name || item.faculty.name || 'Faculty Member';
+    if (item.faculty_name && item.faculty_name.trim() !== '') {
+      name = item.faculty_name.trim();
+    } else if (item.teacher_name && item.teacher_name.trim() !== '') {
+      name = item.teacher_name.trim();
+    } else if (typeof item.faculty === 'object' && item.faculty) {
+      name = item.faculty.full_name || item.faculty.name || name;
       photo = item.faculty.photo_url || item.faculty.photo || null;
     }
 
-    const rawId = item.faculty || item.faculty_id || item.faculty;
-    if (rawId) {
-      const matched = facultyList.find((f) => f.id === rawId || f.user_id === rawId);
+    // Extract ID safely even if item.faculty is serialized as an object
+    let targetFacultyId: number | undefined;
+    if (typeof item.faculty_id === 'number') {
+      targetFacultyId = item.faculty_id;
+    } else if (typeof item.faculty === 'number') {
+      targetFacultyId = item.faculty;
+    } else if (typeof item.faculty === 'string' && !isNaN(Number(item.faculty))) {
+      targetFacultyId = Number(item.faculty);
+    } else if (typeof item.faculty === 'object' && item.faculty && typeof item.faculty.id === 'number') {
+      targetFacultyId = item.faculty.id;
+    }
+
+    if (targetFacultyId !== undefined) {
+      const matched = facultyList.find((f) => f.id === targetFacultyId);
       if (matched) {
         name = matched.full_name || matched.name || name;
         photo = matched.photo_url || matched.photo || photo;
@@ -280,39 +363,60 @@ export const SchedulesTab: React.FC = () => {
 
   const getSubjectCode = (item: ScheduleItem) => {
     if (item.subject_code) return item.subject_code;
-    if (typeof item.subject === 'object' && item.subject) return item.subject.code || item.subject.name;
+    if (typeof item.subject === 'object' && item.subject) {
+      return item.subject.code || item.subject.title || item.subject.name || '—';
+    }
     if (typeof item.subject === 'string') return item.subject;
     return item.subject ? `SUB-${item.subject}` : '—';
   };
 
   const getSubjectName = (item: ScheduleItem) => {
+    if (item.subject_title) return item.subject_title;
     if (item.subject_name) return item.subject_name;
-    if (typeof item.subject === 'object' && item.subject) return item.subject.name;
+    if (typeof item.subject === 'object' && item.subject) {
+      return item.subject.title || item.subject.name || '';
+    }
     return '';
   };
 
+  const getSectionName = (item: ScheduleItem) => {
+    if (item.section_name) return item.section_name;
+    if (typeof item.section === 'object' && item.section) {
+      return item.section.name || `Section #${item.section.id}`;
+    }
+    return item.section ? `Section #${item.section}` : 'Unassigned';
+  };
+
   const getRoomDisplay = (item: ScheduleItem) => {
-    if (item.room_name) return item.room_name;
     if (item.room_number) return item.room_number;
-    if (typeof item.room === 'object' && item.room) return item.room.name || item.room.room_number;
+    if (item.room_name) return item.room_name;
+    if (typeof item.room === 'object' && item.room) {
+      return item.room.room_number || item.room.name || '—';
+    }
     if (typeof item.room === 'string') return item.room;
     if (item.room) return `Rm ${item.room}`;
     return '—';
   };
 
+  // ============================================================================
+  // MEMOIZED FILTERING & TELEMETRY
+  // ============================================================================
+
   const filteredSchedules = useMemo(() => {
     return schedules.filter((s) => {
+      // 1. Section Filter
       if (selectedSectionFilter !== 'ALL') {
-        const matchesSection = 
-          String(s.section) === selectedSectionFilter ||
-          String(s.section_name) === selectedSectionFilter;
-        if (!matchesSection) return false;
+        const secId = typeof s.section === 'object' && s.section ? s.section.id : s.section;
+        const matchesId = String(secId) === selectedSectionFilter;
+        const matchesName = String(s.section_name) === selectedSectionFilter;
+        if (!matchesId && !matchesName) return false;
       }
 
+      // 2. Search Query Filter
       if (searchQuery.trim() !== '') {
         const q = searchQuery.toLowerCase();
         const code = getScheduleCode(s).toLowerCase();
-        const sec = (s.section_name || String(s.section || '')).toLowerCase();
+        const sec = getSectionName(s).toLowerCase();
         const sub = (getSubjectCode(s) + ' ' + getSubjectName(s)).toLowerCase();
         const fac = getFacultyInfo(s).name.toLowerCase();
         const rm = getRoomDisplay(s).toLowerCase();
@@ -325,9 +429,17 @@ export const SchedulesTab: React.FC = () => {
   }, [schedules, selectedSectionFilter, searchQuery, facultyList]);
 
   // Telemetry Metrics
-  const uniqueSectionsCount = new Set(schedules.map((s) => s.section_name || s.section).filter(Boolean)).size;
-  const uniqueTeachersCount = new Set(schedules.map((s) => s.faculty_name || s.teacher_name || s.faculty).filter(Boolean)).size;
-  const uniqueRoomsCount = new Set(schedules.map((s) => s.room_name || s.room_number || s.room).filter(Boolean)).size;
+  const uniqueSectionsCount = useMemo(() => {
+    return new Set(schedules.map((s) => getSectionName(s)).filter((n) => n !== 'Unassigned')).size;
+  }, [schedules]);
+
+  const uniqueTeachersCount = useMemo(() => {
+    return new Set(schedules.map((s) => getFacultyInfo(s).name).filter((n) => n !== 'Unassigned')).size;
+  }, [schedules, facultyList]);
+
+  const uniqueRoomsCount = useMemo(() => {
+    return new Set(schedules.map((s) => getRoomDisplay(s)).filter((r) => r !== '—')).size;
+  }, [schedules]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -354,7 +466,7 @@ export const SchedulesTab: React.FC = () => {
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={statLabel}>ASSIGNED TEACHERS</span>
-            <User size={18} color="#0284c7" />
+            <UserIcon size={18} color="#0284c7" />
           </div>
           <div style={{ ...statVal, color: '#0284c7' }}>{uniqueTeachersCount}</div>
           <div style={statSub}>Faculty members teaching classes</div>
@@ -366,7 +478,7 @@ export const SchedulesTab: React.FC = () => {
             <DoorOpen size={18} color="#d97706" />
           </div>
           <div style={{ ...statVal, color: '#d97706' }}>{uniqueRoomsCount}</div>
-          <div style={statSub}>Classrooms and labs occupied</div>
+          <div style={statSub}>Classrooms and laboratories occupied</div>
         </div>
       </div>
 
@@ -384,7 +496,7 @@ export const SchedulesTab: React.FC = () => {
             <option value="ALL">All Sections ({schedules.length} periods)</option>
             {sections.map((sec) => (
               <option key={sec.id} value={sec.id}>
-                {sec.name} {sec.grade_level_name ? `(${sec.grade_level_name})` : ''}
+                {sec.name} {sec.grade_level_name || sec.grade_level ? `(${sec.grade_level_name || sec.grade_level})` : ''}
               </option>
             ))}
           </select>
@@ -512,7 +624,7 @@ export const SchedulesTab: React.FC = () => {
 
                       <td style={tdStyle}>
                         <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.84rem' }}>
-                          {row.section_name || (typeof row.section === 'object' ? row.section?.name : `Section #${row.section}`)}
+                          {getSectionName(row)}
                         </div>
                         {row.grade_level_name && (
                           <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 1 }}>

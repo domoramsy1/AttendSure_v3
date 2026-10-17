@@ -11,7 +11,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password, check_password
 from django.utils import timezone
 from django.conf import settings
-from django.core.exceptions import ValidationError
 
 User = get_user_model()
 
@@ -114,7 +113,7 @@ class AcademicYear(models.Model):
         return self.code
 
     def save(self, *args, **kwargs):
-        # Cybersecurity / Data Rule: Only one academic year can be ACTIVE at any time
+        # Cybersecurity / Concurrency Guard: Only one academic year can be ACTIVE
         if self.is_active:
             AcademicYear.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
         super().save(*args, **kwargs)
@@ -142,12 +141,10 @@ class SchoolProfile(models.Model):
     principal_name = models.CharField(max_length=255, blank=True, default='')
     principal_title = models.CharField(max_length=150, blank=True, default='Secondary School Principal IV')
 
-    # Base64 or URL Institutional Logos
     school_logo = models.TextField(blank=True, null=True)
     left_logo = models.TextField(blank=True, null=True)
     right_logo = models.TextField(blank=True, null=True)
 
-    # Campus Geofencing Center Coordinates (Used for GPS Boundary Check)
     latitude = models.DecimalField(max_digits=10, decimal_places=7, default=8.4858000)
     longitude = models.DecimalField(max_digits=10, decimal_places=7, default=124.6567000)
     geofence_radius_meters = models.IntegerField(default=150)
@@ -162,23 +159,30 @@ class SchoolProfile(models.Model):
         if self.principal_faculty:
             faculty = self.principal_faculty
             if not self.principal_name:
-                mid = f" {faculty.middle_name[:1]}." if faculty.middle_name else ""
-                suf = f" {faculty.suffix}" if faculty.suffix else ""
-                self.principal_name = f"{faculty.first_name}{mid} {faculty.last_name}{suf}".strip()
+                self.principal_name = faculty.full_name
             if not self.principal_title and faculty.position:
                 self.principal_title = faculty.position
         super().save(*args, **kwargs)
 
-    def calculate_distance_meters(self, user_lat: float, user_lon: float) -> float:
+    def calculate_distance_meters(self, user_lat, user_lon) -> float:
         """
         Anti-Spoofing / Haversine Formula:
-        Calculates exact physical distance between device GPS and campus center in meters.
+        Calculates physical distance in meters between user GPS and campus center.
+        Defensive typing prevents 500 server crashes from malformed telemetry.
         """
+        try:
+            u_lat = float(user_lat)
+            u_lon = float(user_lon)
+            c_lat = float(self.latitude)
+            c_lon = float(self.longitude)
+        except (TypeError, ValueError):
+            return float('inf')
+
         r = 6371000  # Radius of earth in meters
-        phi1 = math.radians(float(self.latitude))
-        phi2 = math.radians(user_lat)
-        delta_phi = math.radians(user_lat - float(self.latitude))
-        delta_lambda = math.radians(user_lon - float(self.longitude))
+        phi1 = math.radians(c_lat)
+        phi2 = math.radians(u_lat)
+        delta_phi = math.radians(u_lat - c_lat)
+        delta_lambda = math.radians(u_lon - c_lon)
 
         a = (math.sin(delta_phi / 2.0) ** 2 +
              math.cos(phi1) * math.cos(phi2) * (math.sin(delta_lambda / 2.0) ** 2))
@@ -239,11 +243,9 @@ class IoTKiosk(models.Model):
         return f"{self.terminal_name} [{self.kiosk_code}]"
 
     def set_secret(self, raw_secret: str):
-        """Hashes raw secret before writing to the database (Anti-Credential Theft)."""
         self.secret_hash = make_password(raw_secret)
 
     def verify_secret(self, raw_secret: str) -> bool:
-        """Verifies the incoming kiosk request token against the PBKDF2/Argon2 hash."""
         return check_password(raw_secret, self.secret_hash)
 
 
@@ -266,12 +268,19 @@ class FacultyProfile(models.Model):
     photo = models.ImageField(upload_to='faculty/', null=True, blank=True)
     photo_updated_at = models.DateTimeField(null=True, blank=True)
 
+    # Teaching eligibility flag required for scheduling & class assignment
+    can_teach = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Designates if this faculty member is available for class assignment."
+    )
+
     # Hardware Tokens
     rfid_uid = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
     qr_token = models.CharField(max_length=128, unique=True, null=True, blank=True, db_index=True)
     is_active = models.BooleanField(default=True)
 
-    # Zero-Trust Mobile Device Binding (Prevents proxy attendance from friend's phone)
+    # Device binding for anti-proxy attendance
     bound_device_id = models.CharField(max_length=128, blank=True, null=True, unique=True)
     device_model = models.CharField(max_length=100, blank=True, null=True)
     device_bound_at = models.DateTimeField(blank=True, null=True)
@@ -285,22 +294,49 @@ class FacultyProfile(models.Model):
         db_table = 'faculty_profiles'
         ordering = ['last_name', 'first_name']
 
+    @property
+    def full_name(self) -> str:
+        """Returns standard DepEd formal name: First M. Last Suffix."""
+        mid = f" {self.middle_name[:1]}." if self.middle_name else ""
+        suf = f" {self.suffix}" if self.suffix else ""
+        name = f"{self.first_name}{mid} {self.last_name}{suf}".strip()
+        return name or f"{self.last_name}, {self.first_name}".strip()
+
+    @property
+    def user(self):
+        """Safe reverse accessor to linked User account."""
+        if hasattr(self, 'account') and self.account:
+            return self.account.user
+        return None
+
     def clean(self):
-        # Normalize RFID to prevent case-sensitivity scan mismatches
+        # Empty string sanitization to prevent PostgreSQL unique key collisions
         if self.rfid_uid:
             self.rfid_uid = self.rfid_uid.strip().upper()
+        if not self.rfid_uid:
+            self.rfid_uid = None
+
+        if self.bound_device_id:
+            self.bound_device_id = self.bound_device_id.strip()
+        if not self.bound_device_id:
+            self.bound_device_id = None
+
+        if self.qr_token:
+            self.qr_token = self.qr_token.strip()
+        if not self.qr_token:
+            self.qr_token = None
+
         if self.contact_number:
             self.contact_number = self.contact_number.strip().replace(' ', '').replace('-', '')
 
     def save(self, *args, **kwargs):
         self.clean()
         if not self.qr_token:
-            # Auto-generate secure 32-byte cryptographic token
             self.qr_token = secrets.token_urlsafe(32)
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.last_name}, {self.first_name} ({self.employee_id})"
+        return f"{self.full_name} ({self.employee_id})"
 
 
 class UserProfile(models.Model):
@@ -316,7 +352,6 @@ class UserProfile(models.Model):
     role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default='FACULTY')
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
 
-    # Hybrid Teaching & Profile Flags
     is_teaching = models.BooleanField(
         default=True,
         help_text="Enables teaching duties and the 'My Assigned Classes' tab for this user."
@@ -326,12 +361,19 @@ class UserProfile(models.Model):
         help_text="Flagged True once the user completes their name, contact, and profile info."
     )
 
-    # Anti-Brute-Force Attack Defense
+    # Brute-force protection
     failed_attempts = models.PositiveIntegerField(default=0)
     locked_until = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'user_profiles'
+
+    @property
+    def can_teach(self) -> bool:
+        """Checks both account and faculty record availability."""
+        if self.faculty:
+            return self.is_teaching and self.faculty.is_active and self.faculty.can_teach
+        return self.is_teaching
 
     def is_locked(self) -> bool:
         if self.locked_until and timezone.now() < self.locked_until:
@@ -383,7 +425,6 @@ class Student(models.Model):
     photo_thumbnail = models.CharField(max_length=255, null=True, blank=True)
     photo_updated_at = models.DateTimeField(null=True, blank=True)
 
-    # Identifiers
     rfid_uid = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
     qr_token = models.CharField(max_length=128, unique=True, db_index=True)
     is_active = models.BooleanField(default=True)
@@ -397,22 +438,31 @@ class Student(models.Model):
         db_table = 'students'
         ordering = ['last_name', 'first_name']
 
+    @property
+    def full_name(self) -> str:
+        """Returns standard DepEd roster name: Last, First M. Suffix."""
+        mid = f" {self.middle_name[:1]}." if self.middle_name else ""
+        suf = f" {self.suffix}" if self.suffix else ""
+        return f"{self.last_name}, {self.first_name}{mid}{suf}".strip()
+
     def clean(self):
         if self.rfid_uid:
             self.rfid_uid = self.rfid_uid.strip().upper()
+        if not self.rfid_uid:
+            self.rfid_uid = None
+
         if self.parent_contact:
-            # Clean spaces and formatting to protect SMS pipeline
-            self.parent_contact = self.parent_contact.strip().replace(' ', '').replace('-', '')
+            # Strip invalid characters to sanitize SMS pipeline
+            self.parent_contact = ''.join(c for c in self.parent_contact if c.isdigit() or c == '+')
 
     def save(self, *args, **kwargs):
         self.clean()
         if not self.qr_token:
-            # Auto-generate unique cryptographic token if blank
             self.qr_token = secrets.token_urlsafe(32)
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.last_name}, {self.first_name} ({self.lrn})"
+        return f"{self.full_name} ({self.lrn})"
 
 
 # ==============================================================================
@@ -541,7 +591,6 @@ class ScheduleDay(models.Model):
 # ==============================================================================
 
 class FacultyGateLog(models.Model):
-    """Turnstile tap record for faculty with tamper protection."""
     id = models.BigAutoField(primary_key=True)
     faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='gate_logs')
     kiosk = models.ForeignKey(IoTKiosk, on_delete=models.SET_NULL, null=True, blank=True)
@@ -550,10 +599,9 @@ class FacultyGateLog(models.Model):
     scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default='RFID')
     raw_identifier = models.CharField(max_length=128)
 
-    # DTR, Loafing & Anti-Cheating Flags
     is_violation = models.BooleanField(
         default=False,
-        help_text="Flagged when unauthorized gate exit occurs during official work hours without Gate Pass"
+        help_text="Flagged when unauthorized gate exit occurs during work hours without Gate Pass"
     )
     violation_type = models.CharField(
         max_length=64,
@@ -563,7 +611,6 @@ class FacultyGateLog(models.Model):
     )
     remarks = models.TextField(blank=True, default='')
 
-    # Principal Exemption / Governance Consideration
     is_excused_by_principal = models.BooleanField(
         default=False,
         help_text="Only the School Principal can excuse a loafing violation"
@@ -590,7 +637,6 @@ class FacultyGateLog(models.Model):
 
 
 class StudentGateLog(models.Model):
-    """High-frequency student gate taps indexed for fast turnstile queries."""
     id = models.BigAutoField(primary_key=True)
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='gate_logs')
     kiosk = models.ForeignKey(IoTKiosk, on_delete=models.SET_NULL, null=True, blank=True)
@@ -655,7 +701,6 @@ class DailyAttendanceSummary(models.Model):
 
 
 class FacultyHeartbeat(models.Model):
-    """High-frequency GPS pings from mobile phones during teaching hours."""
     id = models.BigAutoField(primary_key=True)
     faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='heartbeats')
     latitude = models.DecimalField(max_digits=10, decimal_places=7)
@@ -714,19 +759,15 @@ class GatePass(models.Model):
         ]
 
     def is_currently_valid(self) -> bool:
-        """
-        Anti-Replay / Expiration Defense:
-        Verifies pass is marked ACTIVE AND current timestamp is within the authorized window.
-        """
         now = timezone.now()
         if self.status != 'ACTIVE':
             return False
-        if not (self.valid_from <= now <= self.valid_to):
-            # Auto-mark expired if checked after deadline
-            if now > self.valid_to and self.status == 'ACTIVE':
-                self.status = 'EXPIRED'
-                self.save(update_fields=['status'])
-            return False
+        if self.valid_from and self.valid_to:
+            if not (self.valid_from <= now <= self.valid_to):
+                if now > self.valid_to and self.status == 'ACTIVE':
+                    self.status = 'EXPIRED'
+                    self.save(update_fields=['status'])
+                return False
         return True
 
     def __str__(self):
@@ -774,11 +815,19 @@ class SmsOutbox(models.Model):
 
     def clean(self):
         if self.recipient_number:
-            # Strip spaces and invalid characters to protect physical GSM modem AT command pipeline
-            clean_num = self.recipient_number.strip().replace(' ', '').replace('-', '')
+            # Defensive GSM formatting & AT-command injection barrier
+            clean_num = ''.join(c for c in self.recipient_number if c.isdigit() or c == '+')
             if clean_num.startswith('09') and len(clean_num) == 11:
                 clean_num = '+63' + clean_num[1:]
+            elif clean_num.startswith('9') and len(clean_num) == 10:
+                clean_num = '+63' + clean_num
+            elif clean_num.startswith('639') and len(clean_num) == 12:
+                clean_num = '+' + clean_num
             self.recipient_number = clean_num
+
+        if self.message_body:
+            # Strip modem control termination sequences (Ctrl+Z / 0x1A and null bytes)
+            self.message_body = self.message_body.replace('\x1a', '').replace('\x00', '')
 
     def save(self, *args, **kwargs):
         self.clean()
@@ -797,7 +846,6 @@ class SmsOutbox(models.Model):
 # ==============================================================================
 
 class AuditLog(models.Model):
-    """Immutable table managed by PostgreSQL system triggers."""
     id = models.BigAutoField(primary_key=True)
     table_name = models.CharField(max_length=64)
     record_id = models.BigIntegerField()
@@ -826,7 +874,6 @@ class AuditLog(models.Model):
 
 
 class FacultyMonthlyDTR(models.Model):
-    """Tracks monthly DTR approval and governance for Civil Service Form 48."""
     faculty = models.ForeignKey(
         FacultyProfile,
         on_delete=models.CASCADE,

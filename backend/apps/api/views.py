@@ -5,6 +5,7 @@ File: backend/apps/api/views.py
 
 import base64
 import calendar
+import csv
 from datetime import date, datetime, timedelta
 import hmac
 from html import escape as html_escape
@@ -17,6 +18,7 @@ import uuid
 
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -24,9 +26,10 @@ from django.core.files.base import ContentFile
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from rest_framework import filters, permissions, status, viewsets
+from rest_framework import filters, permissions, serializers as drf_serializers, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
@@ -60,6 +63,7 @@ from apps.academics.services.sf4_service import generate_sf4_data
 
 from .serializers import (
     ClassroomBatchScanSerializer,
+    FacultyDropdownSerializer,
     FacultyProfileSerializer,
     GatePassSerializer,
     GateScanSerializer,
@@ -77,15 +81,13 @@ from .serializers import (
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
+
 # ============================================================================
 # DATABASE TABLE HELPERS & SELF-HEALING SCHEMA
 # ============================================================================
 
 def ensure_user_profile_schema():
-    """
-    Self-healing migration:
-    Guarantees user_profiles table has the necessary columns in PostgreSQL.
-    """
+    """Guarantees user_profiles table has the required columns in PostgreSQL."""
     try:
         with connection.cursor() as cursor:
             cursor.execute("""
@@ -108,8 +110,21 @@ def ensure_user_profile_schema():
         logger.debug("Schema check for user_profiles: %s", e)
 
 
+def ensure_faculty_profile_schema():
+    """Guarantees faculty_profiles has the can_teach column enabled."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                ALTER TABLE faculty_profiles
+                ADD COLUMN IF NOT EXISTS can_teach BOOLEAN NOT NULL DEFAULT TRUE;
+            """)
+    except Exception as e:
+        logger.debug("Schema check for faculty_profiles: %s", e)
+
+
 def ensure_attendance_schema():
     ensure_user_profile_schema()
+    ensure_faculty_profile_schema()
     try:
         with connection.cursor() as cursor:
             cursor.execute("""
@@ -228,20 +243,22 @@ def resolve_logo_field(val, request=None):
 
 
 # ============================================================================
-# STRING FORMATTING HELPERS
+# STRING FORMATTING & NAME HELPERS
 # ============================================================================
 
 def format_full_student_name(st):
-    """Safely builds full name: Last Name, First Name Middle Name Suffix."""
+    """Safely builds full student name: Last Name, First Name Middle Name Suffix."""
     if not st:
         return ""
+    if hasattr(st, 'full_name') and isinstance(st.full_name, str):
+        return st.full_name
     mid = f" {st.middle_name}" if getattr(st, 'middle_name', None) else ""
     suf = f" {st.suffix}" if getattr(st, 'suffix', None) else ""
     return f"{st.last_name}, {st.first_name}{mid}{suf}".strip(" ,")
 
 
 def format_deduped_section_label(grade_name, section_name):
-    """Formats section display label without redundant text (e.g., 'Grade 7 - Diamond')."""
+    """Formats section display label cleanly without duplicate text."""
     g = str(grade_name or '').strip()
     s = str(section_name or '').strip()
     if not g:
@@ -277,19 +294,18 @@ def is_regular_teacher(role):
 
 
 def resolve_faculty_for_user(user):
-    """
-    Finds or automatically links the FacultyProfile for the authenticated user.
-    """
+    """Finds or links the active FacultyProfile for the authenticated user."""
     if not user or not user.is_authenticated:
         return None
 
     ensure_user_profile_schema()
+    ensure_faculty_profile_schema()
 
     user_prof, _ = UserProfile.objects.get_or_create(user=user)
-    if getattr(user_prof, 'faculty', None):
-        return user_prof.faculty
+    faculty = getattr(user_prof, 'faculty', None)
 
-    faculty = getattr(user, 'facultyprofile', None)
+    if not faculty:
+        faculty = getattr(user, 'facultyprofile', None)
 
     if not faculty and user.email:
         faculty = FacultyProfile.objects.filter(email__iexact=user.email, is_active=True).first()
@@ -319,12 +335,30 @@ def resolve_faculty_for_user(user):
                 'department': 'Academic Department',
                 'qr_token': f"STF-{uuid.uuid4().hex[:12].upper()}",
                 'is_active': True,
+                'can_teach': True,
             }
         )
 
-    if faculty and getattr(user_prof, 'faculty_id', None) != faculty.id:
-        user_prof.faculty = faculty
-        user_prof.save(update_fields=['faculty'])
+    if faculty:
+        f_updates = []
+        if not getattr(faculty, 'is_active', True):
+            faculty.is_active = True
+            f_updates.append('is_active')
+        if not getattr(faculty, 'can_teach', True):
+            faculty.can_teach = True
+            f_updates.append('can_teach')
+        if f_updates:
+            faculty.save(update_fields=f_updates)
+
+        p_updates = []
+        if getattr(user_prof, 'faculty_id', None) != faculty.id:
+            user_prof.faculty = faculty
+            p_updates.append('faculty')
+        if not getattr(user_prof, 'is_teaching', True):
+            user_prof.is_teaching = True
+            p_updates.append('is_teaching')
+        if p_updates:
+            user_prof.save(update_fields=p_updates)
 
     return faculty
 
@@ -427,7 +461,6 @@ class HardwareGateScanRateThrottle(AnonRateThrottle):
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 25
     page_size_query_param = 'page_size'
-    # Cybersecurity ceiling: supports 25, 50, 100, 250, 500, 1000, and 'ALL' (up to 10,000 records)
     max_page_size = 10000
 
     def get_page_size(self, request):
@@ -542,7 +575,7 @@ class FacultyClassroomRosterAPIView(APIView):
                 'display_section': format_deduped_section_label(grade_name, sec.name),
                 'subject_name': getattr(sched.subject, 'title', getattr(sched.subject, 'name', '')) if sched.subject else '',
                 'subject_code': getattr(sched.subject, 'code', '') if sched.subject else '',
-                'faculty_name': f"{sched.faculty.first_name} {sched.faculty.last_name}".strip() if sched.faculty else '',
+                'faculty_name': sched.faculty.full_name if sched.faculty else '',
                 'room': getattr(sched, 'room_number', '') or getattr(sec, 'room_number', '') or '',
                 'start_time': str(sched.start_time) if getattr(sched, 'start_time', None) else '',
                 'end_time': str(sched.end_time) if getattr(sched, 'end_time', None) else '',
@@ -586,7 +619,7 @@ class ClassroomBatchScanAPIView(APIView):
             and not request.user.is_superuser
         ):
             return Response(
-                {'error': f"Unauthorized: You ({faculty.first_name} {faculty.last_name}) are not assigned to teach this class."},
+                {'error': f"Unauthorized: You ({faculty.full_name}) are not assigned to teach this class."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -708,7 +741,7 @@ class ClassroomBatchScanAPIView(APIView):
 
 
 # ============================================================================
-# AUTHENTICATION & LOCKOUT PROTECTION
+# AUTHENTICATION & BRUTE-FORCE LOCKOUT DEFENSE
 # ============================================================================
 
 def build_authenticated_user_payload(user, request=None):
@@ -721,11 +754,12 @@ def build_authenticated_user_payload(user, request=None):
     first_name = (getattr(faculty, 'first_name', '') or user.first_name or '').strip()
     middle_name = (getattr(faculty, 'middle_name', '') or '').strip()
     last_name = (getattr(faculty, 'last_name', '') or user.last_name or '').strip()
-    full_name = " ".join(filter(None, [first_name, middle_name, last_name])).strip() or user.username
+    full_name = getattr(faculty, 'full_name', '') if faculty else " ".join(filter(None, [first_name, middle_name, last_name])).strip() or user.username
 
     photo_url = safe_photo_url(faculty.photo, request) if (faculty and faculty.photo) else None
     teaching_class_count = Schedule.objects.filter(faculty=faculty).count() if faculty else 0
-    is_teaching = bool(profile and getattr(profile, 'is_teaching', True)) or (teaching_class_count > 0) or (assigned_role == 'FACULTY')
+    can_teach = bool(getattr(faculty, 'can_teach', True)) and bool(getattr(profile, 'is_teaching', True))
+    is_teaching = can_teach or (teaching_class_count > 0) or (assigned_role == 'FACULTY')
 
     return {
         'id': user.id,
@@ -748,7 +782,8 @@ def build_authenticated_user_payload(user, request=None):
         'role': assigned_role,
         'system_role': assigned_role,
         'is_profile_completed': bool(profile and getattr(profile, 'is_profile_completed', True)),
-        'can_teach': is_teaching,
+        'can_teach': can_teach,
+        'is_teaching': is_teaching,
         'assigned_class_count': teaching_class_count,
         'is_superuser': user.is_superuser,
     }
@@ -865,6 +900,10 @@ class CurrentUserView(APIView):
                 except Exception as e:
                     logger.error("Failed to decode profile photo: %s", e)
 
+            if not faculty.can_teach:
+                faculty.can_teach = True
+            if not faculty.is_active:
+                faculty.is_active = True
             faculty.save()
 
         profile = getattr(user, 'profile', None)
@@ -980,7 +1019,7 @@ class SectionListAPIView(APIView):
                 'grade_level_id': s.grade_level_id,
                 'academic_year': s.academic_year.code if s.academic_year else '',
                 'academic_year_id': s.academic_year_id,
-                'adviser_name': f"{s.adviser.first_name} {s.adviser.last_name}".strip() if s.adviser else "",
+                'adviser_name': s.adviser.full_name if s.adviser else "",
                 'adviser_id': s.adviser_id,
                 'room_number': s.room_number,
                 'capacity': s.capacity,
@@ -1003,8 +1042,8 @@ class SectionListAPIView(APIView):
             return Response({'error': 'Section name and grade_level_id are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         acad_year = None
-        if academic_year_id:
-            acad_year = AcademicYear.objects.filter(id=academic_year_id).first()
+        if academic_year_id and str(academic_year_id).isdigit():
+            acad_year = AcademicYear.objects.filter(id=int(academic_year_id)).first()
         if not acad_year:
             acad_year = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.first()
 
@@ -1013,7 +1052,9 @@ class SectionListAPIView(APIView):
         except GradeLevel.DoesNotExist:
             return Response({'error': 'Grade level not found.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        adviser = FacultyProfile.objects.filter(id=adviser_id).first() if adviser_id else None
+        adviser = None
+        if adviser_id and str(adviser_id).isdigit():
+            adviser = FacultyProfile.objects.filter(id=int(adviser_id)).first()
 
         section, created = Section.objects.get_or_create(
             name=name,
@@ -1032,7 +1073,7 @@ class SectionListAPIView(APIView):
             'name': section.name,
             'grade_level': grade_level.name,
             'academic_year': acad_year.code if acad_year else '',
-            'adviser_name': f"{adviser.first_name} {adviser.last_name}".strip() if adviser else "",
+            'adviser_name': adviser.full_name if adviser else "",
             'room_number': section.room_number,
             'capacity': section.capacity
         }, status=status.HTTP_201_CREATED)
@@ -1051,7 +1092,7 @@ class SectionDetailAPIView(APIView):
                 'grade_level_id': s.grade_level_id,
                 'academic_year': s.academic_year.code if s.academic_year else '',
                 'academic_year_id': s.academic_year_id,
-                'adviser_name': f"{s.adviser.first_name} {s.adviser.last_name}".strip() if s.adviser else "",
+                'adviser_name': s.adviser.full_name if s.adviser else "",
                 'adviser_id': s.adviser_id,
                 'room_number': s.room_number,
                 'capacity': s.capacity,
@@ -1078,7 +1119,8 @@ class SectionDetailAPIView(APIView):
         if 'grade_level_id' in data:
             s.grade_level_id = data['grade_level_id']
         if 'adviser_id' in data:
-            s.adviser_id = data['adviser_id'] or None
+            adv_val = data['adviser_id']
+            s.adviser_id = int(adv_val) if adv_val and str(adv_val).isdigit() else None
         if 'room_number' in data:
             s.room_number = str(data['room_number']).strip()
         if 'capacity' in data:
@@ -1261,7 +1303,7 @@ class GateScanAPIView(APIView):
                 return Response({
                     'notice': 'Tap ignored (debounce active)',
                     'person_type': 'STAFF',
-                    'name': f"{faculty.first_name} {faculty.last_name}".strip(),
+                    'name': faculty.full_name,
                     'direction': recent_log.direction,
                     'scan_time': recent_log.scan_time.strftime('%I:%M:%S %p')
                 }, status=status.HTTP_200_OK)
@@ -1275,7 +1317,7 @@ class GateScanAPIView(APIView):
             return Response({
                 'success': True,
                 'person_type': 'STAFF',
-                'name': f"{faculty.first_name} {faculty.last_name}".strip(),
+                'name': faculty.full_name,
                 'employee_id': faculty.employee_id,
                 'position': faculty.position or '',
                 'photo_url': safe_photo_url(faculty.photo, request),
@@ -1392,7 +1434,7 @@ class GateLogsAPIView(APIView):
             for log in faculty_qs:
                 if direction != 'ALL' and log.direction != direction:
                     continue
-                name = f"{log.faculty.first_name} {log.faculty.last_name}".strip()
+                name = log.faculty.full_name
                 emp_id = log.faculty.employee_id
                 if search_query and (search_query not in name.lower() and search_query not in emp_id.lower()):
                     continue
@@ -1505,7 +1547,7 @@ class ResetFacultyDeviceBindingAPIView(APIView):
             faculty.save()
             return Response({
                 'success': True,
-                'message': f"Phone pairing reset for {faculty.first_name} {faculty.last_name}.",
+                'message': f"Phone pairing reset for {faculty.full_name}.",
                 'released_device_id': old_device
             }, status=status.HTTP_200_OK)
         except FacultyProfile.DoesNotExist:
@@ -1634,7 +1676,7 @@ class DepEdSF1DataAPIView(APIView):
         right_logo = resolve_logo_field(getattr(school, 'right_logo', None), request) if school else None
         school_logo = resolve_logo_field(getattr(school, 'school_logo', None), request) if school else None
 
-        adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip() if section.adviser else ""
+        adviser_name = section.adviser.full_name if section.adviser else ""
         grade_level_name = section.grade_level.name if section.grade_level else ""
 
         enrollments_qs = Enrollment.objects.filter(
@@ -1740,7 +1782,7 @@ class DepEdSF2DataAPIView(APIView):
         except Exception as exc:
             logger.error("SF2 Compilation Error: %s", exc)
             school = SchoolProfile.objects.first()
-            adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip() if section.adviser else ""
+            adviser_name = section.adviser.full_name if section.adviser else ""
             return Response({
                 'school_name': school.school_name if school else "",
                 'school_id': school.school_id if school else "",
@@ -1758,6 +1800,13 @@ SF2ReportAPIView = DepEdSF2DataAPIView
 
 
 class DepEdSF4DataAPIView(APIView):
+    """
+    Generates DepEd School Form 4 (Monthly Attendance Summary).
+    Cybersecurity applied:
+    - Safe Exception Handling: Traps runtime errors and returns a clean 500 error 
+      rather than exposing sensitive server stack traces to users.
+    - Input Validation: Sanitizes month and year parameters before database queries.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -1803,8 +1852,11 @@ class DepEdSF4DataAPIView(APIView):
             data.setdefault('school_year', school_year)
             return Response(data, status=status.HTTP_200_OK)
         except Exception as e:
-            logger.error("SF4 error: %s", str(e), exc_info=True)
-            return Response({'error': 'Cannot compile SF4 report.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.error("SF4 compilation error: %s", str(e), exc_info=True)
+            return Response(
+                {'error': 'Cannot compile SF4 report. Please verify attendance records.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 SF4ReportAPIView = DepEdSF4DataAPIView
@@ -1856,10 +1908,7 @@ class DTRListAPIView(APIView):
             if school.principal_name and school.principal_name.strip():
                 school_head = school.principal_name.strip()
             elif school.principal_faculty:
-                p_fac = school.principal_faculty
-                mid = f" {p_fac.middle_name[:1]}." if p_fac.middle_name else ""
-                suf = f" {p_fac.suffix}" if p_fac.suffix else ""
-                school_head = f"{p_fac.first_name}{mid} {p_fac.last_name}{suf}".strip()
+                school_head = school.principal_faculty.full_name
 
             if school.principal_title and school.principal_title.strip():
                 school_head_title = school.principal_title.strip()
@@ -1976,7 +2025,7 @@ class DTRListAPIView(APIView):
 
         return Response({
             'faculty_id': faculty.id,
-            'faculty_name': f"{faculty.last_name}, {faculty.first_name}".strip(', '),
+            'faculty_name': faculty.full_name,
             'employee_id': faculty.employee_id,
             'department': faculty.department or "",
             'photo_url': safe_photo_url(faculty.photo, request),
@@ -2099,6 +2148,10 @@ class ReportAuditLogAPIView(APIView):
 
 
 def render_centralized_dtr_html(data: dict) -> str:
+    """
+    Renders DepEd Civil Service Form 48 (Daily Time Record) as printable HTML.
+    Protected against XSS and HTML injection via html_escape.
+    """
     rows_html = ""
     for r in data.get('rows', []):
         is_violating = r.get('is_loafing') and not r.get('loafing_excused')
@@ -2120,988 +2173,581 @@ def render_centralized_dtr_html(data: dict) -> str:
         watermark_html = """
         <div style="position:absolute;top:45%;left:50%;transform:translate(-50%,-50%) rotate(-32deg);pointer-events:none;z-index:10;text-align:center;">
           <div style="font-size:40pt;font-weight:900;font-family:'Arial Black',sans-serif;color:rgba(239,68,68,0.20);border:4px dashed rgba(239,68,68,0.28);padding:2px 18px;border-radius:8px;letter-spacing:6px;">DRAFT</div>
-          <div style="font-size:7pt;font-weight:800;color:rgba(239,68,68,0.32);margin-top:4px;">NOT APPROVED BY DEPT HEAD</div>
-        </div>"""
+          <div style="font-size:7pt;font-weight:800;color:rgba(239,68,68,0.32);margin-top:4px;">NOT FOR OFFICIAL USE &bull; PENDING APPROVAL</div>
+        </div>
+        """
 
-    single_copy = f"""
-    <div style="position:relative;width:48%;border:1px solid #000;padding:10px 12px;box-sizing:border-box;font-family:'Times New Roman',serif;color:#000;">
-      {watermark_html}
-      <div style="text-align:center;font-size:7.5pt;font-style:italic;">Civil Service Form No. 48</div>
-      <div style="text-align:center;font-size:11.5pt;font-weight:900;letter-spacing:0.6px;margin:2px 0 6px;">DAILY TIME RECORD</div>
-      <div style="border-bottom:1.2px solid #000;text-align:center;padding-bottom:1px;min-height:16px;">
-        <span style="font-size:9.2pt;font-weight:800;text-transform:uppercase;">{html_escape(str(data.get('faculty_name', '')))}</span>
-      </div>
-      <div style="text-align:center;font-size:6.5pt;font-style:italic;margin-bottom:6px;">(Name / ID: {html_escape(str(data.get('employee_id', '')))})</div>
-      <div style="font-size:6.8pt;border-bottom:0.8px solid #000;padding-bottom:2px;margin-bottom:4px;">
-        For the month of: <u><strong>{html_escape(str(data.get('month', '')))} {html_escape(str(data.get('year', '')))}</strong></u>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:6.2pt;margin-bottom:6px;">
-        <div>Regular Days: <u>{html_escape(str(data.get('regular_days_hours') or '8:00-12:00 / 1:00-5:00'))}</u></div>
-        <div>Saturdays: <u>{html_escape(str(data.get('saturdays_hours') or 'As Required'))}</u></div>
-      </div>
-      <table style="width:100%;border-collapse:collapse;border:1.2px solid #000;font-size:5.6pt;">
-        <thead>
-          <tr>
-            <th rowspan="2" style="border:1px solid #000;width:10%;">Days</th>
-            <th colspan="2" style="border:1px solid #000;">A. M.</th>
-            <th colspan="2" style="border:1px solid #000;">P. M.</th>
-            <th colspan="2" style="border:1px solid #000;">UNDERTIME</th>
-          </tr>
-          <tr style="font-size:5pt;">
-            <th style="border:1px solid #000;">ARRIVAL</th>
-            <th style="border:1px solid #000;">DEPARTURE</th>
-            <th style="border:1px solid #000;">ARRIVAL</th>
-            <th style="border:1px solid #000;">DEPARTURE</th>
-            <th style="border:1px solid #000;">Hours</th>
-            <th style="border:1px solid #000;">Minutes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows_html}
-          <tr style="border-top:1.2px solid #000;font-weight:800;height:16px;">
-            <td style="border:1px solid #000;text-align:center;">TOTAL</td>
-            <td colspan="4" style="border:1px solid #000;text-align:center;">Days Present: <strong>{data.get('days_present', 0)}</strong></td>
-            <td style="border:1px solid #000;text-align:center;">{data.get('total_undertime_hours', 0)}</td>
-            <td style="border:1px solid #000;text-align:center;">{data.get('total_undertime_minutes', 0)}</td>
-          </tr>
-        </tbody>
-      </table>
-      <div style="font-size:5.8pt;text-align:justify;line-height:1.25;margin-top:6px;">
-        I CERTIFY on my honor that the above is a true and correct report of the hours of work performed, record of which was made daily at the time of arrival and departure from office.
-      </div>
-      <div style="margin-top:16px;text-align:center;">
-        <div style="border-bottom:1px solid #000;width:82%;margin:0 auto;"></div>
-        <div style="font-size:5.6pt;font-style:italic;margin-top:1px;">(Signature of Faculty / Employee)</div>
-      </div>
-      <div style="margin-top:10px;text-align:center;">
-        <div style="border-bottom:1px solid #000;width:82%;margin:0 auto;min-height:14px;font-weight:bold;font-size:7.5pt;text-transform:uppercase;">
-          {html_escape(str(data.get('school_head', '')))}
-        </div>
-        <div style="font-size:6.4pt;font-weight:700;margin-top:1px;">
-          {html_escape(str(data.get('school_head_title') or 'In-Charge / School Head'))}
-        </div>
-      </div>
-    </div>"""
+    faculty_name = html_escape(str(data.get('faculty_name', 'Faculty Member')))
+    month_name = html_escape(str(data.get('month_name', '')))
+    year = html_escape(str(data.get('year', '')))
+    school_name = html_escape(str(data.get('school_name', 'Lapasan National High School')))
+    regular_hours = html_escape(str(data.get('regular_hours', '8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM')))
+    saturday_hours = html_escape(str(data.get('saturday_hours', 'As Required')))
+    total_undertime_hours = html_escape(str(data.get('total_undertime_hours', '0')))
+    total_undertime_minutes = html_escape(str(data.get('total_undertime_minutes', '0')))
+    principal_name = html_escape(str(data.get('principal_name', 'School Head / Principal')))
+    principal_title = html_escape(str(data.get('principal_title', 'Secondary School Principal IV')))
 
     return f"""<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>CSC Form 48 - {html_escape(str(data.get('faculty_name', '')))}</title>
+  <meta charset="UTF-8">
+  <title>Civil Service Form No. 48 - {faculty_name}</title>
   <style>
-    @page {{ size: 8.5in 13in portrait; margin: 0.25in; }}
-    body {{ margin: 0; padding: 0; background: #fff; }}
-    .page-sheet {{ display: flex; justify-content: space-between; width: 8.0in; margin: 0 auto; }}
+    @page {{ size: 8.5in 11in; margin: 0.5in; }}
+    body {{ font-family: Arial, sans-serif; font-size: 9pt; margin: 0; padding: 0; position: relative; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 8pt; }}
+    th, td {{ border: 1px solid #000; padding: 2px 4px; }}
+    th {{ background: #f3f4f6; text-align: center; font-weight: 700; }}
   </style>
 </head>
 <body>
-  <div class="page-sheet">
-    {single_copy}
-    <div style="border-left:1px dashed #94a3b8;margin:0 4px;"></div>
-    {single_copy}
+  {watermark_html}
+  <div style="text-align: center; margin-bottom: 8px;">
+    <div style="font-size: 8pt; font-weight: bold;">Civil Service Form No. 48</div>
+    <div style="font-size: 12pt; font-weight: 900; letter-spacing: 1px; margin: 2px 0;">DAILY TIME RECORD</div>
+    <div style="font-size: 10pt; font-weight: bold; text-decoration: underline;">{faculty_name}</div>
+    <div style="font-size: 8pt; color: #4b5563;">(Name)</div>
   </div>
-</body>
-</html>"""
-
-
-def render_centralized_sf1_html(data: dict) -> str:
-    learners = data.get('learners') or data.get('students') or []
-    rows_html = ""
-    for idx, st in enumerate(learners, start=1):
-        rows_html += f"""
-        <tr style="height:17px;">
-          <td style="border:1px solid #000;text-align:center;">{idx}</td>
-          <td style="border:1px solid #000;text-align:center;font-family:monospace;font-weight:700;">{html_escape(str(st.get('lrn', '')))}</td>
-          <td style="border:1px solid #000;padding:1px 3px;font-weight:700;">{html_escape(str(st.get('name', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('sex', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('birthdate', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('age', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('birth_place', '') or st.get('province', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('mother_tongue', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('ethnic_group', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('religion', '')))}</td>
-          <td style="border:1px solid #000;padding:1px 2px;">{html_escape(str(st.get('house_street', '')))}</td>
-          <td style="border:1px solid #000;padding:1px 2px;">{html_escape(str(st.get('barangay', '')))}</td>
-          <td style="border:1px solid #000;padding:1px 2px;">{html_escape(str(st.get('municipality_city', '')))}</td>
-          <td style="border:1px solid #000;padding:1px 2px;">{html_escape(str(st.get('province', '')))}</td>
-          <td style="border:1px solid #000;padding:1px 2px;">{html_escape(str(st.get('father_name', '')))}</td>
-          <td style="border:1px solid #000;padding:1px 2px;">{html_escape(str(st.get('mother_maiden_name', '')))}</td>
-          <td style="border:1px solid #000;padding:1px 2px;">{html_escape(str(st.get('guardian_name', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('guardian_relationship', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;font-family:monospace;">{html_escape(str(st.get('parent_contact', '')))}</td>
-          <td style="border:1px solid #000;text-align:center;">{html_escape(str(st.get('remarks', '')))}</td>
-        </tr>"""
-
-    clean_sec_label = format_deduped_section_label(data.get('grade_level', ''), data.get('section_name', ''))
-
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>DepEd SF1 - {html_escape(clean_sec_label)}</title>
-  <style>
-    @page {{ size: 13in 8.5in landscape; margin: 0.25in; }}
-    body {{ font-family: Arial, sans-serif; font-size: 5.2pt; color: #000; margin: 0; background: #fff; }}
-    table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
-  </style>
-</head>
-<body>
-  <div style="text-align:center;margin-bottom:8px;">
-    <div style="font-family:'Old English Text MT',serif;font-size:12pt;font-weight:bold;">Republic of the Philippines</div>
-    <div style="font-family:'Old English Text MT',serif;font-size:18pt;font-weight:bold;">Department of Education</div>
-    <div style="font-family:Tahoma,sans-serif;font-size:10.5pt;font-weight:900;text-transform:uppercase;margin-top:4px;">School Form 1 (SF 1) School Register</div>
-    <div style="font-size:7.5pt;margin-top:4px;">
-      <strong>School ID:</strong> {html_escape(str(data.get('school_id', '')))} &bull;
-      <strong>School Name:</strong> {html_escape(str(data.get('school_name', '')))} &bull;
-      <strong>SY:</strong> {html_escape(str(data.get('academic_year', '')))} &bull;
-      <strong>Grade &amp; Section:</strong> {html_escape(clean_sec_label)}
-    </div>
-  </div>
-  <table style="border:1.5px solid #000;">
+  <table style="margin-bottom: 6px; font-size: 8pt; border: none;">
+    <tr style="border: none;">
+      <td style="border: none; width: 50%;">For the month of: <strong>{month_name} {year}</strong></td>
+      <td style="border: none; width: 50%; text-align: right;">School: <strong>{school_name}</strong></td>
+    </tr>
+    <tr style="border: none;">
+      <td style="border: none;" colspan="2">Official hours for arrival and departure: Regular days: <u>{regular_hours}</u> / Saturdays: <u>{saturday_hours}</u></td>
+    </tr>
+  </table>
+  <table>
     <thead>
-      <tr style="font-weight:bold;text-align:center;">
-        <th style="border:1px solid #000;width:2%;">#</th>
-        <th style="border:1px solid #000;width:7%;">LRN</th>
-        <th style="border:1px solid #000;width:13%;">LEARNER'S NAME</th>
-        <th style="border:1px solid #000;width:2.5%;">Sex</th>
-        <th style="border:1px solid #000;width:5%;">BIRTH DATE</th>
-        <th style="border:1px solid #000;width:3%;">AGE</th>
-        <th style="border:1px solid #000;width:5%;">BIRTH PLACE</th>
-        <th style="border:1px solid #000;width:4.5%;">MOTHER TONGUE</th>
-        <th style="border:1px solid #000;width:4%;">IP</th>
-        <th style="border:1px solid #000;width:4%;">RELIGION</th>
-        <th style="border:1px solid #000;width:5%;">Street</th>
-        <th style="border:1px solid #000;width:4.5%;">Barangay</th>
-        <th style="border:1px solid #000;width:4.5%;">City/Mun</th>
-        <th style="border:1px solid #000;width:4%;">Province</th>
-        <th style="border:1px solid #000;width:6.5%;">Father's Name</th>
-        <th style="border:1px solid #000;width:6.5%;">Mother's Maiden</th>
-        <th style="border:1px solid #000;width:4.5%;">Guardian</th>
-        <th style="border:1px solid #000;width:3.5%;">Relation</th>
-        <th style="border:1px solid #000;width:5.5%;">Contact</th>
-        <th style="border:1px solid #000;width:5.5%;">REMARKS</th>
+      <tr>
+        <th rowspan="2" style="width: 28px;">Day</th>
+        <th colspan="2">A.M.</th>
+        <th colspan="2">P.M.</th>
+        <th colspan="2">Undertime</th>
+      </tr>
+      <tr>
+        <th style="width: 60px;">Arrival</th>
+        <th style="width: 60px;">Departure</th>
+        <th style="width: 60px;">Arrival</th>
+        <th style="width: 60px;">Departure</th>
+        <th style="width: 45px;">Hours</th>
+        <th style="width: 45px;">Minutes</th>
       </tr>
     </thead>
     <tbody>
       {rows_html}
-      <tr style="background:#e2e8f0;font-weight:900;">
-        <td colspan="3" style="border:1px solid #000;padding-left:6px;">TOTAL ENROLLED</td>
-        <td style="border:1px solid #000;text-align:center;">{data.get('total_combined', len(learners))}</td>
-        <td colspan="16" style="border:1px solid #000;padding-left:6px;">Male: {data.get('total_male', 0)} &bull; Female: {data.get('total_female', 0)}</td>
+      <tr style="font-weight: 700; background: #f9fafb;">
+        <td colspan="5" style="text-align: right; border: 1px solid #000;">TOTAL:</td>
+        <td style="text-align: center; border: 1px solid #000;">{total_undertime_hours}</td>
+        <td style="text-align: center; border: 1px solid #000;">{total_undertime_minutes}</td>
       </tr>
     </tbody>
   </table>
-</body>
-</html>"""
-
-
-def render_centralized_sf2_html(data: dict) -> str:
-    males = data.get('males') or []
-    females = data.get('females') or []
-    school_days = data.get('school_days') or []
-
-    day_cols_th = ""
-    for i in range(25):
-        if i < len(school_days):
-            d = school_days[i]
-            day_cols_th += f"<th style='border:1px solid #000;width:2.4%;'><div>{d.get('dateNumber')}</div><div>{d.get('dayOfWeek')}</div></th>"
-        else:
-            day_cols_th += "<th style='border:1px solid #000;width:2.4%;'></th>"
-
-    def build_rows(learners):
-        out = ""
-        for idx, l in enumerate(learners, start=1):
-            att_map = l.get('attendance') or {}
-            cells = ""
-            for i in range(25):
-                if i < len(school_days):
-                    d_num = school_days[i].get('dateNumber')
-                    st = str(att_map.get(d_num, '')).lower().strip()
-                    mark = "X" if st in ['absent', 'x', '1'] else ("L" if st in ['tardy', 'late', '2'] else "")
-                    cells += f"<td style='border:1px solid #000;text-align:center;'>{mark}</td>"
-                else:
-                    cells += "<td style='border:1px solid #000;'></td>"
-            out += f"""
-            <tr style="height:15px;">
-              <td style="border:1px solid #000;text-align:center;">{idx}</td>
-              <td style="border:1px solid #000;padding:1px 3px;font-weight:700;">{html_escape(str(l.get('name', '')))}</td>
-              {cells}
-              <td style="border:1px solid #000;text-align:center;font-weight:700;">{l.get('total_absent') or ''}</td>
-              <td style="border:1px solid #000;text-align:center;font-weight:700;">{l.get('total_tardy') or ''}</td>
-              <td style="border:1px solid #000;padding:1px 2px;">{html_escape(str(l.get('remarks', '')))}</td>
-            </tr>"""
-        return out
-
-    clean_sec_label = format_deduped_section_label(data.get('grade_level', ''), data.get('section_name', ''))
-
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>DepEd SF2 - {html_escape(clean_sec_label)}</title>
-  <style>
-    @page {{ size: 13in 8.5in landscape; margin: 0.25in; }}
-    body {{ font-family: Arial, sans-serif; font-size: 5pt; color: #000; margin: 0; background: #fff; }}
-    table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
-  </style>
-</head>
-<body>
-  <div style="text-align:center;margin-bottom:8px;">
-    <div style="font-family:'Old English Text MT',serif;font-size:12pt;font-weight:bold;">Republic of the Philippines</div>
-    <div style="font-family:'Old English Text MT',serif;font-size:18pt;font-weight:bold;">Department of Education</div>
-    <div style="font-family:Tahoma,sans-serif;font-size:10.5pt;font-weight:900;text-transform:uppercase;margin-top:4px;">School Form 2 (SF 2) Daily Attendance Report of Learners</div>
-    <div style="font-size:7.5pt;margin-top:4px;">
-      <strong>School ID:</strong> {html_escape(str(data.get('school_id', '')))} &bull;
-      <strong>School Name:</strong> {html_escape(str(data.get('school_name', '')))} &bull;
-      <strong>Month:</strong> {html_escape(str(data.get('month', '')))} {html_escape(str(data.get('year', '')))} &bull;
-      <strong>Grade &amp; Section:</strong> {html_escape(clean_sec_label)}
-    </div>
+  <div style="font-size: 7.5pt; margin-top: 10px; line-height: 1.3;">
+    I certify on my honor that the above is a true and correct report of the hours of work performed, record of which was made daily at the time of arrival and departure from office.
   </div>
-  <table style="border:1.5px solid #000;">
-    <thead>
-      <tr>
-        <th rowspan="2" style="width:2%;border:1px solid #000;">#</th>
-        <th rowspan="2" style="width:16%;border:1px solid #000;">LEARNER'S NAME</th>
-        <th colspan="25" style="border:1px solid #000;">(Dates of Month)</th>
-        <th colspan="2" style="width:6%;border:1px solid #000;">Total</th>
-        <th rowspan="2" style="width:16%;border:1px solid #000;">REMARKS</th>
-      </tr>
-      <tr>
-        {day_cols_th}
-        <th style="border:1px solid #000;">ABSENT</th>
-        <th style="border:1px solid #000;">TARDY</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr style="background:#f8fafc;font-weight:800;"><td colspan="30" style="border:1px solid #000;padding-left:6px;">MALE ({len(males)})</td></tr>
-      {build_rows(males)}
-      <tr style="background:#f8fafc;font-weight:800;"><td colspan="30" style="border:1px solid #000;padding-left:6px;">FEMALE ({len(females)})</td></tr>
-      {build_rows(females)}
-    </tbody>
-  </table>
-</body>
-</html>"""
-
-
-def render_centralized_sf4_html(data: dict) -> str:
-    groups = data.get('grade_groups') or []
-    rows_html = ""
-
-    def render_triplet(t):
-        if not t:
-            return "<td style='border:1px solid #000;text-align:center;'>0</td><td style='border:1px solid #000;text-align:center;'>0</td><td style='border:1px solid #000;text-align:center;font-weight:bold;'>0</td>"
-        return f"<td style='border:1px solid #000;text-align:center;'>{t.get('m', 0)}</td><td style='border:1px solid #000;text-align:center;'>{t.get('f', 0)}</td><td style='border:1px solid #000;text-align:center;font-weight:bold;'>{t.get('total', 0)}</td>"
-
-    for g in groups:
-        for sec in g.get('sections', []):
-            rows_html += f"""
-            <tr style="height:16px;">
-              <td style="border:1px solid #000;padding:1px 3px;">{html_escape(str(sec.get('adviser_name', '')))}</td>
-              <td style="border:1px solid #000;text-align:center;font-weight:bold;">{html_escape(str(sec.get('grade_level', '')))}</td>
-              <td style="border:1px solid #000;padding:1px 3px;">{html_escape(str(sec.get('section_name', '')))}</td>
-              {render_triplet(sec.get('registered_end'))}
-              {render_triplet(sec.get('daily_average'))}
-              {render_triplet(sec.get('attendance_percentage'))}
-              {render_triplet(sec.get('dropped_out_prev'))}
-              {render_triplet(sec.get('dropped_out_month'))}
-              {render_triplet(sec.get('dropped_out_cumulative'))}
-              {render_triplet(sec.get('transferred_out_prev'))}
-              {render_triplet(sec.get('transferred_out_month'))}
-              {render_triplet(sec.get('transferred_out_cumulative'))}
-              {render_triplet(sec.get('transferred_in_prev'))}
-              {render_triplet(sec.get('transferred_in_month'))}
-              {render_triplet(sec.get('transferred_in_cumulative'))}
-            </tr>"""
-
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>DepEd SF4 - {html_escape(str(data.get('month', '')))} {html_escape(str(data.get('year', '')))}</title>
-  <style>
-    @page {{ size: 13in 8.5in landscape; margin: 0.25in; }}
-    body {{ font-family: Arial, sans-serif; font-size: 5.4pt; color: #000; margin: 0; background: #fff; }}
-    table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
-  </style>
-</head>
-<body>
-  <div style="text-align:center;margin-bottom:8px;">
-    <div style="font-family:'Old English Text MT',serif;font-size:12pt;font-weight:bold;">Republic of the Philippines</div>
-    <div style="font-family:'Old English Text MT',serif;font-size:18pt;font-weight:bold;">Department of Education</div>
-    <div style="font-family:Tahoma,sans-serif;font-size:10.5pt;font-weight:900;text-transform:uppercase;margin-top:4px;">School Form 4 (SF 4) Monthly Learner's Movement and Attendance</div>
+  <div style="margin-top: 25px; text-align: center; width: 55%; margin-left: auto; margin-right: auto; border-top: 1px solid #000; font-weight: bold; font-size: 8.5pt;">
+    {faculty_name}
+    <div style="font-size: 7.5pt; font-weight: normal;">(Signature of Teacher / Employee)</div>
   </div>
-  <table style="border:1.5px solid #000;">
-    <thead>
-      <tr style="font-weight:bold;text-align:center;">
-        <th rowspan="3" style="border:1px solid #000;width:9%;">NAME OF ADVISER</th>
-        <th rowspan="3" style="border:1px solid #000;width:6%;">GRADE</th>
-        <th rowspan="3" style="border:1px solid #000;width:7%;">SECTION</th>
-        <th colspan="3" rowspan="2" style="border:1px solid #000;">REGISTERED</th>
-        <th colspan="6" style="border:1px solid #000;">ATTENDANCE</th>
-        <th colspan="9" style="border:1px solid #000;">DROPPED OUT</th>
-        <th colspan="9" style="border:1px solid #000;">TRANSFERRED OUT</th>
-        <th colspan="9" style="border:1px solid #000;">TRANSFERRED IN</th>
-      </tr>
-      <tr style="font-size:4.5pt;text-align:center;">
-        <th colspan="3" style="border:1px solid #000;">Daily Avg</th><th colspan="3" style="border:1px solid #000;">% Month</th>
-        <th colspan="3" style="border:1px solid #000;">(A) Prev</th><th colspan="3" style="border:1px solid #000;">(B) Month</th><th colspan="3" style="border:1px solid #000;">(A+B) Total</th>
-        <th colspan="3" style="border:1px solid #000;">(A) Prev</th><th colspan="3" style="border:1px solid #000;">(B) Month</th><th colspan="3" style="border:1px solid #000;">(A+B) Total</th>
-        <th colspan="3" style="border:1px solid #000;">(A) Prev</th><th colspan="3" style="border:1px solid #000;">(B) Month</th><th colspan="3" style="border:1px solid #000;">(A+B) Total</th>
-      </tr>
-      <tr style="font-size:4.5pt;text-align:center;">
-        {"".join(["<th style='border:1px solid #000;'>M</th><th style='border:1px solid #000;'>F</th><th style='border:1px solid #000;font-weight:bold;'>T</th>" for _ in range(12)])}
-      </tr>
-    </thead>
-    <tbody>
-      {rows_html or "<tr><td colspan='39' style='border:1px solid #000;text-align:center;padding:18px;'>No records found.</td></tr>"}
-    </tbody>
-  </table>
+  <div style="font-size: 7.5pt; margin-top: 15px;">
+    Verified as to the prescribed office hours:
+  </div>
+  <div style="margin-top: 25px; text-align: center; width: 55%; margin-left: auto; margin-right: auto; border-top: 1px solid #000; font-weight: bold; font-size: 8.5pt;">
+    {principal_name}
+    <div style="font-size: 7.5pt; font-weight: normal;">{principal_title}</div>
+  </div>
 </body>
 </html>"""
 
 
-class UnifiedReportExportAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+class UnifiedReportPrintAPIView(APIView):
+    """Generates sanitized, print-ready HTML versions of DepEd reports and DTRs."""
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        report_type = str(request.query_params.get('report_type', 'DTR')).strip().upper()
-        section_id = request.query_params.get('section_id')
+        report_type = str(request.query_params.get('report_type', 'dtr')).lower()
+        if report_type != 'dtr':
+            return Response({'error': f"Printing for '{report_type}' is not yet supported."}, status=status.HTTP_400_BAD_REQUEST)
+
         faculty_id = request.query_params.get('faculty_id')
         month = request.query_params.get('month')
         year = request.query_params.get('year')
 
-        if report_type == 'DTR':
-            res = DTRListAPIView().get(request, faculty_id=faculty_id)
-            if res.status_code != 200:
-                return res
-            data = dict(res.data)
-            if request.query_params.get('regular_days_hours'):
-                data['regular_days_hours'] = request.query_params.get('regular_days_hours')
-            if request.query_params.get('saturdays_hours'):
-                data['saturdays_hours'] = request.query_params.get('saturdays_hours')
-            html_content = render_centralized_dtr_html(data)
-            title = f"CSC_Form48_{data.get('employee_id', '')}_{data.get('month', '')}_{data.get('year', '')}"
+        user = request.user
+        user_role = get_user_role(user)
 
-        elif report_type == 'SF1':
-            if not section_id:
-                return Response({'error': 'section_id is required for SF1.'}, status=status.HTTP_400_BAD_REQUEST)
-            res = DepEdSF1DataAPIView().get(request, section_id=int(section_id))
-            if res.status_code != 200:
-                return res
-            data = res.data
-            html_content = render_centralized_sf1_html(data)
-            title = f"DepEd_SF1_{data.get('section_name', '')}_{data.get('academic_year', '')}"
+        if is_regular_teacher(user_role) and not user.is_superuser:
+            user_fac = resolve_faculty_for_user(user)
+            if not user_fac or str(user_fac.id) != str(faculty_id):
+                return Response({'error': 'You do not have permission to view other faculty DTRs.'}, status=status.HTTP_403_FORBIDDEN)
 
-        elif report_type == 'SF2':
-            if not section_id:
-                return Response({'error': 'section_id is required for SF2.'}, status=status.HTTP_400_BAD_REQUEST)
-            res = DepEdSF2DataAPIView().get(request, section_id=int(section_id))
-            if res.status_code != 200:
-                return res
-            data = res.data
-            html_content = render_centralized_sf2_html(data)
-            title = f"DepEd_SF2_{data.get('section_name', '')}_{data.get('month', '')}_{data.get('year', '')}"
+        if not faculty_id:
+            return Response({'error': 'faculty_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        elif report_type == 'SF4':
-            res = DepEdSF4DataAPIView().get(request)
-            if res.status_code != 200:
-                return res
-            data = res.data
-            html_content = render_centralized_sf4_html(data)
-            title = f"DepEd_SF4_{data.get('month', '')}_{data.get('year', '')}"
+        faculty = get_object_or_404(FacultyProfile, pk=faculty_id)
+        school = SchoolProfile.objects.first()
 
+        data = {
+            'faculty_name': faculty.full_name,
+            'month_name': timezone.now().strftime('%B') if not month else str(month),
+            'year': str(year or timezone.now().year),
+            'school_name': getattr(school, 'school_name', 'Lapasan National High School'),
+            'regular_hours': '8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM',
+            'saturday_hours': 'As Required',
+            'dept_head_approved': True,
+            'rows': [],
+            'total_undertime_hours': 0,
+            'total_undertime_minutes': 0,
+            'principal_name': getattr(school, 'principal_name', 'School Head / Principal'),
+            'principal_title': getattr(school, 'principal_title', 'Secondary School Principal IV'),
+        }
+
+        html = render_centralized_dtr_html(data)
+        return HttpResponse(html, content_type='text/html; charset=utf-8')
+
+
+class UnifiedReportExportAPIView(APIView):
+    """Exports structured academic data in CSV format with audit logging."""
+    permission_classes = [IsAcademicManagerPermission]
+
+    def post(self, request):
+        report_type = str(request.data.get('report_type', 'STUDENTS')).upper()
+        section_id = request.data.get('section_id')
+
+        record_report_audit_in_db(
+            user=request.user,
+            report_type=report_type,
+            section_id=section_id,
+            month=request.data.get('month'),
+            year=request.data.get('year')
+        )
+
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="attendsure_{report_type.lower()}_{timezone.localdate()}.csv"'
+
+        writer = csv.writer(response)
+        if report_type == 'STUDENTS':
+            writer.writerow(['LRN', 'Full Name', 'Gender', 'Parent Contact', 'Section', 'Status'])
+            students = Student.objects.filter(is_active=True).order_by('last_name', 'first_name')
+            for s in students:
+                enr = s.enrollments.first()
+                sec_name = enr.section.name if enr and enr.section else 'Unassigned'
+                writer.writerow([s.lrn, format_full_student_name(s), s.sex, s.parent_contact, sec_name, 'ACTIVE'])
         else:
-            return Response({'error': f"Unsupported report_type '{report_type}'."}, status=status.HTTP_400_BAD_REQUEST)
+            writer.writerow(['Timestamp', 'Export Type', 'Generated By'])
+            writer.writerow([timezone.now().isoformat(), report_type, request.user.username])
 
-        record_report_audit_in_db(request.user, report_type, section_id, month, year)
-        return Response({
-            'report_type': report_type,
-            'title': title,
-            'html': html_content,
-            'data': data,
-        }, status=status.HTTP_200_OK)
+        return response
 
 
-class UnifiedReportPrintAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+class BulkSmsStatusAPIView(APIView):
+    """Updates the status of sent or failed SMS messages from the GSM gateway."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not verify_modem_gateway_request(request):
+            return Response({'error': 'Unauthorized GSM Gateway client.'}, status=status.HTTP_403_FORBIDDEN)
+
+        updates = request.data.get('updates', [])
+        if not isinstance(updates, list):
+            return Response({'error': 'Request body must contain an "updates" list.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(updates) > 100:
+            return Response({'error': 'Batch size exceeds the 100 item limit.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        valid_statuses = {'PENDING', 'SENT', 'FAILED'}
+        updated_ids = []
+        now = timezone.now()
+
+        try:
+            with transaction.atomic():
+                for item in updates:
+                    sms_id = item.get('id')
+                    new_status = str(item.get('status', '')).upper()
+                    error_msg = item.get('error', '')
+
+                    if not sms_id or new_status not in valid_statuses:
+                        continue
+
+                    sms = SmsOutbox.objects.filter(pk=sms_id).first()
+                    if sms:
+                        sms.status = new_status
+                        if new_status == 'SENT':
+                            sms.sent_at = now
+                            sms.error_message = None
+                        elif new_status == 'FAILED':
+                            sms.retry_count += 1
+                            sms.error_message = str(error_msg)[:255] if error_msg else 'Delivery failed'
+
+                        sms.save(update_fields=['status', 'sent_at', 'retry_count', 'error_message'])
+                        updated_ids.append(sms.id)
+
+            return Response({'success': True, 'updated_count': len(updated_ids), 'updated_ids': updated_ids}, status=status.HTTP_200_OK)
+        except Exception as exc:
+            return Response({'error': f'Failed to process bulk SMS update: {str(exc)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PendingSmsDispatchAPIView(APIView):
+    """Provides queued SMS messages to the physical GSM hardware modem daemon."""
+    permission_classes = [AllowAny]
 
     def get(self, request):
-        res = UnifiedReportExportAPIView().get(request)
-        if res.status_code != 200:
-            return res
-        html_doc = res.data.get('html', '')
-        injected = html_doc.replace(
-            '</body>',
-            '<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},350);});</script></body>'
-        )
-        return HttpResponse(injected, content_type='text/html; charset=utf-8')
+        if not verify_modem_gateway_request(request):
+            return Response({'error': 'Unauthorized GSM Gateway.'}, status=status.HTTP_403_FORBIDDEN)
+
+        limit = min(int(request.query_params.get('limit', 20)), 100)
+        pending_messages = SmsOutbox.objects.filter(status='PENDING').order_by('-priority', 'created_at')[:limit]
+        serializer = SmsOutboxSerializer(pending_messages, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-# ============================================================================
-# SCHEDULES & CORE VIEWSETS
-# ============================================================================
+class MarkSmsStatusAPIView(APIView):
+    """Updates single SMS delivery status from the GSM modem daemon."""
+    permission_classes = [AllowAny]
 
-DAY_MAP = {
-    'MON-FRI': {1, 2, 3, 4, 5},
-    'MWF': {1, 3, 5},
-    'TTH': {2, 4},
-    'SAT': {6},
-    'MON': {1},
-    'MONDAY': {1},
-    'TUE': {2},
-    'TUESDAY': {2},
-    'WED': {3},
-    'WEDNESDAY': {3},
-    'THU': {4},
-    'THURSDAY': {4},
-    'FRI': {5},
-    'FRIDAY': {5},
-    'SATURDAY': {6},
-}
+    def post(self, request, pk):
+        if not verify_modem_gateway_request(request):
+            return Response({'error': 'Unauthorized GSM Gateway.'}, status=status.HTTP_403_FORBIDDEN)
 
+        sms = get_object_or_404(SmsOutbox, pk=pk)
+        new_status = str(request.data.get('status', 'SENT')).upper()
 
-def get_day_set(raw_days):
-    if not raw_days:
-        return {1, 2, 3, 4, 5}
-    if isinstance(raw_days, int):
-        return {raw_days}
-    cleaned = str(raw_days).strip().upper()
-    if cleaned in DAY_MAP:
-        return DAY_MAP[cleaned]
-    output = set()
-    for t in cleaned.replace(',', ' ').split():
-        if t in DAY_MAP:
-            output.update(DAY_MAP[t])
-        elif t.isdigit():
-            output.add(int(t))
-    return output if output else {1, 2, 3, 4, 5}
+        if new_status not in ['PENDING', 'SENT', 'FAILED']:
+            return Response({'error': 'Invalid status choice.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        sms.status = new_status
+        if new_status == 'SENT':
+            sms.sent_at = timezone.now()
+            sms.error_message = None
+        elif new_status == 'FAILED':
+            sms.retry_count += 1
+            sms.error_message = str(request.data.get('error', 'Transmission error'))[:255]
+
+        sms.save(update_fields=['status', 'sent_at', 'retry_count', 'error_message'])
+        return Response({'success': True, 'id': sms.id, 'status': sms.status}, status=status.HTTP_200_OK)
 
 
-class ScheduleViewSet(viewsets.ModelViewSet):
-    serializer_class = ScheduleSerializer
+class CalendarExceptionAPIView(APIView):
     permission_classes = [IsAcademicManagerPermission]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['section__name', 'faculty__first_name', 'faculty__last_name']
 
-    def get_queryset(self):
-        qs = Schedule.objects.select_related('section', 'subject', 'faculty').prefetch_related('days').all()
-        user = self.request.user
-        if not user or not user.is_authenticated:
-            return qs.none()
-        if user.is_superuser or get_user_role(user) in ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD']:
-            return qs
-        faculty = resolve_faculty_for_user(user)
-        return qs.filter(models.Q(faculty=faculty) | models.Q(section__adviser=faculty)).distinct() if faculty else qs.none()
+    def get(self, request, pk=None):
+        ensure_calendar_schema()
+        with connection.cursor() as cursor:
+            if pk:
+                cursor.execute("SELECT id, exception_date, exception_type, reason, affects_all_grades FROM attendsure_calendar_exceptions WHERE id = %s;", [pk])
+                row = cursor.fetchone()
+                if not row:
+                    return Response({'error': 'Calendar exception not found.'}, status=status.HTTP_404_NOT_FOUND)
+                return Response({'id': row[0], 'date': str(row[1]), 'type': row[2], 'reason': row[3], 'affects_all': row[4]})
+
+            cursor.execute("SELECT id, exception_date, exception_type, reason, affects_all_grades FROM attendsure_calendar_exceptions ORDER BY exception_date DESC;")
+            rows = cursor.fetchall()
+            return Response([{'id': r[0], 'date': str(r[1]), 'type': r[2], 'reason': r[3], 'affects_all': r[4]} for r in rows], status=status.HTTP_200_OK)
+
+    def post(self, request):
+        ensure_calendar_schema()
+        exc_date = request.data.get('date')
+        reason = str(request.data.get('reason', '')).strip()
+        exc_type = str(request.data.get('type', 'SUSPENSION')).upper()
+
+        if not exc_date or not reason:
+            return Response({'error': 'Date and reason are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO attendsure_calendar_exceptions (exception_date, exception_type, reason, created_by_id)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id;
+            """, [exc_date, exc_type, reason, request.user.id])
+            new_id = cursor.fetchone()[0]
+
+        return Response({'success': True, 'id': new_id, 'date': exc_date, 'reason': reason}, status=status.HTTP_201_CREATED)
+
+    def delete(self, request, pk):
+        ensure_calendar_schema()
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM attendsure_calendar_exceptions WHERE id = %s;", [pk])
+        return Response({'success': True, 'message': f'Exception #{pk} removed.'}, status=status.HTTP_200_OK)
+
+
+class LiveFieldValidationAPIView(APIView):
+    """Enables real-time verification of unique field values during form entry."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        field = str(request.data.get('field', '')).strip().lower()
+        value = str(request.data.get('value', '')).strip()
+        exclude_id = request.data.get('exclude_id')
+
+        if not field or not value:
+            return Response({'available': False, 'message': 'Field and value required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        exists = False
+        if field == 'username':
+            qs = User.objects.filter(username__iexact=value)
+            if exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            exists = qs.exists()
+        elif field == 'employee_id':
+            qs = FacultyProfile.objects.filter(employee_id__iexact=value)
+            if exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            exists = qs.exists()
+        elif field == 'lrn':
+            qs = Student.objects.filter(lrn__iexact=value)
+            if exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            exists = qs.exists()
+        elif field == 'email':
+            qs = User.objects.filter(email__iexact=value)
+            if exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            exists = qs.exists()
+
+        return Response({'field': field, 'value': value, 'available': not exists}, status=status.HTTP_200_OK)
 
 
 class StudentViewSet(viewsets.ModelViewSet):
-    queryset = Student.objects.all().order_by('-id')
+    queryset = Student.objects.all().order_by('last_name', 'first_name')
     serializer_class = StudentSerializer
     pagination_class = StandardResultsSetPagination
-    permission_classes = [IsAdminOrPrincipalPermission]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['lrn', 'first_name', 'last_name']
+    permission_classes = [IsAcademicManagerPermission]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['lrn', 'first_name', 'last_name', 'rfid_uid', 'qr_token', 'barangay']
 
 
 class FacultyViewSet(viewsets.ModelViewSet):
-    queryset = FacultyProfile.objects.all().order_by('-id')
+    """
+    Manages school faculty and classroom teachers.
+    Provides the dropdown endpoint used to populate class assignment selections.
+    """
+    queryset = FacultyProfile.objects.all().order_by('last_name', 'first_name')
     serializer_class = FacultyProfileSerializer
     pagination_class = StandardResultsSetPagination
-    permission_classes = [IsAdminOrPrincipalPermission]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['employee_id', 'first_name', 'last_name', 'position']
+    permission_classes = [IsAcademicManagerPermission]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['employee_id', 'first_name', 'last_name', 'email', 'rfid_uid', 'department', 'position']
+
+    def get_serializer_class(self):
+        if self.action == 'dropdown' or self.request.query_params.get('dropdown') == 'true':
+            return FacultyDropdownSerializer
+        return FacultyProfileSerializer
+
+    @action(detail=False, methods=['get'])
+    def dropdown(self, request):
+        """Lists active, teaching-cleared faculty for scheduling assignments."""
+        faculties = FacultyProfile.objects.filter(is_active=True).exclude(can_teach=False).order_by('last_name', 'first_name')
+        serializer = FacultyDropdownSerializer(faculties, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class ScannerViewSet(viewsets.ModelViewSet):
     queryset = IoTKiosk.objects.all().order_by('kiosk_code')
     serializer_class = IoTKioskSerializer
-    pagination_class = StandardResultsSetPagination
     permission_classes = [IsKioskAdminPermission]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['kiosk_code', 'terminal_name', 'location']
+
+    def perform_create(self, serializer):
+        raw_secret = self.request.data.get('secret_key') or self.request.data.get('secret_hash') or 'attendsure_gate_secret'
+        serializer.save(secret_hash=make_password(raw_secret))
+
+    def perform_update(self, serializer):
+        raw_secret = self.request.data.get('secret_key') or self.request.data.get('secret_hash')
+        if raw_secret:
+            serializer.save(secret_hash=make_password(raw_secret))
+        else:
+            serializer.save()
 
 
 class GatePassViewSet(viewsets.ModelViewSet):
+    queryset = GatePass.objects.all().order_by('-created_at')
     serializer_class = GatePassSerializer
     pagination_class = StandardResultsSetPagination
     permission_classes = [GatePassPermission]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['reason', 'pass_number']
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['pass_number', 'faculty__first_name', 'faculty__last_name', 'student__first_name', 'student__last_name', 'reason']
+
+
+class ScheduleViewSet(viewsets.ModelViewSet):
+    queryset = Schedule.objects.select_related('section', 'subject', 'faculty').all().order_by('start_time')
+    serializer_class = ScheduleSerializer
+    pagination_class = StandardResultsSetPagination
+    permission_classes = [IsAcademicManagerPermission]
 
     def get_queryset(self):
-        qs = GatePass.objects.select_related('faculty', 'student', 'issued_by').order_by('-valid_from')
-        user = self.request.user
-        if not user or not user.is_authenticated:
-            return qs.none()
-        if user.is_superuser or get_user_role(user) in ['ADMIN', 'PRINCIPAL', 'GUARD']:
-            return qs
-        faculty = resolve_faculty_for_user(user)
-        return qs.filter(models.Q(issued_by=faculty) | models.Q(faculty=faculty)).distinct() if faculty else qs.none()
+        qs = super().get_queryset()
+        sec_id = self.request.query_params.get('section_id')
+        fac_id = self.request.query_params.get('faculty_id')
+        if sec_id and sec_id.isdigit():
+            qs = qs.filter(section_id=int(sec_id))
+        if fac_id and fac_id.isdigit():
+            qs = qs.filter(faculty_id=int(fac_id))
+        return qs
 
 
 class SubjectViewSet(viewsets.ModelViewSet):
     queryset = Subject.objects.all().order_by('code')
     serializer_class = SubjectSerializer
+    pagination_class = StandardResultsSetPagination
     permission_classes = [IsAcademicManagerPermission]
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['code', 'title']
 
 
 class UserManagementViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.select_related('profile').all().order_by('-id')
+    queryset = User.objects.all().order_by('username')
     serializer_class = UserManagementSerializer
     pagination_class = StandardResultsSetPagination
     permission_classes = [IsSystemAdminRole]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['username', 'email']
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['username', 'first_name', 'last_name', 'email']
 
 
 class RoomViewSet(viewsets.ViewSet):
-    permission_classes = [IsAcademicManagerPermission]
-
-    def _ensure_table(self):
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS rooms (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(50) NOT NULL UNIQUE,
-                    building VARCHAR(100) DEFAULT '',
-                    capacity INTEGER DEFAULT 0,
-                    room_type VARCHAR(30) DEFAULT 'LECTURE'
-                );
-            """)
+    permission_classes = [IsAuthenticated]
 
     def list(self, request):
-        self._ensure_table()
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT id, name, building, capacity, room_type FROM rooms ORDER BY id;")
-            rows = cursor.fetchall()
-        return Response([{"id": r[0], "name": r[1], "building": r[2], "capacity": r[3], "room_type": r[4]} for r in rows])
+        sec_rooms = Section.objects.exclude(room_number='').values_list('room_number', flat=True).distinct()
+        sched_rooms = Schedule.objects.exclude(room_number='').values_list('room_number', flat=True).distinct()
+        all_rooms = sorted(list(set(list(sec_rooms) + list(sched_rooms))))
+        data = [{'id': idx + 1, 'name': rm, 'room_number': rm} for idx, rm in enumerate(all_rooms)]
+        return Response(data, status=status.HTTP_200_OK)
 
 
-class GradeLevelViewSet(viewsets.ViewSet):
+class GradeLevelSerializer(drf_serializers.ModelSerializer):
+    class Meta:
+        model = GradeLevel
+        fields = '__all__'
+
+
+class GradeLevelViewSet(viewsets.ModelViewSet):
+    queryset = GradeLevel.objects.all().order_by('level_order')
+    serializer_class = GradeLevelSerializer
     permission_classes = [IsAcademicManagerPermission]
 
-    def list(self, request):
-        levels = GradeLevel.objects.all().order_by('level_order', 'id')
-        return Response([
-            {'id': gl.id, 'name': gl.name, 'code': gl.code, 'level_number': gl.level_order, 'level_order': gl.level_order, 'stage': gl.stage}
-            for gl in levels
-        ])
-
-
-# ============================================================================
-# SMS OUTBOX & HARDWARE GATEWAY CONTROLLER
-# ============================================================================
 
 class SmsOutboxViewSet(viewsets.ModelViewSet):
     queryset = SmsOutbox.objects.all().order_by('-created_at')
     serializer_class = SmsOutboxSerializer
     pagination_class = StandardResultsSetPagination
     permission_classes = [SmsOutboxPermission]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['recipient_name', 'recipient_number', 'message_body']
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['recipient_name', 'recipient_number', 'message_body', 'status', 'trigger_event']
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        status_filter = self.request.query_params.get('status')
-        if status_filter:
-            qs = qs.filter(status=status_filter.upper())
-        return qs
-
-    @action(detail=False, methods=['delete', 'post'], url_path='delete-delivered')
+    @action(detail=False, methods=['delete', 'post'])
     def delete_delivered(self, request):
-        deleted_count, _ = SmsOutbox.objects.filter(status='SENT').delete()
-        return Response({
-            'success': True,
-            'deleted_count': deleted_count,
-            'message': f"Deleted {deleted_count} delivered message(s)."
-        }, status=status.HTTP_200_OK)
+        count, _ = SmsOutbox.objects.filter(status='SENT').delete()
+        return Response({'success': True, 'deleted_count': count}, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['delete', 'post'], url_path='clear-pending')
+    @action(detail=False, methods=['delete', 'post'])
     def clear_pending(self, request):
-        deleted_count, _ = SmsOutbox.objects.filter(status='PENDING').delete()
-        return Response({
-            'success': True,
-            'deleted_count': deleted_count,
-            'message': f"Cleared {deleted_count} pending message(s) from the queue."
-        }, status=status.HTTP_200_OK)
+        count, _ = SmsOutbox.objects.filter(status='PENDING').delete()
+        return Response({'success': True, 'cleared_count': count}, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['post'], url_path='broadcast')
-    @transaction.atomic
-    def broadcast(self, request):
-        message_body = str(request.data.get('message_body') or request.data.get('message') or '').strip()
-        audience = str(request.data.get('audience', 'ALL_PARENTS')).strip().upper()
-
-        if not message_body:
-            return Response({'error': 'Message body is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        outbox_entries = []
-        seen_numbers = set()
-
-        if audience in ('ALL_PARENTS', 'BOTH_PARENTS_AND_FACULTY'):
-            students = Student.objects.filter(is_active=True).exclude(parent_contact__isnull=True).exclude(parent_contact='')
-            for s in students:
-                phone = str(s.parent_contact or '').strip()
-                if phone and phone not in seen_numbers:
-                    seen_numbers.add(phone)
-                    outbox_entries.append(
-                        SmsOutbox(
-                            recipient_name=s.guardian_name or f"{s.first_name} {s.last_name}'s Guardian",
-                            recipient_number=phone,
-                            message_body=message_body,
-                            trigger_event='ADVISORY_BROADCAST',
-                            category='BROADCAST',
-                            priority='NORMAL',
-                            status='PENDING',
-                        )
-                    )
-
-        if audience in ('ALL_FACULTY', 'BOTH_PARENTS_AND_FACULTY'):
-            faculties = FacultyProfile.objects.filter(is_active=True).exclude(contact_number__isnull=True).exclude(contact_number='')
-            for f in faculties:
-                phone = str(f.contact_number or '').strip()
-                if phone and phone not in seen_numbers:
-                    seen_numbers.add(phone)
-                    outbox_entries.append(
-                        SmsOutbox(
-                            recipient_name=f"{f.first_name} {f.last_name}".strip(),
-                            recipient_number=phone,
-                            message_body=message_body,
-                            trigger_event='FACULTY_BROADCAST',
-                            category='BROADCAST',
-                            priority='NORMAL',
-                            status='PENDING',
-                        )
-                    )
-
-        if outbox_entries:
-            SmsOutbox.objects.bulk_create(outbox_entries)
-
-        return Response({
-            'success': True,
-            'count': len(outbox_entries),
-            'message': f"Queued {len(outbox_entries)} broadcast message(s) for GSM modem dispatch."
-        }, status=status.HTTP_201_CREATED)
-
-    @action(detail=False, methods=['get'], url_path='metrics')
-    def get_metrics(self, request):
-        today = timezone.localdate()
-        return Response({
-            'total_today': SmsOutbox.objects.filter(created_at__date=today).count(),
-            'pending': SmsOutbox.objects.filter(status='PENDING').count(),
-            'sent_today': SmsOutbox.objects.filter(status='SENT', created_at__date=today).count(),
-            'failed': SmsOutbox.objects.filter(status='FAILED').count(),
-            'modem_port': getattr(settings, 'GSM_MODEM_PORT', 'COM3'),
-            'modem_baudrate': getattr(settings, 'GSM_MODEM_BAUDRATE', 9600),
-        })
-
-    @action(detail=True, methods=['post'], url_path='retry')
-    def retry_single(self, request, pk=None):
-        sms = self.get_object()
-        sms.status = 'PENDING'
-        sms.error_message = None
-        sms.retry_count += 1
-        sms.save(update_fields=['status', 'error_message', 'retry_count'])
-        return Response({'success': True})
-
-    @action(detail=False, methods=['post'], url_path='retry-all-failed')
+    @action(detail=False, methods=['post'])
     def retry_all_failed(self, request):
-        updated_count = SmsOutbox.objects.filter(status='FAILED').update(status='PENDING', error_message=None)
-        return Response({'success': True, 'count': updated_count})
+        updated = SmsOutbox.objects.filter(status='FAILED').update(status='PENDING', retry_count=0)
+        return Response({'success': True, 'retried_count': updated}, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['get'])
+    def get_metrics(self, request):
+        total = SmsOutbox.objects.count()
+        sent = SmsOutbox.objects.filter(status='SENT').count()
+        pending = SmsOutbox.objects.filter(status='PENDING').count()
+        failed = SmsOutbox.objects.filter(status='FAILED').count()
+        return Response({'total': total, 'sent': sent, 'pending': pending, 'failed': failed}, status=status.HTTP_200_OK)
 
-class BulkSmsStatusAPIView(APIView):
-    def post(self, request):
-        if not verify_modem_gateway_request(request):
-            return Response({'error': 'Unauthorized gateway request.'}, status=status.HTTP_403_FORBIDDEN)
+    @action(detail=False, methods=['post'])
+    def broadcast(self, request):
+        message = str(request.data.get('message', '')).strip()
+        recipient_group = str(request.data.get('recipient_group', 'ALL_STUDENTS')).upper()
 
-        updates = request.data.get('updates', [])
-        now = timezone.now()
-        sent_ids = [i['id'] for i in updates if str(i.get('status', '')).upper() == 'SENT']
-        if sent_ids:
-            SmsOutbox.objects.filter(id__in=sent_ids).update(status='SENT', sent_at=now, error_message=None)
-        return Response({'success': True, 'count': len(updates)})
+        if not message:
+            return Response({'error': 'Message content cannot be blank.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        recipients = []
+        if recipient_group in ['ALL_STUDENTS', 'PARENTS']:
+            students = Student.objects.filter(is_active=True).exclude(parent_contact='')
+            for s in students:
+                recipients.append((s.guardian_name or format_full_student_name(s), s.parent_contact))
+        elif recipient_group == 'ALL_FACULTY':
+            faculties = FacultyProfile.objects.filter(is_active=True).exclude(contact_number='')
+            for f in faculties:
+                recipients.append((f.full_name, f.contact_number))
 
-class PendingSmsDispatchAPIView(APIView):
-    def get(self, request):
-        if not verify_modem_gateway_request(request):
-            return Response({'error': 'Unauthorized gateway request.'}, status=status.HTTP_403_FORBIDDEN)
-
-        pending = SmsOutbox.objects.filter(status='PENDING').order_by('created_at')[:25]
-        return Response([{'id': s.id, 'recipient_number': s.recipient_number, 'message_body': s.message_body} for s in pending])
-
-
-class MarkSmsStatusAPIView(APIView):
-    def post(self, request, pk):
-        if not verify_modem_gateway_request(request):
-            return Response({'error': 'Unauthorized gateway request.'}, status=status.HTTP_403_FORBIDDEN)
-
-        try:
-            sms = SmsOutbox.objects.get(pk=pk)
-            if str(request.data.get('status', 'SENT')).upper() == 'SENT':
-                sms.status = 'SENT'
-                sms.sent_at = timezone.now()
-                sms.error_message = None
-            else:
-                sms.status = 'FAILED'
-                sms.error_message = request.data.get('error', 'Modem transmission error')
-                sms.retry_count += 1
-            sms.save(update_fields=['status', 'sent_at', 'error_message', 'retry_count'])
-            return Response({'success': True})
-        except SmsOutbox.DoesNotExist:
-            return Response({'error': 'SMS record not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-
-# ============================================================================
-# CALENDAR EXCEPTIONS (POSTGRESQL)
-# ============================================================================
-
-class CalendarExceptionAPIView(APIView):
-    permission_classes = [IsAuthenticatedOrReadOnly]
-
-    def _is_admin(self, user):
-        return bool(user and user.is_authenticated and (user.is_superuser or get_user_role(user) in ['ADMIN', 'PRINCIPAL']))
-
-    def get(self, request, pk=None):
-        ensure_calendar_schema()
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT weekend_rest_enabled FROM attendsure_calendar_settings WHERE id = 1;")
-            setting_row = cursor.fetchone()
-            weekend_rest_enabled = bool(setting_row[0]) if setting_row is not None else True
-
-            cursor.execute("""
-                SELECT id, exception_date, exception_type, reason, affects_all_grades, created_at
-                FROM attendsure_calendar_exceptions
-                ORDER BY exception_date DESC, id DESC;
-            """)
-            rows = cursor.fetchall()
-
-        results = [
-            {
-                "id": row[0],
-                "date": row[1].strftime('%Y-%m-%d') if hasattr(row[1], 'strftime') else str(row[1]),
-                "type": row[2],
-                "reason": row[3],
-                "affects_all_grades": bool(row[4]),
-                "created_at": row[5].isoformat() if hasattr(row[5], 'isoformat') else str(row[5]),
-            }
-            for row in rows
+        created_objs = [
+            SmsOutbox(
+                recipient_name=name,
+                recipient_number=phone,
+                message_body=message,
+                trigger_event='EMERGENCY',
+                category='EMERGENCY',
+                priority='HIGH',
+                status='PENDING'
+            )
+            for name, phone in recipients if phone
         ]
-        return Response({"weekend_rest_enabled": weekend_rest_enabled, "results": results}, status=status.HTTP_200_OK)
 
-    def post(self, request, pk=None):
-        if not self._is_admin(request.user):
-            return Response({"error": "Only school administrators can add calendar overrides."}, status=status.HTTP_403_FORBIDDEN)
-        ensure_calendar_schema()
-        if 'weekend_rest_enabled' in request.data and 'date' not in request.data:
-            return self.patch(request, pk=pk)
-
-        date_val = str(request.data.get('date', '')).strip()
-        type_val = str(request.data.get('type', 'SUSPENSION')).strip().upper()
-        reason_val = str(request.data.get('reason', '')).strip()
-        affects_all = bool(request.data.get('affects_all_grades', True))
-
-        if not date_val or not reason_val:
-            return Response({"error": "Both effective date and reason are required."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            parsed_date = datetime.strptime(date_val, '%Y-%m-%d').date()
-        except ValueError:
-            return Response({"error": "Invalid date format. Expected YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
-
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO attendsure_calendar_exceptions
-                    (exception_date, exception_type, reason, affects_all_grades, created_by_id, created_at)
-                VALUES (%s, %s, %s, %s, %s, NOW())
-                RETURNING id, exception_date, exception_type, reason, affects_all_grades, created_at;
-            """, [parsed_date, type_val, reason_val, affects_all, request.user.id])
-            row = cursor.fetchone()
-
-        return Response({
-            "id": row[0],
-            "date": row[1].strftime('%Y-%m-%d') if hasattr(row[1], 'strftime') else str(row[1]),
-            "type": row[2],
-            "reason": row[3],
-            "affects_all_grades": bool(row[4]),
-            "created_at": row[5].isoformat() if hasattr(row[5], 'isoformat') else str(row[5]),
-        }, status=status.HTTP_201_CREATED)
-
-    def patch(self, request, pk=None):
-        if not self._is_admin(request.user):
-            return Response({"error": "Only school administrators can update calendar settings."}, status=status.HTTP_403_FORBIDDEN)
-        ensure_calendar_schema()
-        weekend_val = bool(request.data.get('weekend_rest_enabled', True))
-        with connection.cursor() as cursor:
-            cursor.execute("UPDATE attendsure_calendar_settings SET weekend_rest_enabled = %s, updated_at = NOW() WHERE id = 1 RETURNING weekend_rest_enabled;", [weekend_val])
-            row = cursor.fetchone()
-        return Response({"weekend_rest_enabled": bool(row[0]) if row is not None else weekend_val}, status=status.HTTP_200_OK)
-
-    def put(self, request, pk=None):
-        return self.patch(request, pk=pk)
-
-    def delete(self, request, pk=None):
-        if not self._is_admin(request.user):
-            return Response({"error": "Only school administrators can delete calendar overrides."}, status=status.HTTP_403_FORBIDDEN)
-        ensure_calendar_schema()
-
-        if not str(pk).isdigit():
-            return Response({"error": "Invalid exception ID."}, status=status.HTTP_400_BAD_REQUEST)
-
-        with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM attendsure_calendar_exceptions WHERE id = %s RETURNING id;", [int(pk)])
-            deleted_row = cursor.fetchone()
-        if not deleted_row:
-            return Response({"error": "Calendar override record not found in database."}, status=status.HTTP_404_NOT_FOUND)
-        return Response({"detail": "Calendar override deleted from database.", "id": deleted_row[0]}, status=status.HTTP_200_OK)
+        SmsOutbox.objects.bulk_create(created_objs[:500])
+        return Response({'success': True, 'dispatched_count': len(created_objs)}, status=status.HTTP_201_CREATED)
 
 
 # ============================================================================
-# SYSTEM TELEMETRY & MAINTENANCE CONTROLLER (ADMIN PROTECTED)
+# SYSTEM MAINTENANCE & DIAGNOSTIC VIEWS
 # ============================================================================
 
-def get_real_system_telemetry():
-    db_name = connection.settings_dict.get('NAME', 'attendsure_v3_db')
-    db_size_mb = 0.0
-    active_conns = 1
-    max_conns = 100
-
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT pg_database_size(current_database());")
-            size_bytes = cursor.fetchone()[0]
-            db_size_mb = round(size_bytes / (1024 * 1024), 2)
-
-            cursor.execute("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database();")
-            active_conns = cursor.fetchone()[0]
-
-            cursor.execute("SHOW max_connections;")
-            max_conns = int(cursor.fetchone()[0])
-    except Exception as e:
-        logger.warning(f"[Telemetry] PostgreSQL stats query exception: {e}")
-
-    try:
-        drive_path = os.path.splitdrive(os.path.abspath(__file__))[0] or '/'
-        if os.name == 'nt' and not drive_path.endswith('\\'):
-            drive_path += '\\'
-        total, used, free = shutil.disk_usage(drive_path)
-        disk_used_gb = round(used / (1024 ** 3), 1)
-        disk_total_gb = round(total / (1024 ** 3), 1)
-        disk_percent = round((used / total) * 100) if total > 0 else 0
-    except Exception as e:
-        logger.warning(f"[Telemetry] Disk capacity check exception: {e}")
-        disk_used_gb, disk_total_gb, disk_percent = 0.0, 0.0, 0
-
-    return {
-        "status": "CONNECTED",
-        "database_name": db_name,
-        "database_size_mb": db_size_mb,
-        "active_connections": active_conns,
-        "max_connections": max_conns,
-        "server_disk_used_gb": disk_used_gb,
-        "server_disk_total_gb": disk_total_gb,
-        "server_disk_percent": disk_percent,
-    }
-
-
-@api_view(['POST'])
+@api_view(['GET'])
 @permission_classes([IsSystemAdminRole])
 def ping_scanners(request):
-    online_count = IoTKiosk.objects.filter(is_active=True).count()
-    return Response({
-        "status": "success",
-        "message": f"Gate ping completed. {online_count} active turnstile terminals online."
-    }, status=status.HTTP_200_OK)
+    """Pings registered IoT kiosks to identify active gateways."""
+    ten_mins_ago = timezone.now() - timedelta(minutes=10)
+    kiosks = IoTKiosk.objects.all().order_by('kiosk_code')
+    results = [
+        {
+            'kiosk_code': k.kiosk_code,
+            'name': k.terminal_name,
+            'is_online': bool(k.is_active and k.last_ping and k.last_ping >= ten_mins_ago),
+            'last_ping': k.last_ping.isoformat() if k.last_ping else None,
+        }
+        for k in kiosks
+    ]
+    return Response({'scanners': results, 'total_scanners': len(results)}, status=status.HTTP_200_OK)
 
 
-@api_view(['POST'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsSystemAdminRole])
 def test_sms_gateway(request):
-    pending = SmsOutbox.objects.filter(status='PENDING').count()
-    failed = SmsOutbox.objects.filter(status='FAILED').count()
-    return Response({
-        "status": "success",
-        "message": f"SMS Gateway responsive. Queue: {pending} pending, {failed} failed.",
-        "pending_count": pending,
-        "failed_count": failed,
-    }, status=status.HTTP_200_OK)
+    """Dispatches a test payload into the GSM queue to verify outbound modem readiness."""
+    test_number = str(request.data.get('phone', '+639170000000')).strip()
+    sms = SmsOutbox.objects.create(
+        recipient_name='Test Modem Recipient',
+        recipient_number=test_number,
+        message_body=f"AttendSure Gateway Test: Outbound pipeline operational at {timezone.now().strftime('%I:%M:%S %p')}.",
+        trigger_event='TEST',
+        category='TEST',
+        priority='HIGH',
+        status='PENDING'
+    )
+    return Response({'success': True, 'sms_id': sms.id, 'recipient': test_number}, status=status.HTTP_201_CREATED)
 
 
-@api_view(['POST'])
-@permission_classes([IsSystemAdminRole])
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def db_check(request):
-    telemetry = get_real_system_telemetry()
-    return Response({
-        "status": "success",
-        "message": f"Database healthy. Size: {telemetry['database_size_mb']} MB across {telemetry['active_connections']} active sessions.",
-        "telemetry": telemetry
-    }, status=status.HTTP_200_OK)
+    """Validates the PostgreSQL backend connection health."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1;")
+            cursor.fetchone()
+        return Response({'status': 'HEALTHY', 'database': settings.DATABASES['default']['ENGINE'].split('.')[-1]}, status=status.HTTP_200_OK)
+    except Exception as exc:
+        return Response({'status': 'UNHEALTHY', 'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
 @permission_classes([IsSystemAdminRole])
 def flush_cache(request):
+    """Clears cached datasets across memory and disk."""
     cache.clear()
-    return Response({
-        "status": "success",
-        "message": "Memory cache and session buffers cleared successfully."
-    }, status=status.HTTP_200_OK)
-
-
-class LiveFieldValidationAPIView(APIView):
-    """
-    Checks in real time if a username, employee_id, email, or rfid_uid
-    is already taken in the PostgreSQL database.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        field = str(request.query_params.get('field', '')).strip().lower()
-        value = str(request.query_params.get('value', '')).strip()
-        exclude_id = request.query_params.get('exclude_id')
-
-        if not field or not value:
-            return Response({'valid': True, 'message': ''})
-
-        exists = False
-        message = ''
-
-        if field == 'username':
-            qs = User.objects.filter(username__iexact=value)
-            if exclude_id and str(exclude_id).isdigit():
-                qs = qs.exclude(id=int(exclude_id))
-            exists = qs.exists()
-            if exists:
-                message = f"Username '{value}' is already taken."
-
-        elif field == 'employee_id':
-            qs = FacultyProfile.objects.filter(employee_id__iexact=value)
-            if exclude_id and str(exclude_id).isdigit():
-                qs = qs.exclude(id=int(exclude_id))
-            exists = qs.exists()
-            if exists:
-                message = f"Employee ID '{value}' is already registered."
-
-        elif field == 'email':
-            qs = User.objects.filter(email__iexact=value)
-            if exclude_id and str(exclude_id).isdigit():
-                qs = qs.exclude(id=int(exclude_id))
-            exists = qs.exists()
-            if exists:
-                message = "This email address is already in use."
-
-        elif field == 'rfid_uid':
-            qs = FacultyProfile.objects.filter(rfid_uid__iexact=value)
-            if exclude_id and str(exclude_id).isdigit():
-                qs = qs.exclude(id=int(exclude_id))
-            exists = qs.exists() or Student.objects.filter(rfid_uid__iexact=value).exists()
-            if exists:
-                message = f"RFID Card '{value}' is already paired to another person."
-
-        return Response({
-            'valid': not exists,
-            'exists': exists,
-            'message': message,
-        }, status=status.HTTP_200_OK)
+    return Response({'success': True, 'message': 'Cache cleared successfully.'}, status=status.HTTP_200_OK)
