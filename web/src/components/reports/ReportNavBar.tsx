@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Official DepEd Reports Navigation & Export Action Bar
+ * AttendSure - Official DepEd Reports Navigation & Export Action Bar
  * File: frontend/src/components/reports/ReportNavBar.tsx
  *
  * 100% Dynamic:

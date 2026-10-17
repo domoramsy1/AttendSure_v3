@@ -1,4 +1,4 @@
-// mobile/src/screens/SettingsScreen.tsx
+// D:\AttendSure_V3\mobile\src\screens\SettingsScreen.tsx
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -10,14 +10,15 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Modal,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import QRCode from 'react-native-qrcode-svg';
 import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
 import { getServerBaseUrl, setServerBaseUrl } from '../services/configService';
-import { getUnsyncedCount, syncOfflineQueue } from '../services/offlineQueue';
 import { COLORS } from '../constants/theme';
 
 const showAlert = (title: string, message: string) => {
@@ -29,303 +30,321 @@ const showAlert = (title: string, message: string) => {
 };
 
 export const SettingsScreen: React.FC = () => {
-  const { user, refreshUser, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
 
-  const currentUser = user as Record<string, any> | null;
-
-  const [firstName, setFirstName] = useState<string>(currentUser?.first_name || '');
-  const [lastName, setLastName] = useState<string>(currentUser?.last_name || '');
-  const [email, setEmail] = useState<string>(currentUser?.email || '');
-  const [contactNumber, setContactNumber] = useState<string>(currentUser?.contact_number || '');
-  const [newPassword, setNewPassword] = useState<string>('');
+  const [firstName, setFirstName] = useState<string>(user?.first_name || '');
+  const [lastName, setLastName] = useState<string>(user?.last_name || '');
+  const [email, setEmail] = useState<string>(user?.email || '');
+  const [contactNumber, setContactNumber] = useState<string>(user?.contact_number || '');
+  const [password, setPassword] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
 
   const [serverUrl, setServerUrl] = useState<string>('');
-  const [offlineCount, setOfflineCount] = useState<number>(0);
   const [savingProfile, setSavingProfile] = useState<boolean>(false);
   const [savingServer, setSavingServer] = useState<boolean>(false);
-  const [syncingOffline, setSyncingOffline] = useState<boolean>(false);
+  const [pingStatus, setPingStatus] = useState<'IDLE' | 'ONLINE' | 'OFFLINE'>('IDLE');
+  const [qrPassVisible, setQrPassVisible] = useState<boolean>(false);
 
-  const loadSettingsState = useCallback(async () => {
+  const loadSettings = useCallback(async () => {
     try {
-      const [storedUrl, queuedCount] = await Promise.all([
-        getServerBaseUrl(),
-        getUnsyncedCount(),
-      ]);
+      const savedUrl = await getServerBaseUrl();
+      setServerUrl(savedUrl);
 
-      setServerUrl(storedUrl);
-      setOfflineCount(queuedCount);
-
-      const meRes = await apiClient.get('/api/me/');
-      if (meRes.data) {
-        setFirstName(meRes.data.first_name || '');
-        setLastName(meRes.data.last_name || '');
-        setEmail(meRes.data.email || '');
-        setContactNumber(meRes.data.contact_number || '');
+      const res = await apiClient.get('/api/me/');
+      if (res.data) {
+        setFirstName(res.data.first_name || '');
+        setLastName(res.data.last_name || '');
+        setEmail(res.data.email || '');
+        setContactNumber(res.data.contact_number || '');
+        setPingStatus('ONLINE');
       }
     } catch {
-      // Keep local values if offline
+      setPingStatus('OFFLINE');
     }
   }, []);
 
   useEffect(() => {
-    loadSettingsState();
-  }, [loadSettingsState]);
+    loadSettings();
+  }, [loadSettings]);
 
   const handleSaveProfile = async () => {
+    if (!firstName.trim() || !lastName.trim()) {
+      showAlert('Required Fields', 'First Name and Last Name cannot be empty.');
+      return;
+    }
+
     setSavingProfile(true);
     try {
-      const payload: Record<string, string> = {
+      const payload: Record<string, any> = {
         first_name: firstName.trim(),
         last_name: lastName.trim(),
         email: email.trim(),
         contact_number: contactNumber.trim(),
       };
-
-      if (newPassword.trim()) {
-        if (newPassword.trim().length < 6) {
-          showAlert('Weak Password', 'New password must be at least 6 characters.');
-          setSavingProfile(false);
-          return;
-        }
-        payload.password = newPassword.trim();
+      if (password.trim().length >= 6) {
+        payload.password = password.trim();
       }
 
       await apiClient.put('/api/me/', payload);
-      setNewPassword('');
+      setPassword('');
       await refreshUser();
-      showAlert('Profile Updated', 'Your database account details have been saved.');
+      showAlert('Profile Saved', 'Your account details have been saved to PostgreSQL.');
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.error ||
-        err?.response?.data?.detail ||
-        'Could not update profile in database.';
-      showAlert('Update Failed', msg);
+      showAlert('Update Failed', err?.response?.data?.error || 'Could not update profile.');
     } finally {
       setSavingProfile(false);
     }
   };
 
-  const handleSaveServerUrl = async () => {
-    const clean = serverUrl.trim();
-    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-      showAlert('Invalid URL', 'Server URL must start with http:// or https://');
+  const handleUpdateEndpoint = async () => {
+    if (!serverUrl.trim()) {
+      showAlert('Invalid URL', 'Please enter a valid backend server URL.');
       return;
     }
-
     setSavingServer(true);
     try {
-      await setServerBaseUrl(clean);
-      showAlert('Server Updated', `Active backend endpoint set to:\n${clean}`);
+      const normalized = await setServerBaseUrl(serverUrl.trim());
+      setServerUrl(normalized);
+      await apiClient.get('/api/settings/school/');
+      setPingStatus('ONLINE');
+      showAlert('Server Connected', `Connected to ${normalized}`);
     } catch {
-      showAlert('Save Error', 'Could not save server URL.');
+      setPingStatus('OFFLINE');
+      showAlert('Saved (Unreachable)', 'Endpoint saved, but server did not respond to ping.');
     } finally {
       setSavingServer(false);
     }
   };
 
-  const handleSyncOfflineRecords = async () => {
-    setSyncingOffline(true);
-    try {
-      const result = await syncOfflineQueue();
-      const remaining = await getUnsyncedCount();
-      setOfflineCount(remaining);
-
-      if (result.syncedCount > 0 && remaining === 0) {
-        showAlert(
-          'Upload Complete',
-          `Successfully uploaded ${result.syncedCount} offline record(s) to the database.`
-        );
-      } else if (result.syncedCount > 0 && remaining > 0) {
-        showAlert(
-          'Partial Upload',
-          `Uploaded ${result.syncedCount} record(s), but ${remaining} remained in queue.\nLast error: ${result.lastError}`
-        );
-      } else {
-        showAlert(
-          'Upload Failed',
-          result.lastError || 'Could not reach the backend server to upload offline records.'
-        );
-      }
-    } catch (err: any) {
-      showAlert('Sync Error', err?.message || 'Failed to process offline queue.');
-    } finally {
-      setSyncingOffline(false);
-    }
-  };
-
-  const handleLogout = () => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm('Are you sure you want to sign out of AttendSure?')) {
-        logout();
-      }
-      return;
-    }
-
-    Alert.alert('Log Out', 'Are you sure you want to sign out of AttendSure?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log Out', style: 'destructive', onPress: () => logout() },
-    ]);
-  };
+  const displayName = `${firstName} ${lastName}`.trim() || user?.full_name || user?.username || 'Faculty';
+  const employeeId = user?.faculty_id || user?.username || '';
+  const roleLabel = user?.role || 'FACULTY';
+  const qrValue = user?.qr_token || employeeId || 'ATTENDSURE';
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      {/* Fixed Header */}
       <View style={styles.topHeader}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.screenTitle}>Account & System Settings</Text>
-          <Text style={styles.screenSub}>Database Profile, Network Endpoint & Offline Sync</Text>
+          <Text style={styles.screenSub}>Database Profile, Network Endpoint & Gate Pass</Text>
+        </View>
+        <View
+          style={[
+            styles.statusBadge,
+            pingStatus === 'ONLINE'
+              ? { backgroundColor: '#dcfce7' }
+              : { backgroundColor: '#f1f5f9' },
+          ]}
+        >
+          <View
+            style={[
+              styles.statusDot,
+              { backgroundColor: pingStatus === 'ONLINE' ? '#10b981' : '#94a3b8' },
+            ]}
+          />
+          <Text
+            style={[
+              styles.statusBadgeText,
+              { color: pingStatus === 'ONLINE' ? '#065f46' : '#475569' },
+            ]}
+          >
+            {pingStatus === 'ONLINE' ? 'DB ONLINE' : 'SYNC'}
+          </Text>
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* 1. Account Identity Summary */}
-        <View style={styles.card}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* 1. Faculty Identity & Gate Pass Card */}
+        <View style={styles.identityCard}>
           <View style={styles.identityRow}>
             <View style={styles.avatarCircle}>
-              <Text style={styles.avatarInitials}>
-                {(firstName?.[0] || currentUser?.username?.[0] || 'U').toUpperCase()}
-              </Text>
+              <Ionicons name="person" size={24} color="#ffffff" />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.identityName}>
-                {`${firstName} ${lastName}`.trim() || currentUser?.username}
-              </Text>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.identityName}>{displayName}</Text>
               <Text style={styles.identityMeta}>
-                ID: {currentUser?.faculty_id || currentUser?.username} • Role:{' '}
-                {currentUser?.role || 'FACULTY'}
+                {roleLabel} &bull; ID: {employeeId}
               </Text>
             </View>
+            <TouchableOpacity
+              style={styles.qrPassBtn}
+              onPress={() => setQrPassVisible(true)}
+            >
+              <Ionicons name="qr-code-outline" size={16} color="#004b87" />
+              <Text style={styles.qrPassBtnText}>Gate Pass</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
-        {/* 2. Offline Queue Sync Card */}
+        {/* 2. Personal Profile Form */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>OFFLINE ATTENDANCE & GPS QUEUE</Text>
-          <View style={styles.queueRow}>
+          <View style={styles.cardHeaderRow}>
+            <Ionicons name="person-circle-outline" size={16} color="#004b87" />
+            <Text style={styles.cardHeaderTitle}>FACULTY DATABASE PROFILE</Text>
+          </View>
+
+          <View style={styles.rowFields}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.queueTitle}>
-                {offlineCount > 0
-                  ? `${offlineCount} Pending Record(s) on Device`
-                  : 'All Records Synced to Database'}
-              </Text>
-              <Text style={styles.queueSub}>
-                {offlineCount > 0
-                  ? 'Tap below to upload queued scans and GPS pings to PostgreSQL.'
-                  : 'No offline scans waiting for upload.'}
-              </Text>
+              <Text style={styles.fieldLabel}>First Name</Text>
+              <TextInput
+                style={styles.textInput}
+                value={firstName}
+                onChangeText={setFirstName}
+                placeholder="First Name"
+                placeholderTextColor="#94a3b8"
+              />
             </View>
-            <Ionicons
-              name={offlineCount > 0 ? 'cloud-upload-outline' : 'checkmark-done-circle-outline'}
-              size={24}
-              color={offlineCount > 0 ? '#d97706' : '#16a34a'}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Last Name</Text>
+              <TextInput
+                style={styles.textInput}
+                value={lastName}
+                onChangeText={setLastName}
+                placeholder="Last Name"
+                placeholderTextColor="#94a3b8"
+              />
+            </View>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Official Email</Text>
+            <TextInput
+              style={styles.textInput}
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              placeholder="name@deped.gov.ph"
+              placeholderTextColor="#94a3b8"
             />
           </View>
 
-          {offlineCount > 0 && (
-            <TouchableOpacity
-              style={[styles.syncNowBtn, syncingOffline && { opacity: 0.6 }]}
-              onPress={handleSyncOfflineRecords}
-              disabled={syncingOffline}
-            >
-              {syncingOffline ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <>
-                  <Ionicons name="cloud-upload" size={16} color="#ffffff" />
-                  <Text style={styles.syncNowBtnText}>
-                    Upload {offlineCount} Offline Record(s) Now
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Mobile Contact Number</Text>
+            <TextInput
+              style={styles.textInput}
+              value={contactNumber}
+              onChangeText={setContactNumber}
+              keyboardType="phone-pad"
+              placeholder="09171234567"
+              placeholderTextColor="#94a3b8"
+            />
+          </View>
 
-        {/* 3. Database Profile Editor */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>EDIT FACULTY PROFILE</Text>
-
-          <Text style={styles.fieldLabel}>First Name</Text>
-          <TextInput
-            style={styles.input}
-            value={firstName}
-            onChangeText={setFirstName}
-            placeholder="First Name"
-          />
-
-          <Text style={styles.fieldLabel}>Last Name</Text>
-          <TextInput
-            style={styles.input}
-            value={lastName}
-            onChangeText={setLastName}
-            placeholder="Last Name"
-          />
-
-          <Text style={styles.fieldLabel}>Official Email</Text>
-          <TextInput
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            placeholder="Email Address"
-            keyboardType="email-address"
-            autoCapitalize="none"
-          />
-
-          <Text style={styles.fieldLabel}>Mobile Contact Number</Text>
-          <TextInput
-            style={styles.input}
-            value={contactNumber}
-            onChangeText={setContactNumber}
-            placeholder="09XXXXXXXXX"
-            keyboardType="phone-pad"
-          />
-
-          <Text style={styles.fieldLabel}>New Password (Optional)</Text>
-          <TextInput
-            style={styles.input}
-            value={newPassword}
-            onChangeText={setNewPassword}
-            placeholder="Leave blank to keep current password"
-            secureTextEntry
-          />
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>New Password (Optional)</Text>
+            <View style={styles.passwordWrap}>
+              <TextInput
+                style={styles.passwordInput}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                placeholder="Leave blank to keep current password"
+                placeholderTextColor="#94a3b8"
+              />
+              <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)}>
+                <Ionicons
+                  name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                  size={18}
+                  color="#64748b"
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
 
           <TouchableOpacity
-            style={[styles.primaryBtn, savingProfile && { opacity: 0.6 }]}
+            style={[styles.primaryBtn, savingProfile && { opacity: 0.65 }]}
             onPress={handleSaveProfile}
             disabled={savingProfile}
           >
             {savingProfile ? (
               <ActivityIndicator size="small" color="#ffffff" />
             ) : (
-              <Text style={styles.primaryBtnText}>Save Profile to Database</Text>
+              <>
+                <Ionicons name="save-outline" size={16} color="#ffffff" />
+                <Text style={styles.primaryBtnText}>Save Profile to Database</Text>
+              </>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* 4. Dynamic Backend Endpoint Configuration */}
+        {/* 3. Dynamic Backend Server Endpoint */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>DYNAMIC BACKEND SERVER ENDPOINT</Text>
-          <Text style={styles.fieldLabel}>Server Base URL / Domain</Text>
-          <TextInput
-            style={styles.input}
-            value={serverUrl}
-            onChangeText={setServerUrl}
-            placeholder="http://172.20.141.220:8000/api"
-            autoCapitalize="none"
-          />
+          <View style={styles.cardHeaderRow}>
+            <Ionicons name="server-outline" size={16} color="#004b87" />
+            <Text style={styles.cardHeaderTitle}>DYNAMIC BACKEND SERVER ENDPOINT</Text>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Server Base URL / Domain</Text>
+            <TextInput
+              style={styles.textInput}
+              value={serverUrl}
+              onChangeText={setServerUrl}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="http://172.20.141.220:8000/api"
+              placeholderTextColor="#94a3b8"
+            />
+          </View>
+
           <TouchableOpacity
-            style={[styles.secondaryBtn, savingServer && { opacity: 0.6 }]}
-            onPress={handleSaveServerUrl}
+            style={[styles.secondaryBtn, savingServer && { opacity: 0.65 }]}
+            onPress={handleUpdateEndpoint}
             disabled={savingServer}
           >
-            <Text style={styles.secondaryBtnText}>Update Server Endpoint</Text>
+            {savingServer ? (
+              <ActivityIndicator size="small" color="#004b87" />
+            ) : (
+              <>
+                <Ionicons name="sync-outline" size={16} color="#004b87" />
+                <Text style={styles.secondaryBtnText}>Update & Test Server Endpoint</Text>
+              </>
+            )}
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-            <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-            <Text style={styles.logoutBtnText}>Log Out of Account</Text>
+          <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
+            <Ionicons name="log-out-outline" size={17} color="#dc2626" />
+            <Text style={styles.logoutBtnText}>Log Out</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Optical Gate Pass Modal */}
+      <Modal visible={qrPassVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.qrModalCard}>
+            <View style={styles.qrModalHeader}>
+              <View>
+                <Text style={styles.qrModalTitle}>Faculty Optical Gate Pass</Text>
+                <Text style={styles.qrModalSub}>Scan at Campus Turnstile Kiosk</Text>
+              </View>
+              <TouchableOpacity onPress={() => setQrPassVisible(false)}>
+                <Ionicons name="close" size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.qrBox}>
+              <QRCode value={qrValue} size={180} color="#0f172a" backgroundColor="#ffffff" />
+            </View>
+
+            <Text style={styles.qrPassName}>{displayName}</Text>
+            <Text style={styles.qrPassId}>ID: {employeeId}</Text>
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, { width: '100%', marginTop: 16 }]}
+              onPress={() => setQrPassVisible(false)}
+            >
+              <Text style={styles.primaryBtnText}>Close Gate Pass</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -333,23 +352,36 @@ export const SettingsScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
   topHeader: {
-    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
   },
-  screenTitle: { fontSize: 18, fontWeight: '800', color: '#003460' },
+  screenTitle: { fontSize: 17, fontWeight: '800', color: '#003460' },
   screenSub: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
-  scrollContent: { padding: 16, gap: 12 },
-  card: {
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    gap: 5,
+  },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusBadgeText: { fontSize: 9.5, fontWeight: '800' },
+  scrollContent: { padding: 14, paddingBottom: 110, gap: 12 },
+  identityCard: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
-    padding: 16,
+    padding: 14,
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  identityRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  identityRow: { flexDirection: 'row', alignItems: 'center' },
   avatarCircle: {
     width: 46,
     height: 46,
@@ -358,64 +390,77 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarInitials: { color: '#ffffff', fontSize: 18, fontWeight: '800' },
   identityName: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
-  identityMeta: { fontSize: 11, color: '#64748b', marginTop: 2 },
-  sectionTitle: {
-    fontSize: 10.5,
-    fontWeight: '800',
-    color: '#004b87',
-    letterSpacing: 0.4,
-    marginBottom: 10,
+  identityMeta: { fontSize: 11, color: '#64748b', marginTop: 2, fontWeight: '600' },
+  qrPassBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#e6f0fa',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#b8d6f0',
   },
-  fieldLabel: { fontSize: 11, fontWeight: '700', color: '#475569', marginBottom: 4, marginTop: 8 },
-  input: {
-    height: 42,
+  qrPassBtnText: { fontSize: 11.5, fontWeight: '800', color: '#004b87' },
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12 },
+  cardHeaderTitle: { fontSize: 10.5, fontWeight: '800', color: '#004b87', letterSpacing: 0.4 },
+  rowFields: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  fieldGroup: { marginBottom: 10 },
+  fieldLabel: { fontSize: 11, fontWeight: '700', color: '#334155', marginBottom: 5 },
+  textInput: {
     backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 10,
     paddingHorizontal: 12,
-    fontSize: 12.5,
+    height: 42,
+    fontSize: 13,
     color: '#0f172a',
   },
-  primaryBtn: {
-    backgroundColor: '#004b87',
-    paddingVertical: 11,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 14,
-  },
-  primaryBtnText: { color: '#ffffff', fontSize: 12.5, fontWeight: '700' },
-  secondaryBtn: {
-    backgroundColor: '#e6f0fa',
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: '#b8d6f0',
-  },
-  secondaryBtnText: { color: '#004b87', fontSize: 12, fontWeight: '800' },
-  queueRow: {
+  passwordWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 42,
   },
-  queueTitle: { fontSize: 13, fontWeight: '700', color: '#0f172a' },
-  queueSub: { fontSize: 11, color: '#64748b', marginTop: 2 },
-  syncNowBtn: {
+  passwordInput: { flex: 1, fontSize: 13, color: '#0f172a' },
+  primaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#d97706',
-    paddingVertical: 10,
+    backgroundColor: '#004b87',
+    paddingVertical: 12,
     borderRadius: 10,
-    marginTop: 12,
+    marginTop: 4,
     gap: 6,
   },
-  syncNowBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
+  primaryBtnText: { color: '#ffffff', fontSize: 12.5, fontWeight: '800' },
+  secondaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e6f0fa',
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#b8d6f0',
+    marginTop: 4,
+    gap: 6,
+  },
+  secondaryBtnText: { color: '#004b87', fontSize: 12.5, fontWeight: '800' },
   logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -423,12 +468,45 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef2f2',
     paddingVertical: 11,
     borderRadius: 10,
-    marginTop: 14,
     borderWidth: 1,
     borderColor: '#fecaca',
+    marginTop: 10,
     gap: 6,
   },
   logoutBtnText: { color: '#dc2626', fontSize: 12.5, fontWeight: '800' },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  qrModalCard: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 20,
+    alignItems: 'center',
+  },
+  qrModalHeader: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  qrModalTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  qrModalSub: { fontSize: 11, color: '#64748b' },
+  qrBox: {
+    padding: 16,
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 12,
+  },
+  qrPassName: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  qrPassId: { fontSize: 11.5, fontWeight: '700', color: '#004b87', marginTop: 2 },
 });
 
 export default SettingsScreen;

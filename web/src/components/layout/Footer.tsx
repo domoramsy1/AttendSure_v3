@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Institutional Status & Telemetry Footer
+ * AttendSure - Institutional Status & Telemetry Footer
  * File: frontend/src/components/layout/Footer.tsx
  *
  * 100% Dynamic - Derives school identity and hardware status directly from database state.
@@ -111,7 +111,7 @@ export const Footer: React.FC<FooterProps> = ({
 
       {/* Right: Institutional Copyright */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span>&copy; 2026 AttendSure V3 &bull; Developed by</span>
+        <span>&copy; 2026 AttendSure &bull; Developed by</span>
         <strong style={{ color: '#0284c7', fontWeight: 800 }}>TechBlazer</strong>.
         <span className="hidden md:inline" style={{ color: '#94a3b8' }}>
           All rights reserved.

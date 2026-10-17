@@ -9,7 +9,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Modal,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
@@ -21,10 +20,8 @@ import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
-import { getServerBaseUrl, setServerBaseUrl } from '../services/configService';
-import { COLORS } from '../constants/theme';
 
-const fallbackLogo = require('../../assets/logo.svg');
+const fallbackLogo = require('../../assets/attendsure-logo.svg');
 const DEVICE_UUID_STORAGE_KEY = 'attendsure_hardware_device_uuid';
 
 interface PublicSchoolProfile {
@@ -51,7 +48,11 @@ export const getOrCreateDeviceUuid = async (): Promise<string> => {
   const existing = await AsyncStorage.getItem(DEVICE_UUID_STORAGE_KEY);
   if (existing) return existing;
 
-  const randomHex = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1).toUpperCase();
+  const randomHex = () =>
+    Math.floor((1 + Math.random()) * 0x10000)
+      .toString(16)
+      .substring(1)
+      .toUpperCase();
   const generated = `DEV-${Platform.OS.toUpperCase()}-${randomHex()}${randomHex()}-${randomHex()}`;
   await AsyncStorage.setItem(DEVICE_UUID_STORAGE_KEY, generated);
   return generated;
@@ -72,16 +73,9 @@ export const LoginScreen: React.FC = () => {
     `${Platform.OS.toUpperCase()} (${Platform.Version || 'OS'})`
   );
 
-  // Server Configuration Modal State
-  const [configModalVisible, setConfigModalVisible] = useState<boolean>(false);
-  const [serverUrlInput, setServerUrlInput] = useState<string>('');
-  const [testingConnection, setTestingConnection] = useState<boolean>(false);
-
+  // Automatically connects to the Cloudflare tunnel on startup
   const checkServerAndLoadSchool = useCallback(async () => {
     try {
-      const storedUrl = await getServerBaseUrl();
-      setServerUrlInput(storedUrl);
-
       const res = await apiClient.get('/api/settings/school/');
       if (res.data) {
         setSchoolInfo(res.data);
@@ -111,38 +105,11 @@ export const LoginScreen: React.FC = () => {
         err?.response?.data?.error ||
         err?.response?.data?.detail ||
         (err?.code === 'ERR_NETWORK' || err?.message?.includes('Network Error')
-          ? 'Cannot connect to backend server. Tap the gear icon to verify your Server URL.'
+          ? 'Cannot reach AttendSure server. Check your internet connection.'
           : err?.message || 'Authentication failed.');
       showAlert('Login Failed', serverError);
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const handleSaveServerConfig = async () => {
-    const clean = serverUrlInput.trim();
-    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-      showAlert('Invalid URL', 'Server URL must start with http:// or https://');
-      return;
-    }
-
-    setTestingConnection(true);
-    try {
-      await setServerBaseUrl(clean);
-      const res = await apiClient.get('/api/settings/school/');
-      setSchoolInfo(res.data || null);
-      setServerReachable(true);
-      setConfigModalVisible(false);
-      showAlert('Connected', 'Successfully connected to the AttendSure backend server.');
-    } catch {
-      setServerReachable(false);
-      setConfigModalVisible(false);
-      showAlert(
-        'Saved (Offline)',
-        `Server URL saved as:\n${clean}\n\nHowever, the server did not respond. Make sure Django is running on 0.0.0.0:8000.`
-      );
-    } finally {
-      setTestingConnection(false);
     }
   };
 
@@ -164,7 +131,7 @@ export const LoginScreen: React.FC = () => {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Top Bar with Server Status & Gear Button */}
+          {/* Top Bar with Automatic Server Status */}
           <View style={styles.topUtilityBar}>
             <View
               style={[
@@ -206,17 +173,9 @@ export const LoginScreen: React.FC = () => {
                   ? 'DATABASE ONLINE'
                   : serverReachable === false
                   ? 'SERVER UNREACHABLE'
-                  : 'CHECKING SERVER...'}
+                  : 'CONNECTING TO CLOUD...'}
               </Text>
             </View>
-
-            <TouchableOpacity
-              style={styles.configIconBtn}
-              onPress={() => setConfigModalVisible(true)}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="settings-outline" size={20} color="#004b87" />
-            </TouchableOpacity>
           </View>
 
           {/* Institutional Branding Header */}
@@ -300,7 +259,7 @@ export const LoginScreen: React.FC = () => {
               ) : (
                 <>
                   <Ionicons name="shield-checkmark-outline" size={18} color="#ffffff" />
-                  <Text style={styles.loginBtnText}>Verify & Authorize Account</Text>
+                  <Text style={styles.loginBtnText}>Log In</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -323,92 +282,30 @@ export const LoginScreen: React.FC = () => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* Server Endpoint Configuration Modal */}
-      <Modal
-        visible={configModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setConfigModalVisible(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Backend Server Endpoint</Text>
-              <TouchableOpacity onPress={() => setConfigModalVisible(false)}>
-                <Ionicons name="close" size={22} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.modalSubText}>
-              Enter the active IP address or domain name of your AttendSure Django server:
-            </Text>
-
-            <TextInput
-              style={styles.modalInput}
-              value={serverUrlInput}
-              onChangeText={setServerUrlInput}
-              placeholder="http://172.20.141.220:8000/api"
-              placeholderTextColor="#94a3b8"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-            {/* Quick Preset Pills */}
-            <View style={styles.presetRow}>
-              <TouchableOpacity
-                style={styles.presetChip}
-                onPress={() => setServerUrlInput('http://172.20.141.220:8000/api')}
-              >
-                <Text style={styles.presetChipText}>Laptop Wi-Fi IP</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.presetChip}
-                onPress={() => setServerUrlInput('http://lapasan.attendsure.com.ph:8000/api')}
-              >
-                <Text style={styles.presetChipText}>School Domain</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.presetChip}
-                onPress={() => setServerUrlInput('http://localhost:8000/api')}
-              >
-                <Text style={styles.presetChipText}>Localhost / USB</Text>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.saveServerBtn, testingConnection && { opacity: 0.65 }]}
-              onPress={handleSaveServerConfig}
-              disabled={testingConnection}
-            >
-              {testingConnection ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <Text style={styles.saveServerBtnText}>Save & Test Connection</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
-  scrollContent: { flexGrow: 1, paddingHorizontal: 20, paddingVertical: 16, justifyContent: 'center' },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    justifyContent: 'center',
+  },
   topUtilityBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     marginBottom: 20,
   },
   connectionPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 14,
     borderWidth: 1,
     gap: 6,
   },
@@ -416,17 +313,7 @@ const styles = StyleSheet.create({
   pillOffline: { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
   pillChecking: { backgroundColor: '#fffbeb', borderColor: '#fde68a' },
   statusDot: { width: 7, height: 7, borderRadius: 3.5 },
-  connectionPillText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.4 },
-  configIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: '#e6f0fa',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#b8d6f0',
-  },
+  connectionPillText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
   brandSection: { alignItems: 'center', marginBottom: 24 },
   logoImage: { width: 68, height: 68, borderRadius: 14, marginBottom: 12 },
   schoolNameText: {
@@ -488,54 +375,6 @@ const styles = StyleSheet.create({
   hardwareRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 3 },
   hardwareKey: { fontSize: 10.5, fontWeight: '600', color: '#64748b' },
   hardwareVal: { fontSize: 10.5, fontWeight: '800', color: '#334155' },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  modalContainer: {
-    width: '100%',
-    maxWidth: 400,
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 20,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
-  modalSubText: { fontSize: 11.5, color: '#64748b', lineHeight: 16, marginBottom: 12 },
-  modalInput: {
-    height: 44,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1.2,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 13,
-    color: '#0f172a',
-  },
-  presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10, marginBottom: 16 },
-  presetChip: {
-    backgroundColor: '#e6f0fa',
-    paddingVertical: 5,
-    paddingHorizontal: 9,
-    borderRadius: 8,
-  },
-  presetChipText: { fontSize: 10, fontWeight: '700', color: '#004b87' },
-  saveServerBtn: {
-    backgroundColor: '#004b87',
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  saveServerBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '800' },
 });
 
 export default LoginScreen;

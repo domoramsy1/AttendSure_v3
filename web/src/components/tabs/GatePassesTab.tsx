@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Campus Gate Passes & Exit Clearances
+ * AttendSure - Campus Gate Passes & Exit Clearances
  * File: frontend/src/components/tabs/GatePassesTab.tsx
  *
  * Key Highlights:

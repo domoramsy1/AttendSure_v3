@@ -1,5 +1,5 @@
 // ============================================================================
-// ATTENDSURE V3: CORE SHARED DATA TYPES
+// AttendSure: CORE SHARED DATA TYPES
 // Standardized interfaces for classes, sections, school terms, and user sessions.
 // ============================================================================
 

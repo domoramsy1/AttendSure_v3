@@ -1,4 +1,4 @@
-// D:\AttendSure_V3\mobile\src\context\AuthContext.tsx
+// mobile/src/context/AuthContext.tsx
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { Platform } from 'react-native';
@@ -22,8 +22,16 @@ export interface AuthenticatedUser {
   contact_number?: string;
   photo?: string | null;
   school_name?: string;
+  qr_token?: string | null;
+  bound_device_id?: string | null;
+  division?: string | null;
+  department?: string | null;
   is_superuser: boolean;
   is_staff: boolean;
+}
+
+interface DeviceIdentity {
+  deviceId?: string;
 }
 
 interface AuthContextType {
@@ -31,9 +39,11 @@ interface AuthContextType {
   token: string | null;
   loading: boolean;
   isLoading: boolean;
+  deviceIdentity: DeviceIdentity | null;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
+  updateUser: (updatedFields: Partial<AuthenticatedUser>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -64,6 +74,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [deviceIdentity] = useState<DeviceIdentity | null>({ deviceId: 'WEB-CLIENT-UUID' });
   const isRefreshingRef = useRef<boolean>(false);
 
   const refreshUser = useCallback(async () => {
@@ -157,6 +168,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
   };
 
+  const updateUser = async (updatedFields: Partial<AuthenticatedUser>): Promise<void> => {
+    if (!user) return;
+    const nextUser = { ...user, ...updatedFields };
+    setUser(nextUser);
+    await AsyncStorage.setItem(USER_CACHE_KEY, JSON.stringify(nextUser));
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -164,9 +182,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         loading,
         isLoading: loading,
+        deviceIdentity,
         login,
         logout,
         refreshUser,
+        updateUser,
       }}
     >
       {children}

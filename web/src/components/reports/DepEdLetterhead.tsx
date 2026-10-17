@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Official DepEd Manual of Style Header & Footer
+ * AttendSure - Official DepEd Manual of Style Header & Footer
  * File: frontend/src/components/reports/DepEdLetterhead.tsx
  *
  * 100% Dynamic - Zero hardcoded region, division, or school names.

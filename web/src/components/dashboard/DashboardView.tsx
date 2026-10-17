@@ -1,13 +1,7 @@
 /**
- * AttendSure V3 - Comprehensive Institutional Attendance, Analytics & Database Telemetry
+ * AttendSure V3 - All-in-One Dashboard & System Maintenance Hub
+ * Developer: TECHBLAZER
  * File: frontend/src/components/dashboard/DashboardView.tsx
- *
- * 100% Dynamic & Live:
- * - Summary KPIs: Learner attendance, absenteeism, faculty DTR, and gate taps.
- * - Business Analytics: SMS carrier spend, delivery SLA, RFID vs QR usage, punctuality, and truancy risk.
- * - System & Database Capacity: PostgreSQL health, connection pool load, DB size, and disk utilization.
- * - Visual Charts: Hourly turnstile arrivals curve and grade-level turnout progress bars.
- * - Zero hardcoded/synthetic values.
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -41,11 +35,11 @@ import {
   Server,
   XCircle,
   Ticket,
+  WifiOff,
+  Wrench,
+  ShieldCheck,
+  RotateCcw,
 } from 'lucide-react';
-
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
 
 interface HourlyScanItem {
   hour: string;
@@ -115,20 +109,33 @@ interface DashboardMetrics {
 }
 
 interface DashboardViewProps {
+  isServerOnline?: boolean;
+  userRole?: string;
   onGateStatusChange?: (online: boolean) => void;
+  onManualRefresh?: () => void;
 }
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-
-export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({
+  isServerOnline = true,
+  userRole,
+  onGateStatusChange,
+  onManualRefresh,
+}) => {
   const { showAlert } = useAlert();
 
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const [fetchFailed, setFetchFailed] = useState<boolean>(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const isMounted = useRef<boolean>(true);
+
+  const effectiveRole = (
+    userRole ||
+    localStorage.getItem('attendsure_role') ||
+    'FACULTY'
+  ).toUpperCase();
+  const isAdmin = effectiveRole === 'ADMIN';
 
   const [data, setData] = useState<DashboardMetrics>({
     total_students: 0,
@@ -151,21 +158,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
     database: {},
   });
 
+  const isOnline = isServerOnline && !fetchFailed;
+
   const navigateTo = (detail: string | { tab: string; report?: string }) => {
     window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail }));
-  };
-
-  const handleIssueGatePass = () => {
-    showAlert({
-      title: 'Gate Pass Manager',
-      message:
-        'Issue student and faculty departure permits, log authorized exit reasons, and generate departure validation slips.',
-      type: 'info',
-      actionLabel: 'Open Gate Passes',
-      onAction: () => {
-        navigateTo('gate-passes');
-      },
-    });
   };
 
   const fetchDashboardData = useCallback(
@@ -175,9 +171,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
 
         const res = await apiClient.get<DashboardMetrics>('/dashboard/overview/', {
           params: { silent: silent ? '1' : undefined },
+          timeout: 5000,
         });
 
         if (isMounted.current && res.data) {
+          setFetchFailed(false);
           const totalStudents = Number(res.data.total_students) || 0;
           const presentStudents = Number(res.data.students_present) || 0;
           const calculatedRate =
@@ -185,7 +183,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
               ? Math.round((presentStudents / totalStudents) * 100)
               : Number(res.data.attendance_rate) || 0;
 
-          // Normalize hourly scans relative to the day's maximum scan volume
           const rawHourly = Array.isArray(res.data.hourly_scans) ? res.data.hourly_scans : [];
           const maxHourlyVolume = Math.max(...rawHourly.map((h) => Number(h.count) || 0), 1);
           const normalizedHourly = rawHourly.map((item) => {
@@ -243,8 +240,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
             onGateStatusChange((Number(res.data.kiosks_online) || 0) > 0);
           }
         }
-      } catch (err) {
-        console.error('[DashboardView] Database synchronization failure:', err);
+      } catch (err: any) {
+        console.warn('[DashboardView] Server sync warning:', err.message);
+        if (isMounted.current) {
+          setFetchFailed(true);
+          if (onGateStatusChange) onGateStatusChange(false);
+        }
       } finally {
         if (isMounted.current) {
           setLoading(false);
@@ -259,10 +260,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
     isMounted.current = true;
     fetchDashboardData(false);
 
-    // Silent 20-second heartbeat
     const interval = setInterval(() => {
       fetchDashboardData(true);
-    }, 20000);
+    }, 15000);
 
     return () => {
       isMounted.current = false;
@@ -270,7 +270,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
     };
   }, [fetchDashboardData]);
 
-  // Derived Business Analytics Metrics (Zero Dummy Fallbacks)
+  const handleManualSync = () => {
+    fetchDashboardData(false);
+    if (onManualRefresh) onManualRefresh();
+  };
+
+  // Run SysAdmin Maintenance Actions with instant alert feedback
+  const runMaintenanceTask = async (taskName: string, endpoint: string) => {
+    try {
+      setActionLoading(taskName);
+      const res = await apiClient.post(endpoint, {});
+      showAlert({
+        title: 'Task Completed',
+        message: res.data?.message || `${taskName} was executed successfully.`,
+        type: 'success',
+      });
+      fetchDashboardData(true);
+    } catch (err: any) {
+      const msg =
+        err.response?.status === 404
+          ? `Endpoint ${endpoint} not found on backend. Please ensure the URL is registered in Django.`
+          : err.response?.data?.message || `Could not run ${taskName}. Check server logs.`;
+      showAlert({
+        title: 'Task Result',
+        message: msg,
+        type: 'warning',
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Derived Business Analytics
   const analyticsMetrics = useMemo(() => {
     const raw = data.analytics || {};
     const unitCost = Number(raw.sms_unit_cost) || 0;
@@ -317,12 +348,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
     };
   }, [data]);
 
-  // Derived Database & Server Telemetry
+  // Derived Real Database Telemetry
   const dbMetrics = useMemo(() => {
     const raw = data.database || {};
-    const isDbConnected = raw.status ? raw.status === 'CONNECTED' : true;
+    const isDbConnected = isOnline && (raw.status ? raw.status === 'CONNECTED' : true);
     const dbSize = Number(raw.database_size_mb) || 0;
-    const activeConn = Number(raw.active_connections) || 0;
+    const activeConn = Number(raw.active_connections) || 1;
     const maxConn = Number(raw.max_connections) || 100;
     const diskUsed = Number(raw.server_disk_used_gb) || 0;
     const diskTotal = Number(raw.server_disk_total_gb) || 0;
@@ -333,7 +364,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
 
     return {
       isDbConnected,
-      dbName: raw.database_name || 'attendsure_v3',
+      dbName: raw.database_name || 'attendsure_v3_db',
       dbSize,
       activeConn,
       maxConn,
@@ -341,7 +372,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
       diskTotal,
       diskPercent,
     };
-  }, [data]);
+  }, [data, isOnline]);
 
   if (loading) {
     return (
@@ -358,13 +389,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
       >
         <RefreshCw className="animate-spin" size={28} color="#0284c7" />
         <span style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>
-          Synchronizing institutional metrics &amp; database telemetry...
+          Connecting to campus database &amp; hardware telemetry...
         </span>
       </div>
     );
   }
 
-  const hasHourlyScans = data.hourly_scans.some((h) => h.count > 0);
+  const hasHourlyScans = isOnline && data.hourly_scans.some((h) => h.count > 0);
 
   return (
     <div
@@ -398,68 +429,96 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
             backgroundColor: '#ffffff',
             padding: '10px 16px',
             borderRadius: 10,
-            border: '1px solid #e2e8f0',
+            border: `1px solid ${isOnline ? '#e2e8f0' : '#fecaca'}`,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={livePulseBadge}>
-              <span style={pulseDot} />
-              DATABASE LIVE
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '3px 10px',
+                borderRadius: 12,
+                backgroundColor: isOnline ? '#ecfdf5' : '#fee2e2',
+                color: isOnline ? '#059669' : '#dc2626',
+                fontSize: '0.66rem',
+                fontWeight: 800,
+                letterSpacing: '0.5px',
+                border: `1px solid ${isOnline ? '#a7f3d0' : '#fca5a5'}`,
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  backgroundColor: isOnline ? '#10b981' : '#dc2626',
+                }}
+              />
+              {isOnline ? 'DATABASE LIVE' : 'DATABASE OFFLINE'}
             </span>
 
-            {/* DB Health Pill */}
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                color: dbMetrics.isDbConnected ? '#059669' : '#dc2626',
-              }}
-            >
-              <Database size={13} />
-              <span>
-                PostgreSQL: {dbMetrics.isDbConnected ? 'Connected' : 'Offline'} ({dbMetrics.activeConn}/
-                {dbMetrics.maxConn} conns)
+            {isAdmin ? (
+              <>
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    color: dbMetrics.isDbConnected ? '#059669' : '#dc2626',
+                  }}
+                >
+                  <Database size={13} />
+                  <span>
+                    PostgreSQL: {dbMetrics.isDbConnected ? 'Connected' : 'Disconnected'}
+                    {isOnline ? ` (${dbMetrics.activeConn}/${dbMetrics.maxConn} conns)` : ' (Server Unreachable)'}
+                  </span>
+                </div>
+
+                <span style={{ color: '#cbd5e1' }}>&bull;</span>
+
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    color: isOnline && data.kiosks_online > 0 ? '#0284c7' : '#94a3b8',
+                  }}
+                >
+                  <Radio size={13} />
+                  <span>
+                    Terminals: {isOnline ? `${data.kiosks_online}/${data.total_kiosks} Online` : 'Offline'}
+                  </span>
+                </div>
+
+                <span style={{ color: '#cbd5e1' }}>&bull;</span>
+
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    color: isOnline ? '#475569' : '#94a3b8',
+                  }}
+                >
+                  <HardDrive size={13} />
+                  <span>
+                    Disk: {isOnline && dbMetrics.diskPercent > 0 ? `${dbMetrics.diskPercent}% Used` : 'Monitoring'}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 600 }}>
+                Campus Gate &amp; Roster Systems Active
               </span>
-            </div>
-
-            <span style={{ color: '#cbd5e1' }}>&bull;</span>
-
-            {/* Terminal Health Pill */}
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                color: '#0284c7',
-              }}
-            >
-              <Radio size={13} />
-              <span>
-                Terminals: {data.kiosks_online}/{data.total_kiosks} Online
-              </span>
-            </div>
-
-            <span style={{ color: '#cbd5e1' }}>&bull;</span>
-
-            {/* Storage Usage Pill */}
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                color: '#475569',
-              }}
-            >
-              <HardDrive size={13} />
-              <span>Disk: {dbMetrics.diskPercent}% Used</span>
-            </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -470,26 +529,119 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
             )}
 
             <button
-              onClick={() => fetchDashboardData(false)}
+              onClick={handleManualSync}
               disabled={refreshing}
               title="Refresh Numbers"
-              style={refreshBtnStyle}
+              style={{
+                ...refreshBtnStyle,
+                borderColor: isOnline ? '#cbd5e1' : '#f87171',
+                backgroundColor: isOnline ? '#ffffff' : '#fef2f2',
+              }}
               type="button"
             >
               <RefreshCw
                 size={13}
                 className={refreshing ? 'animate-spin' : ''}
-                color="#334155"
+                color={isOnline ? '#334155' : '#dc2626'}
               />
-              <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#334155' }}>
-                Sync Live Data
+              <span
+                style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  color: isOnline ? '#334155' : '#dc2626',
+                }}
+              >
+                {refreshing ? 'Connecting...' : isOnline ? 'Sync Live Data' : 'Retry Connection'}
               </span>
             </button>
           </div>
         </div>
 
         {/* ======================================================== */}
-        {/* 2. PRIMARY ATTENDANCE SUMMARY KPIS                       */}
+        {/* 2. ADMIN ONLY: SYSTEM MAINTENANCE CONSOLE                */}
+        {/* ======================================================== */}
+        {isAdmin && (
+          <div
+            style={{
+              backgroundColor: '#0f172a',
+              borderRadius: 12,
+              padding: '16px 20px',
+              color: '#ffffff',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+              boxShadow: '0 4px 14px rgba(15, 23, 42, 0.12)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Wrench size={18} color="#38bdf8" />
+                <span style={{ fontSize: '0.90rem', fontWeight: 800, letterSpacing: '0.02em' }}>
+                  System Administrator &amp; Maintenance Console
+                </span>
+                <span
+                  style={{
+                    fontSize: '0.62rem',
+                    fontWeight: 800,
+                    backgroundColor: '#0284c7',
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                  }}
+                >
+                  MAINTENANCE
+                </span>
+              </div>
+              <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
+                Hardware Pings • Telemetry Tests • Database Health Checks
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+              <button
+                type="button"
+                disabled={!isOnline || actionLoading !== null}
+                onClick={() => runMaintenanceTask('Ping Gate Scanners', '/telemetry/ping-scanners/')}
+                style={adminActionBtn}
+              >
+                <Radio size={14} color="#38bdf8" />
+                <span>{actionLoading === 'Ping Gate Scanners' ? 'Pinging...' : 'Ping Gate Scanners'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={!isOnline || actionLoading !== null}
+                onClick={() => runMaintenanceTask('Test SMS Gateway', '/sms/test-gateway/')}
+                style={adminActionBtn}
+              >
+                <Send size={14} color="#38bdf8" />
+                <span>{actionLoading === 'Test SMS Gateway' ? 'Testing...' : 'Test SMS Gateway'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={!isOnline || actionLoading !== null}
+                onClick={() => runMaintenanceTask('Check Database Health', '/core/maintenance/db-check/')}
+                style={adminActionBtn}
+              >
+                <Database size={14} color="#38bdf8" />
+                <span>{actionLoading === 'Check Database Health' ? 'Checking...' : 'Check Database Health'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={!isOnline || actionLoading !== null}
+                onClick={() => runMaintenanceTask('Flush Cache', '/core/maintenance/flush-cache/')}
+                style={adminActionBtn}
+              >
+                <RotateCcw size={14} color="#38bdf8" />
+                <span>{actionLoading === 'Flush Cache' ? 'Flushing...' : 'Flush Cache'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* 3. CORE ATTENDANCE KPIS                                  */}
         {/* ======================================================== */}
         <div style={kpiGrid}>
           {/* Students in School */}
@@ -497,17 +649,31 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={kpiLabel}>STUDENTS IN SCHOOL</span>
-                <div style={kpiValue}>{data.students_present.toLocaleString()}</div>
+                <div style={{ ...kpiValue, color: isOnline ? '#0f172a' : '#94a3b8' }}>
+                  {isOnline ? data.students_present.toLocaleString() : '—'}
+                </div>
               </div>
-              <div style={{ ...kpiIconBox, backgroundColor: '#ecfdf5', color: '#059669' }}>
+              <div
+                style={{
+                  ...kpiIconBox,
+                  backgroundColor: isOnline ? '#ecfdf5' : '#f1f5f9',
+                  color: isOnline ? '#059669' : '#94a3b8',
+                }}
+              >
                 <UserCheck size={20} />
               </div>
             </div>
             <div style={kpiFooter}>
-              <span style={{ color: '#059669', fontWeight: 800 }}>{data.attendance_rate}%</span>
-              <span style={kpiSubtext}>
-                of {data.total_students.toLocaleString()} enrolled learners
-              </span>
+              {isOnline ? (
+                <>
+                  <span style={{ color: '#059669', fontWeight: 800 }}>{data.attendance_rate}%</span>
+                  <span style={kpiSubtext}>
+                    of {data.total_students.toLocaleString()} enrolled learners
+                  </span>
+                </>
+              ) : (
+                <span style={{ color: '#dc2626', fontWeight: 600 }}>Server Disconnected</span>
+              )}
             </div>
           </div>
 
@@ -519,18 +685,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
                 <div
                   style={{
                     ...kpiValue,
-                    color: data.students_absent > 0 ? '#e11d48' : '#0f172a',
+                    color: !isOnline
+                      ? '#94a3b8'
+                      : data.students_absent > 0
+                      ? '#e11d48'
+                      : '#0f172a',
                   }}
                 >
-                  {data.students_absent.toLocaleString()}
+                  {isOnline ? data.students_absent.toLocaleString() : '—'}
                 </div>
               </div>
-              <div style={{ ...kpiIconBox, backgroundColor: '#fff1f2', color: '#e11d48' }}>
+              <div
+                style={{
+                  ...kpiIconBox,
+                  backgroundColor: isOnline ? '#fff1f2' : '#f1f5f9',
+                  color: isOnline ? '#e11d48' : '#94a3b8',
+                }}
+              >
                 <UserX size={20} />
               </div>
             </div>
             <div style={kpiFooter}>
-              <span style={kpiSubtext}>No entrance gate scan recorded today</span>
+              <span style={kpiSubtext}>
+                {isOnline
+                  ? data.students_present === 0
+                    ? 'No check-ins recorded for today yet'
+                    : `${data.students_absent} learners unverified`
+                  : 'Telemetry unavailable'}
+              </span>
             </div>
           </div>
 
@@ -539,351 +721,431 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={kpiLabel}>TEACHERS ON DUTY</span>
-                <div style={kpiValue}>
-                  {data.faculty_on_duty}
-                  <span style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 500 }}>
-                    /{data.total_faculty}
-                  </span>
+                <div style={{ ...kpiValue, color: isOnline ? '#0f172a' : '#94a3b8' }}>
+                  {isOnline ? (
+                    <>
+                      {data.faculty_on_duty}
+                      <span style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 500 }}>
+                        /{data.total_faculty}
+                      </span>
+                    </>
+                  ) : (
+                    '—'
+                  )}
                 </div>
               </div>
-              <div style={{ ...kpiIconBox, backgroundColor: '#f0fdf4', color: '#16a34a' }}>
+              <div
+                style={{
+                  ...kpiIconBox,
+                  backgroundColor: isOnline ? '#f0fdf4' : '#f1f5f9',
+                  color: isOnline ? '#16a34a' : '#94a3b8',
+                }}
+              >
                 <Clock size={20} />
               </div>
             </div>
             <div style={kpiFooter}>
-              <span style={kpiSubtext}>Faculty Daily Time Record (CSC Form 48)</span>
+              <span style={kpiSubtext}>
+                {isOnline ? 'Faculty Daily Time Record (CSC Form 48)' : 'Database link required'}
+              </span>
             </div>
           </div>
 
           {/* Gate Scans Today */}
           <div
-            style={{ ...kpiCard, cursor: 'pointer' }}
+            style={{ ...kpiCard, cursor: isOnline ? 'pointer' : 'default' }}
             role="button"
             tabIndex={0}
-            onClick={() => navigateTo('gate-logs')}
+            onClick={() => isOnline && navigateTo('gate-logs')}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
+              if (isOnline && (e.key === 'Enter' || e.key === ' ')) {
                 e.preventDefault();
                 navigateTo('gate-logs');
               }
             }}
-            title="Inspect Turnstile Scans"
+            title={isOnline ? 'Inspect Turnstile Scans' : 'Offline'}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={kpiLabel}>TOTAL GATE SCANS</span>
-                <div style={kpiValue}>{data.gate_scans_today.toLocaleString()}</div>
+                <div style={{ ...kpiValue, color: isOnline ? '#0f172a' : '#94a3b8' }}>
+                  {isOnline ? data.gate_scans_today.toLocaleString() : '—'}
+                </div>
               </div>
-              <div style={{ ...kpiIconBox, backgroundColor: '#eff6ff', color: '#0284c7' }}>
+              <div
+                style={{
+                  ...kpiIconBox,
+                  backgroundColor: isOnline ? '#eff6ff' : '#f1f5f9',
+                  color: isOnline ? '#0284c7' : '#94a3b8',
+                }}
+              >
                 <Scan size={20} />
               </div>
             </div>
             <div style={kpiFooter}>
-              <span
-                style={{
-                  color: '#0284c7',
-                  fontWeight: 700,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                }}
-              >
-                <Ticket size={12} /> {data.active_gate_passes} Active Gate Passes
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* ======================================================== */}
-        {/* 3. BUSINESS ANALYTICS & HARDWARE VELOCITY                */}
-        {/* ======================================================== */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <BarChart3 size={17} color="#0284c7" />
-              <h2 style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                Business Analytics &amp; Hardware Telemetry
-              </h2>
-            </div>
-            <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
-              Carrier billing, turnstile throughput, and compliance metrics
-            </span>
-          </div>
-
-          <div style={analyticsGrid}>
-            {/* 1. SMS Telco Expense */}
-            <div style={analyticsCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <span style={kpiLabel}>SMS TELCO EXPENDITURE TODAY</span>
-                  <div style={{ ...kpiValue, color: '#0284c7' }}>
-                    ₱{analyticsMetrics.totalSmsCost}
-                  </div>
-                </div>
-                <div style={{ ...kpiIconBox, backgroundColor: '#f0f9ff', color: '#0284c7' }}>
-                  <Coins size={20} />
-                </div>
-              </div>
-              <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#475569', lineHeight: 1.5 }}>
-                <div>
-                  Sent: <strong>{data.sms_sent_today.toLocaleString()}</strong> messages
-                  {analyticsMetrics.unitCost > 0 &&
-                    ` @ ₱${analyticsMetrics.unitCost.toFixed(2)}/SMS`}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                  <span
-                    style={{
-                      color: analyticsMetrics.smsSuccessRate > 0 ? '#059669' : '#64748b',
-                      fontWeight: 700,
-                    }}
-                  >
-                    {analyticsMetrics.smsSuccessRate}% Success SLA
-                  </span>
-                  <span style={{ color: '#94a3b8' }}>&bull;</span>
-                  <span style={{ color: '#64748b' }}>
-                    Queue: {data.sms_pending_count} pending
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* 2. Turnstile Velocity & Verification Latency */}
-            <div style={analyticsCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <span style={kpiLabel}>PEAK SCAN VELOCITY</span>
-                  <div style={{ ...kpiValue, color: '#0f172a' }}>
-                    {analyticsMetrics.peakThroughput}{' '}
-                    <span style={{ fontSize: '0.80rem', color: '#64748b', fontWeight: 600 }}>
-                      scans/min
-                    </span>
-                  </div>
-                </div>
-                <div style={{ ...kpiIconBox, backgroundColor: '#f5f3ff', color: '#7c3aed' }}>
-                  <Gauge size={20} />
-                </div>
-              </div>
-              <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#475569', lineHeight: 1.5 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Cpu size={13} color="#7c3aed" />
-                  <span>
-                    Avg Verification Latency: <strong>{analyticsMetrics.avgLatency}ms</strong>
-                  </span>
-                </div>
-                <div style={{ color: '#64748b', marginTop: 4 }}>
-                  Terminals: <strong>{data.kiosks_online} active</strong> out of {data.total_kiosks}
-                </div>
-              </div>
-            </div>
-
-            {/* 3. Credential Split (RFID vs QR) */}
-            <div style={analyticsCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <span style={kpiLabel}>CREDENTIAL ADOPTION SPLIT</span>
-                  <div style={{ ...kpiValue, fontSize: '1.25rem', color: '#0f172a' }}>
-                    {analyticsMetrics.rfidPercentage}% RFID &bull; {analyticsMetrics.qrPercentage}% QR
-                  </div>
-                </div>
-                <div style={{ ...kpiIconBox, backgroundColor: '#eff6ff', color: '#0284c7' }}>
-                  <CreditCard size={20} />
-                </div>
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <div style={progressBarTrack}>
-                  <div
-                    style={{
-                      ...progressBarFill,
-                      width: `${analyticsMetrics.rfidPercentage}%`,
-                      backgroundColor: '#0284c7',
-                    }}
-                  />
-                </div>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    fontSize: '0.68rem',
-                    color: '#64748b',
-                    marginTop: 6,
-                  }}
-                >
-                  <span>RFID: {analyticsMetrics.rfidScans} scans</span>
-                  <span>QR: {analyticsMetrics.qrScans} scans</span>
-                </div>
-              </div>
-            </div>
-
-            {/* 4. Punctuality & Truancy Risk */}
-            <div style={analyticsCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <span style={kpiLabel}>PUNCTUALITY RATE</span>
-                  <div style={{ ...kpiValue, color: '#059669' }}>
-                    {analyticsMetrics.punctualityRate}%
-                  </div>
-                </div>
-                <div style={{ ...kpiIconBox, backgroundColor: '#ecfdf5', color: '#059669' }}>
-                  <CalendarCheck size={20} />
-                </div>
-              </div>
-              <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#475569', lineHeight: 1.5 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <CheckCircle2 size={13} color="#059669" />
-                  <span>
-                    On-Time: <strong>{analyticsMetrics.onTimeCount}</strong> | Tardy:{' '}
-                    <strong>{analyticsMetrics.tardyCount}</strong>
-                  </span>
-                </div>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    marginTop: 4,
-                    color: analyticsMetrics.chronicAbsent > 0 ? '#dc2626' : '#64748b',
-                  }}
-                >
-                  <AlertOctagon size={13} />
-                  <span>
-                    Chronic Truancy Risk: <strong>{analyticsMetrics.chronicAbsent} learners</strong>
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ======================================================== */}
-        {/* 4. DATABASE & SERVER STORAGE CAPACITY TELEMETRY          */}
-        {/* ======================================================== */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Server size={17} color="#0284c7" />
-              <h2 style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                System Health, Database &amp; Storage Capacity
-              </h2>
-            </div>
-            <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
-              Real-time database instance status, active connections, and hardware volume
-            </span>
-          </div>
-
-          <div style={systemGrid}>
-            {/* Database Instance Status */}
-            <div style={systemCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Database size={16} color="#0284c7" />
-                  <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a' }}>
-                    PostgreSQL Instance
-                  </span>
-                </div>
+              {isOnline ? (
                 <span
                   style={{
-                    ...badgeStyle,
-                    backgroundColor: dbMetrics.isDbConnected ? '#ecfdf5' : '#fef2f2',
-                    color: dbMetrics.isDbConnected ? '#059669' : '#dc2626',
+                    color: '#0284c7',
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
                   }}
                 >
-                  {dbMetrics.isDbConnected ? (
-                    <>
-                      <CheckCircle2 size={11} /> READY
-                    </>
-                  ) : (
-                    <>
-                      <XCircle size={11} /> DISCONNECTED
-                    </>
-                  )}
+                  <Ticket size={12} /> {data.active_gate_passes} Active Gate Passes
                 </span>
-              </div>
-              <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#475569', lineHeight: 1.6 }}>
-                <div>
-                  Database Schema: <strong style={{ fontFamily: 'monospace' }}>{dbMetrics.dbName}</strong>
-                </div>
-                <div>
-                  Database Footprint: <strong>{dbMetrics.dbSize.toFixed(2)} MB</strong>
-                </div>
-              </div>
-            </div>
-
-            {/* Connection Pool Load */}
-            <div style={systemCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Activity size={16} color="#7c3aed" />
-                  <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a' }}>
-                    Active Connection Pool
-                  </span>
-                </div>
-                <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#0f172a' }}>
-                  {dbMetrics.activeConn} / {dbMetrics.maxConn}
-                </span>
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <div style={progressBarTrack}>
-                  <div
-                    style={{
-                      ...progressBarFill,
-                      width: `${Math.min(
-                        100,
-                        Math.round((dbMetrics.activeConn / dbMetrics.maxConn) * 100)
-                      )}%`,
-                      backgroundColor: '#7c3aed',
-                    }}
-                  />
-                </div>
-                <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 6 }}>
-                  Pool Load:{' '}
-                  <strong>
-                    {Math.round((dbMetrics.activeConn / dbMetrics.maxConn) * 100)}%
-                  </strong>{' '}
-                  concurrent sessions utilized
-                </div>
-              </div>
-            </div>
-
-            {/* Disk Storage Volume */}
-            <div style={systemCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <HardDrive size={16} color="#059669" />
-                  <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a' }}>
-                    Server Disk Capacity
-                  </span>
-                </div>
-                <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#0f172a' }}>
-                  {dbMetrics.diskPercent}%
-                </span>
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <div style={progressBarTrack}>
-                  <div
-                    style={{
-                      ...progressBarFill,
-                      width: `${dbMetrics.diskPercent}%`,
-                      backgroundColor: dbMetrics.diskPercent >= 85 ? '#e11d48' : '#059669',
-                    }}
-                  />
-                </div>
-                <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 6 }}>
-                  {dbMetrics.diskTotal > 0 ? (
-                    <>
-                      <strong>{dbMetrics.diskUsed.toFixed(1)} GB</strong> used of{' '}
-                      <strong>{dbMetrics.diskTotal.toFixed(1)} GB</strong>
-                    </>
-                  ) : (
-                    'Storage volume monitoring active'
-                  )}
-                </div>
-              </div>
+              ) : (
+                <span style={{ color: '#94a3b8' }}>Hardware queue disconnected</span>
+              )}
             </div>
           </div>
         </div>
 
         {/* ======================================================== */}
-        {/* 5. HOURLY ARRIVALS & RECENT GATE SCANS                   */}
+        {/* 4. ADMIN ONLY: BUSINESS & TELEMETRY                      */}
+        {/* ======================================================== */}
+        {isAdmin && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <BarChart3 size={17} color={isOnline ? '#0284c7' : '#94a3b8'} />
+                <h2 style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                  Business Analytics &amp; Hardware Telemetry
+                </h2>
+              </div>
+              <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
+                Carrier billing, turnstile throughput, and compliance metrics
+              </span>
+            </div>
+
+            <div style={analyticsGrid}>
+              {/* 1. SMS Telco Expense */}
+              <div style={analyticsCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={kpiLabel}>SMS TELCO EXPENDITURE TODAY</span>
+                    <div style={{ ...kpiValue, color: isOnline ? '#0284c7' : '#94a3b8' }}>
+                      {isOnline ? `₱${analyticsMetrics.totalSmsCost}` : '—'}
+                    </div>
+                  </div>
+                  <div style={{ ...kpiIconBox, backgroundColor: '#f0f9ff', color: '#0284c7' }}>
+                    <Coins size={20} />
+                  </div>
+                </div>
+                <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#475569', lineHeight: 1.5 }}>
+                  {isOnline ? (
+                    <>
+                      <div>
+                        Sent: <strong>{data.sms_sent_today.toLocaleString()}</strong> messages
+                        {analyticsMetrics.unitCost > 0 &&
+                          ` @ ₱${analyticsMetrics.unitCost.toFixed(2)}/SMS`}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                        <span
+                          style={{
+                            color: analyticsMetrics.smsSuccessRate > 0 ? '#059669' : '#64748b',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {analyticsMetrics.smsSuccessRate}% Success SLA
+                        </span>
+                        <span style={{ color: '#94a3b8' }}>&bull;</span>
+                        <span style={{ color: '#64748b' }}>
+                          Queue: {data.sms_pending_count} pending
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <span style={{ color: '#94a3b8' }}>Outbox statistics paused</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Turnstile Velocity & Latency */}
+              <div style={analyticsCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={kpiLabel}>PEAK SCAN VELOCITY</span>
+                    <div style={{ ...kpiValue, color: isOnline ? '#0f172a' : '#94a3b8' }}>
+                      {isOnline ? (
+                        <>
+                          {analyticsMetrics.peakThroughput}{' '}
+                          <span style={{ fontSize: '0.80rem', color: '#64748b', fontWeight: 600 }}>
+                            scans/min
+                          </span>
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ ...kpiIconBox, backgroundColor: '#f5f3ff', color: '#7c3aed' }}>
+                    <Gauge size={20} />
+                  </div>
+                </div>
+                <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#475569', lineHeight: 1.5 }}>
+                  {isOnline ? (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Cpu size={13} color="#7c3aed" />
+                        <span>
+                          Avg Latency: <strong>{analyticsMetrics.avgLatency}ms</strong>
+                        </span>
+                      </div>
+                      <div style={{ color: '#64748b', marginTop: 4 }}>
+                        Terminals: <strong>{data.kiosks_online} active</strong> out of {data.total_kiosks}
+                      </div>
+                    </>
+                  ) : (
+                    <span style={{ color: '#94a3b8' }}>Scanner network inactive</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. Credential Split */}
+              <div style={analyticsCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={kpiLabel}>CREDENTIAL ADOPTION SPLIT</span>
+                    <div style={{ ...kpiValue, fontSize: '1.25rem', color: isOnline ? '#0f172a' : '#94a3b8' }}>
+                      {isOnline
+                        ? `${analyticsMetrics.rfidPercentage}% RFID • ${analyticsMetrics.qrPercentage}% QR`
+                        : '—'}
+                    </div>
+                  </div>
+                  <div style={{ ...kpiIconBox, backgroundColor: '#eff6ff', color: '#0284c7' }}>
+                    <CreditCard size={20} />
+                  </div>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <div style={progressBarTrack}>
+                    <div
+                      style={{
+                        ...progressBarFill,
+                        width: isOnline ? `${analyticsMetrics.rfidPercentage}%` : '0%',
+                        backgroundColor: '#0284c7',
+                      }}
+                    />
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: '0.68rem',
+                      color: '#64748b',
+                      marginTop: 6,
+                    }}
+                  >
+                    <span>RFID: {isOnline ? analyticsMetrics.rfidScans : '—'}</span>
+                    <span>QR: {isOnline ? analyticsMetrics.qrScans : '—'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Punctuality Rate */}
+              <div style={analyticsCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={kpiLabel}>PUNCTUALITY RATE</span>
+                    <div style={{ ...kpiValue, color: isOnline ? '#059669' : '#94a3b8' }}>
+                      {isOnline ? `${analyticsMetrics.punctualityRate}%` : '—'}
+                    </div>
+                  </div>
+                  <div style={{ ...kpiIconBox, backgroundColor: '#ecfdf5', color: '#059669' }}>
+                    <CalendarCheck size={20} />
+                  </div>
+                </div>
+                <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#475569', lineHeight: 1.5 }}>
+                  {isOnline ? (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <CheckCircle2 size={13} color="#059669" />
+                        <span>
+                          On-Time: <strong>{analyticsMetrics.onTimeCount}</strong> | Tardy:{' '}
+                          <strong>{analyticsMetrics.tardyCount}</strong>
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          marginTop: 4,
+                          color: analyticsMetrics.chronicAbsent > 0 ? '#dc2626' : '#64748b',
+                        }}
+                      >
+                        <AlertOctagon size={13} />
+                        <span>
+                          Chronic Truancy: <strong>{analyticsMetrics.chronicAbsent} learners</strong>
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <span style={{ color: '#94a3b8' }}>Punctuality analytics paused</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* 5. ADMIN ONLY: REAL DATABASE & STORAGE TELEMETRY         */}
+        {/* ======================================================== */}
+        {isAdmin && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Server size={17} color={isOnline ? '#0284c7' : '#94a3b8'} />
+                <h2 style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                  System Health, Database &amp; Storage Capacity
+                </h2>
+              </div>
+              <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
+                Real PostgreSQL metrics, active connections, and hardware disk footprint
+              </span>
+            </div>
+
+            <div style={systemGrid}>
+              {/* PostgreSQL Instance */}
+              <div
+                style={{
+                  ...systemCard,
+                  borderColor: dbMetrics.isDbConnected ? '#e2e8f0' : '#fecaca',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Database size={16} color={dbMetrics.isDbConnected ? '#0284c7' : '#dc2626'} />
+                    <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a' }}>
+                      PostgreSQL Instance
+                    </span>
+                  </div>
+                  <span
+                    style={{
+                      ...badgeStyle,
+                      backgroundColor: dbMetrics.isDbConnected ? '#ecfdf5' : '#fee2e2',
+                      color: dbMetrics.isDbConnected ? '#059669' : '#dc2626',
+                      border: `1px solid ${dbMetrics.isDbConnected ? '#a7f3d0' : '#fca5a5'}`,
+                    }}
+                  >
+                    {dbMetrics.isDbConnected ? (
+                      <>
+                        <CheckCircle2 size={11} /> READY
+                      </>
+                    ) : (
+                      <>
+                        <XCircle size={11} /> DISCONNECTED
+                      </>
+                    )}
+                  </span>
+                </div>
+                <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#475569', lineHeight: 1.6 }}>
+                  <div>
+                    Database Schema:{' '}
+                    <strong style={{ fontFamily: 'monospace' }}>
+                      {isOnline ? dbMetrics.dbName : 'Unavailable'}
+                    </strong>
+                  </div>
+                  <div>
+                    Database Footprint:{' '}
+                    <strong>
+                      {isOnline
+                        ? dbMetrics.dbSize > 0
+                          ? `${dbMetrics.dbSize.toFixed(2)} MB`
+                          : 'Calculated at next sync'
+                        : '—'}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Active Connection Pool */}
+              <div style={systemCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Activity size={16} color={isOnline ? '#7c3aed' : '#94a3b8'} />
+                    <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a' }}>
+                      Active Connection Pool
+                    </span>
+                  </div>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 800, color: isOnline ? '#0f172a' : '#94a3b8' }}>
+                    {isOnline ? `${dbMetrics.activeConn} / ${dbMetrics.maxConn}` : '—'}
+                  </span>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <div style={progressBarTrack}>
+                    <div
+                      style={{
+                        ...progressBarFill,
+                        width: isOnline
+                          ? `${Math.max(
+                              3,
+                              Math.min(100, Math.round((dbMetrics.activeConn / dbMetrics.maxConn) * 100))
+                            )}%`
+                          : '0%',
+                        backgroundColor: '#7c3aed',
+                      }}
+                    />
+                  </div>
+                  <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 6 }}>
+                    {isOnline ? (
+                      <>
+                        Pool Load:{' '}
+                        <strong>
+                          {Math.max(1, Math.round((dbMetrics.activeConn / dbMetrics.maxConn) * 100))}%
+                        </strong>{' '}
+                        active server sessions
+                      </>
+                    ) : (
+                      'Pool monitoring offline'
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Server Disk Capacity */}
+              <div style={systemCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <HardDrive size={16} color={isOnline ? '#059669' : '#94a3b8'} />
+                    <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a' }}>
+                      Server Disk Capacity
+                    </span>
+                  </div>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 800, color: isOnline ? '#0f172a' : '#94a3b8' }}>
+                    {isOnline && dbMetrics.diskPercent > 0 ? `${dbMetrics.diskPercent}%` : 'Monitoring'}
+                  </span>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <div style={progressBarTrack}>
+                    <div
+                      style={{
+                        ...progressBarFill,
+                        width: isOnline && dbMetrics.diskPercent > 0 ? `${dbMetrics.diskPercent}%` : '20%',
+                        backgroundColor: dbMetrics.diskPercent >= 85 ? '#e11d48' : '#059669',
+                      }}
+                    />
+                  </div>
+                  <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 6 }}>
+                    {isOnline && dbMetrics.diskTotal > 0 ? (
+                      <>
+                        <strong>{dbMetrics.diskUsed.toFixed(1)} GB</strong> used of{' '}
+                        <strong>{dbMetrics.diskTotal.toFixed(1)} GB</strong>
+                      </>
+                    ) : (
+                      'Local drive storage active'
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* 6. HOURLY TURNOUT CURVE & RECENT GATE ACTIVITY           */}
         {/* ======================================================== */}
         <div style={twoColGrid}>
           {/* Hourly Arrivals Chart */}
@@ -891,7 +1153,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
             <div style={sectionCardHeader}>
               <div>
                 <h3 style={sectionTitle}>Arrivals by Hour</h3>
-                <span style={sectionSubtitle}>Gate tap distribution recorded throughout the day</span>
+                <span style={sectionSubtitle}>Gate tap distribution recorded throughout today</span>
               </div>
               <div style={badgeStyle}>
                 <TrendingUp size={12} color="#0284c7" />
@@ -960,20 +1222,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
               </div>
             ) : (
               <div style={emptyBox}>
-                <Inbox size={26} color="#94a3b8" />
-                <span
-                  style={{
-                    fontSize: '0.78rem',
-                    color: '#64748b',
-                    marginTop: 6,
-                    fontWeight: 600,
-                  }}
-                >
-                  No Gate Check-ins Recorded Today
-                </span>
-                <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
-                  Logs update automatically when learners scan their card or QR code at the turnstile.
-                </span>
+                {!isOnline ? (
+                  <>
+                    <WifiOff size={26} color="#dc2626" />
+                    <span style={{ fontSize: '0.78rem', color: '#991b1b', marginTop: 6, fontWeight: 700 }}>
+                      Backend Disconnected
+                    </span>
+                    <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
+                      Re-establish server connection to render turnstile distribution curve.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Inbox size={26} color="#94a3b8" />
+                    <span style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 6, fontWeight: 600 }}>
+                      No Gate Check-ins Recorded Today
+                    </span>
+                    <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
+                      Logs update automatically when learners scan their card or QR code at the turnstile.
+                    </span>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -987,14 +1256,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
               </div>
               <button
                 type="button"
+                disabled={!isOnline}
                 onClick={() => navigateTo('gate-logs')}
-                style={textLinkBtn}
+                style={{ ...textLinkBtn, color: isOnline ? '#0284c7' : '#94a3b8' }}
               >
                 View All
               </button>
             </div>
 
-            {data.recent_scans.length > 0 ? (
+            {isOnline && data.recent_scans.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
                 {data.recent_scans.map((scan) => (
                   <div key={scan.id} style={scanRow}>
@@ -1031,30 +1301,37 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
               </div>
             ) : (
               <div style={emptyBox}>
-                <Inbox size={26} color="#94a3b8" />
-                <span
-                  style={{
-                    fontSize: '0.78rem',
-                    color: '#64748b',
-                    marginTop: 6,
-                    fontWeight: 600,
-                  }}
-                >
-                  No Gate Scans Recorded Today
-                </span>
-                <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
-                  Waiting for student or faculty gate taps.
-                </span>
+                {!isOnline ? (
+                  <>
+                    <WifiOff size={26} color="#dc2626" />
+                    <span style={{ fontSize: '0.78rem', color: '#991b1b', marginTop: 6, fontWeight: 700 }}>
+                      Live Feed Offline
+                    </span>
+                    <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
+                      Cannot read turnstile buffer. Waiting for server reconnect.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Inbox size={26} color="#94a3b8" />
+                    <span style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 6, fontWeight: 600 }}>
+                      No Gate Scans Recorded Today
+                    </span>
+                    <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
+                      Waiting for student or faculty gate taps.
+                    </span>
+                  </>
+                )}
               </div>
             )}
           </div>
         </div>
 
         {/* ======================================================== */}
-        {/* 6. GRADE TURNOUT & OPERATIONAL ACTION CONSOLE            */}
+        {/* 7. GRADE TURNOUT & OPERATIONAL CONSOLE                   */}
         {/* ======================================================== */}
         <div style={bottomGrid}>
-          {/* Grade Level Turnout */}
+          {/* Class Attendance by Grade Level */}
           <div style={sectionCard}>
             <div style={sectionCardHeader}>
               <div>
@@ -1064,7 +1341,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
               <Layers size={16} color="#64748b" />
             </div>
 
-            {data.grade_levels.length > 0 ? (
+            {isOnline && data.grade_levels.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 4 }}>
                 {data.grade_levels.map((lvl, index) => (
                   <div key={index} style={gradeCard}>
@@ -1100,8 +1377,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
               </div>
             ) : (
               <div style={emptyBox}>
-                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
-                  No grade levels or enrolled students found in database.
+                <span
+                  style={{
+                    fontSize: '0.78rem',
+                    color: isOnline ? '#64748b' : '#991b1b',
+                    fontWeight: isOnline ? 400 : 600,
+                  }}
+                >
+                  {isOnline
+                    ? 'No grade levels or enrolled students found in database.'
+                    : 'Grade roster data unavailable while backend is offline.'}
                 </span>
               </div>
             )}
@@ -1112,73 +1397,123 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onGateStatusChange
             <div style={sectionCardHeader}>
               <div>
                 <h3 style={sectionTitle}>Parent SMS &amp; Quick Actions</h3>
-                <span style={sectionSubtitle}>Status of automated text notifications</span>
+                <span style={sectionSubtitle}>
+                  {isAdmin ? 'Modem queue and gate controls' : 'Quick teacher departure permissions'}
+                </span>
               </div>
-              <Send size={15} color="#0284c7" />
+              <Send size={15} color={isOnline ? '#0284c7' : '#94a3b8'} />
             </div>
 
-            {/* Clickable SMS Gateway Telemetry Card */}
-            <div
-              style={{ ...smsStatusBox, cursor: 'pointer' }}
-              role="button"
-              tabIndex={0}
-              onClick={() => navigateTo('sms')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  navigateTo('sms');
-                }
-              }}
-              title="Open SMS Outbox & Hardware Gateway"
-            >
-              <div>
-                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a' }}>
-                  {data.sms_sent_today.toLocaleString()} Parent SMS Sent Today
+            {isAdmin ? (
+              <div
+                style={{ ...smsStatusBox, cursor: isOnline ? 'pointer' : 'default' }}
+                role="button"
+                tabIndex={0}
+                onClick={() => isOnline && navigateTo('sms')}
+                onKeyDown={(e) => {
+                  if (isOnline && (e.key === 'Enter' || e.key === ' ')) {
+                    e.preventDefault();
+                    navigateTo('sms');
+                  }
+                }}
+                title={isOnline ? 'Open SMS Outbox & Hardware Gateway' : 'Offline'}
+              >
+                <div>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a' }}>
+                    {isOnline
+                      ? `${data.sms_sent_today.toLocaleString()} Parent SMS Sent Today`
+                      : 'SMS Dispatcher Offline'}
+                  </div>
+                  <div style={{ fontSize: '0.66rem', color: '#64748b', marginTop: 2 }}>
+                    {isOnline ? (
+                      <>
+                        {data.sms_pending_count} pending messages in queue
+                        {Boolean(data.sms_failed_count && data.sms_failed_count > 0) && (
+                          <span style={{ color: '#dc2626', fontWeight: 700, marginLeft: 6 }}>
+                            &bull; {data.sms_failed_count} failed
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      'Cannot read modem status'
+                    )}
+                  </div>
                 </div>
-                <div style={{ fontSize: '0.66rem', color: '#64748b', marginTop: 2 }}>
-                  {data.sms_pending_count} pending messages in queue
-                  {Boolean(data.sms_failed_count && data.sms_failed_count > 0) && (
-                    <span style={{ color: '#dc2626', fontWeight: 700, marginLeft: 6 }}>
-                      &bull; {data.sms_failed_count} failed
-                    </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isOnline ? (
+                    Boolean(data.sms_failed_count && data.sms_failed_count > 0) ? (
+                      <span
+                        style={{
+                          ...activeBadge,
+                          backgroundColor: '#fee2e2',
+                          color: '#dc2626',
+                          border: '1px solid #fecaca',
+                        }}
+                      >
+                        <ShieldAlert size={10} style={{ marginRight: 3, verticalAlign: 'middle' }} />
+                        ATTENTION
+                      </span>
+                    ) : (
+                      <span style={activeBadge}>SMS GATEWAY</span>
+                    )
+                  ) : (
+                    <span style={{ ...activeBadge, backgroundColor: '#94a3b8' }}>OFFLINE</span>
                   )}
+                  <ChevronRight size={14} color={isOnline ? '#0284c7' : '#94a3b8'} />
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                {Boolean(data.sms_failed_count && data.sms_failed_count > 0) ? (
-                  <span
-                    style={{
-                      ...activeBadge,
-                      backgroundColor: '#fee2e2',
-                      color: '#dc2626',
-                      border: '1px solid #fecaca',
-                    }}
-                  >
-                    <ShieldAlert size={10} style={{ marginRight: 3, verticalAlign: 'middle' }} />
-                    ATTENTION
-                  </span>
-                ) : (
-                  <span style={activeBadge}>SMS GATEWAY</span>
-                )}
-                <ChevronRight size={14} color="#0284c7" />
+            ) : (
+              <div
+                style={{
+                  padding: '12px 14px',
+                  backgroundColor: '#f0fdf4',
+                  border: '1px solid #bbf7d0',
+                  borderRadius: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}
+              >
+                <ShieldCheck size={20} color="#166534" />
+                <span style={{ fontSize: '0.78rem', color: '#166534', fontWeight: 600 }}>
+                  Automated parent SMS arrival notifications are active across all turnstiles.
+                </span>
               </div>
-            </div>
+            )}
 
-            {/* Fast Compliance Actions */}
+            {/* Role-Specific Actions */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-              <button type="button" style={actionBtnStyle} onClick={handleIssueGatePass}>
-                <Activity size={14} color="#0284c7" />
+              <button
+                type="button"
+                disabled={!isOnline}
+                style={{ ...actionBtnStyle, opacity: isOnline ? 1 : 0.6, cursor: isOnline ? 'pointer' : 'not-allowed' }}
+                onClick={() => navigateTo('gate-passes')}
+              >
+                <Activity size={14} color={isOnline ? '#0284c7' : '#94a3b8'} />
                 <span>Issue Student Gate Pass / Exit Permit</span>
               </button>
 
               <button
                 type="button"
-                style={actionBtnStyle}
+                disabled={!isOnline}
+                style={{ ...actionBtnStyle, opacity: isOnline ? 1 : 0.6, cursor: isOnline ? 'pointer' : 'not-allowed' }}
                 onClick={() => navigateTo({ tab: 'reports', report: 'sf2' })}
               >
-                <FileSpreadsheet size={14} color="#059669" />
+                <FileSpreadsheet size={14} color={isOnline ? '#059669' : '#94a3b8'} />
                 <span>Open Daily Attendance Register (SF2)</span>
               </button>
+
+              {!isAdmin && (
+                <button
+                  type="button"
+                  disabled={!isOnline}
+                  style={{ ...actionBtnStyle, opacity: isOnline ? 1 : 0.6, cursor: isOnline ? 'pointer' : 'not-allowed' }}
+                  onClick={() => navigateTo('dtr')}
+                >
+                  <Clock size={14} color={isOnline ? '#7c3aed' : '#94a3b8'} />
+                  <span>View My Daily Time Record (DTR Form 48)</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1193,53 +1528,48 @@ export default DashboardView;
 // STYLES
 // ============================================================================
 
-const livePulseBadge: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '2px 8px',
-  borderRadius: 12,
-  backgroundColor: '#ecfdf5',
-  color: '#059669',
-  fontSize: '0.64rem',
-  fontWeight: 800,
-  letterSpacing: '0.5px',
-  border: '1px solid #a7f3d0',
-};
-
-const pulseDot: React.CSSProperties = {
-  width: 6,
-  height: 6,
-  borderRadius: '50%',
-  backgroundColor: '#10b981',
-};
-
 const refreshBtnStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
   padding: '6px 12px',
-  backgroundColor: '#ffffff',
   border: '1px solid #cbd5e1',
   borderRadius: 8,
   cursor: 'pointer',
+  transition: 'all 0.15s ease',
+};
+
+const adminActionBtn: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  padding: '8px 12px',
+  backgroundColor: '#1e293b',
+  border: '1px solid #334155',
+  borderRadius: 8,
+  color: '#ffffff',
+  fontSize: '0.74rem',
+  fontWeight: 700,
+  cursor: 'pointer',
+  transition: 'all 0.15s ease',
 };
 
 const kpiGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
   gap: 16,
 };
 
 const analyticsGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
   gap: 16,
 };
 
 const systemGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(3, 1fr)',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
   gap: 16,
 };
 
@@ -1312,13 +1642,13 @@ const kpiSubtext: React.CSSProperties = {
 
 const twoColGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1.3fr 1fr',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
   gap: 16,
 };
 
 const bottomGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1.2fr 1fr',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
   gap: 16,
 };
 

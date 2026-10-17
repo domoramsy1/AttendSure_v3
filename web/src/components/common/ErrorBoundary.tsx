@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Fault Isolation Error Boundary
+ * AttendSure - Fault Isolation Error Boundary
  * File: frontend/src/components/common/ErrorBoundary.tsx
  *
  * Prevents sub-feature crashes (such as heavy DepEd report calculations,

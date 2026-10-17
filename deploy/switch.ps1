@@ -1,4 +1,4 @@
-# AttendSure V3 - Windows 10 Zero-Downtime Deployment Switcher
+# AttendSure - Windows 10 Zero-Downtime Deployment Switcher
 # File: D:\AttendSure_V3\deploy\switch.ps1
 
 $ErrorActionPreference = "Stop"

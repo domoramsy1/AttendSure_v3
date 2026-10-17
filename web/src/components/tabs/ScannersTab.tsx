@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - IoT Kiosks & Hardware Scanners Management
+ * AttendSure - IoT Kiosks & Hardware Scanners Management
  * File: frontend/src/components/tabs/ScannersTab.tsx
  *
  * Key Highlights:

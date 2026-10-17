@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - School Profile & Administration Settings
+ * AttendSure - School Profile & Administration Settings
  * File: frontend/src/components/tabs/SettingsTab.tsx
  *
  * Branding Structure:

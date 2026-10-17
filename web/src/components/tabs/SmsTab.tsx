@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - SMS Gateway & Outbox Dispatcher
+ * AttendSure - SMS Gateway & Outbox Dispatcher
  * File: frontend/src/components/tabs/SmsTab.tsx
  *
  * Core Supported Channels:

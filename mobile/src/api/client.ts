@@ -2,11 +2,14 @@
 
 import axios, { InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getServerBaseUrl } from '../services/configService';
 
 export const AUTH_TOKEN_KEY = 'attendsure_auth_token';
 
+// Primary Cloudflare Host (Base domain without trailing slash or /api)
+const CLOUDFLARE_HOST = 'https://conventional-prayer-specs-boxed.trycloudflare.com';
+
 export const apiClient = axios.create({
+  baseURL: CLOUDFLARE_HOST,
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
@@ -14,38 +17,46 @@ export const apiClient = axios.create({
   },
 });
 
-/**
- * Request Interceptor:
- * 1. Dynamically loads the current server base URL from storage.
- * 2. Normalizes `/api` prefixes so paths work whether baseURL ends in `/api` or not.
- * 3. Attaches the Django DRF Token from storage.
- */
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
-    const rawBaseUrl = await getServerBaseUrl();
-    // Strip trailing slashes and any trailing `/api` so we have a clean origin host
-    const cleanHost = rawBaseUrl.trim().replace(/\/+$/, '').replace(/\/api$/i, '');
+    // 1. Keep base URL clean
+    config.baseURL = CLOUDFLARE_HOST;
 
+    // 2. Prevent duplicate /api/api/ by sanitizing the path
     let requestPath = config.url || '';
     if (!requestPath.startsWith('http://') && !requestPath.startsWith('https://')) {
-      if (!requestPath.startsWith('/')) {
-        requestPath = `/${requestPath}`;
-      }
-      if (!requestPath.startsWith('/api/')) {
-        requestPath = `/api${requestPath}`;
-      }
-      config.baseURL = cleanHost;
-      config.url = requestPath;
+      // Remove any leading slashes and any duplicate /api prefixes
+      const cleaned = requestPath.replace(/^\/+/, '').replace(/^(api\/)+/i, '');
+      config.url = `/api/${cleaned}`;
     }
 
-    const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+    // 3. Attach authentication token if present
+    const token =
+      (await AsyncStorage.getItem(AUTH_TOKEN_KEY)) ||
+      (await AsyncStorage.getItem('attendsure_token'));
+
     if (token && config.headers) {
-      config.headers.Authorization = `Token ${token}`;
+      config.headers.Authorization = `Token ${token.trim()}`;
     }
 
     return config;
   },
   (error) => Promise.reject(error)
+);
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      await AsyncStorage.multiRemove([
+        AUTH_TOKEN_KEY,
+        'attendsure_token',
+        'attendsure_username',
+        'attendsure_role',
+      ]);
+    }
+    return Promise.reject(error);
+  }
 );
 
 export default apiClient;

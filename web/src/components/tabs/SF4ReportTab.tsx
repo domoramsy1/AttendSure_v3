@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - DepEd School Form 4 (SF 4) Monthly Learner's Movement and Attendance
+ * AttendSure - DepEd School Form 4 (SF 4) Monthly Learner's Movement and Attendance
  * File: frontend/src/components/tabs/SF4ReportTab.tsx
  *
  * Fixes Applied:

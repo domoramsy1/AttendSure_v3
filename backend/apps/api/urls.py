@@ -1,5 +1,5 @@
 """
-AttendSure V3 - API Routing Architecture
+AttendSure - API Routing Architecture
 File: backend/apps/api/urls.py
 """
 
@@ -30,6 +30,7 @@ from .views import (
     GradeLevelViewSet,
     LoginAPIView,
     MarkSmsStatusAPIView,
+    MyAssignedClassesAPIView,
     PendingSmsDispatchAPIView,
     ReportAuditLogAPIView,
     ResetFacultyDeviceBindingAPIView,
@@ -46,6 +47,11 @@ from .views import (
     UnifiedReportExportAPIView,
     UnifiedReportPrintAPIView,
     UserManagementViewSet,
+    db_check,
+    flush_cache,
+    ping_scanners,
+    test_sms_gateway,
+    LiveFieldValidationAPIView,
 )
 
 # 1. Register Core Entity ViewSets
@@ -65,10 +71,26 @@ router.register(r'sms-outbox', SmsOutboxViewSet, basename='sms-outbox')
 
 # 2. Main API Route Configuration
 urlpatterns = [
+    # Explicit SMS Outbox Custom Actions
     path(
         'sms-outbox/delete-delivered/',
         SmsOutboxViewSet.as_view({'delete': 'delete_delivered', 'post': 'delete_delivered'}),
         name='api-sms-delete-delivered',
+    ),
+    path(
+        'sms-outbox/clear-pending/',
+        SmsOutboxViewSet.as_view({'delete': 'clear_pending', 'post': 'clear_pending'}),
+        name='api-sms-clear-pending',
+    ),
+    path(
+        'sms-outbox/retry-all-failed/',
+        SmsOutboxViewSet.as_view({'post': 'retry_all_failed'}),
+        name='api-sms-retry-all-failed',
+    ),
+    path(
+        'sms-outbox/metrics/',
+        SmsOutboxViewSet.as_view({'get': 'get_metrics'}),
+        name='api-sms-metrics',
     ),
     path(
         'sms-outbox/broadcast/',
@@ -77,54 +99,77 @@ urlpatterns = [
     ),
     path('sms/bulk-status/', BulkSmsStatusAPIView.as_view(), name='api-sms-bulk-status'),
 
+    # Core ViewSet Router Endpoints
     path('', include(router.urls)),
 
+    # Authentication & User Profile
     path('auth/login/', DatabaseLoginView.as_view(), name='api-login'),
+    path('login/', LoginAPIView.as_view(), name='api-login-alias'),
     path('me/', CurrentUserView.as_view(), name='api-me'),
     path('auth/me/', CurrentUserView.as_view(), name='api-auth-me'),
+    path('profile/me/', CurrentUserProfileView.as_view(), name='api-profile-me'),
 
+    # Hardware GSM Modem Dispatch
     path('sms/pending/', PendingSmsDispatchAPIView.as_view(), name='api-sms-pending'),
     path('sms/<int:pk>/status/', MarkSmsStatusAPIView.as_view(), name='api-sms-status'),
 
+    # Hardware Binding
     path('facultys/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-reset-device-binding'),
     path('faculty/<int:faculty_id>/reset-device/', ResetFacultyDeviceBindingAPIView.as_view(), name='api-faculty-reset-device-binding'),
 
+    # Dashboard & Sections
     path('dashboard/overview/', DashboardOverviewAPIView.as_view(), name='api-dashboard-overview'),
     path('sections/', SectionListAPIView.as_view(), name='api-sections'),
     path('sections/<int:pk>/', SectionDetailAPIView.as_view(), name='api-section-detail'),
 
+    # Institutional Settings
     path('settings/school/', SchoolSettingsAPIView.as_view(), name='api-settings-school'),
     path('school/settings/', SchoolSettingsAPIView.as_view(), name='api-school-settings-alias'),
 
+    # Gate Turnstile & RFID/QR Ingestion
     path('gate/scan/', GateScanAPIView.as_view(), name='api-gate-scan'),
     path('gate/logs/', GateLogsAPIView.as_view(), name='api-gate-logs'),
     path('faculty-gate-logs/', GateLogsAPIView.as_view(), name='api-faculty-gate-logs-alias'),
 
+    # Classroom Attendance & Assigned Classes
     path('classroom/roster/', FacultyClassroomRosterAPIView.as_view(), name='api-classroom-roster'),
     path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='api-classroom-batch-scan'),
+    path('classroom/my-classes/', MyAssignedClassesAPIView.as_view(), name='api-my-classes'),
 
+    # IoT Kiosk & Telemetry
     path('scanners/heartbeat/', KioskHeartbeatView.as_view(), name='api-kiosk-heartbeat'),
     path('telemetry/heartbeat/', TelemetryHeartbeatAPIView.as_view(), name='api-telemetry-heartbeat'),
     path('telemetry/async-heartbeat/', AsyncTelemetryHeartbeatView.as_view(), name='api-telemetry-async-heartbeat'),
 
+    # Form 48 DTR
     path('dtr/', DTRListAPIView.as_view(), name='api-dtr'),
     path('dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='api-dtr-detail'),
     path('faculty/dtr/', DTRListAPIView.as_view(), name='api-faculty-dtr-alias'),
     path('reports/dtr/', DTRListAPIView.as_view(), name='api-reports-dtr-root'),
     path('reports/dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='api-reports-dtr'),
 
+    # Campus Geofence
     path('geofence/', GeofenceAPIView.as_view(), name='api-geofence'),
     path('campus/geofence/', GeofenceAPIView.as_view(), name='api-campus-geofence-alias'),
 
+    # DepEd Reports
     path('reports/sf1/<int:section_id>/', DepEdSF1DataAPIView.as_view(), name='api-sf1-report'),
     path('reports/sf2/<int:section_id>/', DepEdSF2DataAPIView.as_view(), name='api-sf2-report'),
     path('reports/sf4/', DepEdSF4DataAPIView.as_view(), name='api-sf4-report'),
     path('reports/export/', UnifiedReportExportAPIView.as_view(), name='api-unified-report-export'),
     path('reports/print/', UnifiedReportPrintAPIView.as_view(), name='api-unified-report-print'),
-
     path('reports/audit-log/', ReportAuditLogAPIView.as_view(), name='api-report-audit-log'),
     path('reports/audit-logs/', ReportAuditLogAPIView.as_view(), name='api-report-audit-logs'),
 
+    # Calendar Exceptions
     path('calendar/exceptions/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions-list'),
-    path('calendar/exceptions/<str:pk>/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions-detail'),
+    path('calendar/exceptions/<slug:pk>/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions-detail'),
+
+    # Maintenance Endpoints
+    path('telemetry/ping-scanners/', ping_scanners, name='ping-scanners'),
+    path('sms/test-gateway/', test_sms_gateway, name='test-sms-gateway'),
+    path('core/maintenance/db-check/', db_check, name='db-check'),
+    path('core/maintenance/flush-cache/', flush_cache, name='flush-cache'),
+
+    path('validate-field/', LiveFieldValidationAPIView.as_view(), name='api-validate-field'),
 ]

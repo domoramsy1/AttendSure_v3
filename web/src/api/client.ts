@@ -1,28 +1,47 @@
-// D:\AttendSure_V3\web\src\api\client.ts
+/**
+ * AttendSure Web API Client
+ * File: web/src/api/client.ts
+ */
 
-import axios from 'axios';
+import axios, { type InternalAxiosRequestConfig } from 'axios';
 
-const defaultBaseUrl = typeof window !== 'undefined'
-  ? `${window.location.protocol}//${window.location.hostname}:8000/api`
-  : 'http://127.0.0.1:8000/api';
+const CLOUDFLARE_HOST = 'https://sing-happened-plastics-wish.trycloudflare.com';
+
+const resolveBaseHost = (): string => {
+  if (typeof window !== 'undefined') {
+    const { hostname, protocol } = window.location;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return `${protocol}//${hostname}:8000`;
+    }
+  }
+  return CLOUDFLARE_HOST;
+};
 
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || defaultBaseUrl,
-  timeout: 12000,
+  baseURL: resolveBaseHost(),
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Attach Authorization Token using AttendSure's native storage key
 apiClient.interceptors.request.use(
-  (config) => {
+  (config: InternalAxiosRequestConfig) => {
+    config.baseURL = resolveBaseHost();
+
+    // Prevent duplicate /api/api/
+    let requestPath = config.url || '';
+    if (!requestPath.startsWith('http://') && !requestPath.startsWith('https://')) {
+      const cleaned = requestPath.replace(/^\/+/, '').replace(/^(api\/)+/i, '');
+      config.url = `/api/${cleaned}`;
+    }
+
     const token =
       localStorage.getItem('attendsure_token') ||
       localStorage.getItem('auth_token') ||
       localStorage.getItem('token');
 
-    if (token && token.trim() !== '' && !config.headers.Authorization) {
+    if (token && token.trim() !== '' && config.headers && !config.headers.Authorization) {
       config.headers.Authorization = `Token ${token.trim()}`;
     }
     return config;
@@ -30,7 +49,6 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Intercept 401: Notify App.tsx to drop session and lock to LoginView
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -45,7 +63,6 @@ apiClient.interceptors.response.use(
       localStorage.removeItem('attendsure_role');
       localStorage.removeItem('attendsure_user_photo');
 
-      // Triggers handleAuthExpired in App.tsx
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('attendsure:auth-expired'));
       }

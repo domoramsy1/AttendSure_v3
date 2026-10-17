@@ -1,5 +1,5 @@
 """
-AttendSure V3 - IoT Hardware Scanner Heartbeat
+AttendSure - IoT Hardware Scanner Heartbeat
 File: backend/apps/scanners/views.py
 """
 

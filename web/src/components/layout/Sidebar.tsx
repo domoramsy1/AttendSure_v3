@@ -1,38 +1,35 @@
 /**
- * AttendSure V3 - Institutional Navigation Sidebar
+ * AttendSure V3 - Institutional Navigation Sidebar (Role-Secured)
  * File: frontend/src/components/layout/Sidebar.tsx
  *
- * Capabilities:
- * - 5-Tier Role-Based Access Control (RBAC) navigation filtering.
- * - Dynamic school logo and ID integration with SchoolContext fallback.
- * - Complete route mapping including Gate Passes, SMS Gateway, and DepEd Reports.
- * - Resilient user avatar with localStorage hydration fallback and image error handling.
- * - Accessible collapsed/expanded navigation states.
+ * Security: Strictly filters menu items based on the user's RBAC role.
+ * Faculty-only accounts cannot view admin panels, user settings, or system hardware config.
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React from 'react';
+import type { UserSession } from '../../types/section';
 import {
   LayoutDashboard,
-  Radio,
-  GraduationCap,
+  Scan,
   Users,
+  GraduationCap,
   CalendarDays,
-  Cpu,
+  FileSpreadsheet,
+  Settings,
+  Send,
+  Ticket,
   Clock,
   MapPin,
-  FileSpreadsheet,
+  Cpu,
   UserCheck,
-  Settings,
   ChevronLeft,
   ChevronRight,
-  MessageSquare,
-  Ticket,
+  BookOpen,
 } from 'lucide-react';
-import { useSchool } from '../../context/SchoolContext';
-import type { UserSession } from '../../types/section';
 
 export type NavItemKey =
   | 'dashboard'
+  | 'my-classes'
   | 'gate-logs'
   | 'students'
   | 'facultys'
@@ -46,21 +43,7 @@ export type NavItemKey =
   | 'reports'
   | 'settings';
 
-export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'GUARD';
-
-interface NavItem {
-  id: NavItemKey;
-  label: string;
-  icon: React.ElementType;
-  allowedRoles: UserRole[];
-}
-
-interface NavGroup {
-  groupTitle: string;
-  items: NavItem[];
-}
-
-export interface SidebarProps {
+interface SidebarProps {
   activeTab: NavItemKey;
   onSelectTab: (tab: NavItemKey) => void;
   session: UserSession | null;
@@ -70,44 +53,19 @@ export interface SidebarProps {
   schoolName?: string;
   schoolId?: string;
   schoolLogo?: string | null;
+  canTeach?: boolean;
 }
 
-const formatImageSource = (rawSrc?: string | null): string | null => {
-  if (!rawSrc || typeof rawSrc !== 'string') return null;
-  const trimmed = rawSrc.trim();
-  if (!trimmed) return null;
+interface NavItem {
+  key: NavItemKey;
+  label: string;
+  icon: React.ReactNode;
+}
 
-  if (
-    trimmed.startsWith('data:image/') ||
-    trimmed.startsWith('http://') ||
-    trimmed.startsWith('https://') ||
-    trimmed.startsWith('blob:')
-  ) {
-    return trimmed;
-  }
-
-  // Handle server-relative media paths dynamically without hardcoded localhost
-  if (trimmed.startsWith('/media/') || trimmed.startsWith('media/')) {
-    const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-    const protocol = window.location.protocol;
-    const hostname = window.location.hostname;
-    const backendPort = window.location.port === '8000' ? '' : ':8000';
-    return `${protocol}//${hostname}${backendPort}${cleanPath}`;
-  }
-
-  // Raw base64 string headers fallback
-  if (trimmed.startsWith('/9j/')) {
-    return `data:image/jpeg;base64,${trimmed}`;
-  }
-  if (trimmed.startsWith('iVBORw0KGgo')) {
-    return `data:image/png;base64,${trimmed}`;
-  }
-  if (trimmed.length > 50 && !trimmed.includes(' ') && !trimmed.startsWith('/')) {
-    return `data:image/png;base64,${trimmed}`;
-  }
-
-  return trimmed;
-};
+interface NavGroup {
+  groupTitle: string;
+  items: NavItem[];
+}
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
@@ -116,157 +74,73 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userPhoto,
   isCollapsed,
   onToggleCollapse,
-  schoolName,
-  schoolId,
+  schoolName = 'Lapasan National High School',
+  schoolId = '340964',
   schoolLogo,
+  canTeach = false,
 }) => {
-  const { school } = useSchool();
-  const [imgFailed, setImgFailed] = useState(false);
-  const [userImgFailed, setUserImgFailed] = useState(false);
+  const role = (session?.role || 'FACULTY').toUpperCase();
+  const isAdmin = role === 'ADMIN';
+  const isPrincipal = role === 'PRINCIPAL';
+  const isDeptHead = role === 'DEPT_HEAD';
+  const isLeadership = isAdmin || isPrincipal || isDeptHead;
+  const isPureFaculty = role === 'FACULTY';
 
-  // Fallback to localStorage session data during initial hydration
-  const rawRole = (
-    session?.role ||
-    localStorage.getItem('attendsure_role') ||
-    'FACULTY'
-  ).toUpperCase();
+  // Show "My Assigned Classes" if user has active teaching duties or is FACULTY
+  const showMyClasses = canTeach || isPureFaculty;
 
-  const userRole: UserRole = (
-    ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'].includes(rawRole)
-      ? rawRole
-      : 'FACULTY'
-  ) as UserRole;
-
-  const userName =
-    session?.faculty_name ||
-    session?.username ||
-    localStorage.getItem('attendsure_faculty_name') ||
-    localStorage.getItem('attendsure_username') ||
-    'User';
-
-  const userInitial = userName ? userName.charAt(0).toUpperCase() : '?';
-
-  // Prioritize live database state from SchoolContext over initial props
-  const effectiveSchoolLogo = school.school_logo || schoolLogo || null;
-  const effectiveSchoolName = school.school_name || schoolName || 'Lapasan National High School';
-  const effectiveSchoolId = school.school_id || schoolId || school.school_id || '340964';
-
-  const resolvedLogo = formatImageSource(effectiveSchoolLogo);
-  const resolvedUserPhoto = formatImageSource(userPhoto);
-
-  useEffect(() => {
-    setImgFailed(false);
-  }, [resolvedLogo, effectiveSchoolLogo]);
-
-  useEffect(() => {
-    setUserImgFailed(false);
-  }, [resolvedUserPhoto, userPhoto]);
-
-  const dynamicMonogram = useMemo(() => {
-    if (!effectiveSchoolName || !effectiveSchoolName.trim()) return 'SCH';
-    const words = effectiveSchoolName.trim().split(/\s+/).filter(Boolean);
-    const initials = words.map((w) => w[0]).join('').slice(0, 4).toUpperCase();
-    return initials || 'SCH';
-  }, [effectiveSchoolName]);
-
-  // 5-Tier RBAC Navigation Access
-  const navGroups: NavGroup[] = [
+  // STRICT RBAC MENU FILTERING: Pure faculty users only see classroom tools.
+  const menuGroups: NavGroup[] = [
     {
       groupTitle: 'OVERVIEW',
       items: [
-        {
-          id: 'dashboard',
-          label: 'Dashboard',
-          icon: LayoutDashboard,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'],
-        },
-        {
-          id: 'gate-logs',
-          label: 'Gate Logs',
-          icon: Radio,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'GUARD'],
-        },
+        { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+        { key: 'gate-logs', label: 'Gate Logs', icon: <Scan size={18} /> },
       ],
     },
     {
-      groupTitle: 'PEOPLE & CLASSES',
+      groupTitle: 'ACADEMICS & ROSTER',
       items: [
-        {
-          id: 'students',
-          label: 'Students',
-          icon: GraduationCap,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
-        },
-        {
-          id: 'facultys',
-          label: 'Faculty',
-          icon: Users,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD'],
-        },
-        {
-          id: 'schedules',
-          label: 'Schedules & Sections',
-          icon: CalendarDays,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
-        },
+        ...(showMyClasses
+          ? [{ key: 'my-classes' as NavItemKey, label: 'My Assigned Classes', icon: <BookOpen size={18} /> }]
+          : []),
+        { key: 'students', label: 'Student Directory', icon: <GraduationCap size={18} /> },
+        ...(isLeadership
+          ? [{ key: 'facultys' as NavItemKey, label: 'Faculty Directory', icon: <Users size={18} /> }]
+          : []),
+        { key: 'schedules', label: isLeadership ? 'Schedules & Sections' : 'Class Schedules', icon: <CalendarDays size={18} /> },
       ],
     },
     {
       groupTitle: 'GATE & SECURITY',
       items: [
-        {
-          id: 'sms',
-          label: 'SMS Gateway',
-          icon: MessageSquare,
-          allowedRoles: ['ADMIN', 'PRINCIPAL'],
-        },
-        {
-          id: 'gate-passes',
-          label: 'Gate Passes',
-          icon: Ticket,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY', 'GUARD'],
-        },
-        {
-          id: 'scanners',
-          label: 'IoT Kiosks & Scanners',
-          icon: Cpu,
-          allowedRoles: ['ADMIN'],
-        },
-        {
-          id: 'dtr',
-          label: 'DTR',
-          icon: Clock,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
-        },
-        {
-          id: 'geofence',
-          label: 'Campus Perimeter',
-          icon: MapPin,
-          allowedRoles: ['ADMIN', 'PRINCIPAL'],
-        },
+        ...(isAdmin || isPrincipal
+          ? [{ key: 'sms' as NavItemKey, label: 'SMS Gateway', icon: <Send size={18} /> }]
+          : []),
+        { key: 'gate-passes', label: 'Gate Passes', icon: <Ticket size={18} /> },
+        ...(isAdmin || isPrincipal
+          ? [{ key: 'scanners' as NavItemKey, label: 'IoT Kiosks & Scanners', icon: <Cpu size={18} /> }]
+          : []),
+        // Faculty members can view their own DTR Form 48, while leadership sees all
+        { key: 'dtr', label: 'DTR Form 48', icon: <Clock size={18} /> },
+        ...(isAdmin || isPrincipal
+          ? [{ key: 'geofence' as NavItemKey, label: 'Campus Perimeter', icon: <MapPin size={18} /> }]
+          : []),
       ],
     },
     {
-      groupTitle: 'ADMINISTRATION',
+      groupTitle: 'GOVERNANCE & REPORTS',
       items: [
-        {
-          id: 'reports',
-          label: 'Reports',
-          icon: FileSpreadsheet,
-          allowedRoles: ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY'],
-        },
-        {
-          id: 'users',
-          label: 'Users',
-          icon: UserCheck,
-          allowedRoles: ['ADMIN'],
-        },
-        {
-          id: 'settings',
-          label: 'Settings',
-          icon: Settings,
-          allowedRoles: ['ADMIN'],
-        },
+        // Regular faculty cannot access administrative master reports (SF1/SF2/SF4)
+        ...(!isPureFaculty
+          ? [{ key: 'reports' as NavItemKey, label: 'DepEd Reports (SF1/2/4)', icon: <FileSpreadsheet size={18} /> }]
+          : []),
+        ...(isAdmin
+          ? [{ key: 'users' as NavItemKey, label: 'User Accounts', icon: <UserCheck size={18} /> }]
+          : []),
+        ...(isAdmin || isPrincipal
+          ? [{ key: 'settings' as NavItemKey, label: 'School Settings', icon: <Settings size={18} /> }]
+          : []),
       ],
     },
   ];
@@ -274,343 +148,297 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside
       style={{
-        width: isCollapsed ? 74 : 260,
+        width: isCollapsed ? 72 : 250,
+        minWidth: isCollapsed ? 72 : 250,
         height: '100vh',
-        backgroundColor: '#0c1322',
-        color: '#f8fafc',
+        backgroundColor: '#0b192c',
+        color: '#ffffff',
         display: 'flex',
         flexDirection: 'column',
-        transition: 'width 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-        borderRight: '1px solid #1a2538',
-        position: 'relative',
-        userSelect: 'none',
-        flexShrink: 0,
+        justifyContent: 'space-between',
+        transition: 'width 0.2s ease-in-out',
+        borderRight: '1px solid #1e293b',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
         zIndex: 50,
       }}
     >
-      {/* 1. Header: School Emblem & System Title */}
+      {/* 1. Header & School Info */}
       <div
         style={{
+          padding: isCollapsed ? '16px 8px' : '16px 14px',
+          borderBottom: '1px solid #1e293b',
           display: 'flex',
           alignItems: 'center',
           justifyContent: isCollapsed ? 'center' : 'space-between',
-          padding: isCollapsed ? '16px 8px' : '16px 14px',
-          borderBottom: '1px solid #1a2538',
-          background: 'linear-gradient(180deg, #101a2e 0%, #0c1322 100%)',
-          position: 'relative',
-          minHeight: 72,
+          minHeight: 68,
           boxSizing: 'border-box',
+          position: 'relative',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, overflow: 'hidden' }}>
-          <div
-            style={{
-              width: 40,
-              height: 40,
-              borderRadius: '50%',
-              backgroundColor: '#ffffff',
-              border: '2px solid rgba(56, 189, 248, 0.4)',
-              boxShadow: '0 0 10px rgba(2, 132, 199, 0.2)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden',
-              flexShrink: 0,
-              padding: 2,
-            }}
-          >
-            {resolvedLogo && !imgFailed ? (
-              <img
-                src={resolvedLogo}
-                alt={effectiveSchoolName}
-                onError={() => setImgFailed(true)}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'contain',
-                  borderRadius: '50%',
-                }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  borderRadius: '50%',
-                  background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#ffffff',
-                  fontWeight: 900,
-                  fontSize: '0.68rem',
-                }}
-              >
-                {dynamicMonogram}
-              </div>
-            )}
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          {schoolLogo ? (
+            <img
+              src={schoolLogo}
+              alt="School Seal"
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: '50%',
+                objectFit: 'cover',
+                border: '1.5px solid #0284c7',
+                flexShrink: 0,
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: '50%',
+                backgroundColor: '#0284c7',
+                color: '#ffffff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 800,
+                fontSize: '0.85rem',
+                flexShrink: 0,
+              }}
+            >
+              LNHS
+            </div>
+          )}
 
           {!isCollapsed && (
-            <div style={{ minWidth: 0 }}>
-              <div
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span
+                title={schoolName}
                 style={{
                   fontSize: '0.88rem',
-                  fontWeight: 800,
+                  fontWeight: 700,
                   color: '#ffffff',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
-                  letterSpacing: '0.2px',
+                  maxWidth: 140,
                 }}
-                title={effectiveSchoolName}
               >
-                {effectiveSchoolName}
-              </div>
+                {schoolName}
+              </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                {effectiveSchoolId && (
-                  <span
-                    style={{
-                      fontSize: '0.62rem',
-                      color: '#94a3b8',
-                      fontFamily: 'monospace',
-                      fontWeight: 600,
-                    }}
-                  >
-                    ID: {effectiveSchoolId}
-                  </span>
-                )}
+                <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>ID: {schoolId}</span>
                 <span
                   style={{
-                    fontSize: '0.58rem',
+                    fontSize: '0.62rem',
+                    backgroundColor: 'rgba(2, 132, 199, 0.25)',
                     color: '#38bdf8',
-                    backgroundColor: 'rgba(56, 189, 248, 0.12)',
                     padding: '1px 5px',
                     borderRadius: 4,
                     fontWeight: 700,
                   }}
                 >
-                  AttendSure V3
+                  AttendSure
                 </span>
               </div>
             </div>
           )}
         </div>
 
+        {/* Collapse Button */}
         <button
-          type="button"
           onClick={onToggleCollapse}
-          title={isCollapsed ? 'Expand Navigation' : 'Collapse Navigation'}
-          aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          type="button"
           style={{
-            position: 'absolute',
-            right: isCollapsed ? -11 : 10,
-            top: 25,
-            width: 22,
-            height: 22,
+            position: isCollapsed ? 'static' : 'relative',
+            width: 24,
+            height: 24,
             borderRadius: '50%',
-            backgroundColor: '#1a2538',
+            backgroundColor: '#1e293b',
             border: '1px solid #334155',
             color: '#cbd5e1',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             cursor: 'pointer',
-            zIndex: 60,
-            boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+            flexShrink: 0,
           }}
         >
-          {isCollapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+          {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
       </div>
 
-      {/* 2. Menu Navigation */}
-      <div
+      {/* 2. Navigation List */}
+      <nav
         style={{
           flex: 1,
           overflowY: 'auto',
           overflowX: 'hidden',
-          padding: '12px 8px',
+          padding: '12px 10px',
           display: 'flex',
           flexDirection: 'column',
-          gap: 12,
+          gap: 16,
         }}
       >
-        {navGroups.map((group, groupIdx) => {
-          const visibleItems = group.items.filter((item) =>
-            item.allowedRoles.includes(userRole)
-          );
-
-          if (visibleItems.length === 0) return null;
-
+        {menuGroups.map((group, gIdx) => {
+          if (group.items.length === 0) return null;
           return (
-            <div key={groupIdx}>
+            <div key={gIdx} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {!isCollapsed && (
-                <div
+                <span
                   style={{
-                    fontSize: '0.60rem',
+                    fontSize: '0.64rem',
                     fontWeight: 800,
                     color: '#64748b',
-                    letterSpacing: '0.8px',
+                    letterSpacing: '0.08em',
                     padding: '4px 10px',
+                    userSelect: 'none',
                   }}
                 >
                   {group.groupTitle}
-                </div>
+                </span>
               )}
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {visibleItems.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeTab === item.id;
-
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => onSelectTab(item.id)}
-                      title={isCollapsed ? item.label : undefined}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 12,
-                        width: '100%',
-                        padding: isCollapsed ? '10px 0' : '9px 12px',
-                        justifyContent: isCollapsed ? 'center' : 'flex-start',
-                        borderRadius: 8,
-                        border: 'none',
-                        background: isActive
-                          ? 'linear-gradient(90deg, #0284c7 0%, #0369a1 100%)'
-                          : 'transparent',
-                        color: isActive ? '#ffffff' : '#94a3b8',
-                        fontWeight: isActive ? 700 : 500,
-                        fontSize: '0.80rem',
-                        cursor: 'pointer',
-                        transition: 'background 0.15s ease, color 0.15s ease',
-                        position: 'relative',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isActive) {
-                          e.currentTarget.style.backgroundColor = '#162238';
-                          e.currentTarget.style.color = '#f1f5f9';
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isActive) {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                          e.currentTarget.style.color = '#94a3b8';
-                        }
-                      }}
-                    >
-                      <Icon
-                        size={17}
-                        color={isActive ? '#ffffff' : '#94a3b8'}
-                        style={{ flexShrink: 0 }}
-                      />
-                      {!isCollapsed && (
-                        <span
-                          style={{
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                        >
-                          {item.label}
-                        </span>
-                      )}
-
-                      {isCollapsed && isActive && (
-                        <div
-                          style={{
-                            position: 'absolute',
-                            left: 2,
-                            width: 3,
-                            height: 18,
-                            borderRadius: 2,
-                            backgroundColor: '#38bdf8',
-                          }}
-                        />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+              {group.items.map((item) => {
+                const isActive = activeTab === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    onClick={() => onSelectTab(item.key)}
+                    title={isCollapsed ? item.label : undefined}
+                    type="button"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      width: '100%',
+                      height: 38,
+                      padding: isCollapsed ? '0 16px' : '0 12px',
+                      borderRadius: 8,
+                      border: 'none',
+                      backgroundColor: isActive ? '#0284c7' : 'transparent',
+                      color: isActive ? '#ffffff' : '#94a3b8',
+                      fontWeight: isActive ? 700 : 500,
+                      fontSize: '0.84rem',
+                      cursor: 'pointer',
+                      justifyContent: isCollapsed ? 'center' : 'flex-start',
+                      transition: 'all 0.15s ease',
+                      boxSizing: 'border-box',
+                      textAlign: 'left',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = '#1e293b';
+                        e.currentTarget.style.color = '#ffffff';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        e.currentTarget.style.color = '#94a3b8';
+                      }
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {item.icon}
+                    </div>
+                    {!isCollapsed && (
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {item.label}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           );
         })}
-      </div>
+      </nav>
 
-      {/* 3. Bottom Account Profile */}
+      {/* 3. Bottom User Profile Card */}
       <div
         style={{
-          padding: isCollapsed ? '14px 6px' : '14px 14px',
-          borderTop: '1px solid #1a2538',
-          backgroundColor: '#080d17',
+          padding: '12px 14px',
+          borderTop: '1px solid #1e293b',
+          backgroundColor: '#071220',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: isCollapsed ? 'center' : 'flex-start',
           gap: 10,
+          boxSizing: 'border-box',
         }}
       >
-        <div
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: '50%',
-            backgroundColor: '#0284c7',
-            color: '#ffffff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontWeight: 800,
-            fontSize: '0.82rem',
-            flexShrink: 0,
-            border: '2px solid rgba(56, 189, 248, 0.4)',
-            overflow: 'hidden',
-          }}
-        >
-          {resolvedUserPhoto && !userImgFailed ? (
+        <div style={{ position: 'relative', width: 34, height: 34, flexShrink: 0 }}>
+          {userPhoto ? (
             <img
-              src={resolvedUserPhoto}
-              alt={userName}
-              onError={() => setUserImgFailed(true)}
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              src={userPhoto}
+              alt="Profile"
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: '50%',
+                objectFit: 'cover',
+                border: '1.5px solid #0284c7',
+              }}
             />
           ) : (
-            userInitial
+            <div
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: '50%',
+                backgroundColor: '#1e293b',
+                color: '#38bdf8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 700,
+                fontSize: '0.80rem',
+                border: '1.5px solid #334155',
+              }}
+            >
+              {session?.faculty_name ? session.faculty_name.charAt(0) : 'U'}
+            </div>
           )}
+          <span
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              right: 0,
+              width: 9,
+              height: 9,
+              backgroundColor: '#10b981',
+              borderRadius: '50%',
+              border: '2px solid #071220',
+            }}
+          />
         </div>
 
         {!isCollapsed && (
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div
+          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+            <span
               style={{
-                fontSize: '0.80rem',
+                fontSize: '0.82rem',
                 fontWeight: 700,
                 color: '#ffffff',
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
-              title={userName}
             >
-              {userName}
-            </div>
-            {userRole && (
-              <span
-                style={{
-                  fontSize: '0.58rem',
-                  fontWeight: 800,
-                  color: '#38bdf8',
-                  backgroundColor: 'rgba(56, 189, 248, 0.12)',
-                  padding: '1px 5px',
-                  borderRadius: 4,
-                  letterSpacing: '0.3px',
-                }}
-              >
-                {userRole}
-              </span>
-            )}
+              {session?.faculty_name || session?.username || 'User'}
+            </span>
+            <span
+              style={{
+                fontSize: '0.64rem',
+                fontWeight: 800,
+                color: '#38bdf8',
+                letterSpacing: '0.04em',
+                marginTop: 2,
+              }}
+            >
+              {role}
+            </span>
           </div>
         )}
       </div>

@@ -22,7 +22,7 @@ import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
 
 export const ProfileSettingsScreen: React.FC = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
   const { user, logout, deviceIdentity, updateUser } = useAuth();
 
   const [firstName, setFirstName] = useState<string>('');
@@ -133,7 +133,7 @@ export const ProfileSettingsScreen: React.FC = () => {
 
   const confirmSignOut = () => {
     Alert.alert(
-      'Log Out ',
+      'Log Out',
       'Are you sure you want to log out from this smartphone?',
       [
         { text: 'Cancel', style: 'cancel' },
@@ -362,7 +362,7 @@ export const ProfileSettingsScreen: React.FC = () => {
         <View style={[styles.card, { backgroundColor: '#fffafa', borderColor: '#fecaca' }]}>
           <TouchableOpacity style={styles.logoutBtn} onPress={confirmSignOut} activeOpacity={0.8}>
             <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-            <Text style={styles.logoutBtnText}>Log Out from this Device</Text>
+            <Text style={styles.logoutBtnText}>Log Out</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

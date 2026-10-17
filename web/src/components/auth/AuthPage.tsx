@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - School Authentication & 2FA Security Portal
+ * AttendSure - School Authentication & 2FA Security Portal
  * File: frontend/src/components/auth/AuthPage.tsx
  *
  * Capabilities:

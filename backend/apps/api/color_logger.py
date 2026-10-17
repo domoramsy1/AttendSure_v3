@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Color Terminal Request Logger Middleware
+AttendSure - Color Terminal Request Logger Middleware
 File: backend/apps/api/color_logger.py
 
 Formats terminal output with ANSI colors to visually highlight:

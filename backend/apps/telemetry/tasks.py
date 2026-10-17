@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Asynchronous Ingestion & Batch Tasks
+AttendSure - Asynchronous Ingestion & Batch Tasks
 File: backend/apps/telemetry/tasks.py
 """
 

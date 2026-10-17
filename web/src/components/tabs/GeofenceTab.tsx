@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Campus Perimeter & Geofence Security
+ * AttendSure - Campus Perimeter & Geofence Security
  * File: frontend/src/components/tabs/GeofenceTab.tsx
  *
  * Key Highlights:
@@ -13,6 +13,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import apiClient from '../../api/client';
 import { useAlert } from '../../context/AlertContext';
+import { Pagination, ALL_ROWS_SIZE, exportToCsv } from '../common/Pagination';
 import {
   User,
   ShieldCheck,

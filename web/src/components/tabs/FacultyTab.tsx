@@ -1,19 +1,17 @@
 /**
- * AttendSure V3 - Faculty & Staff Directory
+ * AttendSure - Faculty & Staff Directory
  * File: frontend/src/components/tabs/FacultyTab.tsx
  *
  * Key Upgrades:
- * 1. DEFAULT USER ICON: Standardizes <User /> from lucide-react as the fallback for all profile images.
- * 2. REUSABLE ALERTS: Uses showConfirm and showAlert from AlertContext (removes duplicate confirm modal code).
- * 3. LIVE POLLING: Silent 3-second background polling keeps attendance and roster up to date without refresh.
- * 4. TELEMETRY CARDS: Live summary counters for Total Faculty, Active Status, RFID Paired, and Departments.
- * 5. SERVER PAGINATION: Full page controls with record counts and per-page limits.
- * 6. DIGITAL ID PRINTING: Print-ready employee credential preview.
+ * 1. REUSABLE PAGINATION & CSV: Uses <Pagination /> and `exportToCsv` from common/Pagination.tsx.
+ * 2. RACE-CONDITION SHIELD: AbortController cancels stale search requests.
+ * 3. STRICT INPUT SANITIZATION: Cleans RFID UIDs, Employee IDs, and phone numbers.
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import apiClient from '../../api/client';
 import { ModuleTableLayout } from './ModuleTableLayout';
+import { Pagination, ALL_ROWS_SIZE, exportToCsv } from '../common/Pagination';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { useAlert } from '../../context/AlertContext';
@@ -35,10 +33,7 @@ import {
   Building,
   ShieldCheck,
   Printer,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
+  Download,
 } from 'lucide-react';
 
 // ============================================================================
@@ -70,7 +65,6 @@ interface PaginatedResponse<T> {
   results: T[];
 }
 
-// Standardized DepEd Position Ranks
 const FACULTY_POSITIONS = [
   {
     category: 'Classroom Teachers',
@@ -119,7 +113,6 @@ const FACULTY_POSITIONS = [
   },
 ];
 
-// Standardized Academic & Administrative Departments
 const FACULTY_DEPARTMENTS = [
   'Office of the Principal / Administration',
   'Junior High School',
@@ -152,7 +145,7 @@ const INITIAL_FORM_DATA = {
 };
 
 // ============================================================================
-// REUSABLE DEFAULT USER AVATAR COMPONENT
+// PROFILE AVATAR COMPONENT
 // ============================================================================
 
 interface ProfileAvatarProps {
@@ -176,10 +169,10 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
 
   const hasPhoto = Boolean(
     photoUrl &&
-    typeof photoUrl === 'string' &&
-    photoUrl.trim() !== '' &&
-    photoUrl.trim().toLowerCase() !== 'null' &&
-    photoUrl.trim().toLowerCase() !== 'undefined'
+      typeof photoUrl === 'string' &&
+      photoUrl.trim() !== '' &&
+      photoUrl.trim().toLowerCase() !== 'null' &&
+      photoUrl.trim().toLowerCase() !== 'undefined'
   );
 
   return (
@@ -242,7 +235,7 @@ export const FacultyTab: React.FC = () => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Guard flag: prevents silent background polling from interrupting open modals
+  const activeAbortController = useRef<AbortController | null>(null);
   const isInteracting = useRef(false);
   isInteracting.current = isModalOpen || Boolean(inspectingFaculty);
 
@@ -287,23 +280,32 @@ export const FacultyTab: React.FC = () => {
 
   const fetchFacultys = useCallback(
     async (page = 1, size = 25, query = '', deptVal = '', silent = false) => {
+      if (activeAbortController.current) {
+        activeAbortController.current.abort();
+      }
+      const controller = new AbortController();
+      activeAbortController.current = controller;
+
       try {
         if (!silent) setLoading(true);
         setError(null);
+        const isAll = size >= ALL_ROWS_SIZE;
+
         const res = await apiClient.get<PaginatedResponse<Faculty> | Faculty[]>('/facultys/', {
           params: {
-            page,
-            page_size: size,
+            page: isAll ? 1 : page,
+            page_size: isAll ? 'ALL' : size,
             search: query.trim() || undefined,
             department: deptVal || undefined,
           },
+          signal: controller.signal,
         });
 
         if (res.data && 'results' in res.data) {
           setFacultys(res.data.results);
           setTotalCount(res.data.count);
-          setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size) || 1);
-          setCurrentPage(res.data.current_page || page);
+          setTotalPages(isAll ? 1 : res.data.total_pages || Math.ceil(res.data.count / size) || 1);
+          setCurrentPage(isAll ? 1 : res.data.current_page || page);
         } else if (Array.isArray(res.data)) {
           setFacultys(res.data);
           setTotalCount(res.data.length);
@@ -311,8 +313,11 @@ export const FacultyTab: React.FC = () => {
           setCurrentPage(1);
         }
       } catch (err: any) {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') {
+          return;
+        }
         if (!silent) {
-          setError(err?.response?.data?.detail || err?.response?.data?.error || 'Failed to fetch faculty records.');
+          setError('Unable to load faculty records. Please check server connectivity.');
         }
       } finally {
         if (!silent) setLoading(false);
@@ -321,7 +326,6 @@ export const FacultyTab: React.FC = () => {
     []
   );
 
-  // Debounced search and filter watcher
   useEffect(() => {
     const timeout = setTimeout(() => {
       setCurrentPage(1);
@@ -330,7 +334,6 @@ export const FacultyTab: React.FC = () => {
     return () => clearTimeout(timeout);
   }, [search, departmentFilter, pageSize, fetchFacultys]);
 
-  // LIVE ZERO-REFRESH POLLING: Syncs fresh data from PostgreSQL every 3 seconds
   useEffect(() => {
     const liveInterval = setInterval(() => {
       if (!isInteracting.current) {
@@ -353,13 +356,46 @@ export const FacultyTab: React.FC = () => {
     fetchFacultys(1, newSize, search, departmentFilter, false);
   };
 
+  // Uses shared `exportToCsv` from Pagination.tsx
+  const handleExportFacultyCsv = () => {
+    const suffix = pageSize >= ALL_ROWS_SIZE ? 'ALL' : `Page${currentPage}_${pageSize}rows`;
+    const exported = exportToCsv(
+      `AttendSure_Faculty_${suffix}.csv`,
+      ['Employee ID', 'Full Name', 'Position', 'Department', 'Email', 'Contact', 'RFID UID', 'Status'],
+      facultys.map((f) => [
+        f.employee_id,
+        f.full_name,
+        f.position,
+        f.department,
+        f.email || '',
+        f.contact_number || '',
+        f.rfid_uid || '',
+        f.is_active ? 'ACTIVE' : 'INACTIVE',
+      ])
+    );
+
+    if (exported) {
+      showAlert({
+        title: 'CSV Exported',
+        message: `Exported ${facultys.length} faculty records to CSV.`,
+        type: 'success',
+      });
+    } else {
+      showAlert({
+        title: 'Nothing to Export',
+        message: 'No faculty records available to export.',
+        type: 'info',
+      });
+    }
+  };
+
   // Telemetry Calculations
   const activeFacultyCount = facultys.filter((f) => f.is_active).length;
   const pairedCardsCount = facultys.filter((f) => Boolean(f.rfid_uid && f.rfid_uid.trim().length > 0)).length;
   const uniqueDepartments = new Set(facultys.map((f) => f.department).filter(Boolean)).size;
 
   // ============================================================================
-  // PHOTO UPLOAD HANDLER
+  // SECURE PHOTO UPLOAD HANDLER
   // ============================================================================
 
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -369,8 +405,8 @@ export const FacultyTab: React.FC = () => {
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (!allowedTypes.includes(file.type)) {
       showAlert({
-        title: 'Invalid Image Format',
-        message: 'Only JPG, PNG, and WebP images are supported.',
+        title: 'Unsupported Image Format',
+        message: 'Only JPG, PNG, and WebP image formats are accepted.',
         type: 'error',
       });
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -392,6 +428,13 @@ export const FacultyTab: React.FC = () => {
       const base64String = reader.result as string;
       setPhotoPreview(base64String);
       setFormData((prev) => ({ ...prev, photo: base64String }));
+    };
+    reader.onerror = () => {
+      showAlert({
+        title: 'Upload Error',
+        message: 'Could not read the selected image file.',
+        type: 'error',
+      });
     };
     reader.readAsDataURL(file);
   };
@@ -427,7 +470,7 @@ export const FacultyTab: React.FC = () => {
       contact_number: faculty.contact_number || '',
       email: faculty.email || '',
       rfid_uid: faculty.rfid_uid || '',
-      photo: faculty.photo || null,
+      photo: null,
     });
     setPhotoPreview(faculty.photo_url || faculty.photo || null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -437,30 +480,56 @@ export const FacultyTab: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+
+    const cleanedContact = formData.contact_number.trim().replace(/[\s-]/g, '');
+    const cleanPayload: Record<string, any> = {
+      employee_id: formData.employee_id.trim().toUpperCase(),
+      first_name: formData.first_name.trim(),
+      middle_name: formData.middle_name.trim(),
+      last_name: formData.last_name.trim(),
+      suffix: formData.suffix.trim(),
+      position: formData.position.trim(),
+      department: formData.department.trim(),
+      email: formData.email.trim().toLowerCase(),
+      contact_number: cleanedContact,
+      rfid_uid: formData.rfid_uid.trim().toUpperCase() || null,
+    };
+
+    if (formData.photo !== null) {
+      cleanPayload.photo = formData.photo === '' ? null : formData.photo;
+    }
+
     try {
       if (editingFaculty) {
-        const res = await apiClient.put<Faculty>(`/facultys/${editingFaculty.id}/`, formData);
+        const res = await apiClient.put<Faculty>(`/facultys/${editingFaculty.id}/`, cleanPayload);
         setFacultys((prev) => prev.map((f) => (f.id === editingFaculty.id ? res.data : f)));
         showAlert({
           title: 'Profile Updated',
-          message: `Saved changes for ${editingFaculty.first_name} ${editingFaculty.last_name}.`,
+          message: `Changes saved for ${editingFaculty.first_name} ${editingFaculty.last_name}.`,
           type: 'success',
         });
       } else {
-        const res = await apiClient.post<Faculty>('/facultys/', formData);
+        const res = await apiClient.post<Faculty>('/facultys/', cleanPayload);
         setFacultys((prev) => [res.data, ...prev]);
         showAlert({
           title: 'Faculty Registered',
-          message: `${formData.first_name} ${formData.last_name} registered successfully.`,
+          message: `${cleanPayload.first_name} ${cleanPayload.last_name} registered successfully.`,
           type: 'success',
         });
       }
       setIsModalOpen(false);
       fetchFacultys(currentPage, pageSize, search, departmentFilter, true);
     } catch (err: any) {
+      const serverMessage =
+        err.response?.data?.employee_id?.[0] ||
+        err.response?.data?.rfid_uid?.[0] ||
+        err.response?.data?.email?.[0] ||
+        err.response?.data?.detail ||
+        'Failed to save faculty record. Please verify all details.';
+
       showAlert({
         title: 'Save Failed',
-        message: err.response?.data?.detail || err.response?.data?.error || 'Failed to save faculty record.',
+        message: serverMessage,
         type: 'error',
       });
     } finally {
@@ -488,7 +557,7 @@ export const FacultyTab: React.FC = () => {
         } catch (err: any) {
           showAlert({
             title: 'Delete Failed',
-            message: err?.response?.data?.detail || 'Failed to delete faculty member.',
+            message: err?.response?.data?.detail || 'Unable to delete faculty member.',
             type: 'error',
           });
         }
@@ -501,11 +570,22 @@ export const FacultyTab: React.FC = () => {
   const isCustomDepartment = Boolean(formData.department && !FACULTY_DEPARTMENTS.includes(formData.department));
   const isCustomSuffix = Boolean(formData.suffix && !SUFFIX_OPTIONS.includes(formData.suffix));
 
-  const startRecord = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
-  const endRecord = Math.min(currentPage * pageSize, totalCount);
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          #printable-faculty-id-card, #printable-faculty-id-card * { visibility: visible !important; }
+          #printable-faculty-id-card {
+            position: fixed !important;
+            left: 50% !important;
+            top: 20% !important;
+            transform: translate(-50%, -20%) !important;
+            border: 1px solid #000 !important;
+          }
+        }
+      `}</style>
+
       {/* 1. Live Faculty Telemetry Cards */}
       <div style={statsContainer}>
         <div style={statCard}>
@@ -515,13 +595,13 @@ export const FacultyTab: React.FC = () => {
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>ACTIVE ON DUTY (PAGE)</div>
+          <div style={statLabel}>ACTIVE ON DUTY (LOADED)</div>
           <div style={{ ...statValue, color: '#059669' }}>{activeFacultyCount}</div>
           <div style={statHelp}>Eligible for Form 48 gate tracking</div>
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>RFID CARDS PAIRED (PAGE)</div>
+          <div style={statLabel}>RFID CARDS PAIRED (LOADED)</div>
           <div style={{ ...statValue, color: '#0284c7' }}>
             {pairedCardsCount}
             <span style={{ fontSize: '0.80rem', color: '#94a3b8', fontWeight: 500 }}> / {facultys.length}</span>
@@ -530,7 +610,7 @@ export const FacultyTab: React.FC = () => {
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>DEPARTMENTS (PAGE)</div>
+          <div style={statLabel}>DEPARTMENTS (LOADED)</div>
           <div style={{ ...statValue, color: '#d97706' }}>{uniqueDepartments}</div>
           <div style={statHelp}>Academic and admin units</div>
         </div>
@@ -553,19 +633,30 @@ export const FacultyTab: React.FC = () => {
           </select>
         </div>
 
-        <Button
-          variant="primary"
-          size="md"
-          type="button"
-          onClick={handleOpenCreate}
-          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-        >
-          <Plus size={16} />
-          Add Faculty Member
-        </Button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button type="button" onClick={handleExportFacultyCsv} style={exportCsvBtnStyle}>
+            <Download size={14} />
+            <span>
+              {pageSize >= ALL_ROWS_SIZE
+                ? `Export All CSV (${facultys.length})`
+                : `Export Page CSV (${facultys.length})`}
+            </span>
+          </button>
+
+          <Button
+            variant="primary"
+            size="md"
+            type="button"
+            onClick={handleOpenCreate}
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <Plus size={16} />
+            Add Faculty Member
+          </Button>
+        </div>
       </div>
 
-      {/* 3. Main Faculty Table */}
+      {/* 3. Main Faculty Table + Reusable Pagination Component */}
       <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
           title="Faculty & Staff Directory"
@@ -714,82 +805,20 @@ export const FacultyTab: React.FC = () => {
           ]}
         />
 
-        {/* Server Pagination Bar */}
-        <div style={paginationContainer}>
-          <div style={{ fontSize: '0.80rem', color: '#475569' }}>
-            {totalCount > 0 ? (
-              <>
-                Showing <strong>{startRecord}</strong> to <strong>{endRecord}</strong> of{' '}
-                <strong>{totalCount}</strong> faculty members
-              </>
-            ) : (
-              'No records found'
-            )}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 8 }}>
-              <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Per page:</span>
-              <select
-                value={pageSize}
-                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                style={paginationSelect}
-              >
-                <option value={15}>15</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-            </div>
-
-            <button
-              onClick={() => handlePageChange(1)}
-              disabled={currentPage <= 1 || loading}
-              style={{ ...paginationBtn, opacity: currentPage <= 1 || loading ? 0.35 : 1 }}
-              title="First Page"
-              type="button"
-            >
-              <ChevronsLeft size={16} />
-            </button>
-
-            <button
-              onClick={() => handlePageChange(currentPage - 1)}
-              disabled={currentPage <= 1 || loading}
-              style={{ ...paginationBtn, opacity: currentPage <= 1 || loading ? 0.35 : 1 }}
-              title="Previous Page"
-              type="button"
-            >
-              <ChevronLeft size={16} />
-            </button>
-
-            <span style={{ fontSize: '0.80rem', fontWeight: 600, padding: '0 8px', color: '#0f172a' }}>
-              Page {currentPage} of {Math.max(1, totalPages)}
-            </span>
-
-            <button
-              onClick={() => handlePageChange(currentPage + 1)}
-              disabled={currentPage >= totalPages || loading}
-              style={{ ...paginationBtn, opacity: currentPage >= totalPages || loading ? 0.35 : 1 }}
-              title="Next Page"
-              type="button"
-            >
-              <ChevronRight size={16} />
-            </button>
-
-            <button
-              onClick={() => handlePageChange(totalPages)}
-              disabled={currentPage >= totalPages || loading}
-              style={{ ...paginationBtn, opacity: currentPage >= totalPages || loading ? 0.35 : 1 }}
-              title="Last Page"
-              type="button"
-            >
-              <ChevronsRight size={16} />
-            </button>
-          </div>
-        </div>
+        {/* Shared Reusable Pagination Bar */}
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalCount={totalCount}
+          pageSize={pageSize}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+          itemLabel="faculty members"
+          disabled={loading}
+        />
       </div>
 
-      {/* 4. MODAL: REGISTER & EDIT FACULTY (CREATE / UPDATE) */}
+      {/* 4. MODAL: REGISTER & EDIT FACULTY */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
@@ -1010,7 +1039,7 @@ export const FacultyTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 5. MODAL: INSPECT DIGITAL FACULTY ID CARD (READ & PRINT) */}
+      {/* 5. MODAL: INSPECT DIGITAL FACULTY ID CARD */}
       {inspectingFaculty && (
         <Modal
           isOpen={Boolean(inspectingFaculty)}
@@ -1018,12 +1047,12 @@ export const FacultyTab: React.FC = () => {
           title="Digital Faculty ID Card"
         >
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-            <div style={idCardFrame}>
+            <div id="printable-faculty-id-card" style={idCardFrame}>
               <div style={idCardHeader}>
                 <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#ffffff', letterSpacing: '0.5px' }}>
                   FACULTY &amp; STAFF CREDENTIAL
                 </span>
-                <span style={{ fontSize: '0.62rem', color: '#bfdbfe' }}>ATTENDSURE V3</span>
+                <span style={{ fontSize: '0.62rem', color: '#bfdbfe' }}>AttendSure</span>
               </div>
 
               <div style={{ display: 'flex', gap: 14, padding: '16px 14px', alignItems: 'center' }}>
@@ -1159,6 +1188,20 @@ const selectPill: React.CSSProperties = {
   cursor: 'pointer',
 };
 
+const exportCsvBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '7px 12px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  backgroundColor: '#f8fafc',
+  color: '#334155',
+  fontSize: '0.78rem',
+  fontWeight: 700,
+  cursor: 'pointer',
+};
+
 const empIdBadge: React.CSSProperties = {
   fontFamily: 'monospace',
   fontWeight: 700,
@@ -1272,35 +1315,4 @@ const idCardFooter: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
-};
-
-const paginationContainer: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '12px 18px',
-  backgroundColor: '#ffffff',
-  borderTop: '1px solid #e2e8f0',
-  boxSizing: 'border-box',
-};
-
-const paginationBtn: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '6px',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  backgroundColor: '#ffffff',
-  color: '#334155',
-  cursor: 'pointer',
-};
-
-const paginationSelect: React.CSSProperties = {
-  padding: '4px 6px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.78rem',
-  color: '#0f172a',
-  backgroundColor: '#ffffff',
 };

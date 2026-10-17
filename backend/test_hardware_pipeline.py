@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Hardware & Mobile Ingestion Test Harness
+AttendSure - Hardware & Mobile Ingestion Test Harness
 File: backend/test_hardware_pipeline.py
 
 Simulates external physical turnstile hardware and mobile camera scans.
@@ -48,7 +48,7 @@ def send_post(endpoint: str, payload: dict):
 
 def main():
     print("=" * 65)
-    print("ATTENDSURE V3: HARDWARE & MOBILE INGESTION TEST")
+    print("AttendSure: HARDWARE & MOBILE INGESTION TEST")
     print("=" * 65)
     print(f"Server Target   : {BASE_URL}")
     print(f"Kiosk Terminal  : {KIOSK_CODE}")

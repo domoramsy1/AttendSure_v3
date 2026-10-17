@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Academic Setup & Institutional Structure Modal
+ * AttendSure - Academic Setup & Institutional Structure Modal
  * File: frontend/src/components/modals/AcademicSetupModal.tsx
  *
  * Capabilities:

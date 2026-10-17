@@ -1,4 +1,4 @@
-// AttendSure V3 - Mobile Authentication Service
+// AttendSure - Mobile Authentication Service
 // File: mobile/src/services/authService.ts
 
 import { Platform } from 'react-native';

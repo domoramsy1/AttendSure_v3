@@ -20,3 +20,11 @@ dist-ssr/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local logs and temporary exports
+backend/logs/*.log
+*.log
+attendsure_codebase.txt
+project_files.txt
+desktop.ini
+save_codebase.py

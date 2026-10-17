@@ -1,4 +1,4 @@
-// AttendSure V3 - Official Design Tokens & Theme System
+// AttendSure - Official Design Tokens & Theme System
 // File: mobile/src/constants/theme.ts
 
 export const COLORS = {

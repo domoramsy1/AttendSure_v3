@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Standard Module Table Layout
+ * AttendSure - Standard Module Table Layout
  * File: frontend/src/components/tabs/ModuleTableLayout.tsx
  *
  * Standard layout wrapper providing:

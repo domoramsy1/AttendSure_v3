@@ -1,239 +1,283 @@
 /**
- * AttendSure V3 - Institutional Top Header Bar
+ * AttendSure V3 - Top Application Navigation Bar
+ * Developer: TECHBLAZER
  * File: frontend/src/components/layout/Header.tsx
- *
- * Fixes TS2322 by maintaining backward-compatible optional props for App.tsx
- * while keeping the visual layout clean and free of duplicate headers/logos.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Clock, Bell, Radio } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
 import type { UserSession } from '../../types/section';
 import type { NavItemKey } from './Sidebar';
-import { ProfileDropdown } from './ProfileDropdown';
+import {
+  Bell,
+  Clock,
+  Radio,
+  User,
+  LogOut,
+  ChevronDown,
+} from 'lucide-react';
 
-export interface HeaderProps {
+interface HeaderProps {
   title: string;
-  isGateNodeOnline?: boolean;
+  isGateNodeOnline: boolean;
   session: UserSession | null;
   userPhoto?: string | null;
-  schoolName?: string | null;
-  schoolId?: string | null;
+  schoolName?: string;
+  schoolId?: string;
   schoolLogo?: string | null;
   onLogout: () => void;
-  onNavigateTab?: (tab: NavItemKey) => void;
-  onOpenProfile?: () => void;
+  onNavigateTab: (tab: NavItemKey) => void;
+  onOpenProfile: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = (props) => {
-  const {
-    title,
-    isGateNodeOnline = true,
-    session,
-    userPhoto,
-    onLogout,
-    onNavigateTab,
-    onOpenProfile,
-  } = props;
-
+export const Header: React.FC<HeaderProps> = ({
+  title,
+  isGateNodeOnline,
+  session,
+  userPhoto,
+  schoolName,
+  onLogout,
+  onOpenProfile,
+}) => {
   const [currentTime, setCurrentTime] = useState<string>('');
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [imgError, setImgError] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
 
-  // Synchronized Philippine Standard Time (PST) live ticker
-  const updatePSTClock = useCallback(() => {
-    const now = new Date();
-    const options: Intl.DateTimeFormatOptions = {
-      timeZone: 'Asia/Manila',
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true,
+  // Live Philippine Standard Time clock
+  useEffect(() => {
+    const updateClock = () => {
+      const now = new Date();
+      setCurrentTime(
+        now.toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+        }) + ' PST'
+      );
     };
 
-    try {
-      const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(now);
-      const month = parts.find((p) => p.type === 'month')?.value || '';
-      const day = parts.find((p) => p.type === 'day')?.value || '';
-      const year = parts.find((p) => p.type === 'year')?.value || '';
-      const hour = parts.find((p) => p.type === 'hour')?.value || '';
-      const min = parts.find((p) => p.type === 'minute')?.value || '';
-      const sec = parts.find((p) => p.type === 'second')?.value || '';
-      const period = parts.find((p) => p.type === 'dayPeriod')?.value?.toUpperCase() || 'AM';
-
-      setCurrentTime(`${month} ${day}, ${year} • ${hour}:${min}:${sec} ${period} PST`);
-    } catch {
-      setCurrentTime(now.toLocaleTimeString('en-US') + ' PST');
-    }
+    updateClock();
+    const timer = setInterval(updateClock, 1000);
+    return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    updatePSTClock();
-    const interval = setInterval(updatePSTClock, 1000);
-    return () => clearInterval(interval);
-  }, [updatePSTClock]);
-
-  const handleNotificationClick = () => {
-    if (onNavigateTab) {
-      onNavigateTab('sms');
-    } else {
-      window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail: 'sms' }));
-    }
-  };
-
-  const userName = session?.faculty_name || session?.username || '';
-  const userInitial = userName ? userName.charAt(0).toUpperCase() : '?';
+  // Remove repeated school name prefix from the title
+  const cleanTitle = title.replace(schoolName ? `${schoolName} ` : '', '');
 
   return (
     <header
       style={{
-        height: 56,
+        height: 60,
+        minHeight: 60,
         backgroundColor: '#ffffff',
         borderBottom: '1px solid #e2e8f0',
-        padding: '0 24px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        position: 'sticky',
-        top: 0,
-        zIndex: 40,
+        padding: '0 24px',
         boxSizing: 'border-box',
+        position: 'relative',
+        zIndex: 40,
       }}
     >
-      {/* Streamlined Single Title */}
-      <div>
-        <h1 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-          {title}
+      {/* 1. View Title with Subtle Breadcrumb */}
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {schoolName && (
+          <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>
+            {schoolName}
+          </span>
+        )}
+        <h1
+          style={{
+            fontSize: '1.18rem',
+            fontWeight: 800,
+            color: '#0f172a',
+            margin: 0,
+            letterSpacing: '-0.02em',
+          }}
+        >
+          {cleanTitle}
         </h1>
       </div>
 
-      {/* Right Toolbar: PST Clock, Gate Scanner Telemetry, Notifications & User Session */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, position: 'relative' }}>
-        {/* Live Philippine Standard Time */}
+      {/* 2. Top-Right Status Controls */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {/* Real-time Clock Pill */}
         <div
           style={{
-            display: 'inline-flex',
+            display: 'flex',
             alignItems: 'center',
             gap: 6,
-            padding: '5px 10px',
+            height: 34,
+            padding: '0 12px',
             backgroundColor: '#f8fafc',
-            borderRadius: 6,
             border: '1px solid #e2e8f0',
-            fontSize: '0.72rem',
-            fontWeight: 700,
-            color: '#334155',
+            borderRadius: 8,
+            fontSize: '0.76rem',
+            color: '#475569',
             fontFamily: 'monospace',
+            fontWeight: 600,
           }}
-          title="Synchronized Philippine Standard Time (PST)"
         >
-          <Clock size={13} color="#0284c7" />
-          <span>{currentTime || 'Clock syncing...'}</span>
+          <Clock size={14} color="#0284c7" />
+          <span>{currentTime}</span>
         </div>
 
-        {/* Gate Scanner Telemetry Pill */}
+        {/* Dynamic Gate Scanner Status Pill */}
         <div
           style={{
-            display: 'inline-flex',
+            display: 'flex',
             alignItems: 'center',
             gap: 6,
-            padding: '4px 10px',
-            borderRadius: 20,
+            height: 34,
+            padding: '0 12px',
+            borderRadius: 8,
             backgroundColor: isGateNodeOnline ? '#ecfdf5' : '#fef2f2',
-            border: `1px solid ${isGateNodeOnline ? '#a7f3d0' : '#fecaca'}`,
-            fontSize: '0.72rem',
+            border: `1px solid ${isGateNodeOnline ? '#a7f3d0' : '#fca5a5'}`,
+            fontSize: '0.76rem',
             fontWeight: 700,
             color: isGateNodeOnline ? '#059669' : '#dc2626',
           }}
-          title={isGateNodeOnline ? 'Gate kiosks connected' : 'Gate kiosks offline'}
         >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              backgroundColor: isGateNodeOnline ? '#10b981' : '#ef4444',
-            }}
-          />
-          <Radio size={12} color={isGateNodeOnline ? '#059669' : '#dc2626'} />
-          <span>{isGateNodeOnline ? 'Gate Scanner: Online' : 'Gate Scanner: Offline'}</span>
+          <Radio size={14} className={isGateNodeOnline ? 'animate-pulse' : ''} />
+          <span>Gate Scanner: {isGateNodeOnline ? 'Online' : 'Offline'}</span>
         </div>
 
-        {/* SMS / Notifications Trigger */}
+        {/* Notifications Icon Button */}
         <button
           type="button"
-          title="Open SMS Outbox & Alerts"
-          style={iconBtnStyle}
-          onClick={handleNotificationClick}
-        >
-          <Bell size={14} color="#475569" />
-        </button>
-
-        {/* Account Profile Avatar */}
-        <button
-          type="button"
-          onClick={() => setIsProfileOpen((prev) => !prev)}
-          title="Account Profile"
-          aria-expanded={isProfileOpen}
-          aria-haspopup="true"
+          title="Notifications"
           style={{
-            width: 36,
-            height: 36,
-            borderRadius: '50%',
-            backgroundColor: isProfileOpen ? '#0369a1' : '#0284c7',
-            color: '#ffffff',
+            width: 34,
+            height: 34,
+            borderRadius: 8,
+            border: '1px solid #e2e8f0',
+            backgroundColor: '#ffffff',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontWeight: 800,
-            fontSize: '0.86rem',
-            border: isProfileOpen ? '2px solid #38bdf8' : '2px solid #e0f2fe',
             cursor: 'pointer',
-            transition: 'all 0.15s ease',
-            outline: 'none',
-            overflow: 'hidden',
-            padding: 0,
+            color: '#64748b',
           }}
+          onClick={() => {}}
         >
-          {userPhoto && !imgError ? (
-            <img
-              src={userPhoto}
-              alt={userName}
-              onError={() => setImgError(true)}
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-            />
-          ) : (
-            userInitial
-          )}
+          <Bell size={16} />
         </button>
 
-        {/* Profile Dropdown Popover */}
-        <ProfileDropdown
-          isOpen={isProfileOpen}
-          onClose={() => setIsProfileOpen(false)}
-          session={session}
-          userPhoto={userPhoto}
-          onLogout={onLogout}
-          onNavigateTab={onNavigateTab}
-          onOpenProfile={onOpenProfile}
-        />
+        {/* Profile Dropdown Menu Trigger */}
+        <div style={{ position: 'relative' }}>
+          <button
+            type="button"
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              height: 34,
+              padding: '0 8px 0 4px',
+              backgroundColor: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: 8,
+              cursor: 'pointer',
+            }}
+          >
+            {userPhoto ? (
+              <img
+                src={userPhoto}
+                alt="Avatar"
+                style={{ width: 26, height: 26, borderRadius: '50%', objectFit: 'cover' }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 26,
+                  height: 26,
+                  borderRadius: '50%',
+                  backgroundColor: '#0284c7',
+                  color: '#ffffff',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {session?.faculty_name ? session.faculty_name.charAt(0) : 'U'}
+              </div>
+            )}
+            <ChevronDown size={14} color="#64748b" />
+          </button>
+
+          {/* User Options Dropdown */}
+          {dropdownOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 40,
+                right: 0,
+                width: 170,
+                backgroundColor: '#ffffff',
+                border: '1px solid #e2e8f0',
+                borderRadius: 8,
+                boxShadow: '0 8px 18px rgba(0, 0, 0, 0.08)',
+                padding: '6px 0',
+                display: 'flex',
+                flexDirection: 'column',
+                zIndex: 100,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setDropdownOpen(false);
+                  onOpenProfile();
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 14px',
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '0.80rem',
+                  color: '#334155',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <User size={14} /> My Profile
+              </button>
+              <div style={{ height: 1, backgroundColor: '#f1f5f9', margin: '4px 0' }} />
+              <button
+                type="button"
+                onClick={() => {
+                  setDropdownOpen(false);
+                  onLogout();
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 14px',
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '0.80rem',
+                  color: '#dc2626',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  fontWeight: 600,
+                }}
+              >
+                <LogOut size={14} /> Log Out
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );
-};
-
-const iconBtnStyle: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: 8,
-  border: '1px solid #e2e8f0',
-  backgroundColor: '#ffffff',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
 };
 
 export default Header;

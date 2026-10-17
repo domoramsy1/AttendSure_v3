@@ -1,12 +1,12 @@
 /**
- * AttendSure V3 - User Accounts & Security
+ * AttendSure - User Accounts & Role-Based Access Control (RBAC)
  * File: frontend/src/components/tabs/UsersTab.tsx
  *
- * Key Highlights:
- * 1. REAL PHOTOS ONLY: No colored circles or letter monograms. Displays real photo or neutral placeholder.
- * 2. FULL CRUD: Create system accounts, view role tiers, update credentials/photos, delete accounts.
- * 3. LIVE DATABASE SYNC: 3-second background polling updates active user accounts without browser refresh.
- * 4. MODERN ALERTS: Uses AlertContext and custom modal dialogs instead of window.alert / window.confirm.
+ * Key Capabilities:
+ * 1. Explicit support for Admin, Faculty/Admin, Principal, Dept Head, Faculty, and Guard.
+ * 2. Dual-Role toggle lets Principals, Dept Heads, and Admins also teach classes.
+ * 3. Live field validation (username availability, email format, password complexity).
+ * 4. Self-lockout guard prevents the active admin from deleting or suspending their own account.
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -30,8 +30,9 @@ import {
   Lock,
   Copy,
   Check,
-  AlertTriangle,
-  AlertCircle,
+  BookOpen,
+  CheckCircle2,
+  Clock,
 } from 'lucide-react';
 
 // ============================================================================
@@ -47,6 +48,10 @@ export interface SystemUser {
   role?: string;
   current_role?: string;
   role_display?: string;
+  is_teaching?: boolean;
+  can_teach?: boolean;
+  is_profile_completed?: boolean;
+  faculty_id?: number | null;
   photo?: string | null;
   photo_url?: string | null;
   is_active: boolean;
@@ -59,12 +64,13 @@ interface PaginatedResponse<T> {
   results: T[];
 }
 
-// Standardized RBAC Security Roles
+// Standardized RBAC Security Roles (Including Faculty / Admin Dual Role)
 const RBAC_ROLES = [
   { value: 'ADMIN', label: 'System Administrator', color: '#6366f1', bg: '#e0e7ff' },
+  { value: 'FACULTY_ADMIN', label: 'Faculty / System Admin (Dual Role)', color: '#4f46e5', bg: '#eef2ff' },
   { value: 'PRINCIPAL', label: 'School Principal', color: '#059669', bg: '#d1fae5' },
   { value: 'DEPT_HEAD', label: 'Department Head', color: '#0284c7', bg: '#e0f2fe' },
-  { value: 'FACULTY', label: 'Faculty / Faculty', color: '#0d9488', bg: '#ccfbf1' },
+  { value: 'FACULTY', label: 'Classroom Faculty / Teacher', color: '#0d9488', bg: '#ccfbf1' },
   { value: 'GUARD', label: 'Gate Security / Guard', color: '#d97706', bg: '#fef3c7' },
 ];
 
@@ -74,6 +80,8 @@ const INITIAL_FORM = {
   first_name: '',
   last_name: '',
   role: 'FACULTY',
+  is_teaching: true,
+  is_active: true,
   password: '',
   photo: null as string | null,
 };
@@ -83,7 +91,10 @@ const INITIAL_FORM = {
 // ============================================================================
 
 export const UsersTab: React.FC = () => {
-  const { showAlert } = useAlert();
+  const { showAlert, showConfirm } = useAlert();
+
+  // Active logged-in username to prevent self-deletion
+  const currentLoggedUsername = (localStorage.getItem('attendsure_username') || '').trim().toLowerCase();
 
   // --- Table & Filter State ---
   const [users, setUsers] = useState<SystemUser[]>([]);
@@ -102,26 +113,84 @@ export const UsersTab: React.FC = () => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // --- Custom Confirmation Dialog State (replaces window.confirm) ---
-  const [confirmDialog, setConfirmDialog] = useState<{
-    isOpen: boolean;
-    title: string;
-    message: string;
-    confirmLabel: string;
-    isDestructive: boolean;
-    action: () => Promise<void>;
-  }>({
-    isOpen: false,
-    title: '',
-    message: '',
-    confirmLabel: 'Confirm',
-    isDestructive: false,
-    action: async () => {},
-  });
-
-  // Guard flag: prevents silent background polling from interrupting open modals
+  const activeAbortController = useRef<AbortController | null>(null);
   const isInteracting = useRef<boolean>(false);
-  isInteracting.current = isModalOpen || confirmDialog.isOpen;
+  isInteracting.current = isModalOpen;
+
+  // --- Live Validation State ---
+  const [liveErrors, setLiveErrors] = useState<{
+    username?: string;
+    email?: string;
+    password?: string;
+  }>({});
+  const [isCheckingUsername, setIsCheckingUsername] = useState(false);
+
+  // 1. Live Format & Password Strength Check (Instant as you type)
+  useEffect(() => {
+    const newErrors: { username?: string; email?: string; password?: string } = {};
+
+    if (formData.username) {
+      if (/\s/.test(formData.username)) {
+        newErrors.username = 'Username cannot contain spaces.';
+      } else if (!/^[a-zA-Z0-9_.-]+$/.test(formData.username)) {
+        newErrors.username = 'Use only letters, numbers, dots, dashes, or underscores.';
+      } else if (formData.username.length < 3) {
+        newErrors.username = 'Username must be at least 3 characters.';
+      }
+    }
+
+    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+      newErrors.email = 'Please enter a valid email address.';
+    }
+
+    if (formData.password) {
+      if (formData.password.length < 8) {
+        newErrors.password = 'Password must be at least 8 characters long.';
+      } else if (!/[A-Za-z]/.test(formData.password) || !/[0-9]/.test(formData.password)) {
+        newErrors.password = 'Password must include both letters and numbers.';
+      }
+    }
+
+    setLiveErrors((prev) => ({
+      ...newErrors,
+      username: newErrors.username || (prev.username?.includes('already') ? prev.username : undefined),
+    }));
+  }, [formData.username, formData.email, formData.password]);
+
+  // 2. Live Database Duplicate Check for Username (Debounced 400ms)
+  useEffect(() => {
+    const cleanUser = formData.username.trim();
+    if (!isModalOpen || cleanUser.length < 3 || /\s/.test(cleanUser)) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        setIsCheckingUsername(true);
+        const res = await apiClient.get('/validate-field/', {
+          params: {
+            field: 'username',
+            value: cleanUser,
+            exclude_id: editingUser?.id,
+          },
+        });
+        if (!res.data.valid) {
+          setLiveErrors((prev) => ({ ...prev, username: res.data.message }));
+        } else {
+          setLiveErrors((prev) => ({
+            ...prev,
+            username: prev.username?.includes('already') ? undefined : prev.username,
+          }));
+        }
+      } catch {
+        // Ignore network errors during silent check
+      } finally {
+        setIsCheckingUsername(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [formData.username, editingUser, isModalOpen]);
+
+  const hasLiveErrors = Boolean(liveErrors.username || liveErrors.email || liveErrors.password);
 
   // ============================================================================
   // CLIPBOARD HELPER
@@ -162,56 +231,60 @@ export const UsersTab: React.FC = () => {
   // DATABASE DATA FETCHING & LIVE POLLING
   // ============================================================================
 
-  const fetchUsers = useCallback(
-    async (query = '', roleVal = '', silent = false) => {
-      try {
-        if (!silent) setLoading(true);
-        setError(null);
+  const fetchUsers = useCallback(async (query = '', silent = false) => {
+    if (activeAbortController.current) {
+      activeAbortController.current.abort();
+    }
+    const controller = new AbortController();
+    activeAbortController.current = controller;
 
-        const res = await apiClient.get<PaginatedResponse<SystemUser> | SystemUser[]>('/users/', {
-          params: {
-            search: query.trim() || undefined,
-            role: roleVal || undefined,
-          },
-        });
+    try {
+      if (!silent) setLoading(true);
+      setError(null);
 
-        const raw = res.data;
-        const items: SystemUser[] = Array.isArray(raw)
-          ? raw
-          : raw && 'results' in raw && Array.isArray(raw.results)
-          ? raw.results
-          : [];
-        setUsers(items);
-      } catch (err: any) {
-        if (!silent) {
-          setError(err?.response?.data?.detail || err?.response?.data?.error || 'Failed to fetch user accounts. Admin access required.');
-        }
-      } finally {
-        if (!silent) setLoading(false);
+      const res = await apiClient.get<PaginatedResponse<SystemUser> | SystemUser[]>('/users/', {
+        params: {
+          search: query.trim() || undefined,
+        },
+        signal: controller.signal,
+      });
+
+      const raw = res.data;
+      const items: SystemUser[] = Array.isArray(raw)
+        ? raw
+        : raw && 'results' in raw && Array.isArray(raw.results)
+        ? raw.results
+        : [];
+      setUsers(items);
+    } catch (err: any) {
+      if (err.name === 'CanceledError' || err.name === 'AbortError') {
+        return;
       }
-    },
-    []
-  );
+      if (!silent) {
+        setError('Unable to load user accounts. System Administrator privileges are required.');
+      }
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, []);
 
-  // Debounced search and role filter watcher
   useEffect(() => {
-    const timeout = setTimeout(() => fetchUsers(search, roleFilter, false), 300);
+    const timeout = setTimeout(() => fetchUsers(search, false), 300);
     return () => clearTimeout(timeout);
-  }, [search, roleFilter, fetchUsers]);
+  }, [search, fetchUsers]);
 
-  // LIVE ZERO-REFRESH POLLING: Syncs fresh data from PostgreSQL every 3 seconds
   useEffect(() => {
     const liveInterval = setInterval(() => {
       if (!isInteracting.current) {
-        fetchUsers(search, roleFilter, true);
+        fetchUsers(search, true);
       }
     }, 3000);
 
     return () => clearInterval(liveInterval);
-  }, [search, roleFilter, fetchUsers]);
+  }, [search, fetchUsers]);
 
   // ============================================================================
-  // PHOTO UPLOAD HANDLER (REAL PHOTOS ONLY)
+  // PHOTO UPLOAD HANDLER
   // ============================================================================
 
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -221,7 +294,7 @@ export const UsersTab: React.FC = () => {
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (!allowedTypes.includes(file.type)) {
       showAlert({
-        title: 'Invalid Image Format',
+        title: 'Unsupported Image Format',
         message: 'Only JPG, PNG, and WebP images are permitted.',
         type: 'error',
       });
@@ -232,7 +305,7 @@ export const UsersTab: React.FC = () => {
     if (file.size > 2.5 * 1024 * 1024) {
       showAlert({
         title: 'File Too Large',
-        message: 'Profile picture must be smaller than 2.5 MB.',
+        message: 'Profile picture must be 2.5 MB or smaller.',
         type: 'error',
       });
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -258,27 +331,40 @@ export const UsersTab: React.FC = () => {
   // CRUD ACTIONS
   // ============================================================================
 
-  // --- 1. CREATE (Add User) ---
   const handleOpenCreate = () => {
     setEditingUser(null);
     setFormData(INITIAL_FORM);
+    setLiveErrors({});
     setPhotoPreview(null);
     setShowPassword(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
     setIsModalOpen(true);
   };
 
-  // --- 2. UPDATE (Edit User) ---
   const handleOpenEdit = (user: SystemUser) => {
+    const rawRole = (user.current_role || user.role || 'FACULTY').toUpperCase();
+    const isTeach =
+      user.is_teaching !== undefined
+        ? Boolean(user.is_teaching)
+        : user.can_teach !== undefined
+        ? Boolean(user.can_teach)
+        : rawRole !== 'GUARD' && rawRole !== 'ADMIN';
+
+    const effectiveDropdownRole =
+      rawRole === 'ADMIN' && isTeach ? 'FACULTY_ADMIN' : rawRole;
+
     setEditingUser(user);
+    setLiveErrors({});
     setFormData({
       username: user.username || '',
       email: user.email || '',
       first_name: user.first_name || '',
       last_name: user.last_name || '',
-      role: user.current_role || user.role || 'FACULTY',
+      role: effectiveDropdownRole,
+      is_teaching: isTeach,
+      is_active: user.is_active ?? true,
       password: '',
-      photo: user.photo || null,
+      photo: null,
     });
     setPhotoPreview(user.photo_url || user.photo || null);
     setShowPassword(false);
@@ -288,22 +374,62 @@ export const UsersTab: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (hasLiveErrors) {
+      showAlert({
+        title: 'Validation Error',
+        message: 'Please resolve the highlighted field errors before saving.',
+        type: 'error',
+      });
+      return;
+    }
+
+    const cleanUsername = formData.username.trim().replace(/\s+/g, '');
+    if (!cleanUsername) {
+      showAlert({
+        title: 'Invalid Username',
+        message: 'Username cannot be empty or contain spaces.',
+        type: 'error',
+      });
+      return;
+    }
+
+    if (!editingUser && formData.password.trim().length < 8) {
+      showAlert({
+        title: 'Weak Password',
+        message: 'Initial password must be at least 8 characters long.',
+        type: 'error',
+      });
+      return;
+    }
+
     setSaving(true);
     try {
-      const payload: any = {
-        username: formData.username.trim(),
-        email: formData.email.trim(),
+      const isFacultyAdmin = formData.role === 'FACULTY_ADMIN';
+      const finalBackendRole = isFacultyAdmin ? 'ADMIN' : formData.role;
+      const finalIsTeaching =
+        isFacultyAdmin || formData.role === 'FACULTY'
+          ? true
+          : formData.role === 'GUARD'
+          ? false
+          : formData.is_teaching;
+
+      const payload: Record<string, any> = {
+        username: cleanUsername,
+        email: formData.email.trim().toLowerCase(),
         first_name: formData.first_name.trim(),
         last_name: formData.last_name.trim(),
-        role: formData.role,
+        role: finalBackendRole,
+        is_teaching: finalIsTeaching,
+        is_active: formData.is_active,
       };
 
-      if (formData.password) {
-        payload.password = formData.password;
+      if (formData.password.trim()) {
+        payload.password = formData.password.trim();
       }
 
       if (formData.photo !== null) {
-        payload.photo = formData.photo;
+        payload.photo = formData.photo === '' ? null : formData.photo;
       }
 
       if (editingUser) {
@@ -311,24 +437,31 @@ export const UsersTab: React.FC = () => {
         setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? res.data : u)));
         showAlert({
           title: 'Account Updated',
-          message: `Saved changes for user @${formData.username}.`,
-          type: 'info',
+          message: `Saved changes for @${cleanUsername}.`,
+          type: 'success',
         });
       } else {
         const res = await apiClient.post<SystemUser>('/users/', payload);
         setUsers((prev) => [res.data, ...prev]);
         showAlert({
-          title: 'User Created',
-          message: `System account @${formData.username} created successfully.`,
-          type: 'info',
+          title: 'User Created & Synced to Faculty',
+          message: `Account @${cleanUsername} created. It now reflects in the Faculty tab, and the user will complete their profile upon first login.`,
+          type: 'success',
         });
       }
       setIsModalOpen(false);
-      fetchUsers(search, roleFilter, true);
+      fetchUsers(search, true);
     } catch (err: any) {
+      const errMsg =
+        err.response?.data?.username?.[0] ||
+        err.response?.data?.password?.[0] ||
+        err.response?.data?.email?.[0] ||
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        'Failed to save user account.';
       showAlert({
         title: 'Operation Failed',
-        message: err.response?.data?.detail || err.response?.data?.error || 'Failed to save user account.',
+        message: errMsg,
         type: 'error',
       });
     } finally {
@@ -336,15 +469,22 @@ export const UsersTab: React.FC = () => {
     }
   };
 
-  // --- 3. DELETE (Remove User) ---
   const promptDelete = (user: SystemUser) => {
-    setConfirmDialog({
-      isOpen: true,
+    if (user.username.trim().toLowerCase() === currentLoggedUsername) {
+      showAlert({
+        title: 'Action Blocked',
+        message: 'You cannot delete your own active administrator account.',
+        type: 'error',
+      });
+      return;
+    }
+
+    showConfirm({
       title: 'Delete System Account',
-      message: `Permanently delete user account "${user.username}"? This action cannot be undone.`,
+      message: `Permanently delete user account "@${user.username}"?`,
       confirmLabel: 'Delete Account',
       isDestructive: true,
-      action: async () => {
+      onConfirm: async () => {
         try {
           await apiClient.delete(`/users/${user.id}/`);
           setUsers((prev) => prev.filter((u) => u.id !== user.id));
@@ -364,30 +504,61 @@ export const UsersTab: React.FC = () => {
     });
   };
 
-  const getRoleBadge = (roleCode?: string) => {
-    const matched = RBAC_ROLES.find((r) => r.value === roleCode) || {
-      label: roleCode || 'User',
+  const getRoleBadge = (user: SystemUser) => {
+    const baseRole = (user.role || 'FACULTY').toUpperCase();
+    const isTeach = Boolean(user.is_teaching ?? user.can_teach ?? baseRole === 'FACULTY');
+    const lookupRole = baseRole === 'ADMIN' && isTeach ? 'FACULTY_ADMIN' : baseRole;
+
+    const matched = RBAC_ROLES.find((r) => r.value === lookupRole) || {
+      label: lookupRole,
       color: '#475569',
       bg: '#f1f5f9',
     };
+
+    const showSecondaryFacultyBadge =
+      (baseRole === 'PRINCIPAL' || baseRole === 'DEPT_HEAD') && isTeach;
+
     return (
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 5,
-          padding: '3px 9px',
-          borderRadius: 12,
-          fontSize: '0.72rem',
-          fontWeight: 800,
-          color: matched.color,
-          backgroundColor: matched.bg,
-          border: `1px solid ${matched.color}30`,
-        }}
-      >
-        <Shield size={11} color={matched.color} />
-        {matched.label}
-      </span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '3px 9px',
+            borderRadius: 12,
+            fontSize: '0.72rem',
+            fontWeight: 800,
+            color: matched.color,
+            backgroundColor: matched.bg,
+            border: `1px solid ${matched.color}30`,
+          }}
+        >
+          <Shield size={11} color={matched.color} />
+          {matched.label}
+        </span>
+
+        {showSecondaryFacultyBadge && (
+          <span
+            title="Holds dual role: Leadership + Classroom Faculty"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '2px 7px',
+              borderRadius: 10,
+              fontSize: '0.68rem',
+              fontWeight: 700,
+              color: '#0d9488',
+              backgroundColor: '#f0fdfa',
+              border: '1px solid #99f6e4',
+            }}
+          >
+            <BookOpen size={10} color="#0d9488" />
+            + Faculty
+          </span>
+        )}
+      </div>
     );
   };
 
@@ -400,16 +571,55 @@ export const UsersTab: React.FC = () => {
       (u.email || '').toLowerCase().includes(q) ||
       name.includes(q);
 
-    const matchesRole = roleFilter
-      ? (u.current_role || u.role) === roleFilter
-      : true;
+    if (!roleFilter) return matchesSearch;
 
-    return matchesSearch && matchesRole;
+    const baseRole = (u.role || 'FACULTY').toUpperCase();
+    const isTeach = Boolean(u.is_teaching ?? u.can_teach ?? baseRole === 'FACULTY');
+    const effectiveRole = baseRole === 'ADMIN' && isTeach ? 'FACULTY_ADMIN' : baseRole;
+
+    if (roleFilter === 'FACULTY') {
+      return matchesSearch && (effectiveRole === 'FACULTY' || isTeach);
+    }
+    return matchesSearch && (effectiveRole === roleFilter || baseRole === roleFilter);
   });
 
+  // Telemetry Counters
+  const activeCount = users.filter((u) => u.is_active).length;
+  const leadershipCount = users.filter((u) =>
+    ['ADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes((u.current_role || u.role || '').toUpperCase())
+  ).length;
+  const pendingProfileCount = users.filter((u) => u.is_profile_completed === false).length;
+
   return (
-    <>
-      {/* 1. Header Control Bar */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* 1. Telemetry Summary Cards */}
+      <div style={statsGrid}>
+        <div style={statCard}>
+          <div style={statLabel}>TOTAL SYSTEM ACCOUNTS</div>
+          <div style={statValue}>{users.length}</div>
+          <div style={statHelp}>Linked to Faculty &amp; Staff Directory</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={statLabel}>ACTIVE ACCOUNTS</div>
+          <div style={{ ...statValue, color: '#059669' }}>{activeCount}</div>
+          <div style={statHelp}>Authorized for portal &amp; mobile login</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={statLabel}>ADMIN, PRINCIPAL &amp; DEPT HEAD</div>
+          <div style={{ ...statValue, color: '#0284c7' }}>{leadershipCount}</div>
+          <div style={statHelp}>Includes dual-role Faculty / Admin users</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={statLabel}>PENDING PROFILE SETUP</div>
+          <div style={{ ...statValue, color: '#d97706' }}>{pendingProfileCount}</div>
+          <div style={statHelp}>Awaiting user completion on login</div>
+        </div>
+      </div>
+
+      {/* 2. Header Control Bar */}
       <div style={controlBar}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <select
@@ -434,15 +644,15 @@ export const UsersTab: React.FC = () => {
           style={{ display: 'flex', alignItems: 'center', gap: 6 }}
         >
           <Plus size={16} />
-          Add User
+          Add User Account
         </Button>
       </div>
 
-      {/* 2. Main Users Table */}
+      {/* 3. Main Users Table */}
       <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
           title="User Accounts & Security"
-          subtitle="Manage access roles, credentials, and institutional employee identity."
+          subtitle="Create accounts for Admin, Faculty/Admin, Principal, Dept Head, and Faculty. Created users automatically appear in the Faculty tab."
           searchPlaceholder="Search by username, full name, or email..."
           searchValue={search}
           onSearchChange={setSearch}
@@ -455,7 +665,6 @@ export const UsersTab: React.FC = () => {
               header: 'User Identity',
               render: (u) => (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  {/* REAL PHOTO ONLY: Neutral outline placeholder if missing */}
                   <div style={avatarBox}>
                     {u.photo_url || u.photo ? (
                       <img
@@ -478,7 +687,7 @@ export const UsersTab: React.FC = () => {
                         : u.username}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                      <span style={{ fontSize: '0.74rem', color: '#64748b' }}>
+                      <span style={{ fontSize: '0.74rem', color: '#64748b', fontFamily: 'monospace' }}>
                         @{u.username}
                       </span>
                       <button
@@ -502,14 +711,35 @@ export const UsersTab: React.FC = () => {
                   {u.email ? (
                     <span>{u.email}</span>
                   ) : (
-                    <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>Unassigned</span>
+                    <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>Pending user setup</span>
                   )}
                 </div>
               ),
             },
             {
-              header: 'Security Role',
-              render: (u) => getRoleBadge(u.current_role || u.role),
+              header: 'Security Role & Duties',
+              render: (u) => getRoleBadge(u),
+            },
+            {
+              header: 'Profile Setup',
+              render: (u) => {
+                const completed = u.is_profile_completed ?? Boolean(u.first_name && u.last_name);
+                return (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      color: completed ? '#059669' : '#d97706',
+                    }}
+                  >
+                    {completed ? <CheckCircle2 size={13} /> : <Clock size={13} />}
+                    {completed ? 'Completed' : 'Pending User Setup'}
+                  </span>
+                );
+              },
             },
             {
               header: 'Status',
@@ -533,42 +763,50 @@ export const UsersTab: React.FC = () => {
             {
               header: 'Actions',
               align: 'right',
-              render: (u) => (
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                  {/* Edit User Account */}
-                  <button
-                    type="button"
-                    onClick={() => handleOpenEdit(u)}
-                    title="Edit User"
-                    style={{ ...actionBtn, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}
-                  >
-                    <Pencil size={13} color="#0284c7" />
-                  </button>
+              render: (u) => {
+                const isSelf = u.username.trim().toLowerCase() === currentLoggedUsername;
+                return (
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(u)}
+                      title="Edit User & Role"
+                      style={{ ...actionBtn, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}
+                    >
+                      <Pencil size={13} color="#0284c7" />
+                    </button>
 
-                  {/* Delete Account */}
-                  <button
-                    type="button"
-                    onClick={() => promptDelete(u)}
-                    title="Delete User"
-                    style={{ ...actionBtn, backgroundColor: '#fff1f2', borderColor: '#fecdd3' }}
-                  >
-                    <Trash2 size={13} color="#e11d48" />
-                  </button>
-                </div>
-              ),
+                    <button
+                      type="button"
+                      disabled={isSelf}
+                      onClick={() => promptDelete(u)}
+                      title={isSelf ? 'Cannot delete your own active account' : 'Delete User'}
+                      style={{
+                        ...actionBtn,
+                        backgroundColor: '#fff1f2',
+                        borderColor: '#fecdd3',
+                        opacity: isSelf ? 0.35 : 1,
+                        cursor: isSelf ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <Trash2 size={13} color="#e11d48" />
+                    </button>
+                  </div>
+                );
+              },
             },
           ]}
         />
       </div>
 
-      {/* 3. MODAL: CREATE & EDIT USER */}
+      {/* 4. MODAL: CREATE & EDIT USER (WITH LIVE VALIDATION) */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title={editingUser ? `Edit Account: @${editingUser.username}` : 'Create System Account'}
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Real Portrait Photo Upload Area */}
+          {/* Portrait Photo Upload Area */}
           <div style={photoUploadContainer}>
             <div style={photoPreviewBox}>
               {photoPreview ? (
@@ -580,10 +818,10 @@ export const UsersTab: React.FC = () => {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
               <span style={{ fontSize: '0.80rem', fontWeight: 800, color: '#0f172a' }}>
-                Profile Picture
+                Profile Picture (Optional)
               </span>
               <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
-                JPEG, PNG, or WebP under 2.5 MB. Stored directly to the media database.
+                User can also upload their own photo when completing their profile.
               </span>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
@@ -594,10 +832,7 @@ export const UsersTab: React.FC = () => {
                   style={{ display: 'none' }}
                   onChange={handlePhotoSelect}
                 />
-                <label
-                  onClick={() => fileInputRef.current?.click()}
-                  style={uploadBtnLabel}
-                >
+                <label onClick={() => fileInputRef.current?.click()} style={uploadBtnLabel}>
                   <Camera size={13} />
                   <span>{photoPreview ? 'Change Photo' : 'Upload Photo'}</span>
                 </label>
@@ -612,23 +847,41 @@ export const UsersTab: React.FC = () => {
             </div>
           </div>
 
-          {/* Username */}
+          {/* Username / Employee ID with Live Validation */}
           <div>
-            <label style={labelStyle}>Username *</label>
+            <label style={labelStyle}>Username / Employee ID *</label>
             <input
               type="text"
               required
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-              style={inputStyle}
-              placeholder="e.g. jdoe_admin"
+              style={{
+                ...inputStyle,
+                borderColor: liveErrors.username ? '#dc2626' : formData.username.length >= 3 ? '#059669' : '#cbd5e1',
+              }}
+              placeholder="e.g. EMP-2026-001 or maria_santos"
             />
+            {isCheckingUsername && (
+              <span style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 3, display: 'block' }}>
+                Checking availability...
+              </span>
+            )}
+            {!isCheckingUsername && liveErrors.username && (
+              <span style={{ fontSize: '0.72rem', color: '#dc2626', fontWeight: 600, marginTop: 3, display: 'block' }}>
+                {liveErrors.username}
+              </span>
+            )}
+            {!isCheckingUsername && !liveErrors.username && formData.username.length >= 3 && (
+              <span style={{ fontSize: '0.72rem', color: '#059669', fontWeight: 600, marginTop: 3, display: 'block' }}>
+                ✓ Username is available
+              </span>
+            )}
           </div>
 
           {/* First & Last Name */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
-              <label style={labelStyle}>First Name</label>
+              <label style={labelStyle}>First Name (User can complete later)</label>
               <input
                 type="text"
                 value={formData.first_name}
@@ -638,7 +891,7 @@ export const UsersTab: React.FC = () => {
               />
             </div>
             <div>
-              <label style={labelStyle}>Last Name</label>
+              <label style={labelStyle}>Last Name (User can complete later)</label>
               <input
                 type="text"
                 value={formData.last_name}
@@ -649,7 +902,7 @@ export const UsersTab: React.FC = () => {
             </div>
           </div>
 
-          {/* Email Address */}
+          {/* Email Address with Live Validation */}
           <div>
             <label style={labelStyle}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -660,9 +913,17 @@ export const UsersTab: React.FC = () => {
               type="email"
               value={formData.email}
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              style={inputStyle}
+              style={{
+                ...inputStyle,
+                borderColor: liveErrors.email ? '#dc2626' : '#cbd5e1',
+              }}
               placeholder="user@attendsure.edu.ph"
             />
+            {liveErrors.email && (
+              <span style={{ fontSize: '0.72rem', color: '#dc2626', fontWeight: 600, marginTop: 3, display: 'block' }}>
+                {liveErrors.email}
+              </span>
+            )}
           </div>
 
           {/* Security Role */}
@@ -674,7 +935,19 @@ export const UsersTab: React.FC = () => {
             </label>
             <select
               value={formData.role}
-              onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+              onChange={(e) => {
+                const newRole = e.target.value;
+                setFormData({
+                  ...formData,
+                  role: newRole,
+                  is_teaching:
+                    newRole === 'FACULTY' || newRole === 'FACULTY_ADMIN'
+                      ? true
+                      : newRole === 'GUARD' || newRole === 'ADMIN'
+                      ? false
+                      : true,
+                });
+              }}
               style={inputStyle}
             >
               {RBAC_ROLES.map((role) => (
@@ -685,21 +958,67 @@ export const UsersTab: React.FC = () => {
             </select>
           </div>
 
-          {/* Password Field */}
+          {/* Dual-Role Checkbox for Principal, Dept Head, or Admin */}
+          {(formData.role === 'PRINCIPAL' || formData.role === 'DEPT_HEAD' || formData.role === 'ADMIN') && (
+            <label style={checkboxCard}>
+              <input
+                type="checkbox"
+                checked={formData.is_teaching}
+                onChange={(e) => setFormData({ ...formData, is_teaching: e.target.checked })}
+                style={{ width: 16, height: 16, accentColor: '#0284c7', cursor: 'pointer' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: '0.80rem', fontWeight: 800, color: '#0f172a' }}>
+                  Also serves as Classroom Faculty (Dual Role)
+                </span>
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                  Enables the "My Assigned Classes" tab for this {formData.role.replace('_', ' ')} so they can manage their own teaching load.
+                </span>
+              </div>
+            </label>
+          )}
+
+          {/* Account Active / Suspended Switch (When Editing) */}
+          {editingUser && editingUser.username.trim().toLowerCase() !== currentLoggedUsername && (
+            <label style={checkboxCard}>
+              <input
+                type="checkbox"
+                checked={formData.is_active}
+                onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+                style={{ width: 16, height: 16, accentColor: '#059669', cursor: 'pointer' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: '0.80rem', fontWeight: 800, color: '#0f172a' }}>
+                  Account Active (Permit Login)
+                </span>
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                  Uncheck to suspend this user's access immediately while keeping their historical DTR and attendance records.
+                </span>
+              </div>
+            </label>
+          )}
+
+          {/* Password Field with Show/Hide Toggle & Live Strength Indicator */}
           <div>
             <label style={labelStyle}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Lock size={12} color="#64748b" /> Password {editingUser ? '(Leave blank to retain current)' : '*'}
+                <Lock size={12} color="#64748b" />{' '}
+                {editingUser ? 'Reset Password (Optional, min 8 chars)' : 'Temporary Password (Min 8 chars) *'}
               </span>
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 type={showPassword ? 'text' : 'password'}
                 required={!editingUser}
-                placeholder={editingUser ? '••••••••' : 'Enter strong password'}
+                minLength={8}
+                placeholder={editingUser ? 'Leave blank to keep current password' : 'Minimum 8 characters (letters + numbers)'}
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                style={{ ...inputStyle, paddingRight: 38 }}
+                style={{
+                  ...inputStyle,
+                  paddingRight: 38,
+                  borderColor: liveErrors.password ? '#dc2626' : formData.password.length >= 8 ? '#059669' : '#cbd5e1',
+                }}
               />
               <button
                 type="button"
@@ -720,82 +1039,35 @@ export const UsersTab: React.FC = () => {
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            {liveErrors.password && (
+              <span style={{ fontSize: '0.72rem', color: '#dc2626', fontWeight: 600, marginTop: 3, display: 'block' }}>
+                {liveErrors.password}
+              </span>
+            )}
+            {!liveErrors.password && formData.password.length >= 8 && (
+              <span style={{ fontSize: '0.72rem', color: '#059669', fontWeight: 600, marginTop: 3, display: 'block' }}>
+                ✓ Strong password
+              </span>
+            )}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
             <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" size="md" type="submit" disabled={saving}>
+            <Button
+              variant="primary"
+              size="md"
+              type="submit"
+              disabled={saving || hasLiveErrors || isCheckingUsername}
+            >
               {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : null}
-              {editingUser ? 'Save Updates' : 'Create User'}
+              {editingUser ? 'Save Updates' : 'Create User Account'}
             </Button>
           </div>
         </form>
       </Modal>
-
-      {/* 4. MODAL: MODERN CONFIRMATION DIALOG */}
-      <Modal
-        isOpen={confirmDialog.isOpen}
-        onClose={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
-        title={confirmDialog.title}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-            <div
-              style={{
-                width: 38,
-                height: 38,
-                borderRadius: '50%',
-                backgroundColor: confirmDialog.isDestructive ? '#fee2e2' : '#eff6ff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            >
-              {confirmDialog.isDestructive ? (
-                <AlertTriangle size={20} color="#dc2626" />
-              ) : (
-                <AlertCircle size={20} color="#0284c7" />
-              )}
-            </div>
-            <div style={{ fontSize: '0.84rem', color: '#334155', lineHeight: 1.5, marginTop: 4 }}>
-              {confirmDialog.message}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-            <Button
-              variant="secondary"
-              size="md"
-              type="button"
-              disabled={saving}
-              onClick={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="md"
-              type="button"
-              disabled={saving}
-              onClick={async () => {
-                await confirmDialog.action();
-                setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
-              }}
-              style={
-                confirmDialog.isDestructive
-                  ? { backgroundColor: '#dc2626', borderColor: '#dc2626', color: '#ffffff' }
-                  : {}
-              }
-            >
-              {saving ? <Loader2 className="animate-spin" size={16} /> : confirmDialog.confirmLabel}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    </>
+    </div>
   );
 };
 
@@ -805,6 +1077,39 @@ export default UsersTab;
 // STYLES
 // ============================================================================
 
+const statsGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
+  gap: 14,
+};
+
+const statCard: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  borderRadius: 10,
+  border: '1px solid #e2e8f0',
+  padding: '14px 16px',
+};
+
+const statLabel: React.CSSProperties = {
+  fontSize: '0.66rem',
+  fontWeight: 700,
+  color: '#64748b',
+  marginBottom: 4,
+};
+
+const statValue: React.CSSProperties = {
+  fontSize: '1.40rem',
+  fontWeight: 800,
+  color: '#0f172a',
+  lineHeight: 1.1,
+};
+
+const statHelp: React.CSSProperties = {
+  fontSize: '0.68rem',
+  color: '#94a3b8',
+  marginTop: 4,
+};
+
 const controlBar: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
@@ -813,7 +1118,6 @@ const controlBar: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
   border: '1px solid #e2e8f0',
-  marginBottom: 16,
 };
 
 const selectPill: React.CSSProperties = {
@@ -884,6 +1188,17 @@ const inputStyle: React.CSSProperties = {
   boxSizing: 'border-box',
   color: '#0f172a',
   backgroundColor: '#ffffff',
+};
+
+const checkboxCard: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+  padding: '10px 12px',
+  backgroundColor: '#f8fafc',
+  borderRadius: 8,
+  border: '1px solid #cbd5e1',
+  cursor: 'pointer',
 };
 
 const photoUploadContainer: React.CSSProperties = {

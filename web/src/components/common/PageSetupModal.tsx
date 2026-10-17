@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Universal Page Setup Modal
+ * AttendSure - Universal Page Setup Modal
  * File: frontend/src/components/common/PageSetupModal.tsx
  *
  * Configures paper dimensions, margins, orientation, and layout format.

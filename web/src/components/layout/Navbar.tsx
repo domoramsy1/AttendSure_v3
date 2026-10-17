@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Institutional Top Navigation Bar
+ * AttendSure - Institutional Top Navigation Bar
  * File: frontend/src/components/layout/Navbar.tsx
  *
  * Features:

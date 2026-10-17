@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Official DepEd & Institutional Report Header & Signatories
+ * AttendSure - Official DepEd & Institutional Report Header & Signatories
  * File: frontend/src/components/reports/ReportHeader.tsx
  *
  * 100% Dynamic:

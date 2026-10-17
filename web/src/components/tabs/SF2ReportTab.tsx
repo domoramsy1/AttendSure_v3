@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - DepEd School Form 2 (SF 2) Daily Attendance Report of Learners
+ * AttendSure - DepEd School Form 2 (SF 2) Daily Attendance Report of Learners
  * File: frontend/src/components/tabs/SF2ReportTab.tsx
  *
  * Header Rule:

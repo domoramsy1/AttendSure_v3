@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Gate Scanner Transactions & Audit Ledger
+ * AttendSure - Gate Scanner Transactions & Audit Ledger
  * File: frontend/src/components/tabs/GateLogsTab.tsx
  *
  * Key Highlights:

@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Global Modern Alert & Confirmation System
+ * AttendSure - Global Modern Alert & Confirmation System
  * File: frontend/src/context/AlertContext.tsx
  */
 

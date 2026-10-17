@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - DepEd School Form 1 (SF 1) School Register
+ * AttendSure - DepEd School Form 1 (SF 1) School Register
  * File: frontend/src/components/tabs/SF1ReportTab.tsx
  *
  * Fixes Applied:

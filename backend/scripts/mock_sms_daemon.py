@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Dynamic SMS Modem & Simulation Daemon
+AttendSure - Dynamic SMS Modem & Simulation Daemon
 File: backend/scripts/sms_daemon.py
 """
 
@@ -150,7 +150,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("  ATTENDSURE V3: DYNAMIC SMS DISPATCHER")
+    print("  AttendSure: DYNAMIC SMS DISPATCHER")
     print("=" * 60)
 
     if not args.simulate:

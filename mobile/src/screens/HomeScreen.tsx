@@ -22,7 +22,7 @@ import { getUnsyncedCount } from '../services/offlineQueue';
 import { apiClient } from '../api/client';
 import { COLORS } from '../constants/theme';
 
-const fallbackLogo = require('../../assets/logo.svg');
+const fallbackLogo = require('../../assets/attendsure-logo.svg');
 
 interface StudentRosterItem {
   id: number;

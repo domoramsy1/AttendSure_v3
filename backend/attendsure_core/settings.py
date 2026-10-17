@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Core System & Hardware Configuration
+AttendSure - Core System & Hardware Configuration
 Optimized for Campus IoT Gate Kiosks, Mobile Geofencing, and Administrative Portal.
 File: backend/attendsure_core/settings.py
 """
@@ -110,7 +110,7 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'corsheaders',
 
-    # AttendSure V3 local domain modules
+    # AttendSure local domain modules
     'apps.core',
     'apps.academics.apps.AcademicsConfig',
     'apps.api.apps.ApiConfig',

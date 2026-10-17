@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - User Account & Profile Popover Menu
+ * AttendSure - User Account & Profile Popover Menu
  * File: frontend/src/components/layout/ProfileDropdown.tsx
  *
  * Capabilities:

@@ -1,4 +1,4 @@
-// AttendSure V3 - Core Mobile Type Definitions
+// AttendSure - Core Mobile Type Definitions
 // File: mobile/src/types/index.ts
 
 export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'GUARD';

@@ -2,9 +2,9 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
-import appLogoSrc from './assets/AppLogo.svg';
+import appLogoSrc from './assets/attendsure-logo.svg';
 
-// Dynamically generate a high-contrast PNG favicon from AppLogo.svg
+// Dynamically generate a high-contrast PNG favicon from attendsure-logo.svg
 const applyAppFavicon = () => {
   const img = new Image();
   img.src = appLogoSrc;

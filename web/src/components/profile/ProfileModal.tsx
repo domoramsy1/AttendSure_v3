@@ -1,447 +1,292 @@
 /**
- * AttendSure V3 - User Profile & Account Settings Modal
- * File: frontend/src/components/modals/ProfileModal.tsx
- *
- * Capabilities:
- * - Profile photo upload with client-side 2MB constraint and immediate preview.
- * - Dynamic server-relative media URL resolution.
- * - Password modification with eye visibility toggle.
- * - Synchronizes updated identity with localStorage and parent states.
- * - Non-blocking inline error and success feedback banners.
+ * AttendSure - User Profile View & Edit Modal
+ * File: frontend/src/components/profile/ProfileModal.tsx
  */
 
 import React, { useState, useEffect } from 'react';
 import apiClient from '../../api/client';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
-import {
-  Camera,
-  Trash2,
-  Upload,
-  User,
-  Mail,
-  Phone,
-  Lock,
-  Loader2,
-  CheckCircle2,
-  AlertCircle,
-  Eye,
-  EyeOff,
-} from 'lucide-react';
+import { useAlert } from '../../context/AlertContext';
+import { Mail, Phone, Lock, Building, Briefcase, Camera, X, Loader2 } from 'lucide-react';
+
+export interface ProfileUpdatePayload {
+  full_name?: string;
+  photo?: string | null;
+  [key: string]: unknown;
+}
 
 interface ProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onProfileUpdated: (updated: { full_name: string; photo?: string | null }) => void;
+  onProfileUpdated?: (updated: ProfileUpdatePayload) => void;
 }
 
-const resolvePhotoSource = (rawSrc?: string | null): string | null => {
-  if (!rawSrc || typeof rawSrc !== 'string') return null;
-  const trimmed = rawSrc.trim();
-  if (!trimmed) return null;
-
-  if (
-    trimmed.startsWith('data:image/') ||
-    trimmed.startsWith('http://') ||
-    trimmed.startsWith('https://') ||
-    trimmed.startsWith('blob:')
-  ) {
-    return trimmed;
-  }
-
-  if (trimmed.startsWith('/media/') || trimmed.startsWith('media/')) {
-    const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-    const protocol = window.location.protocol;
-    const hostname = window.location.hostname;
-    const backendPort = window.location.port === '8000' ? '' : ':8000';
-    return `${protocol}//${hostname}${backendPort}${cleanPath}`;
-  }
-
-  return trimmed;
-};
-
-export const ProfileModal: React.FC<ProfileModalProps> = ({
-  isOpen,
-  onClose,
-  onProfileUpdated,
-}) => {
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onProfileUpdated }) => {
+  const { showAlert } = useAlert();
+  const [loading, setLoading] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
 
   const [formData, setFormData] = useState({
     username: '',
-    role: '',
     first_name: '',
+    middle_name: '',
     last_name: '',
+    suffix: '',
     email: '',
     contact_number: '',
+    position: '',
+    department: '',
     password: '',
     photo: null as string | null,
   });
 
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
   useEffect(() => {
     if (!isOpen) return;
-    setSuccessMsg(null);
-    setErrorMsg(null);
-    setShowPassword(false);
-    setLoading(true);
 
+    setLoading(true);
     apiClient
       .get('/me/')
       .then((res) => {
+        const u = res.data;
         setFormData({
-          username: res.data.username || '',
-          role: res.data.role || '',
-          first_name: res.data.first_name || '',
-          last_name: res.data.last_name || '',
-          email: res.data.email || '',
-          contact_number: res.data.contact_number || '',
+          username: u.username || '',
+          first_name: u.first_name || '',
+          middle_name: u.middle_name || '',
+          last_name: u.last_name || '',
+          suffix: u.suffix || '',
+          email: u.email || '',
+          contact_number: u.contact_number || '',
+          position: u.position || '',
+          department: u.department || '',
           password: '',
-          photo: res.data.photo || null,
+          photo: null,
         });
+        setPhotoPreview(u.photo_url || u.photo || null);
       })
       .catch((err) => {
-        const detail =
-          err.response?.data?.detail ||
-          err.response?.data?.error ||
-          'Failed to load profile details.';
-        setErrorMsg(detail);
+        showAlert({
+          title: 'Error',
+          message: err.response?.data?.detail || 'Failed to load user profile.',
+          type: 'error',
+        });
       })
       .finally(() => setLoading(false));
-  }, [isOpen]);
+  }, [isOpen, showAlert]);
 
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 2 * 1024 * 1024) {
-      setErrorMsg('Photo size must be less than 2MB.');
-      e.target.value = '';
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      showAlert({
+        title: 'Unsupported Format',
+        message: 'Only JPG, PNG, and WebP images are allowed.',
+        type: 'error',
+      });
       return;
     }
 
-    setErrorMsg(null);
+    if (file.size > 2.5 * 1024 * 1024) {
+      showAlert({
+        title: 'File Too Large',
+        message: 'Profile photos must be 2.5 MB or smaller.',
+        type: 'error',
+      });
+      return;
+    }
+
     const reader = new FileReader();
     reader.onloadend = () => {
-      setFormData((prev) => ({
-        ...prev,
-        photo: reader.result as string,
-      }));
+      const base64Str = reader.result as string;
+      setPhotoPreview(base64Str);
+      setFormData((prev) => ({ ...prev, photo: base64Str }));
     };
     reader.readAsDataURL(file);
-    e.target.value = '';
-  };
-
-  const handleRemovePhoto = () => {
-    setErrorMsg(null);
-    setFormData((prev) => ({
-      ...prev,
-      photo: null,
-    }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    setSuccessMsg(null);
-    setErrorMsg(null);
+
+    const payload: Record<string, any> = {
+      first_name: formData.first_name.trim(),
+      middle_name: formData.middle_name.trim(),
+      last_name: formData.last_name.trim(),
+      suffix: formData.suffix.trim(),
+      email: formData.email.trim(),
+      contact_number: formData.contact_number.trim(),
+    };
+
+    if (formData.password && formData.password.trim().length >= 8) {
+      payload.password = formData.password.trim();
+    }
+
+    if (formData.photo !== null) {
+      payload.photo = formData.photo === '' ? null : formData.photo;
+    }
 
     try {
-      const payload: Record<string, any> = {
-        first_name: formData.first_name.trim(),
-        last_name: formData.last_name.trim(),
-        email: formData.email.trim(),
-        contact_number: formData.contact_number.trim(),
-      };
-
-      if (formData.password.trim()) {
-        payload.password = formData.password.trim();
-      }
-
-      if (formData.photo === null || formData.photo.startsWith('data:image')) {
-        payload.photo = formData.photo;
-      }
-
       const res = await apiClient.put('/me/', payload);
-      setSuccessMsg('Profile saved successfully!');
-
-      const updatedFullName =
-        res.data.full_name ||
-        `${formData.first_name.trim()} ${formData.last_name.trim()}`.trim() ||
-        formData.username;
-
-      // Synchronize with local storage for app-wide reactivity
-      localStorage.setItem('attendsure_faculty_name', updatedFullName);
-
-      onProfileUpdated({
-        full_name: updatedFullName,
-        photo: res.data.photo,
+      showAlert({
+        title: 'Profile Updated',
+        message: 'Your profile changes have been saved.',
+        type: 'success',
       });
 
-      setTimeout(() => {
-        onClose();
-      }, 700);
-    } catch (err: any) {
-      const data = err.response?.data;
-      if (typeof data === 'object' && data !== null) {
-        if (data.detail) {
-          setErrorMsg(data.detail);
-        } else if (data.error) {
-          setErrorMsg(data.error);
-        } else {
-          const lines = Object.entries(data).map(
-            ([key, val]) => `${key}: ${Array.isArray(val) ? val.join(' ') : val}`
-          );
-          setErrorMsg(lines.join(' | ') || 'Failed to save profile changes.');
-        }
-      } else {
-        setErrorMsg('Failed to save profile changes. Please verify your connection.');
+      if (onProfileUpdated) {
+        onProfileUpdated(res.data);
       }
+      onClose();
+    } catch (err: any) {
+      showAlert({
+        title: 'Update Failed',
+        message: err.response?.data?.error || err.response?.data?.detail || 'Failed to update profile.',
+        type: 'error',
+      });
     } finally {
       setSaving(false);
     }
   };
 
-  const previewPhotoSrc = resolvePhotoSource(formData.photo);
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Manage Account Profile">
+    <Modal isOpen={isOpen} onClose={onClose} title="My User Profile">
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '30px 0' }}>
-          <Loader2 className="animate-spin" size={24} color="#0284c7" />
-        </div>
+        <div style={{ padding: 24, textAlign: 'center', color: '#64748b' }}>Loading details...</div>
       ) : (
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {errorMsg && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 12px',
-                backgroundColor: '#fef2f2',
-                border: '1px solid #fecaca',
-                borderRadius: 6,
-                color: '#dc2626',
-                fontSize: '0.80rem',
-                lineHeight: 1.4,
-              }}
-            >
-              <AlertCircle size={16} style={{ flexShrink: 0 }} />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          {successMsg && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 12px',
-                backgroundColor: '#ecfdf5',
-                border: '1px solid #a7f3d0',
-                borderRadius: 6,
-                color: '#059669',
-                fontSize: '0.80rem',
-                fontWeight: 600,
-              }}
-            >
-              <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
-              <span>{successMsg}</span>
-            </div>
-          )}
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 16,
-              padding: 12,
-              backgroundColor: '#f8fafc',
-              borderRadius: 8,
-              border: '1px solid #e2e8f0',
-            }}
-          >
-            <div
-              style={{
-                width: 64,
-                height: 64,
-                borderRadius: '50%',
-                backgroundColor: '#e2e8f0',
-                border: '2px solid #0284c7',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                overflow: 'hidden',
-                flexShrink: 0,
-              }}
-            >
-              {previewPhotoSrc ? (
-                <img
-                  src={previewPhotoSrc}
-                  alt="Profile Preview"
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Photo Section */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 10, backgroundColor: '#f8fafc', borderRadius: 8 }}>
+            <div style={{ width: 54, height: 54, borderRadius: '50%', overflow: 'hidden', backgroundColor: '#e2e8f0', flexShrink: 0 }}>
+              {photoPreview ? (
+                <img src={photoPreview} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
-                <Camera size={26} color="#64748b" />
+                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
+                  No Pic
+                </div>
               )}
             </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <label style={uploadPhotoBtn}>
-                  <Upload size={13} />
-                  <span>Upload Photo</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handlePhotoSelect}
-                    style={{ display: 'none' }}
-                  />
-                </label>
-
-                {formData.photo && (
-                  <button
-                    type="button"
-                    onClick={handleRemovePhoto}
-                    style={removePhotoBtn}
-                    title="Remove Photo"
-                  >
-                    <Trash2 size={13} />
-                    <span>Remove</span>
-                  </button>
-                )}
-              </div>
-              <span style={{ fontSize: '0.68rem', color: '#64748b' }}>
-                Square photo recommended (PNG or JPG, max 2MB).
-              </span>
+            <div>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: '0.74rem',
+                  padding: '4px 10px',
+                  backgroundColor: '#0284c7',
+                  color: '#fff',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                }}
+              >
+                <Camera size={12} /> Change Photo
+                <input type="file" accept="image/*" onChange={handlePhotoSelect} style={{ display: 'none' }} />
+              </label>
+              {photoPreview && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhotoPreview(null);
+                    setFormData((prev) => ({ ...prev, photo: '' }));
+                  }}
+                  style={{ marginLeft: 8, fontSize: '0.74rem', color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer' }}
+                >
+                  <X size={12} style={{ verticalAlign: 'middle' }} /> Remove
+                </button>
+              )}
             </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
-              <label style={labelStyle}>Username</label>
+              <label style={labelStyle}>First Name</label>
               <input
+                required
                 type="text"
-                disabled
-                value={formData.username}
-                style={{ ...inputStyle, backgroundColor: '#f1f5f9', color: '#64748b' }}
+                style={inputStyle}
+                value={formData.first_name}
+                onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
               />
             </div>
             <div>
-              <label style={labelStyle}>System Role</label>
+              <label style={labelStyle}>Last Name</label>
+              <input
+                required
+                type="text"
+                style={inputStyle}
+                value={formData.last_name}
+                onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 10 }}>
+            <div>
+              <label style={labelStyle}>Middle Name</label>
               <input
                 type="text"
-                disabled
-                value={formData.role}
-                style={{ ...inputStyle, backgroundColor: '#f1f5f9', color: '#0284c7', fontWeight: 700 }}
+                style={inputStyle}
+                value={formData.middle_name}
+                onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })}
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>Suffix</label>
+              <input
+                type="text"
+                style={inputStyle}
+                value={formData.suffix}
+                onChange={(e) => setFormData({ ...formData, suffix: e.target.value })}
+                placeholder="Jr., III..."
               />
             </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
-              <label style={labelStyle}>First Name *</label>
-              <div style={{ position: 'relative' }}>
-                <User size={14} color="#94a3b8" style={inputIconStyle} />
-                <input
-                  type="text"
-                  required
-                  value={formData.first_name}
-                  onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                  style={{ ...inputStyle, paddingLeft: 32 }}
-                  placeholder="First Name"
-                />
-              </div>
+              <label style={labelStyle}><Mail size={12} style={{ verticalAlign: 'middle' }} /> Email</label>
+              <input
+                type="email"
+                style={inputStyle}
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              />
             </div>
             <div>
-              <label style={labelStyle}>Last Name *</label>
-              <div style={{ position: 'relative' }}>
-                <User size={14} color="#94a3b8" style={inputIconStyle} />
-                <input
-                  type="text"
-                  required
-                  value={formData.last_name}
-                  onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                  style={{ ...inputStyle, paddingLeft: 32 }}
-                  placeholder="Last Name"
-                />
-              </div>
+              <label style={labelStyle}><Phone size={12} style={{ verticalAlign: 'middle' }} /> Contact Number</label>
+              <input
+                type="text"
+                style={inputStyle}
+                value={formData.contact_number}
+                onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
+              />
             </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
-              <label style={labelStyle}>Email Address *</label>
-              <div style={{ position: 'relative' }}>
-                <Mail size={14} color="#94a3b8" style={inputIconStyle} />
-                <input
-                  type="email"
-                  required
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  style={{ ...inputStyle, paddingLeft: 32 }}
-                  placeholder="name@school.edu.ph"
-                />
-              </div>
+              <label style={labelStyle}><Briefcase size={12} style={{ verticalAlign: 'middle' }} /> Position</label>
+              <input type="text" style={{ ...inputStyle, backgroundColor: '#f1f5f9' }} value={formData.position} disabled />
             </div>
             <div>
-              <label style={labelStyle}>Phone Number</label>
-              <div style={{ position: 'relative' }}>
-                <Phone size={14} color="#94a3b8" style={inputIconStyle} />
-                <input
-                  type="text"
-                  value={formData.contact_number}
-                  onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
-                  style={{ ...inputStyle, paddingLeft: 32 }}
-                  placeholder="09171234567"
-                />
-              </div>
+              <label style={labelStyle}><Building size={12} style={{ verticalAlign: 'middle' }} /> Department</label>
+              <input type="text" style={{ ...inputStyle, backgroundColor: '#f1f5f9' }} value={formData.department} disabled />
             </div>
           </div>
 
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <label style={{ ...labelStyle, marginBottom: 0 }}>
-                Change Password (leave blank to keep current)
-              </label>
-              {formData.password && (
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#0284c7',
-                    fontSize: '0.72rem',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 3,
-                    padding: 0,
-                  }}
-                >
-                  {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
-                  <span>{showPassword ? 'Hide' : 'Show'}</span>
-                </button>
-              )}
-            </div>
-            <div style={{ position: 'relative' }}>
-              <Lock size={14} color="#94a3b8" style={inputIconStyle} />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                style={{ ...inputStyle, paddingLeft: 32 }}
-                placeholder="Enter at least 6 characters"
-                minLength={6}
-              />
-            </div>
+            <label style={labelStyle}><Lock size={12} style={{ verticalAlign: 'middle' }} /> New Password (Leave blank to keep current)</label>
+            <input
+              type="password"
+              placeholder="Min 8 characters"
+              style={inputStyle}
+              value={formData.password}
+              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+            />
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
@@ -449,8 +294,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               Cancel
             </Button>
             <Button variant="primary" size="md" type="submit" disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" size={15} style={{ marginRight: 6 }} /> : null}
-              Save Changes
+              {saving ? <Loader2 size={16} className="animate-spin" /> : 'Save Changes'}
             </Button>
           </div>
         </form>
@@ -459,56 +303,24 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   );
 };
 
-export default ProfileModal;
-
 const labelStyle: React.CSSProperties = {
   display: 'block',
-  fontSize: '0.76rem',
-  fontWeight: 600,
+  fontSize: '0.78rem',
+  fontWeight: 700,
   color: '#334155',
   marginBottom: 4,
 };
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  padding: '8px 10px',
+  padding: '8px 12px',
   borderRadius: 6,
   border: '1px solid #cbd5e1',
-  fontSize: '0.82rem',
+  fontSize: '0.84rem',
   outline: 'none',
   boxSizing: 'border-box',
   color: '#0f172a',
+  backgroundColor: '#ffffff',
 };
 
-const inputIconStyle: React.CSSProperties = {
-  position: 'absolute',
-  left: 10,
-  top: 10,
-};
-
-const uploadPhotoBtn: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '6px 10px',
-  backgroundColor: '#0284c7',
-  color: '#ffffff',
-  borderRadius: 6,
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const removePhotoBtn: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '6px 10px',
-  backgroundColor: '#fee2e2',
-  color: '#dc2626',
-  borderRadius: 6,
-  border: '1px solid #fecaca',
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
+export default ProfileModal;

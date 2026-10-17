@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Academic Timetables, Sections & Schedules
+ * AttendSure - Academic Timetables, Sections & Schedules
  * File: frontend/src/components/tabs/SchedulesTab.tsx
  *
  * Key Upgrades:
@@ -46,8 +46,7 @@ interface ScheduleItem {
   grade_level_name?: string;
   subject?: any;
   subject_code?: string;
-  subject_name?: string;
-  faculty?: any;
+  subject_name?: string; 
   faculty_name?: string;
   faculty_id?: number;
   faculty?: any;

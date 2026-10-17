@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - School Institutional Context
+ * AttendSure - School Institutional Context
  * File: frontend/src/context/SchoolContext.tsx
  *
  * Provides institutional branding, IDs, principal signatures,
@@ -72,37 +72,38 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Synchronizes browser favicon and document title
   const syncBrowserTabBranding = useCallback((profile: SchoolProfile) => {
-    // 1. Dynamic Document Title Update
     if (profile.school_name) {
-      document.title = `${profile.school_name} — AttendSure V3`;
+      document.title = `${profile.school_name} — AttendSure`;
     }
 
-    // 2. Dynamic Favicon Update
     const rawLogo = profile.school_logo || profile.left_logo;
     if (!rawLogo) return;
 
     const applyFaviconLink = (iconDataUri: string) => {
-      // Remove all existing icon tags to break Chromium cache latching
       const existingIcons = document.querySelectorAll("link[rel*='icon']");
       existingIcons.forEach((el) => el.remove());
 
-      // Create and mount fresh link tags
+      const mimeType = iconDataUri.includes('svg') ? 'image/svg+xml' : 'image/png';
+
       const link = document.createElement('link');
       link.id = 'app-favicon';
       link.rel = 'icon';
-      link.type = 'image/png';
+      link.type = mimeType;
       link.href = iconDataUri;
       document.head.appendChild(link);
 
       const shortcutLink = document.createElement('link');
       shortcutLink.rel = 'shortcut icon';
-      shortcutLink.type = 'image/png';
+      shortcutLink.type = mimeType;
       shortcutLink.href = iconDataUri;
       document.head.appendChild(shortcutLink);
     };
 
-    // Canvas Downscaling: Compress high-res logo into a 64x64 PNG (~4KB)
-    // to bypass Chromium's silent buffer discard on large data URIs
+    if (rawLogo.includes('.svg') || rawLogo.startsWith('data:image/svg+xml')) {
+      applyFaviconLink(rawLogo);
+      return;
+    }
+
     const img = new Image();
     img.crossOrigin = 'anonymous';
 
@@ -134,21 +135,43 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const fetchSchoolProfile = useCallback(async () => {
     setLoading(true);
+
+    // EXACT 5 SECONDS SPLASH SCREEN TIMER (5,000 ms)
+    const SPLASH_DURATION_MS = 2500;
+    const minDelayTimer = new Promise((resolve) => setTimeout(resolve, SPLASH_DURATION_MS));
+
     try {
-      const res = await apiClient.get('/settings/school/');
-      if (res.data) {
+      // Waits for BOTH the API fetch and the 5-second timer to resolve
+      const [apiResult] = await Promise.allSettled([
+        apiClient.get('/settings/school/'),
+        minDelayTimer,
+      ]);
+
+      if (apiResult.status === 'fulfilled' && apiResult.value?.data) {
         const merged: SchoolProfile = {
           ...defaultSchool,
-          ...res.data,
+          ...apiResult.value.data,
         };
         setSchool(merged);
         syncBrowserTabBranding(merged);
+      } else {
+        syncBrowserTabBranding(defaultSchool);
       }
     } catch (err) {
       console.warn('[SchoolContext] Using default institutional configuration:', err);
       syncBrowserTabBranding(defaultSchool);
     } finally {
       setLoading(false);
+
+      // Smooth 0.6s fade-out transition before removing from the DOM
+      const splash = document.getElementById('web-splash');
+      if (splash) {
+        splash.style.transition = 'opacity 0.6s ease-out';
+        splash.style.opacity = '0';
+        setTimeout(() => {
+          splash.remove();
+        }, 600);
+      }
     }
   }, [syncBrowserTabBranding]);
 
@@ -182,10 +205,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 };
 
-// Primary hook
 export const useSchool = () => useContext(SchoolContext);
-
-// Backwards-compatible alias for tabs importing useSchoolContext
 export const useSchoolContext = useSchool;
 
 export default SchoolContext;
