@@ -1,15 +1,15 @@
 /**
  * AttendSure - Reusable Server Pagination Bar & Safe CSV Exporter
- * File: frontend/src/components/common/Pagination.tsx
+ * File: web/src/components/common/Pagination.tsx
  *
- * Enhancements:
- * 1. FULL SCALE OPTIONS: Supports 25, 50, 100, 250, 500, 1000, and All (10,000 ceiling).
- * 2. SHARED CSV EXPORTER: Provides `exportToCsv` with OWASP CSV Formula Injection protection.
- * 3. FORM SAFE: Explicit type="button" prevents accidental parent form submissions.
- * 4. ASYNC PROTECTION: Freezes controls during active data fetches.
+ * Cybersecurity & Stability Hardening:
+ * 1. OWASP CSV Formula Injection Defense: Neutralizes cells starting with =, +, -, @, |, \t, \r.
+ * 2. Asynchronous Memory Cleanup: Delays URL.revokeObjectURL by 1s to prevent premature download aborts.
+ * 3. Strict Numeric Math: Guards against NaN / divide-by-zero during rapid page size switching.
+ * 4. WCAG Accessible Controls: Adds aria-label descriptors to all buttons and select inputs.
  */
 
-import React from 'react';
+import React, { useId } from 'react';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 
 /** Safe upper ceiling representing "All" records without exhausting server RAM */
@@ -26,19 +26,27 @@ export const DEFAULT_PAGE_SIZE_OPTIONS: number[] = [
 ];
 
 /**
- * Cybersecurity Helper: Sanitizes a cell value to prevent CSV Formula Injection
- * in Microsoft Excel and Google Sheets (blocks cells starting with =, +, -, or @).
+ * Cybersecurity Helper: Sanitizes cell values to prevent CSV Formula / DDE Injection
+ * in Microsoft Excel, LibreOffice, and Google Sheets.
+ * Blocks: =, +, -, @, |, \t, \r
  */
 export const sanitizeCsvCell = (val: string | number | boolean | undefined | null): string => {
-  const clean = String(val ?? '').replace(/"/g, '""').trim();
-  if (/^[=+\-@]/.test(clean)) {
+  if (val === null || val === undefined) return '""';
+  
+  // Escape internal double quotes by doubling them per RFC 4180
+  const clean = String(val).replace(/"/g, '""').trim();
+  
+  // Neutralize formula trigger characters with a leading single quote
+  if (/^[=+\-@\t\r|]/.test(clean)) {
     return `"'${clean}"`;
   }
+  
   return `"${clean}"`;
 };
 
 /**
- * Reusable CSV Downloader for any table tab.
+ * Reusable CSV Downloader for any table module.
+ * Embeds UTF-8 BOM (\uFEFF) for proper display of special characters in Excel.
  */
 export const exportToCsv = (
   filename: string,
@@ -52,16 +60,25 @@ export const exportToCsv = (
     ...rows.map((row) => row.map((cell) => sanitizeCsvCell(cell)).join(',')),
   ];
 
+  // UTF-8 BOM prefix ensures correct rendering in Excel
   const csvContent = '\uFEFF' + csvLines.join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
+  
   const link = document.createElement('a');
   link.href = url;
-  link.download = filename.endsWith('.csv') ? filename : `${filename}.csv`;
+  link.download = filename.toLowerCase().endsWith('.csv') ? filename : `${filename}.csv`;
+  link.style.display = 'none';
   document.body.appendChild(link);
+  
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+
+  // Defer revocation by 1 second to ensure browser has completed file stream
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 1000);
+
   return true;
 };
 
@@ -92,33 +109,48 @@ export const Pagination: React.FC<PaginationProps> = ({
   className,
   style,
 }) => {
-  if (totalCount === 0) return null;
+  const selectId = useId();
 
-  const isAllSelected = pageSize >= ALL_ROWS_SIZE;
-  const safeTotalPages = isAllSelected ? 1 : Math.max(1, totalPages);
-  const safeCurrentPage = isAllSelected ? 1 : Math.min(Math.max(1, currentPage), safeTotalPages);
+  if (totalCount <= 0) return null;
 
-  const startRecord = isAllSelected ? 1 : (safeCurrentPage - 1) * pageSize + 1;
-  const endRecord = isAllSelected ? totalCount : Math.min(safeCurrentPage * pageSize, totalCount);
+  // Defensive Numeric Guards
+  const safePageSize = Math.max(1, Number(pageSize) || 25);
+  const isAllSelected = safePageSize >= ALL_ROWS_SIZE;
+  const safeTotalPages = isAllSelected ? 1 : Math.max(1, Number(totalPages) || 1);
+  const safeCurrentPage = isAllSelected
+    ? 1
+    : Math.min(Math.max(1, Number(currentPage) || 1), safeTotalPages);
+
+  const startRecord = isAllSelected ? 1 : (safeCurrentPage - 1) * safePageSize + 1;
+  const endRecord = isAllSelected ? totalCount : Math.min(safeCurrentPage * safePageSize, totalCount);
 
   const isPrevDisabled = disabled || isAllSelected || safeCurrentPage <= 1;
   const isNextDisabled = disabled || isAllSelected || safeCurrentPage >= safeTotalPages;
 
   return (
-    <div className={className} style={{ ...containerStyle, ...style }}>
+    <div className={className} style={{ ...containerStyle, ...style }} role="navigation" aria-label="Pagination Navigation">
       <div style={{ fontSize: '0.80rem', color: '#475569' }}>
-        Showing <strong>{startRecord}</strong> to <strong>{endRecord}</strong> of{' '}
-        <strong>{totalCount}</strong> {itemLabel}
+        Showing <strong>{startRecord.toLocaleString()}</strong> to <strong>{endRecord.toLocaleString()}</strong> of{' '}
+        <strong>{totalCount.toLocaleString()}</strong> {itemLabel}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         {onPageSizeChange && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 8 }}>
-            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Rows per page:</span>
+            <label htmlFor={selectId} style={{ fontSize: '0.78rem', color: '#64748b' }}>
+              Rows per page:
+            </label>
             <select
-              value={pageSize}
+              id={selectId}
+              value={safePageSize}
               disabled={disabled}
-              onChange={(e) => onPageSizeChange(Number(e.target.value))}
+              aria-label="Rows per page selector"
+              onChange={(e) => {
+                const nextSize = Number(e.target.value);
+                if (!isNaN(nextSize) && nextSize > 0) {
+                  onPageSizeChange(nextSize);
+                }
+              }}
               style={{
                 ...selectStyle,
                 opacity: disabled ? 0.6 : 1,
@@ -139,7 +171,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           type="button"
           onClick={() => onPageChange(1)}
           disabled={isPrevDisabled}
-          aria-label="First page"
+          aria-label="Go to first page"
           title="First Page"
           style={{
             ...btnStyle,
@@ -155,7 +187,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           type="button"
           onClick={() => onPageChange(safeCurrentPage - 1)}
           disabled={isPrevDisabled}
-          aria-label="Previous page"
+          aria-label="Go to previous page"
           title="Previous Page"
           style={{
             ...btnStyle,
@@ -184,7 +216,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           type="button"
           onClick={() => onPageChange(safeCurrentPage + 1)}
           disabled={isNextDisabled}
-          aria-label="Next page"
+          aria-label="Go to next page"
           title="Next Page"
           style={{
             ...btnStyle,
@@ -200,7 +232,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           type="button"
           onClick={() => onPageChange(safeTotalPages)}
           disabled={isNextDisabled}
-          aria-label="Last page"
+          aria-label="Go to last page"
           title="Last Page"
           style={{
             ...btnStyle,

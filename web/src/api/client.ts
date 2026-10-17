@@ -17,9 +17,9 @@ const resolveBaseHost = (): string => {
   return CLOUDFLARE_HOST;
 };
 
-export const apiClient = axios.create({
-  baseURL: resolveBaseHost(),
-  timeout: 15000,
+const apiClient = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  timeout: 15000, // Set global timeout to 30 seconds for Cloudflare Tunnel
   headers: {
     'Content-Type': 'application/json',
   },

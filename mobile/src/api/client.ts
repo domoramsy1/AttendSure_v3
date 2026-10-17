@@ -6,7 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const AUTH_TOKEN_KEY = 'attendsure_auth_token';
 
 // Primary Cloudflare Host (Base domain without trailing slash or /api)
-const CLOUDFLARE_HOST = 'https://conventional-prayer-specs-boxed.trycloudflare.com';
+const CLOUDFLARE_HOST = 'https://sing-happened-plastics-wish.trycloudflare.com';
 
 export const apiClient = axios.create({
   baseURL: CLOUDFLARE_HOST,

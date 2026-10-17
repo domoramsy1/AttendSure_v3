@@ -1765,6 +1765,7 @@ class GeofenceAPIView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+
 class SchoolSettingsAPIView(APIView):
     def get_permissions(self):
         if self.request.method in permissions.SAFE_METHODS:
@@ -1787,7 +1788,6 @@ class SchoolSettingsAPIView(APIView):
         serializer = SchoolProfileSerializer(profile, context={'request': request})
         data = dict(serializer.data)
 
-        # Offload any base64 logos in database to disk URLs
         for key in ('school_logo', 'left_logo', 'right_logo'):
             if data.get(key):
                 data[key] = resolve_logo_field(data[key], request)
@@ -1795,27 +1795,35 @@ class SchoolSettingsAPIView(APIView):
         cache.set(cache_key, data, timeout=300)
         return Response(data, status=status.HTTP_200_OK)
 
-    def post(self, request):
-        cache.delete("attendsure_school_settings_fast_payload")
-        return self._save(request, partial=True)
-
     def put(self, request):
-        cache.delete("attendsure_school_settings_fast_payload")
         return self._save(request, partial=False)
 
     def patch(self, request):
-        cache.delete("attendsure_school_settings_fast_payload")
         return self._save(request, partial=True)
 
     def _save(self, request, partial=True):
         profile = self.get_object()
         serializer = SchoolProfileSerializer(profile, data=request.data, partial=partial, context={'request': request})
+        
         if serializer.is_valid():
             serializer.save()
-            cache.delete("attendsure_school_settings_fast_payload")
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 1. Instantly bust cache so fresh data serves immediately
+            cache_key = "attendsure_school_settings_fast_payload"
+            cache.delete(cache_key)
 
+            # 2. Return clean payload directly
+            return Response({
+                'success': True,
+                'message': 'School settings updated successfully.',
+                **serializer.data
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            'success': False,
+            'error': serializer.errors,
+            'message': 'Validation error.'
+        }, status=status.HTTP_400_BAD_REQUEST)
 
 SchoolProfileView = SchoolSettingsAPIView
 
@@ -3301,3 +3309,49 @@ def flush_cache(request):
     """Clears cached datasets across memory and disk."""
     cache.clear()
     return Response({'success': True, 'message': 'Cache cleared successfully.'}, status=status.HTTP_200_OK)
+
+
+
+class RegisterPushTokenAPIView(APIView):
+    """
+    Endpoint: POST /api/users/register-push-token/
+    Stores the mobile device push token.
+    Uses fast Redis/memory cache to prevent slow database writes during gate card taps.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        push_token = str(request.data.get('push_token', '')).strip()
+        if not push_token:
+            return Response(
+                {'success': False, 'message': 'Push token is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        faculty = (
+            FacultyProfile.objects.filter(account__user=user).first()
+            or FacultyProfile.objects.filter(employee_id__iexact=getattr(user, 'username', '')).first()
+        )
+
+        if not faculty:
+            return Response(
+                {'success': False, 'message': 'Faculty profile not found for this account.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # 1. High-speed cache write (valid for 30 days) for instant retrieval during gate scans
+        cache.set(f"faculty_push_token_{faculty.id}", push_token, timeout=86400 * 30)
+
+        # 2. Persist to database column if it exists on the model
+        if hasattr(faculty, 'push_token'):
+            try:
+                faculty.push_token = push_token
+                faculty.save(update_fields=['push_token'])
+            except Exception:
+                pass
+
+        return Response(
+            {'success': True, 'message': 'Push token registered successfully.'},
+            status=status.HTTP_200_OK,
+        )

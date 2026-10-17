@@ -18,11 +18,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import { useAuth } from '../context/AuthContext';
-import { apiClient } from '../api/client';
+import defaultApiClient, { apiClient as namedClient } from '../api/client';
+import { registerPushTokenWithBackend } from '../services/pushService';
+import { startPassivePresenceTracking } from '../services/backgroundLocation';
+import { getOrCreateDeviceUuid } from '../services/deviceService';
+
+const client = defaultApiClient || namedClient;
 
 const fallbackLogo = require('../../assets/attendsure-logo.svg');
-const DEVICE_UUID_STORAGE_KEY = 'attendsure_hardware_device_uuid';
+const CACHED_SCHOOL_PROFILE_KEY = 'attendsure_cached_school_profile';
 
 interface PublicSchoolProfile {
   school_id?: string;
@@ -41,23 +47,6 @@ const showAlert = (title: string, message: string) => {
   }
 };
 
-/**
- * Generates or retrieves a persistent hardware UUID for zero-trust device binding.
- */
-export const getOrCreateDeviceUuid = async (): Promise<string> => {
-  const existing = await AsyncStorage.getItem(DEVICE_UUID_STORAGE_KEY);
-  if (existing) return existing;
-
-  const randomHex = () =>
-    Math.floor((1 + Math.random()) * 0x10000)
-      .toString(16)
-      .substring(1)
-      .toUpperCase();
-  const generated = `DEV-${Platform.OS.toUpperCase()}-${randomHex()}${randomHex()}-${randomHex()}`;
-  await AsyncStorage.setItem(DEVICE_UUID_STORAGE_KEY, generated);
-  return generated;
-};
-
 export const LoginScreen: React.FC = () => {
   const { login } = useAuth();
 
@@ -73,13 +62,23 @@ export const LoginScreen: React.FC = () => {
     `${Platform.OS.toUpperCase()} (${Platform.Version || 'OS'})`
   );
 
-  // Automatically connects to the Cloudflare tunnel on startup
-  const checkServerAndLoadSchool = useCallback(async () => {
+  // Fast data fetching: Loads cached profile immediately, then syncs with server
+  const loadSchoolProfile = useCallback(async () => {
     try {
-      const res = await apiClient.get('/api/settings/school/');
-      if (res.data) {
+      const cached = await AsyncStorage.getItem(CACHED_SCHOOL_PROFILE_KEY);
+      if (cached) {
+        setSchoolInfo(JSON.parse(cached));
+      }
+    } catch {
+      // Continue to network fetch if local cache is empty
+    }
+
+    try {
+      const res = await client.get('/api/settings/school/', { timeout: 3500 });
+      if (res && res.data) {
         setSchoolInfo(res.data);
         setServerReachable(true);
+        await AsyncStorage.setItem(CACHED_SCHOOL_PROFILE_KEY, JSON.stringify(res.data));
       }
     } catch {
       setServerReachable(false);
@@ -88,25 +87,39 @@ export const LoginScreen: React.FC = () => {
 
   useEffect(() => {
     getOrCreateDeviceUuid().then(setDeviceUuid);
-    checkServerAndLoadSchool();
-  }, [checkServerAndLoadSchool]);
+    loadSchoolProfile();
+  }, [loadSchoolProfile]);
 
   const handleLogin = async () => {
-    if (!username.trim() || !password.trim()) {
+    const cleanUsername = username.trim();
+    const cleanPassword = password.trim();
+
+    if (!cleanUsername || !cleanPassword) {
       showAlert('Missing Credentials', 'Please enter your username and password.');
       return;
     }
 
     setSubmitting(true);
     try {
-      await login(username, password);
+      // 1. Authenticate with backend database
+      await login(cleanUsername, cleanPassword);
+
+      // 2. Automatically start live background GPS tracking (Zero button clicks needed)
+      startPassivePresenceTracking().catch((gpsErr) => {
+        console.warn('[LoginScreen] Background GPS start notice:', gpsErr?.message || gpsErr);
+      });
+
+      // 3. Register device push token for Gate turnstile wake-up signals
+      registerPushTokenWithBackend().catch((pushErr) => {
+        console.warn('[LoginScreen] Push token registration notice:', pushErr?.message || pushErr);
+      });
     } catch (err: any) {
       const serverError =
         err?.response?.data?.error ||
         err?.response?.data?.detail ||
-        (err?.code === 'ERR_NETWORK' || err?.message?.includes('Network Error')
-          ? 'Cannot reach AttendSure server. Check your internet connection.'
-          : err?.message || 'Authentication failed.');
+        (err?.code === 'ECONNABORTED' || err?.code === 'ERR_NETWORK' || err?.message?.includes('Network Error')
+          ? 'Cannot reach AttendSure server. Please check your internet connection.'
+          : err?.message || 'Authentication failed. Please verify your credentials.');
       showAlert('Login Failed', serverError);
     } finally {
       setSubmitting(false);
@@ -131,7 +144,7 @@ export const LoginScreen: React.FC = () => {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Top Bar with Automatic Server Status */}
+          {/* Top Bar with Live Server Status */}
           <View style={styles.topUtilityBar}>
             <View
               style={[

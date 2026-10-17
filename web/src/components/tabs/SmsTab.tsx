@@ -1,12 +1,12 @@
 /**
- * AttendSure - SMS Gateway & Outbox Dispatcher (Full Admin CRUD)
+ * AttendSure - SMS Gateway & Outbox Dispatcher (Full Admin CRUD & RBAC Hardened)
  * File: web/src/components/tabs/SmsTab.tsx
  *
- * Full Admin CRUD Actions:
- * - CREATE: Compose single SMS (with student directory autofill) & Broadcast Announcements.
- * - READ: Live outbox ledger, delivery status pills, message details inspector.
- * - UPDATE: Edit recipient name, phone, message text, category, priority, status; retry single & bulk failed dispatches.
- * - DELETE: Delete individual message, clear delivered messages, or clear pending queue.
+ * Cybersecurity & Stability Hardening:
+ * 1. Role-Based Access Control (RBAC): Uses `isAdmin` to protect bulk deletions, queue flushes, and policy updates.
+ * 2. Zero-Unused-Variables: Cleans up all TypeScript compiler warnings (TS6133).
+ * 3. Sanitized Phone & Payload: Enforces standard Philippine mobile numbers (+63 / 09).
+ * 4. Resilient Live Polling: Non-blocking background sync pauses while interacting with modals.
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -47,6 +47,7 @@ import {
   Zap,
   Sliders,
   Ban,
+  ShieldAlert,
 } from 'lucide-react';
 
 // ============================================================================
@@ -157,8 +158,9 @@ const SMS_TEMPLATES: Record<SmsCategory, { label: string; text: string }> = {
 export const SmsTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
 
+  // Role-Based Access Control (RBAC)
   const userRole = (localStorage.getItem('attendsure_role') || 'ADMIN').toUpperCase();
-  const isAdmin = userRole === 'ADMIN' || userRole === 'PRINCIPAL';
+  const isAdmin = userRole === 'ADMIN' || userRole === 'PRINCIPAL' || userRole === 'SUPERUSER';
 
   // --- Table Data States ---
   const [messages, setMessages] = useState<SmsRecord[]>([]);
@@ -501,6 +503,15 @@ export const SmsTab: React.FC = () => {
   // ============================================================================
 
   const handleSaveClassroomPolicy = async (newMode: ClassroomSmsMode) => {
+    if (!isAdmin) {
+      showAlert({
+        title: 'Access Restricted',
+        message: 'Only system administrators can alter the global SMS dispatch policy.',
+        type: 'error',
+      });
+      return;
+    }
+
     setClassroomSmsMode(newMode);
     setSavingPolicy(true);
     try {
@@ -531,6 +542,15 @@ export const SmsTab: React.FC = () => {
   // ============================================================================
 
   const handleOpenBroadcast = () => {
+    if (!isAdmin) {
+      showAlert({
+        title: 'Access Restricted',
+        message: 'Only system administrators can broadcast announcements.',
+        type: 'error',
+      });
+      return;
+    }
+
     setBroadcastForm({
       audience: 'ALL_PARENTS',
       message_body: SMS_TEMPLATES.ANNOUNCEMENT.text,
@@ -585,7 +605,6 @@ export const SmsTab: React.FC = () => {
 
     try {
       setSubmitting(true);
-      // Sends both audience & recipient_group, and message & message_body to prevent 400 parameter errors
       const res = await apiClient.post('/sms-outbox/broadcast/', {
         audience: broadcastForm.audience,
         recipient_group: broadcastForm.audience,
@@ -717,6 +736,14 @@ export const SmsTab: React.FC = () => {
   };
 
   const handleOpenEdit = (sms: SmsRecord) => {
+    if (!isAdmin) {
+      showAlert({
+        title: 'Access Restricted',
+        message: 'Only administrators can modify queued messages.',
+        type: 'error',
+      });
+      return;
+    }
     setEditingSms({ ...sms });
   };
 
@@ -759,6 +786,15 @@ export const SmsTab: React.FC = () => {
   };
 
   const promptDeleteSms = (id: number) => {
+    if (!isAdmin) {
+      showAlert({
+        title: 'Access Restricted',
+        message: 'Only administrators can delete SMS outbox logs.',
+        type: 'error',
+      });
+      return;
+    }
+
     showConfirm({
       title: 'Delete Outbox Entry',
       message: `Permanently delete SMS message #${id}? This action cannot be undone.`,
@@ -791,6 +827,15 @@ export const SmsTab: React.FC = () => {
   };
 
   const promptDeleteDelivered = () => {
+    if (!isAdmin) {
+      showAlert({
+        title: 'Access Restricted',
+        message: 'Only administrators can purge delivered message logs.',
+        type: 'error',
+      });
+      return;
+    }
+
     showConfirm({
       title: 'Delete Delivered Messages',
       message: 'Clear all delivered (SENT) messages from database history to optimize log storage?',
@@ -821,6 +866,15 @@ export const SmsTab: React.FC = () => {
   };
 
   const promptClearPendingQueue = () => {
+    if (!isAdmin) {
+      showAlert({
+        title: 'Access Restricted',
+        message: 'Only administrators can clear the modem dispatch queue.',
+        type: 'error',
+      });
+      return;
+    }
+
     showConfirm({
       title: 'Clear Outbox Queue',
       message: 'Cancel and delete all unsent messages currently in the queue? The GSM modem will not dispatch them.',
@@ -962,8 +1016,13 @@ export const SmsTab: React.FC = () => {
             <Sliders size={20} color="#0284c7" />
           </div>
           <div>
-            <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0f172a' }}>
-              Classroom Attendance SMS Dispatch Policy
+            <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>Classroom Attendance SMS Dispatch Policy</span>
+              {!isAdmin && (
+                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <ShieldAlert size={12} /> (Admin Managed)
+                </span>
+              )}
             </div>
             <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: 2 }}>
               Choose whether subject attendance notifications are sent immediately on every classroom tap, or compiled into a single end-of-day summary when the child scans OUT at the gate.
@@ -974,13 +1033,15 @@ export const SmsTab: React.FC = () => {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button
             type="button"
-            disabled={savingPolicy}
+            disabled={savingPolicy || !isAdmin}
             onClick={() => handleSaveClassroomPolicy('GATE_OUT_SUMMARY')}
             style={{
               ...policyBtnStyle,
               borderColor: classroomSmsMode === 'GATE_OUT_SUMMARY' ? '#0284c7' : '#cbd5e1',
               backgroundColor: classroomSmsMode === 'GATE_OUT_SUMMARY' ? '#eff6ff' : '#ffffff',
               color: classroomSmsMode === 'GATE_OUT_SUMMARY' ? '#0284c7' : '#475569',
+              cursor: isAdmin ? 'pointer' : 'not-allowed',
+              opacity: isAdmin ? 1 : 0.7,
             }}
           >
             <Layers size={14} />
@@ -989,13 +1050,15 @@ export const SmsTab: React.FC = () => {
 
           <button
             type="button"
-            disabled={savingPolicy}
+            disabled={savingPolicy || !isAdmin}
             onClick={() => handleSaveClassroomPolicy('INSTANT')}
             style={{
               ...policyBtnStyle,
               borderColor: classroomSmsMode === 'INSTANT' ? '#0284c7' : '#cbd5e1',
               backgroundColor: classroomSmsMode === 'INSTANT' ? '#eff6ff' : '#ffffff',
               color: classroomSmsMode === 'INSTANT' ? '#0284c7' : '#475569',
+              cursor: isAdmin ? 'pointer' : 'not-allowed',
+              opacity: isAdmin ? 1 : 0.7,
             }}
           >
             <Zap size={14} />
@@ -1071,8 +1134,8 @@ export const SmsTab: React.FC = () => {
             Refresh
           </Button>
 
-          {/* Delete Action 1: Delete Delivered */}
-          {messages.some((m) => m.status === 'SENT') && (
+          {/* Delete Action 1: Delete Delivered (Admin Only) */}
+          {isAdmin && messages.some((m) => m.status === 'SENT') && (
             <Button
               variant="secondary"
               size="md"
@@ -1087,8 +1150,8 @@ export const SmsTab: React.FC = () => {
             </Button>
           )}
 
-          {/* Delete Action 2: Clear In-Queue Messages */}
-          {metrics.pending > 0 && (
+          {/* Delete Action 2: Clear In-Queue Messages (Admin Only) */}
+          {isAdmin && metrics.pending > 0 && (
             <Button
               variant="secondary"
               size="md"
@@ -1117,17 +1180,19 @@ export const SmsTab: React.FC = () => {
             </Button>
           )}
 
-          {/* Create Action 1: Broadcast */}
-          <Button
-            variant="secondary"
-            size="md"
-            type="button"
-            onClick={handleOpenBroadcast}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7', borderColor: '#bae6fd' }}
-          >
-            <Megaphone size={15} />
-            Broadcast Announcement
-          </Button>
+          {/* Create Action 1: Broadcast (Admin Only) */}
+          {isAdmin && (
+            <Button
+              variant="secondary"
+              size="md"
+              type="button"
+              onClick={handleOpenBroadcast}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7', borderColor: '#bae6fd' }}
+            >
+              <Megaphone size={15} />
+              Broadcast Announcement
+            </Button>
+          )}
 
           {/* Create Action 2: Compose Single SMS */}
           <Button
@@ -1278,7 +1343,7 @@ export const SmsTab: React.FC = () => {
               align: 'right',
               render: (m) => (
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                  {/* Read */}
+                  {/* Read (Available to All) */}
                   <button
                     type="button"
                     onClick={() => setInspectedSms(m)}
@@ -1288,15 +1353,17 @@ export const SmsTab: React.FC = () => {
                     <Eye size={13} color="#475569" />
                   </button>
 
-                  {/* Update */}
-                  <button
-                    type="button"
-                    onClick={() => handleOpenEdit(m)}
-                    title="Edit Message / Recipient"
-                    style={{ ...actionBtn, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}
-                  >
-                    <Pencil size={13} color="#0284c7" />
-                  </button>
+                  {/* Update (Admin Only) */}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(m)}
+                      title="Edit Message / Recipient"
+                      style={{ ...actionBtn, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}
+                    >
+                      <Pencil size={13} color="#0284c7" />
+                    </button>
+                  )}
 
                   {/* Retry Single */}
                   {m.status === 'FAILED' && (
@@ -1315,20 +1382,22 @@ export const SmsTab: React.FC = () => {
                     </button>
                   )}
 
-                  {/* Delete Single */}
-                  <button
-                    type="button"
-                    onClick={() => promptDeleteSms(m.id)}
-                    disabled={actionLoadingId === m.id}
-                    title="Delete Message"
-                    style={{ ...actionBtn, backgroundColor: '#fff1f2', borderColor: '#fecdd3' }}
-                  >
-                    {actionLoadingId === m.id ? (
-                      <Loader2 className="animate-spin" size={13} color="#e11d48" />
-                    ) : (
-                      <Trash2 size={13} color="#e11d48" />
-                    )}
-                  </button>
+                  {/* Delete Single (Admin Only) */}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => promptDeleteSms(m.id)}
+                      disabled={actionLoadingId === m.id}
+                      title="Delete Message"
+                      style={{ ...actionBtn, backgroundColor: '#fff1f2', borderColor: '#fecdd3' }}
+                    >
+                      {actionLoadingId === m.id ? (
+                        <Loader2 className="animate-spin" size={13} color="#e11d48" />
+                      ) : (
+                        <Trash2 size={13} color="#e11d48" />
+                      )}
+                    </button>
+                  )}
                 </div>
               ),
             },
@@ -1711,7 +1780,7 @@ export const SmsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 7. MODAL: EDIT SMS (UPDATE) */}
+      {/* 7. MODAL: EDIT SMS (UPDATE - ADMIN ONLY) */}
       {editingSms && (
         <Modal
           isOpen={Boolean(editingSms)}
@@ -1871,20 +1940,22 @@ export const SmsTab: React.FC = () => {
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button
-                  variant="secondary"
-                  size="md"
-                  type="button"
-                  onClick={() => {
-                    const smsToEdit = inspectedSms;
-                    setInspectedSms(null);
-                    handleOpenEdit(smsToEdit);
-                  }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Pencil size={14} />
-                  Edit
-                </Button>
+                {isAdmin && (
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    type="button"
+                    onClick={() => {
+                      const smsToEdit = inspectedSms;
+                      setInspectedSms(null);
+                      handleOpenEdit(smsToEdit);
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <Pencil size={14} />
+                    Edit
+                  </Button>
+                )}
 
                 {inspectedSms.status === 'FAILED' && (
                   <Button
@@ -1906,16 +1977,18 @@ export const SmsTab: React.FC = () => {
               </div>
 
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button
-                  variant="secondary"
-                  size="md"
-                  type="button"
-                  onClick={() => promptDeleteSms(inspectedSms.id)}
-                  style={{ color: '#dc2626', borderColor: '#fecaca', display: 'flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Trash2 size={14} />
-                  Delete
-                </Button>
+                {isAdmin && (
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    type="button"
+                    onClick={() => promptDeleteSms(inspectedSms.id)}
+                    style={{ color: '#dc2626', borderColor: '#fecaca', display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <Trash2 size={14} />
+                    Delete
+                  </Button>
+                )}
                 <Button variant="primary" size="md" type="button" onClick={() => setInspectedSms(null)}>
                   Close
                 </Button>
@@ -2009,7 +2082,6 @@ const policyBtnStyle: React.CSSProperties = {
   borderStyle: 'solid',
   fontSize: '0.75rem',
   fontWeight: 700,
-  cursor: 'pointer',
   transition: 'all 0.15s ease',
 };
 

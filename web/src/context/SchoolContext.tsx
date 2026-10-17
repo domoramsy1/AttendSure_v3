@@ -2,10 +2,11 @@
  * AttendSure - Institutional Context Provider (Cache-First Fast Boot)
  * File: web/src/context/SchoolContext.tsx
  *
- * Performance:
- * 1. Loads instantly from localStorage on frame 1 (0ms wait time).
- * 2. Dismisses the SplashScreen without waiting for network transfers.
- * 3. Quietly refreshes school settings in the background.
+ * Cybersecurity & Performance:
+ * 1. 0ms Fast Boot: Loads cached profile frame-1 from localStorage without network blocks.
+ * 2. Unified Context Interface: Exports both updateSchool and updateSchoolInstantly.
+ * 3. Safe Storage Quota Guard: Strips oversized base64 strings before localStorage writes.
+ * 4. Zero Unused Variables: Clean TypeScript compilation.
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
@@ -17,6 +18,10 @@ export interface SchoolData {
   division: string;
   region: string;
   district: string;
+  address?: string;
+  contact_number?: string;
+  email?: string;
+  principal_faculty?: number | string | null;
   principal_name: string;
   principal_title: string;
   school_logo: string | null;
@@ -48,6 +53,7 @@ interface SchoolContextValue {
   loading: boolean;
   refreshSchool: () => Promise<void>;
   updateSchool: (data: Partial<SchoolData>) => void;
+  updateSchoolInstantly: (data: Partial<SchoolData>) => void;
 }
 
 const SchoolContext = createContext<SchoolContextValue>({
@@ -55,10 +61,10 @@ const SchoolContext = createContext<SchoolContextValue>({
   loading: false,
   refreshSchool: async () => {},
   updateSchool: () => {},
+  updateSchoolInstantly: () => {},
 });
 
 export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Load cached school profile instantly from localStorage
   const [school, setSchool] = useState<SchoolData>(() => {
     try {
       const cached = localStorage.getItem('attendsure_school_profile');
@@ -71,50 +77,56 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return DEFAULT_SCHOOL;
   });
 
-  // If cached data already exists, don't block the UI with the splash screen
   const [loading, setLoading] = useState<boolean>(() => {
     return !localStorage.getItem('attendsure_school_profile');
   });
 
-  const fetchSchoolData = useCallback(async () => {
-    try {
-      const res = await apiClient.get<SchoolData>('/settings/school/', { timeout: 6000 });
-      if (res.data) {
-        setSchool((prev) => {
-          const merged = { ...prev, ...res.data };
-          try {
-            localStorage.setItem('attendsure_school_profile', JSON.stringify(merged));
-          } catch {
-            // Ignore storage limits
-          }
-          return merged;
-        });
-      }
-    } catch {
-      // Retain existing cached state if request fails
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchSchoolData();
-  }, [fetchSchoolData]);
-
-  const updateSchool = useCallback((patch: Partial<SchoolData>) => {
+  // Instant optimistic updater (0ms latency UI update)
+  const applySchoolUpdate = useCallback((patch: Partial<SchoolData>) => {
     setSchool((prev) => {
       const updated = { ...prev, ...patch };
       try {
-        localStorage.setItem('attendsure_school_profile', JSON.stringify(updated));
+        const storageSafe = { ...updated };
+        // Prevent QuotaExceededError by omitting massive base64 text from localStorage
+        if (storageSafe.school_logo && storageSafe.school_logo.length > 300000) storageSafe.school_logo = null;
+        if (storageSafe.left_logo && storageSafe.left_logo.length > 300000) storageSafe.left_logo = null;
+        if (storageSafe.right_logo && storageSafe.right_logo.length > 300000) storageSafe.right_logo = null;
+        localStorage.setItem('attendsure_school_profile', JSON.stringify(storageSafe));
       } catch {
-        // Ignore
+        // Ignore storage limits safely
       }
       return updated;
     });
   }, []);
 
+  const fetchSchoolData = useCallback(async () => {
+    try {
+      const res = await apiClient.get<SchoolData>('/settings/school/', { timeout: 8000 });
+      if (res.data) {
+        applySchoolUpdate(res.data);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('[SchoolContext] Non-blocking sync notice:', msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [applySchoolUpdate]);
+
+  useEffect(() => {
+    fetchSchoolData();
+  }, [fetchSchoolData]);
+
   return (
-    <SchoolContext.Provider value={{ school, loading, refreshSchool: fetchSchoolData, updateSchool }}>
+    <SchoolContext.Provider
+      value={{
+        school,
+        loading,
+        refreshSchool: fetchSchoolData,
+        updateSchool: applySchoolUpdate,
+        updateSchoolInstantly: applySchoolUpdate,
+      }}
+    >
       {children}
     </SchoolContext.Provider>
   );

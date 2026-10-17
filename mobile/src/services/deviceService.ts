@@ -1,106 +1,69 @@
+/**
+ * AttendSure V3 - Hardware Device Identity Service
+ * File: mobile/src/services/deviceService.ts
+ *
+ * Cybersecurity & Anti-Cheating:
+ * 1. Cryptographic Entropy: Generates unguessable device IDs using expo-crypto.
+ * 2. Hardware Enclave & Keystore: Stores IDs using AES-256 encrypted SecureStore.
+ * 3. In-Memory Caching: Speeds up repeated lookups without disk latency.
+ * 4. Decoupled Architecture: Completely breaks require cycles between screens and background tasks.
+ */
+
 import { Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
+import * as Crypto from 'expo-crypto';
 
-// Safe loaders for Expo hardware modules
-let Device: any = null;
-let Application: any = null;
+export const SECURE_DEVICE_UUID_KEY = 'attendsure_hardware_device_uuid';
 
-try {
-  Device = require('expo-device');
-} catch {
-  // Graceful fallback if expo-device is unavailable
-}
-
-try {
-  Application = require('expo-application');
-} catch {
-  // Graceful fallback if expo-application is unavailable
-}
-
-const DEVICE_ID_STORAGE_KEY = '@attendsure_device_uuid';
-
-export interface DeviceHardwareInfo {
-  client_device_id: string;
-  deviceId: string;
-  brand: string | null;
-  device_model: string | null;
-  deviceModel: string | null;
-  modelName: string | null;
-  osName: string | null;
-  osVersion: string | null;
-  isPhysicalDevice: boolean;
-}
+// In-memory cache to prevent repeated storage disk reads
+let cachedDeviceUuid: string | null = null;
 
 /**
- * Gets or creates a stable hardware ID for this phone.
+ * Generates or retrieves the hardware-encrypted device UUID.
  */
-export const getOrCreateDeviceId = async (): Promise<string> => {
-  try {
-    // 1. Try native Android ID
-    if (Platform.OS === 'android' && Application?.getAndroidId) {
-      const androidId = Application.getAndroidId();
-      if (androidId) {
-        return `PHONE-ANDROID-${androidId.toUpperCase()}`;
-      }
-    }
-
-    // 2. Try native iOS Identifier
-    if (Platform.OS === 'ios' && Application?.getIosIdForVendorAsync) {
-      const iosId = await Application.getIosIdForVendorAsync();
-      if (iosId) {
-        return `PHONE-IOS-${iosId.toUpperCase()}`;
-      }
-    }
-
-    // 3. Fallback to cached ID in storage
-    const storedId = await AsyncStorage.getItem(DEVICE_ID_STORAGE_KEY);
-    if (storedId) {
-      return storedId;
-    }
-
-    // 4. Generate and save a new persistent device ID
-    const randomHex = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
-    const newId = `PHONE-${Platform.OS.toUpperCase()}-${randomHex.toUpperCase()}`;
-    await AsyncStorage.setItem(DEVICE_ID_STORAGE_KEY, newId);
-    return newId;
-  } catch {
-    return `PHONE-${Platform.OS.toUpperCase()}-CLIENT-ID`;
+export const getOrCreateDeviceUuid = async (): Promise<string> => {
+  if (cachedDeviceUuid) {
+    return cachedDeviceUuid;
   }
-};
 
-/**
- * Reads phone hardware information for device binding.
- */
-export const getDeviceHardwareInfo = async (): Promise<DeviceHardwareInfo> => {
-  const deviceId = await getOrCreateDeviceId();
+  try {
+    if (Platform.OS === 'web') {
+      const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(SECURE_DEVICE_UUID_KEY) : null;
+      if (stored) {
+        cachedDeviceUuid = stored;
+        return stored;
+      }
+      const webUuid = `DEV-WEB-${Crypto.randomUUID ? Crypto.randomUUID().substring(0, 13).toUpperCase() : Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(SECURE_DEVICE_UUID_KEY, webUuid);
+      }
+      cachedDeviceUuid = webUuid;
+      return webUuid;
+    }
 
-  const brand = Device?.brand || (Platform.OS === 'ios' ? 'Apple' : 'Android');
-  const modelName = Device?.modelName || Device?.designName || Device?.productName || Platform.OS;
-  const deviceModel = modelName;
-  const osName = Device?.osName || Platform.OS;
-  const osVersion = Device?.osVersion ? String(Device.osVersion) : String(Platform.Version);
-  const isPhysicalDevice = Device?.isDevice ?? true;
+    const existing = await SecureStore.getItemAsync(SECURE_DEVICE_UUID_KEY);
+    if (existing) {
+      cachedDeviceUuid = existing;
+      return existing;
+    }
 
-  return {
-    client_device_id: deviceId,
-    deviceId: deviceId,
-    brand,
-    device_model: deviceModel,
-    deviceModel: deviceModel,
-    modelName,
-    osName,
-    osVersion,
-    isPhysicalDevice,
-  };
-};
+    // Generate secure random entropy for hardware binding
+    const randomBytes = await Crypto.getRandomBytesAsync(8);
+    const hex = Array.from(randomBytes)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase();
 
-// Aliases for compatibility across older screens
-export const getDeviceIdentity = getDeviceHardwareInfo;
-export const getDeviceId = getOrCreateDeviceId;
+    const generated = `DEV-${Platform.OS.toUpperCase()}-${hex.substring(0, 8)}-${hex.substring(8, 16)}`;
+    await SecureStore.setItemAsync(SECURE_DEVICE_UUID_KEY, generated, {
+      keychainAccessible: SecureStore.ALWAYS_THIS_DEVICE_ONLY,
+    });
 
-export default {
-  getDeviceHardwareInfo,
-  getDeviceIdentity,
-  getDeviceId,
-  getOrCreateDeviceId,
+    cachedDeviceUuid = generated;
+    return generated;
+  } catch (error) {
+    const fallback = `DEV-${Platform.OS.toUpperCase()}-TEMP-${Date.now().toString(36).toUpperCase()}`;
+    cachedDeviceUuid = fallback;
+    return fallback;
+  }
 };

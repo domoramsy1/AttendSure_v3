@@ -36,7 +36,10 @@
           "locationWhenInUsePermission": "AttendSure requires location access to verify presence inside campus boundaries for Civil Service Form 48."
         }
       ],
-      "expo-image"
+      "expo-image",
+      "expo-splash-screen",
+      "expo-status-bar",
+      "expo-secure-store"
     ]
   }
 }
