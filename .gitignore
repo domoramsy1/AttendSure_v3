@@ -27,4 +27,8 @@ backend/logs/*.log
 attendsure_codebase.txt
 project_files.txt
 desktop.ini
-save_codebase.py
+save_codebase.py*.env
+db.sqlite3
+.venv/
+build/
+.expo/
