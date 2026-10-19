@@ -1,4 +1,4 @@
-# AttendSure V3 - Single-File Source Code Exporter
+# AttendSure V3 - High-Speed Secure Source Code Exporter
 # Location: D:\AttendSure_V3\export_all_codes.ps1
 
 $rootDir = $PSScriptRoot
@@ -6,9 +6,8 @@ if (-not $rootDir) { $rootDir = "D:\AttendSure_V3" }
 $outputFile = Join-Path $rootDir "all_source_codes.txt"
 
 # ---------------------------------------------------------------------------
-# 1. FILE EXTENSIONS & FILTER RULES
+# 1. ALLOWED SOURCE CODE EXTENSIONS
 # ---------------------------------------------------------------------------
-# Source code extensions to include
 $validExtensions = @(
     '.py',
     '.ts',
@@ -22,8 +21,11 @@ $validExtensions = @(
     '.sql'
 )
 
-# Folders and cache paths to ignore
-$excludePathPatterns = @(
+# ---------------------------------------------------------------------------
+# 2. CYBERSECURITY & NOISE EXCLUSION PATTERNS
+# ---------------------------------------------------------------------------
+# Directories to bypass
+$excludeDirectories = @(
     '\\node_modules($|\\)',
     '\\\.git($|\\)',
     '\\\.expo($|\\)',
@@ -35,73 +37,85 @@ $excludePathPatterns = @(
     '\\dist($|\\)',
     '\\build($|\\)',
     '\\media($|\\)',
-    '\\assets($|\\)'
+    '\\assets($|\\)',
+    '\\coverage($|\\)',
+    '\\\.cache($|\\)'
 )
+$dirRegex = ($excludeDirectories -join '|')
 
-# Cybersecurity: Never export secrets, credentials, binary files, or lockfiles
-$excludeFileNames = @(
-    '.env',
-    '.env.local',
-    '.env.production',
-    'package-lock.json',
-    'yarn.lock',
-    'all_source_codes.txt',
-    'project_files.txt',
-    'db.sqlite3'
-)
+# Sensitive files, credentials, keys, lockfiles, and generated dumps
+$excludeFileRegex = '^(all_source_codes\.txt|project_files\.txt|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|\.env.*|.*\.sqlite3|.*\.db|.*\.log|.*\.keystore|.*\.jks|.*\.pem|.*\.key|.*\.pfx|google-services\.json|GoogleService-Info\.plist)$'
 
-$excludePathRegex = ($excludePathPatterns -join '|')
-
-Write-Host "Collecting all source code files..." -ForegroundColor Cyan
+Write-Host "Scanning repository for source code..." -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
-# 2. SCAN AND FILTER FILES
+# 3. FAST SCAN & CYBERSECURITY FILTERING
 # ---------------------------------------------------------------------------
-$allFiles = Get-ChildItem -Path $rootDir -Recurse -File | Where-Object {
-    $file = $_
-    $hasValidExt = $validExtensions -contains $file.Extension.ToLower()
-    $notExcludedFolder = $file.FullName -notmatch $excludePathRegex
-    $notExcludedFile = $excludeFileNames -notcontains $file.Name
+$allFiles = Get-ChildItem -Path $rootDir -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $extMatches = $validExtensions -contains $_.Extension.ToLower()
+    $dirAllowed = $_.FullName -notmatch $dirRegex
+    $fileAllowed = $_.Name -notmatch $excludeFileRegex
+    $sizeAllowed = $_.Length -lt 2MB # Prevent minified vendor files from bloating output
 
-    return $hasValidExt -and $notExcludedFolder -and $notExcludedFile
+    return $extMatches -and $dirAllowed -and $fileAllowed -and $sizeAllowed
 } | Sort-Object FullName
 
 if ($allFiles.Count -eq 0) {
-    Write-Host "No matching source files found." -ForegroundColor Yellow
+    Write-Host "No matching source code files found." -ForegroundColor Yellow
     exit 0
 }
 
+Write-Host "Found $($allFiles.Count) verified source files. Writing backup..." -ForegroundColor Cyan
+
 # ---------------------------------------------------------------------------
-# 3. WRITE COMBINED TEXT FILE
+# 4. HIGH-SPEED BUFFERED STREAM WRITING
 # ---------------------------------------------------------------------------
-$headerText = @"
-================================================================================
-ATTENDSURE V3 - FULL SOURCE CODE BACKUP
-Export Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-Total Files: $($allFiles.Count)
-================================================================================
-"@
+# Using StreamWriter avoids repetitive open/close disk cycles
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$writer = New-Object System.IO.StreamWriter($outputFile, $false, $utf8NoBom)
 
-$headerText | Set-Content -Path $outputFile -Encoding UTF8
+try {
+    # Institutional Header
+    $writer.WriteLine("================================================================================")
+    $writer.WriteLine("ATTENDSURE V3 - COMPLETE SOURCE CODE REPOSITORY EXPORT")
+    $writer.WriteLine("Generated : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+    $writer.WriteLine("Root Path : $rootDir")
+    $writer.WriteLine("Total     : $($allFiles.Count) files")
+    $writer.WriteLine("================================================================================")
+    $writer.WriteLine()
 
-$count = 0
-foreach ($file in $allFiles) {
-    $count++
-    $relativePath = $file.FullName.Substring($rootDir.Length).TrimStart('\')
+    $index = 0
+    foreach ($file in $allFiles) {
+        $index++
+        $relativePath = $file.FullName.Substring($rootDir.Length).TrimStart('\')
 
-    $separator = @"
+        # Clean file banner
+        $writer.WriteLine("================================================================================")
+        $writer.WriteLine("FILE [$index/$($allFiles.Count)]: $relativePath")
+        $writer.WriteLine("FULL PATH: $($file.FullName)")
+        $writer.WriteLine("================================================================================")
+        $writer.WriteLine()
 
-================================================================================
-FILE [$count/$($allFiles.Count)]: $relativePath
-PATH: $($file.FullName)
-================================================================================
+        # Stream file content safely with fallback if locked by dev server
+        try {
+            $content = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
+            $writer.WriteLine($content)
+        } catch {
+            $writer.WriteLine("// [WARNING] Could not read file contents: $($_.Exception.Message)")
+        }
 
-"@
-
-    Write-Host "[$count/$($allFiles.Count)] Merging: $relativePath" -ForegroundColor Gray
-    $separator | Add-Content -Path $outputFile -Encoding UTF8
-    Get-Content -Path $file.FullName -Raw -Encoding UTF8 | Add-Content -Path $outputFile -Encoding UTF8
+        $writer.WriteLine()
+        $writer.WriteLine()
+    }
+} finally {
+    $writer.Flush()
+    $writer.Close()
+    $writer.Dispose()
 }
 
-Write-Host "`nCompleted! Successfully merged $($allFiles.Count) source files into:" -ForegroundColor Green
-Write-Host "$outputFile" -ForegroundColor Yellow
+$outputFileInfo = Get-Item $outputFile
+$outputSizeMB = [Math]::Round(($outputFileInfo.Length / 1MB), 2)
+
+Write-Host "`nExport complete! Clean source archive generated:" -ForegroundColor Green
+Write-Host "Location: $outputFile" -ForegroundColor Yellow
+Write-Host "Files Included: $($allFiles.Count) ($outputSizeMB MB)" -ForegroundColor Green
