@@ -13,19 +13,25 @@ export interface AuthenticatedUser {
   username: string;
   first_name: string;
   last_name: string;
+  middle_name?: string;
+  suffix?: string;
   full_name: string;
   faculty_name: string;
   faculty_id: string;
+  employee_id?: string;
   email: string;
   role: string;
   system_role: string;
+  position?: string;
+  department?: string | null;
+  division?: string | null;
   contact_number?: string;
+  phone?: string;
   photo?: string | null;
+  avatar?: string | null;
   school_name?: string;
   qr_token?: string | null;
   bound_device_id?: string | null;
-  division?: string | null;
-  department?: string | null;
   is_superuser: boolean;
   is_staff: boolean;
 }
@@ -54,7 +60,7 @@ const saveTokenSafely = async (token: string): Promise<void> => {
     try {
       await SecureStore.setItemAsync(AUTH_TOKEN_KEY, token);
     } catch {
-      // Ignore native keychain write errors
+      // Ignore keychain write error
     }
   }
 };
@@ -65,7 +71,7 @@ const clearTokenSafely = async (): Promise<void> => {
     try {
       await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
     } catch {
-      // Ignore native keychain delete errors
+      // Ignore keychain delete error
     }
   }
 };

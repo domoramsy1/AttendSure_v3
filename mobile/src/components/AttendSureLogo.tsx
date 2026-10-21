@@ -1,38 +1,32 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import AttendSureLogo from '../components/AttendSureLogo';
+// mobile/src/components/AttendSureLogo.tsx
 
-export default function LoginScreen() {
+import React from 'react';
+import { StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
+
+const LOGO_SOURCE = require('../../assets/attendsure-logo.svg');
+
+interface AttendSureLogoProps {
+  size?: number;
+}
+
+export const AttendSureLogo: React.FC<AttendSureLogoProps> = ({ size = 48 }) => {
   return (
-    <View style={styles.container}>
-      {/* Renders your vector SVG logo cleanly on the screen */}
-      <AttendSureLogo />
-      
-      <Text style={styles.title}>AttendSure</Text>
-      <Text style={styles.subtitle}>DepEd Attendance & Gate Security</Text>
-      
-      {/* Your rest of your login form inputs and buttons here */}
+    <View style={[styles.container, { width: size, height: size }]}>
+      <Image
+        source={LOGO_SOURCE}
+        style={{ width: size, height: size }}
+        contentFit="contain"
+      />
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f8fafc',
-    padding: 20,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#004b87',
-    marginTop: 12,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#64748b',
-    marginBottom: 24,
   },
 });
+
+export default AttendSureLogo;

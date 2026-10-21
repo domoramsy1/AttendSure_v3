@@ -8,6 +8,7 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  Image,
   ActivityIndicator,
   Alert,
   Modal,
@@ -18,8 +19,28 @@ import { Ionicons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
-import { getServerBaseUrl, setServerBaseUrl } from '../services/configService';
-import { COLORS } from '../constants/theme';
+import { getServerBaseUrl } from '../services/configService';
+
+export interface ExtendedUserProfile {
+  id?: number | string;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+  middle_name?: string;
+  suffix?: string;
+  email?: string;
+  contact_number?: string;
+  phone?: string;
+  position?: string;
+  department?: string;
+  role?: string;
+  employee_id?: string;
+  faculty_id?: string;
+  full_name?: string;
+  qr_token?: string;
+  photo?: string | null;
+  avatar?: string | null;
+}
 
 const showAlert = (title: string, message: string) => {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -31,125 +52,169 @@ const showAlert = (title: string, message: string) => {
 
 export const SettingsScreen: React.FC = () => {
   const { user, logout, refreshUser } = useAuth();
+  const currentUser = user as (typeof user & ExtendedUserProfile) | null;
 
-  const [firstName, setFirstName] = useState<string>(user?.first_name || '');
-  const [lastName, setLastName] = useState<string>(user?.last_name || '');
-  const [email, setEmail] = useState<string>(user?.email || '');
-  const [contactNumber, setContactNumber] = useState<string>(user?.contact_number || '');
+  // Profile Form State
+  const [firstName, setFirstName] = useState<string>(currentUser?.first_name || '');
+  const [lastName, setLastName] = useState<string>(currentUser?.last_name || '');
+  const [middleName, setMiddleName] = useState<string>(currentUser?.middle_name || '');
+  const [suffix, setSuffix] = useState<string>(currentUser?.suffix || '');
+  const [email, setEmail] = useState<string>(currentUser?.email || '');
+  const [contactNumber, setContactNumber] = useState<string>(
+    currentUser?.contact_number || currentUser?.phone || ''
+  );
+  const [position, setPosition] = useState<string>(currentUser?.position || '');
+  const [department, setDepartment] = useState<string>(currentUser?.department || '');
+  const [photoUrl, setPhotoUrl] = useState<string | null>(
+    currentUser?.photo || currentUser?.avatar || null
+  );
+
+  // Security & State
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [serverBase, setServerBase] = useState<string>('');
+  const [onlineStatus, setOnlineStatus] = useState<'CONNECTING' | 'ONLINE' | 'OFFLINE'>('CONNECTING');
+  const [gatePassVisible, setGatePassVisible] = useState<boolean>(false);
 
-  const [serverUrl, setServerUrl] = useState<string>('');
-  const [savingProfile, setSavingProfile] = useState<boolean>(false);
-  const [savingServer, setSavingServer] = useState<boolean>(false);
-  const [pingStatus, setPingStatus] = useState<'IDLE' | 'ONLINE' | 'OFFLINE'>('IDLE');
-  const [qrPassVisible, setQrPassVisible] = useState<boolean>(false);
+  // Resolve media paths safely
+  const resolvePhotoUrl = useCallback((path: string | null, base: string) => {
+    if (!path) return null;
+    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) {
+      return path;
+    }
+    const cleanBase = base.replace(/\/+$/, '');
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    return `${cleanBase}${cleanPath}`;
+  }, []);
 
-  const loadSettings = useCallback(async () => {
+  // Fetch verified profile from database
+  const loadProfile = useCallback(async () => {
     try {
-      const savedUrl = await getServerBaseUrl();
-      setServerUrl(savedUrl);
+      const activeBase = await getServerBaseUrl();
+      setServerBase(activeBase);
 
       const res = await apiClient.get('/api/me/');
       if (res.data) {
         setFirstName(res.data.first_name || '');
         setLastName(res.data.last_name || '');
+        setMiddleName(res.data.middle_name || '');
+        setSuffix(res.data.suffix || '');
         setEmail(res.data.email || '');
-        setContactNumber(res.data.contact_number || '');
-        setPingStatus('ONLINE');
+        setContactNumber(res.data.contact_number || res.data.phone || '');
+        setPosition(res.data.position || '');
+        setDepartment(res.data.department || '');
+        setPhotoUrl(res.data.photo || res.data.avatar || null);
+        setOnlineStatus('ONLINE');
       }
     } catch {
-      setPingStatus('OFFLINE');
+      setOnlineStatus('OFFLINE');
     }
   }, []);
 
   useEffect(() => {
-    loadSettings();
-  }, [loadSettings]);
+    loadProfile();
+  }, [loadProfile]);
 
-  const handleSaveProfile = async () => {
+  // Save profile changes
+  const handleSave = async () => {
     if (!firstName.trim() || !lastName.trim()) {
-      showAlert('Required Fields', 'First Name and Last Name cannot be empty.');
+      showAlert('Required', 'First Name and Last Name are required.');
       return;
     }
 
-    setSavingProfile(true);
+    setSaving(true);
     try {
       const payload: Record<string, any> = {
         first_name: firstName.trim(),
         last_name: lastName.trim(),
+        middle_name: middleName.trim(),
+        suffix: suffix.trim(),
         email: email.trim(),
         contact_number: contactNumber.trim(),
+        position: position.trim(),
+        department: department.trim(),
       };
-      if (password.trim().length >= 6) {
+
+      if (password.trim().length > 0) {
+        if (password.trim().length < 6) {
+          showAlert('Security', 'Password must be at least 6 characters.');
+          setSaving(false);
+          return;
+        }
         payload.password = password.trim();
       }
 
       await apiClient.put('/api/me/', payload);
       setPassword('');
       await refreshUser();
-      showAlert('Profile Saved', 'Your account details have been saved to PostgreSQL.');
+      showAlert('Success', 'Profile saved.');
     } catch (err: any) {
-      showAlert('Update Failed', err?.response?.data?.error || 'Could not update profile.');
+      showAlert('Error', err?.response?.data?.error || 'Could not save profile.');
     } finally {
-      setSavingProfile(false);
+      setSaving(false);
     }
   };
 
-  const handleUpdateEndpoint = async () => {
-    if (!serverUrl.trim()) {
-      showAlert('Invalid URL', 'Please enter a valid backend server URL.');
-      return;
-    }
-    setSavingServer(true);
-    try {
-      const normalized = await setServerBaseUrl(serverUrl.trim());
-      setServerUrl(normalized);
-      await apiClient.get('/api/settings/school/');
-      setPingStatus('ONLINE');
-      showAlert('Server Connected', `Connected to ${normalized}`);
-    } catch {
-      setPingStatus('OFFLINE');
-      showAlert('Saved (Unreachable)', 'Endpoint saved, but server did not respond to ping.');
-    } finally {
-      setSavingServer(false);
-    }
-  };
-
-  const displayName = `${firstName} ${lastName}`.trim() || user?.full_name || user?.username || 'Faculty';
-  const employeeId = user?.faculty_id || user?.username || '';
-  const roleLabel = user?.role || 'FACULTY';
-  const qrValue = user?.qr_token || employeeId || 'ATTENDSURE';
+  const displayName =
+    `${firstName} ${lastName}`.trim() ||
+    currentUser?.full_name ||
+    currentUser?.username ||
+    'Faculty';
+  const employeeId = currentUser?.faculty_id || currentUser?.username || '';
+  const roleLabel = currentUser?.role || 'FACULTY';
+  const qrValue = currentUser?.qr_token || employeeId || 'ATTENDSURE';
+  const fullAvatarUri = resolvePhotoUrl(photoUrl, serverBase);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      {/* Fixed Header */}
+      {/* Header */}
       <View style={styles.topHeader}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.screenTitle}>Account & System Settings</Text>
-          <Text style={styles.screenSub}>Database Profile, Network Endpoint & Gate Pass</Text>
+          <Text style={styles.screenTitle}>Settings</Text>
+          <Text style={styles.screenSub}>Profile & Gate Pass</Text>
         </View>
         <View
           style={[
             styles.statusBadge,
-            pingStatus === 'ONLINE'
+            onlineStatus === 'ONLINE'
               ? { backgroundColor: '#dcfce7' }
-              : { backgroundColor: '#f1f5f9' },
+              : onlineStatus === 'CONNECTING'
+              ? { backgroundColor: '#fef3c7' }
+              : { backgroundColor: '#fee2e2' },
           ]}
         >
           <View
             style={[
               styles.statusDot,
-              { backgroundColor: pingStatus === 'ONLINE' ? '#10b981' : '#94a3b8' },
+              {
+                backgroundColor:
+                  onlineStatus === 'ONLINE'
+                    ? '#10b981'
+                    : onlineStatus === 'CONNECTING'
+                    ? '#f59e0b'
+                    : '#ef4444',
+              },
             ]}
           />
           <Text
             style={[
               styles.statusBadgeText,
-              { color: pingStatus === 'ONLINE' ? '#065f46' : '#475569' },
+              {
+                color:
+                  onlineStatus === 'ONLINE'
+                    ? '#065f46'
+                    : onlineStatus === 'CONNECTING'
+                    ? '#92400e'
+                    : '#991b1b',
+              },
             ]}
           >
-            {pingStatus === 'ONLINE' ? 'DB ONLINE' : 'SYNC'}
+            {onlineStatus === 'ONLINE'
+              ? 'ONLINE'
+              : onlineStatus === 'CONNECTING'
+              ? 'CONNECTING'
+              : 'OFFLINE'}
           </Text>
         </View>
       </View>
@@ -158,12 +223,16 @@ export const SettingsScreen: React.FC = () => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* 1. Faculty Identity & Gate Pass Card */}
+        {/* User Card */}
         <View style={styles.identityCard}>
           <View style={styles.identityRow}>
-            <View style={styles.avatarCircle}>
-              <Ionicons name="person" size={24} color="#ffffff" />
-            </View>
+            {fullAvatarUri ? (
+              <Image source={{ uri: fullAvatarUri }} style={styles.avatarImage} />
+            ) : (
+              <View style={styles.avatarCircle}>
+                <Ionicons name="person" size={24} color="#ffffff" />
+              </View>
+            )}
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.identityName}>{displayName}</Text>
               <Text style={styles.identityMeta}>
@@ -172,7 +241,7 @@ export const SettingsScreen: React.FC = () => {
             </View>
             <TouchableOpacity
               style={styles.qrPassBtn}
-              onPress={() => setQrPassVisible(true)}
+              onPress={() => setGatePassVisible(true)}
             >
               <Ionicons name="qr-code-outline" size={16} color="#004b87" />
               <Text style={styles.qrPassBtnText}>Gate Pass</Text>
@@ -180,13 +249,14 @@ export const SettingsScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* 2. Personal Profile Form */}
+        {/* Profile Card */}
         <View style={styles.card}>
           <View style={styles.cardHeaderRow}>
             <Ionicons name="person-circle-outline" size={16} color="#004b87" />
-            <Text style={styles.cardHeaderTitle}>FACULTY DATABASE PROFILE</Text>
+            <Text style={styles.cardHeaderTitle}>PROFILE</Text>
           </View>
 
+          {/* First Name & Last Name */}
           <View style={styles.rowFields}>
             <View style={{ flex: 1 }}>
               <Text style={styles.fieldLabel}>First Name</Text>
@@ -210,33 +280,84 @@ export const SettingsScreen: React.FC = () => {
             </View>
           </View>
 
+          {/* Middle Name & Suffix */}
+          <View style={styles.rowFields}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Middle Name</Text>
+              <TextInput
+                style={styles.textInput}
+                value={middleName}
+                onChangeText={setMiddleName}
+                placeholder="Middle Name"
+                placeholderTextColor="#94a3b8"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Suffix</Text>
+              <TextInput
+                style={styles.textInput}
+                value={suffix}
+                onChangeText={setSuffix}
+                placeholder="Suffix"
+                placeholderTextColor="#94a3b8"
+              />
+            </View>
+          </View>
+
+          {/* Email */}
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Official Email</Text>
+            <Text style={styles.fieldLabel}>Email</Text>
             <TextInput
               style={styles.textInput}
               value={email}
               onChangeText={setEmail}
               keyboardType="email-address"
               autoCapitalize="none"
-              placeholder="name@deped.gov.ph"
+              placeholder="email@school.edu.ph"
               placeholderTextColor="#94a3b8"
             />
           </View>
 
+          {/* Contact Number */}
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Mobile Contact Number</Text>
+            <Text style={styles.fieldLabel}>Contact Number</Text>
             <TextInput
               style={styles.textInput}
               value={contactNumber}
               onChangeText={setContactNumber}
               keyboardType="phone-pad"
-              placeholder="09171234567"
+              placeholder="09123456789"
               placeholderTextColor="#94a3b8"
             />
           </View>
 
+          {/* Position */}
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>New Password (Optional)</Text>
+            <Text style={styles.fieldLabel}>Position</Text>
+            <TextInput
+              style={styles.textInput}
+              value={position}
+              onChangeText={setPosition}
+              placeholder="Position"
+              placeholderTextColor="#94a3b8"
+            />
+          </View>
+
+          {/* Department */}
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Department</Text>
+            <TextInput
+              style={styles.textInput}
+              value={department}
+              onChangeText={setDepartment}
+              placeholder="Department"
+              placeholderTextColor="#94a3b8"
+            />
+          </View>
+
+          {/* New Password */}
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>New Password</Text>
             <View style={styles.passwordWrap}>
               <TextInput
                 style={styles.passwordInput}
@@ -244,7 +365,7 @@ export const SettingsScreen: React.FC = () => {
                 onChangeText={setPassword}
                 secureTextEntry={!showPassword}
                 autoCapitalize="none"
-                placeholder="Leave blank to keep current password"
+                placeholder="Leave blank to keep current"
                 placeholderTextColor="#94a3b8"
               />
               <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)}>
@@ -257,74 +378,40 @@ export const SettingsScreen: React.FC = () => {
             </View>
           </View>
 
+          {/* Save Button */}
           <TouchableOpacity
-            style={[styles.primaryBtn, savingProfile && { opacity: 0.65 }]}
-            onPress={handleSaveProfile}
-            disabled={savingProfile}
+            style={[styles.primaryBtn, saving && { opacity: 0.65 }]}
+            onPress={handleSave}
+            disabled={saving}
           >
-            {savingProfile ? (
+            {saving ? (
               <ActivityIndicator size="small" color="#ffffff" />
             ) : (
               <>
                 <Ionicons name="save-outline" size={16} color="#ffffff" />
-                <Text style={styles.primaryBtnText}>Save Profile to Database</Text>
+                <Text style={styles.primaryBtnText}>Save</Text>
               </>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* 3. Dynamic Backend Server Endpoint */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <Ionicons name="server-outline" size={16} color="#004b87" />
-            <Text style={styles.cardHeaderTitle}>DYNAMIC BACKEND SERVER ENDPOINT</Text>
-          </View>
-
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Server Base URL / Domain</Text>
-            <TextInput
-              style={styles.textInput}
-              value={serverUrl}
-              onChangeText={setServerUrl}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="http://172.20.141.220:8000/api"
-              placeholderTextColor="#94a3b8"
-            />
-          </View>
-
-          <TouchableOpacity
-            style={[styles.secondaryBtn, savingServer && { opacity: 0.65 }]}
-            onPress={handleUpdateEndpoint}
-            disabled={savingServer}
-          >
-            {savingServer ? (
-              <ActivityIndicator size="small" color="#004b87" />
-            ) : (
-              <>
-                <Ionicons name="sync-outline" size={16} color="#004b87" />
-                <Text style={styles.secondaryBtnText}>Update & Test Server Endpoint</Text>
-              </>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
-            <Ionicons name="log-out-outline" size={17} color="#dc2626" />
-            <Text style={styles.logoutBtnText}>Log Out</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Log Out */}
+        <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
+          <Ionicons name="log-out-outline" size={17} color="#dc2626" />
+          <Text style={styles.logoutBtnText}>Log Out</Text>
+        </TouchableOpacity>
       </ScrollView>
 
-      {/* Optical Gate Pass Modal */}
-      <Modal visible={qrPassVisible} transparent animationType="fade">
+      {/* Gate Pass Modal */}
+      <Modal visible={gatePassVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.qrModalCard}>
             <View style={styles.qrModalHeader}>
               <View>
-                <Text style={styles.qrModalTitle}>Faculty Optical Gate Pass</Text>
-                <Text style={styles.qrModalSub}>Scan at Campus Turnstile Kiosk</Text>
+                <Text style={styles.qrModalTitle}>Gate Pass</Text>
+                <Text style={styles.qrModalSub}>Scan at Kiosk</Text>
               </View>
-              <TouchableOpacity onPress={() => setQrPassVisible(false)}>
+              <TouchableOpacity onPress={() => setGatePassVisible(false)}>
                 <Ionicons name="close" size={22} color="#64748b" />
               </TouchableOpacity>
             </View>
@@ -338,9 +425,9 @@ export const SettingsScreen: React.FC = () => {
 
             <TouchableOpacity
               style={[styles.primaryBtn, { width: '100%', marginTop: 16 }]}
-              onPress={() => setQrPassVisible(false)}
+              onPress={() => setGatePassVisible(false)}
             >
-              <Text style={styles.primaryBtnText}>Close Gate Pass</Text>
+              <Text style={styles.primaryBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -382,10 +469,17 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
   },
   identityRow: { flexDirection: 'row', alignItems: 'center' },
+  avatarImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
   avatarCircle: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: '#004b87',
     alignItems: 'center',
     justifyContent: 'center',
@@ -412,7 +506,7 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
   },
   cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12 },
-  cardHeaderTitle: { fontSize: 10.5, fontWeight: '800', color: '#004b87', letterSpacing: 0.4 },
+  cardHeaderTitle: { fontSize: 11, fontWeight: '800', color: '#004b87', letterSpacing: 0.5 },
   rowFields: { flexDirection: 'row', gap: 10, marginBottom: 10 },
   fieldGroup: { marginBottom: 10 },
   fieldLabel: { fontSize: 11, fontWeight: '700', color: '#334155', marginBottom: 5 },
@@ -447,20 +541,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     gap: 6,
   },
-  primaryBtnText: { color: '#ffffff', fontSize: 12.5, fontWeight: '800' },
-  secondaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#e6f0fa',
-    paddingVertical: 11,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#b8d6f0',
-    marginTop: 4,
-    gap: 6,
-  },
-  secondaryBtnText: { color: '#004b87', fontSize: 12.5, fontWeight: '800' },
+  primaryBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '800' },
   logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -470,7 +551,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#fecaca',
-    marginTop: 10,
+    marginTop: 4,
     gap: 6,
   },
   logoutBtnText: { color: '#dc2626', fontSize: 12.5, fontWeight: '800' },

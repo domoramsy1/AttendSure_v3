@@ -6,6 +6,42 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def ensure_school_profile_table(apps, schema_editor):
+    """
+    Ensures the physical table name matches the migration state in SQLite
+    before table remake operations run, preventing 'no such table: school_profile'.
+    """
+    connection = schema_editor.connection
+    with connection.cursor() as cursor:
+        tables = connection.introspection.table_names(cursor)
+        if "academics_schoolprofile" in tables and "school_profile" not in tables:
+            cursor.execute("ALTER TABLE academics_schoolprofile RENAME TO school_profile;")
+        elif "school_profile" not in tables:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS school_profile (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    school_name VARCHAR(255) NOT NULL DEFAULT '',
+                    school_id VARCHAR(50) NOT NULL DEFAULT '',
+                    address TEXT NOT NULL DEFAULT '',
+                    contact_number VARCHAR(100) NOT NULL DEFAULT '',
+                    email VARCHAR(254) NOT NULL DEFAULT '',
+                    principal_name VARCHAR(150) NOT NULL DEFAULT '',
+                    principal_title VARCHAR(100) NOT NULL DEFAULT '',
+                    division VARCHAR(150) NOT NULL DEFAULT '',
+                    region VARCHAR(100) NOT NULL DEFAULT '',
+                    district VARCHAR(100) NOT NULL DEFAULT '',
+                    school_logo TEXT NULL,
+                    deped_logo TEXT NULL,
+                    kagawaran_logo TEXT NULL,
+                    geofence_radius_meters INTEGER NULL,
+                    latitude REAL NULL,
+                    longitude REAL NULL,
+                    created_at DATETIME NULL,
+                    updated_at DATETIME NULL
+                );
+            """)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -14,6 +50,9 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # 1. Physical Table Integrity Check (Runs first to prevent SQLite remake crashes)
+        migrations.RunPython(ensure_school_profile_table, reverse_code=migrations.RunPython.noop),
+
         migrations.AlterModelOptions(
             name='schoolprofile',
             options={},

@@ -1,6 +1,6 @@
-// mobile/src/screens/CalendarScreen.tsx
+// D:\AttendSure_V3\mobile\src\screens\CalendarScreen.tsx
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,9 +16,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { COLORS } from '../constants/theme';
+
+const CACHED_CALENDAR_KEY = 'attendsure_cached_calendar_data';
 
 interface CalendarException {
   id: number;
@@ -47,6 +50,8 @@ const showAlert = (title: string, message: string) => {
 
 export const CalendarScreen: React.FC = () => {
   const { user } = useAuth();
+  const isMounted = useRef<boolean>(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const currentUser = user as Record<string, any> | null;
   const rawRole = String(currentUser?.role || currentUser?.system_role || '').trim().toUpperCase();
@@ -64,74 +69,135 @@ export const CalendarScreen: React.FC = () => {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
-  const fetchCalendarData = useCallback(async () => {
+  // 1. Cache-First Initialization
+  const loadCachedCalendar = useCallback(async () => {
     try {
-      const res = await apiClient.get('/api/calendar/exceptions/');
-      const payload = res.data;
-
-      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-        if (typeof payload.weekend_rest_enabled === 'boolean') {
-          setWeekendRestEnabled(payload.weekend_rest_enabled);
+      const cached = await AsyncStorage.getItem(CACHED_CALENDAR_KEY);
+      if (cached && isMounted.current) {
+        const parsed = JSON.parse(cached);
+        if (typeof parsed.weekend_rest_enabled === 'boolean') {
+          setWeekendRestEnabled(parsed.weekend_rest_enabled);
         }
-        setExceptions(Array.isArray(payload.results) ? payload.results : []);
-      } else if (Array.isArray(payload)) {
-        setExceptions(payload);
-      } else {
-        setExceptions([]);
+        if (Array.isArray(parsed.exceptions)) {
+          setExceptions(parsed.exceptions);
+        }
       }
-    } catch (err: any) {
-      console.warn('Database calendar fetch failed:', err?.message || err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    } catch {
+      // Continue to live network fetch
     }
   }, []);
 
+  // 2. Fast Data Fetching with AbortController
+  const fetchCalendarData = useCallback(async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const res = await apiClient.get('/calendar/exceptions/', {
+        signal: controller.signal,
+      });
+      const payload = res.data;
+
+      if (!isMounted.current) return;
+
+      let nextWeekendRest = weekendRestEnabled;
+      let nextExceptions: CalendarException[] = [];
+
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        if (typeof payload.weekend_rest_enabled === 'boolean') {
+          nextWeekendRest = payload.weekend_rest_enabled;
+          setWeekendRestEnabled(payload.weekend_rest_enabled);
+        }
+        nextExceptions = Array.isArray(payload.results) ? payload.results : [];
+      } else if (Array.isArray(payload)) {
+        nextExceptions = payload;
+      }
+
+      setExceptions(nextExceptions);
+
+      // Persist clean cache
+      await AsyncStorage.setItem(
+        CACHED_CALENDAR_KEY,
+        JSON.stringify({
+          weekend_rest_enabled: nextWeekendRest,
+          exceptions: nextExceptions,
+        })
+      );
+    } catch (err: any) {
+      // Ignore normal request cancellations
+    } finally {
+      if (isMounted.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
+  }, [weekendRestEnabled]);
+
   useEffect(() => {
-    fetchCalendarData();
-  }, [fetchCalendarData]);
+    isMounted.current = true;
+    loadCachedCalendar().then(() => {
+      fetchCalendarData();
+    });
+
+    return () => {
+      isMounted.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, [loadCachedCalendar, fetchCalendarData]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchCalendarData();
   }, [fetchCalendarData]);
 
+  // 3. Weekend Rest Toggle with Rollback Protection
   const handleToggleWeekendRest = async (value: boolean) => {
     if (!isAdmin) return;
     const previousValue = weekendRestEnabled;
     setWeekendRestEnabled(value);
 
     try {
-      const res = await apiClient.patch('/api/calendar/exceptions/', {
+      const res = await apiClient.patch('/calendar/exceptions/', {
         weekend_rest_enabled: value,
       });
       if (typeof res.data?.weekend_rest_enabled === 'boolean') {
         setWeekendRestEnabled(res.data.weekend_rest_enabled);
       }
-    } catch (err: any) {
+    } catch {
       setWeekendRestEnabled(previousValue);
-      const msg =
-        err?.response?.data?.error ||
-        err?.response?.data?.detail ||
-        'Could not update weekend rest setting in database.';
-      showAlert('Update Failed', msg);
+      showAlert('Update Failed', 'Could not save weekend rest setting.');
     }
   };
 
+  // 4. Input Sanitization & Override Submission
   const handleAddException = async () => {
     if (!isAdmin) {
-      showAlert('Permission Denied', 'Only school administrators can set calendar overrides.');
+      showAlert('Denied', 'Only school administrators can set calendar overrides.');
       return;
     }
 
-    if (!exceptionReason.trim()) {
-      showAlert('Missing Detail', 'Please enter a description or reason for this calendar override.');
+    const cleanReason = exceptionReason.replace(/[\r\n\t]/g, ' ').trim();
+    const cleanDate = exceptionDate.trim();
+
+    if (!cleanReason) {
+      showAlert('Required', 'Please enter a description or reason.');
       return;
     }
 
-    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-    if (!datePattern.test(exceptionDate.trim())) {
-      showAlert('Invalid Date Format', 'Please format the date as YYYY-MM-DD (e.g. 2026-10-15).');
+    if (cleanReason.length > 255) {
+      showAlert('Invalid Input', 'Reason cannot exceed 255 characters.');
+      return;
+    }
+
+    // Strict Date Validation (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+    if (!dateRegex.test(cleanDate)) {
+      showAlert('Invalid Date', 'Date format must be YYYY-MM-DD.');
       return;
     }
 
@@ -139,12 +205,12 @@ export const CalendarScreen: React.FC = () => {
     try {
       const payload = {
         type: selectedType,
-        date: exceptionDate.trim(),
-        reason: exceptionReason.trim(),
+        date: cleanDate,
+        reason: cleanReason,
         affects_all_grades: true,
       };
 
-      const res = await apiClient.post('/api/calendar/exceptions/', payload);
+      const res = await apiClient.post('/calendar/exceptions/', payload);
       if (res.data && res.data.id) {
         setExceptions((prev) => [res.data, ...prev.filter((i) => i.id !== res.data.id)]);
       } else {
@@ -152,72 +218,69 @@ export const CalendarScreen: React.FC = () => {
       }
 
       setExceptionReason('');
-      showAlert('Exception Saved', 'The date override has been saved to the database.');
+      showAlert('Saved', 'Calendar override saved.');
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.error ||
-        err?.response?.data?.detail ||
-        err?.response?.data?.reason?.[0] ||
-        'Could not save date exception to the database.';
-      showAlert('Save Failed', msg);
+      const rawError = String(err?.response?.data?.error || err?.response?.data?.detail || '');
+      const safeError = rawError.includes('Traceback')
+        ? 'Could not save override. Please check server.'
+        : rawError || 'Failed to save calendar override.';
+      showAlert('Save Failed', safeError);
     } finally {
-      setSubmitting(false);
+      if (isMounted.current) {
+        setSubmitting(false);
+      }
     }
   };
 
+  // 5. Deletion Handler with Numeric ID Validation
   const executeDeleteException = async (id: number) => {
+    if (!Number.isInteger(id) || id <= 0) return;
+
     try {
-      await apiClient.delete(`/api/calendar/exceptions/${id}/`);
+      await apiClient.delete(`/calendar/exceptions/${id}/`);
       setExceptions((prev) => prev.filter((item) => item.id !== id));
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.error ||
-        err?.response?.data?.detail ||
-        'Database could not delete the record.';
-      showAlert('Delete Failed', msg);
+    } catch {
+      showAlert('Error', 'Could not remove override.');
     }
   };
 
   const handleDeleteException = (id: number) => {
     if (!isAdmin) {
-      showAlert('Permission Denied', 'Only school administrators can remove calendar overrides.');
+      showAlert('Denied', 'Only school administrators can remove overrides.');
       return;
     }
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm('Are you sure you want to remove this date override from the database?')) {
+      if (window.confirm('Remove this calendar override?')) {
         executeDeleteException(id);
       }
       return;
     }
 
-    Alert.alert(
-      'Confirm Removal',
-      'Are you sure you want to remove this date override from the database?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => executeDeleteException(id),
-        },
-      ]
-    );
+    Alert.alert('Confirm Delete', 'Remove this calendar override?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => executeDeleteException(id),
+      },
+    ]);
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      {/* Header */}
       <View style={styles.topHeader}>
         <View>
-          <Text style={styles.screenTitle}>Class Calendar</Text>
+          <Text style={styles.screenTitle}>Calendar</Text>
           <Text style={styles.screenSub}>
-            {isAdmin ? 'Administrative Date Management' : 'Official Attendance Schedules & Memorandums'}
+            {isAdmin ? 'Date Overrides & Schedules' : 'Schedules & Memorandums'}
           </Text>
         </View>
         <View style={[styles.headerBadge, !isAdmin && styles.headerBadgeFaculty]}>
           <View style={[styles.activeDot, !isAdmin && { backgroundColor: '#16a34a' }]} />
           <Text style={[styles.headerBadgeText, !isAdmin && { color: '#16a34a' }]}>
-            {isAdmin ? 'ADMIN ACCESS' : 'DEPED CALENDAR'}
+            {isAdmin ? 'ADMIN' : 'DEPED'}
           </Text>
         </View>
       </View>
@@ -229,18 +292,16 @@ export const CalendarScreen: React.FC = () => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
         }
       >
-        {/* 1. Weekend Rest Indicator (Synced with PostgreSQL) */}
+        {/* Weekend Rest Card */}
         <View style={styles.card}>
           <View style={styles.weekendCardRow}>
             <View style={styles.cardIconBox}>
-              <Ionicons name="calendar" size={22} color={COLORS.primary} />
+              <Ionicons name="calendar" size={20} color={COLORS.primary} />
             </View>
             <View style={{ flex: 1, marginRight: 10 }}>
-              <Text style={styles.cardHeading}>Automatic Weekend Rest Days</Text>
+              <Text style={styles.cardHeading}>Weekend Rest</Text>
               <Text style={styles.cardDetailText}>
-                {isAdmin
-                  ? 'Excludes Saturdays and Sundays from mandatory classroom attendance logging'
-                  : 'Saturdays and Sundays are automatically excluded from attendance logging'}
+                Saturdays and Sundays are excluded from attendance logging
               </Text>
             </View>
             {isAdmin ? (
@@ -260,15 +321,15 @@ export const CalendarScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* 2. Admin Only: Add Override Form */}
+        {/* Admin Form: Add Override */}
         {isAdmin ? (
           <View style={styles.card}>
-            <Text style={styles.sectionHeaderTitle}>ADD DATE OVERRIDE / SUSPENSION</Text>
+            <Text style={styles.sectionHeaderTitle}>ADD OVERRIDE</Text>
 
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Effective Date (YYYY-MM-DD)</Text>
               <View style={styles.inputBox}>
-                <Ionicons name="calendar-outline" size={17} color="#64748b" style={{ marginRight: 8 }} />
+                <Ionicons name="calendar-outline" size={16} color="#64748b" style={{ marginRight: 8 }} />
                 <TextInput
                   style={styles.inputText}
                   value={exceptionDate}
@@ -276,12 +337,13 @@ export const CalendarScreen: React.FC = () => {
                   placeholder="YYYY-MM-DD"
                   placeholderTextColor="#94a3b8"
                   autoCapitalize="none"
+                  maxLength={10}
                 />
               </View>
             </View>
 
             <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Exception Category</Text>
+              <Text style={styles.fieldLabel}>Category</Text>
               <View style={styles.typeSelectorRow}>
                 {(['SUSPENSION', 'HOLIDAY', 'EVENT'] as const).map((type) => (
                   <TouchableOpacity
@@ -299,15 +361,16 @@ export const CalendarScreen: React.FC = () => {
             </View>
 
             <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Reason / Official Memorandum</Text>
-              <View style={[styles.inputBox, { height: 48 }]}>
-                <Ionicons name="document-text-outline" size={17} color="#64748b" style={{ marginRight: 8 }} />
+              <Text style={styles.fieldLabel}>Reason / Memorandum</Text>
+              <View style={[styles.inputBox, { height: 44 }]}>
+                <Ionicons name="document-text-outline" size={16} color="#64748b" style={{ marginRight: 8 }} />
                 <TextInput
                   style={styles.inputText}
-                  placeholder="Enter official memorandum or reason"
+                  placeholder="Official memorandum or reason"
                   placeholderTextColor="#94a3b8"
                   value={exceptionReason}
                   onChangeText={setExceptionReason}
+                  maxLength={255}
                 />
               </View>
             </View>
@@ -322,8 +385,8 @@ export const CalendarScreen: React.FC = () => {
                 <ActivityIndicator size="small" color="#ffffff" />
               ) : (
                 <>
-                  <Ionicons name="add-circle-outline" size={18} color="#ffffff" style={{ marginRight: 6 }} />
-                  <Text style={styles.addOverrideBtnText}>Save Calendar Override</Text>
+                  <Ionicons name="add-circle-outline" size={16} color="#ffffff" style={{ marginRight: 6 }} />
+                  <Text style={styles.addOverrideBtnText}>Save</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -332,24 +395,24 @@ export const CalendarScreen: React.FC = () => {
           <View style={styles.infoBanner}>
             <Ionicons name="information-circle-outline" size={18} color="#004b87" />
             <Text style={styles.infoBannerText}>
-              Official class suspensions, holidays, and calendar overrides are managed by School Administrators.
+              Official class suspensions and calendar overrides are managed by administrators.
             </Text>
           </View>
         )}
 
-        {/* 3. Active Exceptions List (Directly from PostgreSQL) */}
+        {/* Active Overrides List */}
         <View style={styles.card}>
           <View style={styles.listHeaderRow}>
             <Text style={styles.sectionHeaderTitle}>
-              ACTIVE DATE OVERRIDES ({exceptions.length})
+              ACTIVE OVERRIDES ({exceptions.length})
             </Text>
-            <Text style={styles.listSubText}>Takes precedence over regular classes</Text>
+            <Text style={styles.listSubText}>Overrides regular schedule</Text>
           </View>
 
           {loading ? (
             <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 14 }} />
           ) : exceptions.length === 0 ? (
-            <Text style={styles.noExceptionsText}>No special date overrides currently set in database.</Text>
+            <Text style={styles.noExceptionsText}>No active date overrides set.</Text>
           ) : (
             exceptions.map((item) => (
               <View key={String(item.id)} style={styles.exceptionItemRow}>
@@ -388,7 +451,7 @@ export const CalendarScreen: React.FC = () => {
                     style={styles.deleteBtn}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="trash-outline" size={17} color="#ef4444" />
+                    <Ionicons name="trash-outline" size={16} color="#ef4444" />
                   </TouchableOpacity>
                 )}
               </View>
@@ -406,13 +469,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
   },
-  screenTitle: { fontSize: 18, fontWeight: '800', color: '#003460', letterSpacing: -0.3 },
+  screenTitle: { fontSize: 17, fontWeight: '800', color: '#003460', letterSpacing: -0.3 },
   screenSub: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
   headerBadge: {
     flexDirection: 'row',
@@ -428,22 +491,22 @@ const styles = StyleSheet.create({
   },
   activeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#004b87' },
   headerBadgeText: { fontSize: 9, fontWeight: '800', color: '#004b87', letterSpacing: 0.3 },
-  scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28, gap: 12 },
-  card: { backgroundColor: '#ffffff', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#e2e8f0' },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 110, gap: 12 },
+  card: { backgroundColor: '#ffffff', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#e2e8f0' },
   weekendCardRow: { flexDirection: 'row', alignItems: 'center' },
   cardIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 10,
+    width: 38,
+    height: 38,
+    borderRadius: 9,
     backgroundColor: '#e6f0fa',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
   },
-  cardHeading: { fontSize: 13.5, fontWeight: '700', color: '#0f172a' },
-  cardDetailText: { fontSize: 11, color: '#64748b', marginTop: 2, lineHeight: 15 },
+  cardHeading: { fontSize: 13, fontWeight: '700', color: '#0f172a' },
+  cardDetailText: { fontSize: 10.5, color: '#64748b', marginTop: 2, lineHeight: 14 },
   readOnlyPill: { backgroundColor: '#dcfce7', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 },
-  readOnlyPillText: { fontSize: 9.5, fontWeight: '800', color: '#16a34a' },
+  readOnlyPillText: { fontSize: 9, fontWeight: '800', color: '#16a34a' },
   infoBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -455,34 +518,34 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   infoBannerText: { flex: 1, fontSize: 11, color: '#1e40af', lineHeight: 15 },
-  sectionHeaderTitle: { fontSize: 10.5, fontWeight: '800', color: '#004b87', letterSpacing: 0.5, marginBottom: 12 },
+  sectionHeaderTitle: { fontSize: 10.5, fontWeight: '800', color: '#004b87', letterSpacing: 0.5, marginBottom: 10 },
   listHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  listSubText: { fontSize: 9.5, color: '#94a3b8', marginBottom: 12 },
+  listSubText: { fontSize: 9.5, color: '#94a3b8', marginBottom: 10 },
   fieldRow: { marginBottom: 10 },
-  fieldLabel: { fontSize: 11, fontWeight: '700', color: '#475569', marginBottom: 5 },
+  fieldLabel: { fontSize: 10.5, fontWeight: '700', color: '#475569', marginBottom: 5 },
   inputBox: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#f8fafc',
     borderRadius: 10,
-    borderWidth: 1.2,
+    borderWidth: 1,
     borderColor: '#cbd5e1',
     paddingHorizontal: 12,
-    height: 42,
+    height: 40,
   },
   inputText: { flex: 1, fontSize: 12.5, color: '#0f172a' },
-  typeSelectorRow: { flexDirection: 'row', gap: 8 },
+  typeSelectorRow: { flexDirection: 'row', gap: 6 },
   typePill: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 8,
     backgroundColor: '#f1f5f9',
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
   typePillActive: { backgroundColor: '#004b87', borderColor: '#004b87' },
-  typePillText: { fontSize: 10.5, fontWeight: '700', color: '#64748b' },
+  typePillText: { fontSize: 10, fontWeight: '700', color: '#64748b' },
   typePillTextActive: { color: '#ffffff' },
   addOverrideBtn: {
     flexDirection: 'row',
@@ -493,26 +556,26 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginTop: 4,
   },
-  addOverrideBtnText: { fontSize: 12.5, fontWeight: '700', color: '#ffffff' },
+  addOverrideBtnText: { fontSize: 12, fontWeight: '700', color: '#ffffff' },
   btnDisabled: { opacity: 0.6 },
-  noExceptionsText: { fontSize: 11.5, color: '#94a3b8', textAlign: 'center', paddingVertical: 12 },
+  noExceptionsText: { fontSize: 11, color: '#94a3b8', textAlign: 'center', paddingVertical: 12 },
   exceptionItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 9,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  typeBadge: { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 },
+  typeBadge: { paddingVertical: 3, paddingHorizontal: 7, borderRadius: 5 },
   badgeSuspension: { backgroundColor: '#fee2e2' },
-  textSuspension: { color: '#dc2626', fontWeight: '800', fontSize: 8.5 },
+  textSuspension: { color: '#dc2626', fontWeight: '800', fontSize: 8 },
   badgeHoliday: { backgroundColor: '#fef3c7' },
-  textHoliday: { color: '#d97706', fontWeight: '800', fontSize: 8.5 },
+  textHoliday: { color: '#d97706', fontWeight: '800', fontSize: 8 },
   badgeEvent: { backgroundColor: '#e0f2fe' },
-  textEvent: { color: '#0284c7', fontWeight: '800', fontSize: 8.5 },
-  typeBadgeText: { letterSpacing: 0.4 },
-  exceptionDateText: { fontSize: 12, fontWeight: '700', color: '#0f172a' },
-  exceptionReasonText: { fontSize: 11, color: '#64748b', marginTop: 1 },
+  textEvent: { color: '#0284c7', fontWeight: '800', fontSize: 8 },
+  typeBadgeText: { letterSpacing: 0.3 },
+  exceptionDateText: { fontSize: 11.5, fontWeight: '700', color: '#0f172a' },
+  exceptionReasonText: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
   deleteBtn: { padding: 6 },
 });
 

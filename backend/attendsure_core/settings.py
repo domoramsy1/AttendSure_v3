@@ -29,31 +29,29 @@ if not SECRET_KEY and not DEBUG:
 if not SECRET_KEY:
     SECRET_KEY = 'django-insecure-attendsure-dev-key-never-use-in-production'
 
-# Ensure dedicated logs directory exists for SysAdmin maintenance and audit trails
+# Ensure dedicated logs directory exists for audit trails
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 # ==============================================================================
-# 2. NETWORKING, REVERSE PROXY & HOST RESOLUTION (CCNA STANDARDS)
+# 2. NETWORKING, REVERSE PROXY & HOST RESOLUTION (CYBERSECURITY APPLIED)
 # ==============================================================================
 
-# Parse ALLOWED_HOSTS from .env if defined
+# Parse ALLOWED_HOSTS from .env
 env_hosts = os.getenv('ALLOWED_HOSTS', '')
 if env_hosts:
     ALLOWED_HOSTS = [h.strip() for h in env_hosts.split(',') if h.strip()]
 else:
     ALLOWED_HOSTS = []
 
-# Core infrastructure hosts required for local, school LAN, and domain routing:
-# - lapasan.attendsure.com.ph / wildcard: Official multi-school domain routing
-# - 10.16.115.49: Current active Wi-Fi IP for direct mobile phone testing
-# - 172.20.140.221: Dedicated school campus server IP
 REQUIRED_HOSTS = [
     'lapasan.attendsure.com.ph',
-    '.attendsure.com.ph',        # Wildcard matching all school subdomains
-    '10.16.115.49',              # Active Wi-Fi test interface
-    '172.20.140.221',            # School Local Server IP
+    '.attendsure.com.ph',
+    '.trycloudflare.com',        # Allows any active Cloudflare tunnel
+    '10.16.115.49',
+    '172.20.140.221',
+    '172.20.141.220',
     'localhost',
     '127.0.0.1',
     '0.0.0.0',
@@ -63,17 +61,18 @@ for host in REQUIRED_HOSTS:
     if host not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(host)
 
-# Permit all hosts in local development / debugging to avoid mobile connection drops
 if DEBUG and '*' not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append('*')
 
-# Reverse Proxy / L3 Gateway Forwarding (Nginx / Linux Gateway integration)
+# Reverse Proxy / L3 Gateway Forwarding
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
 
-# CSRF Trusted Origins for Web Portals, Gate Kiosks, and Mobile API Handshakes
+# CSRF Trusted Origins (Includes Cloudflare wildcards to stop 403 CSRF lockouts)
 CSRF_TRUSTED_ORIGINS = [
+    'https://*.trycloudflare.com',
+    'http://*.trycloudflare.com',
     'http://lapasan.attendsure.com.ph:8000',
     'http://lapasan.attendsure.com.ph:5173',
     'http://lapasan.attendsure.com.ph',
@@ -97,7 +96,6 @@ CSRF_TRUSTED_ORIGINS = [
 # ==============================================================================
 
 INSTALLED_APPS = [
-    # Built-in Django applications
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -105,12 +103,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    # Third-party scalable extensions
+    # Third-party utilities
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
 
-    # AttendSure local domain modules
+    # AttendSure local apps
     'apps.core',
     'apps.academics.apps.AcademicsConfig',
     'apps.api.apps.ApiConfig',
@@ -124,16 +122,16 @@ INSTALLED_APPS = [
 # ==============================================================================
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',                     # 1. CORS Preflight & Handshake
-    'django.middleware.security.SecurityMiddleware',             # 2. Security Headers & SSL Inspection
-    'django.contrib.sessions.middleware.SessionMiddleware',       # 3. Session Management
-    'django.middleware.common.CommonMiddleware',                 # 4. Canonical URLs
-    'django.middleware.csrf.CsrfViewMiddleware',                 # 5. Anti-CSRF Token Enforcement
-    'django.contrib.auth.middleware.AuthenticationMiddleware',   # 6. User RBAC Authentication
-    'django.contrib.messages.middleware.MessageMiddleware',       # 7. Flash Messaging
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',   # 8. Anti-Clickjacking Defense
-    'apps.core.middleware.SoftwareLicenseMiddleware',            # 9. Hardware License Guard
-    'apps.api.color_logger.ColorTerminalMiddleware',             # 10. Colorized CRUD & Status Terminal Logger
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'apps.core.middleware.SoftwareLicenseMiddleware',
+    'apps.api.color_logger.ColorTerminalMiddleware',
 ]
 
 ROOT_URLCONF = 'attendsure_core.urls'
@@ -158,34 +156,46 @@ WSGI_APPLICATION = 'attendsure_core.wsgi.application'
 
 
 # ==============================================================================
-# 5. DATABASE ARCHITECTURE (POSTGRESQL & CONNECTION POOLING)
+# 5. DATABASE ARCHITECTURE (POSTGRESQL DEFAULT + FASTER FETCHING)
 # ==============================================================================
 
-# CONN_MAX_AGE keeps database connections open for 60 seconds.
-# This eliminates TCP reconnect overhead on thousands of simultaneous requests.
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'attendsure_v3'),
-        'USER': os.getenv('DB_USER', 'postgres'),
-        'PASSWORD': os.getenv('DB_PASSWORD', ''),
-        'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '5432'),
-        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', 60)),  # Persistent connection pooling
-        'OPTIONS': {
-            'connect_timeout': 5,
-        },
+# Explicitly check DB_ENGINE. Defaults directly to postgresql.
+db_engine_choice = os.getenv('DB_ENGINE', 'postgresql').strip().lower()
+
+if db_engine_choice == 'postgresql':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME', 'attendsure_v3_db'),
+            'USER': os.getenv('DB_USER', 'attendsure_admin'),
+            'PASSWORD': os.getenv('DB_PASSWORD', '88888888'),
+            'HOST': os.getenv('DB_HOST', '127.0.0.1'),
+            'PORT': os.getenv('DB_PORT', '5432'),
+            # Keeps TCP connections open for 300 seconds to accelerate queries
+            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', 300)),
+            'OPTIONS': {
+                'connect_timeout': 5,
+            },
+        }
     }
-}
+else:
+    # Fallback to local SQLite only when explicitly requested
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+
 
 # ==============================================================================
-# 6. IN-MEMORY CACHE (REDIS WITH LOCAL RAM FALLBACK)
+# 6. IN-MEMORY CACHE (HIGH-SPEED RAM CACHING)
 # ==============================================================================
 
 REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
 
 if DEBUG:
-    # Local Development: Uses your laptop RAM directly (no Redis server needed)
+    # High-speed local RAM cache for development (no Redis server required)
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -193,7 +203,6 @@ if DEBUG:
         }
     }
 else:
-    # Production / High-Scale: Uses fast external Redis server
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
@@ -210,13 +219,9 @@ else:
 
 
 # ==============================================================================
-# 7. ASYNCHRONOUS BACKGROUND TASKS (CELERY & REDIS QUEUE)
+# 7. ASYNCHRONOUS BACKGROUND TASKS (CELERY & REDIS)
 # ==============================================================================
 
-# Celery handles heavy operations in the background:
-# - Batch writes for gate RFID taps
-# - Processing high-frequency GPS telemetry
-# - SMS dispatch to parents
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
@@ -224,14 +229,12 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Manila'
 CELERY_ENABLE_UTC = False
-
-# Rate limiting and worker concurrency settings
 CELERY_WORKER_CONCURRENCY = int(os.getenv('CELERY_WORKER_CONCURRENCY', 4))
-CELERY_WORKER_PREFETCH_MULTIPLIER = 4  # Prefetches tasks for fast throughput
+CELERY_WORKER_PREFETCH_MULTIPLIER = 4
 
 
 # ==============================================================================
-# 8. REST API & HARDWARE RATE LIMITING (THROTTLING)
+# 8. REST API & THROTTLING (CYBERSECURITY DEFENSE)
 # ==============================================================================
 
 REST_FRAMEWORK = {
@@ -249,8 +252,8 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '300/minute',       # High capacity for hardware gate turnstiles
-        'user': '1800/minute',      # High capacity for authenticated faculty telemetry pings
+        'anon': '120/minute',       # Protects endpoints from brute-force attacks
+        'user': '1200/minute',      # High-throughput capacity for authenticated GPS pings
     },
 }
 
@@ -279,23 +282,17 @@ CORS_ALLOW_CREDENTIALS = True
 # 9. ATTENDSURE HARDWARE, SMS & IOT PARAMETERS
 # ==============================================================================
 
-# Hardware Anti-Passback Cooldown (Prevents duplicate taps on turnstiles)
 GATE_DEBOUNCE_SECONDS = int(os.getenv('GATE_DEBOUNCE_SECONDS', 10))
 GATE_DEBOUNCE_MINUTES = int(os.getenv('GATE_DEBOUNCE_MINUTES', 3))
-
-# Estimated SMS cost per text in PHP for dashboard balance metrics
 SMS_UNIT_COST = float(os.getenv('SMS_UNIT_COST', 0.40))
-
-# Mobile Geofence Radius Default (Meters)
 DEFAULT_GEOFENCE_RADIUS_METERS = int(os.getenv('GEOFENCE_RADIUS_METERS', 150))
 
-# GSM Modem Serial Interface Configuration
 GSM_MODEM_PORT = os.getenv('GSM_MODEM_PORT', 'COM3' if os.name == 'nt' else '/dev/ttyUSB0')
-GSM_MODEM_BAUDRATE = int(os.getenv('GSM_MODEM_BAUDRATE', 9600))
+GSM_MODEM_BAUDRATE = int(os.getenv('GSM_MODEM_BAUDRATE', 115200))
 
 
 # ==============================================================================
-# 10. SYSTEM MAINTENANCE & ROTATING LOGGERS (SYSADMIN AUDIT TRAIL)
+# 10. ROTATING AUDIT LOGGERS (SYSADMIN & SECURITY MONITORING)
 # ==============================================================================
 
 LOGGING = {
@@ -307,10 +304,6 @@ LOGGING = {
             'style': '{',
             'datefmt': '%Y-%m-%d %H:%M:%S',
         },
-        'simple': {
-            'format': '[{levelname}] {message}',
-            'style': '{',
-        },
     },
     'handlers': {
         'console': {
@@ -318,7 +311,6 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
-        # Daily operational log (Rotates every 10MB, retains 5 backups)
         'file_general': {
             'level': 'INFO',
             'class': 'logging.handlers.RotatingFileHandler',
@@ -328,17 +320,6 @@ LOGGING = {
             'formatter': 'verbose',
             'encoding': 'utf-8',
         },
-        # Dedicated hardware log for IoT Kiosks, Turnstiles, and RFID/QR Taps
-        'file_hardware': {
-            'level': 'DEBUG' if DEBUG else 'INFO',
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': os.path.join(LOGS_DIR, 'hardware_scanners.log'),
-            'maxBytes': 15 * 1024 * 1024,
-            'backupCount': 7,
-            'formatter': 'verbose',
-            'encoding': 'utf-8',
-        },
-        # Security incident log (GPS spoofing, proxy taps, unapproved edits)
         'file_security': {
             'level': 'WARNING',
             'class': 'logging.handlers.RotatingFileHandler',
@@ -350,7 +331,6 @@ LOGGING = {
         },
     },
     'loggers': {
-        # Mute monotone django.server request lines so ColorTerminalMiddleware handles output
         'django.server': {
             'handlers': ['console'],
             'level': 'WARNING',
@@ -367,7 +347,7 @@ LOGGING = {
             'propagate': True,
         },
         'apps.api': {
-            'handlers': ['console', 'file_hardware'],
+            'handlers': ['console'],
             'level': 'DEBUG' if DEBUG else 'INFO',
             'propagate': False,
         },
@@ -384,7 +364,6 @@ LOGGING = {
 # 11. LOCALIZATION & REGIONAL STANDARDS
 # ==============================================================================
 
-# Time Localization: Philippine Standard Time (PST, UTC+8) for DepEd SF2 and CSC 48
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Manila'
 USE_I18N = True
@@ -397,28 +376,30 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# File upload restrictions (5 MB maximum payload)
 DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
-FILE_UPLOAD_MAX_MEMORY_SIZE = 2621440  # 2.5 MB
-
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2621440
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # ==============================================================================
-# 13. PRODUCTION SECURITY HEADERS
+# 13. CYBERSECURITY HARDENING
 # ==============================================================================
+
+# Protect cookies from JavaScript injection (Cross-Site Scripting / XSS defense)
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = False  # Allows frontend Axios client to read CSRF token
+
+# Anti-clickjacking defense
+X_FRAME_OPTIONS = 'DENY'
 
 if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
-    X_FRAME_OPTIONS = 'DENY'
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SESSION_COOKIE_HTTPONLY = True
-    SECURE_HSTS_SECONDS = 31536000  # 1 Year Strict-Transport-Security
+    SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True

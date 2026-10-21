@@ -1,6 +1,10 @@
 // AttendSure - Core Mobile Type Definitions
 // File: mobile/src/types/index.ts
 
+// ==============================================================================
+// 1. ROLES & DEVICE IDENTIFICATION (CYBERSECURITY CONTROLS)
+// ==============================================================================
+
 export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'GUARD';
 
 export interface DeviceIdentity {
@@ -12,6 +16,10 @@ export interface DeviceIdentity {
   osVersion?: string | null;
   isPhysicalDevice?: boolean;
 }
+
+// ==============================================================================
+// 2. TURNSTILE GATE LOGS & CAMPUS PROFILE
+// ==============================================================================
 
 export interface GateLog {
   id?: number | string;
@@ -48,13 +56,26 @@ export interface SchoolProfile {
   updated_at?: string;
 }
 
+// ==============================================================================
+// 3. USER ACCOUNTS & PROFILES (SYNCED WITH WEB & POSTGRESQL)
+// ==============================================================================
+
 export interface FacultyProfileObject {
   employee_id?: string;
   first_name?: string;
   last_name?: string;
+  middle_name?: string;
+  suffix?: string;
   full_name?: string;
+  email?: string;
+  contact_number?: string;
+  phone?: string;
+  position?: string;
   department?: string;
+  photo?: string | null;
+  avatar?: string | null;
   qr_token?: string;
+  bound_device_id?: string | null;
 }
 
 export interface UserAccount {
@@ -65,16 +86,43 @@ export interface UserAccount {
   role?: UserRole | string;
   first_name?: string;
   last_name?: string;
+  middle_name?: string;
+  suffix?: string;
   full_name?: string;
+  contact_number?: string;
+  phone?: string;
+  position?: string;
+  department?: string;
   faculty_id?: string;
   faculty_name?: string;
   faculty?: FacultyProfileObject;
   qr_token?: string;
-  contact_number?: string;
   photo?: string | null;
+  avatar?: string | null;
+  is_staff?: boolean;
   is_superuser?: boolean;
   token?: string;
 }
+
+// Alias for seamless compatibility across AuthContext and mobile screens
+export type AuthenticatedUser = UserAccount;
+
+// Strict typing for updating profile data without sending untrusted keys
+export interface UpdateProfilePayload {
+  first_name: string;
+  last_name: string;
+  middle_name?: string;
+  suffix?: string;
+  email: string;
+  contact_number: string;
+  position?: string;
+  department?: string;
+  password?: string;
+}
+
+// ==============================================================================
+// 4. AUTHENTICATION RESPONSES
+// ==============================================================================
 
 export interface AuthResponse {
   token: string;
@@ -84,8 +132,21 @@ export interface AuthResponse {
   faculty_id: string | null;
   faculty_name: string;
   is_superuser: boolean;
+  first_name?: string;
+  last_name?: string;
+  middle_name?: string;
+  suffix?: string;
+  email?: string;
+  contact_number?: string;
+  position?: string;
+  department?: string;
+  photo?: string | null;
   school_profile?: SchoolProfile | null;
 }
+
+// ==============================================================================
+// 5. GEOFENCING & TELEMETRY (HARDWARE SECURITY)
+// ==============================================================================
 
 export interface GeofenceConfig {
   name: string;

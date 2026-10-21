@@ -1,7 +1,7 @@
 // D:\AttendSure_V3\mobile\App.tsx
 
 import React, { useEffect, useCallback, useState } from 'react';
-import { View } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import * as SplashScreen from 'expo-splash-screen';
@@ -9,32 +9,48 @@ import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider } from './src/context/AuthContext';
 import AppNavigator from './src/navigation/AppNavigator';
 
-// 1. Prevent the splash screen from auto-hiding immediately
-SplashScreen.preventAutoHideAsync();
+// 1. Prevent splash auto-hide safely without crashing web or fast-reload sessions
+SplashScreen.preventAutoHideAsync().catch(() => {
+  /* Ignore failure if splash screen was already handled or running on web */
+});
 
 export default function App() {
-  const [appIsReady, setAppIsReady] = useState(false);
+  const [appIsReady, setAppIsReady] = useState<boolean>(false);
 
   useEffect(() => {
-    async function prepareApp() {
+    let isMounted = true;
+
+    async function initializeSystem() {
       try {
-        // You can load custom fonts or initial background data here
-        // We add a tiny 500ms buffer so the splash screen transitions smoothly
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (e) {
-        console.warn('Error loading app resources:', e);
+        // Fast startup: No artificial delays or mock waiting.
+        // Initialization tasks (such as checking saved tokens) run inside AuthProvider.
+      } catch (error) {
+        // Log safe message without leaking internal trace details to user screens
+        if (__DEV__) {
+          console.warn('[Security] Startup preparation failed safely:', error);
+        }
       } finally {
-        setAppIsReady(true);
+        if (isMounted) {
+          setAppIsReady(true);
+        }
       }
     }
 
-    prepareApp();
+    initializeSystem();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  // 2. Hide the splash screen exactly when the root view is done rendering
+  // 2. Hide the splash screen safely once UI layout rendering is confirmed
   const onLayoutRootView = useCallback(async () => {
     if (appIsReady) {
-      await SplashScreen.hideAsync();
+      try {
+        await SplashScreen.hideAsync();
+      } catch {
+        // Graceful fallback if already hidden
+      }
     }
   }, [appIsReady]);
 
@@ -44,7 +60,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+      <View style={styles.rootContainer} onLayout={onLayoutRootView}>
         <AuthProvider>
           <NavigationContainer>
             <AppNavigator />
@@ -54,3 +70,10 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  rootContainer: {
+    flex: 1,
+    backgroundColor: '#0f172a', // Consistent theme prevent flashing during load
+  },
+});

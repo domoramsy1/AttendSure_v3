@@ -1,16 +1,4 @@
-// mobile/src/screens/HomeScreen.tsx
-
-/**
- * AttendSure Mobile - Faculty Institutional Home & Live Telemetry
- * File: mobile/src/screens/HomeScreen.tsx
- *
- * Cybersecurity & Anti-Cheating:
- * 1. Perimeter Breach Alarm: Physical vibration and emergency visual modal trigger instantly upon crossing the campus boundary while on duty.
- * 2. Zero-Click Real-Time Telemetry: Automatically computes live Haversine distance from school center.
- * 3. Instant Anti-Spoof Warning: Detects and flags fake GPS applications immediately.
- * 4. Cache-First Fast Boot: Loads cached rosters, school settings, and DTR records instantly.
- * 5. Simple English Terms: Clear alerts and straightforward attendance metrics.
- */
+// D:\AttendSure_V3\mobile\src\screens\HomeScreen.tsx
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
@@ -33,11 +21,11 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useAuth } from '../context/AuthContext';
+import { apiClient } from '../api/client';
+import { getServerBaseUrl } from '../services/configService';
 import { getUnsyncedCount } from '../services/offlineQueue';
-import defaultApiClient, { apiClient as namedClient } from '../api/client';
 import { COLORS } from '../constants/theme';
 
-const apiClient = defaultApiClient || namedClient;
 const fallbackLogo = require('../../assets/attendsure-logo.svg');
 
 // ============================================================================
@@ -50,7 +38,7 @@ function calculateDistanceMeters(
   lat2: number,
   lon2: number
 ): number {
-  const R = 6371000.0; // Earth radius in meters
+  const R = 6371000.0;
   const dLat = ((lat2 - lat1) * Math.PI) / 180.0;
   const dLon = ((lon2 - lon1) * Math.PI) / 180.0;
   const radLat1 = (lat1 * Math.PI) / 180.0;
@@ -120,9 +108,6 @@ interface DtrDayRow {
   pm_departure: string;
   undertime_hours: string;
   undertime_minutes: string;
-  is_loafing: boolean;
-  loafing_excused: boolean;
-  loafing_remarks: string;
 }
 
 interface DtrSummaryData {
@@ -155,27 +140,6 @@ interface CalendarOverrideItem {
   reason: string;
 }
 
-interface CampusOverviewData {
-  total_students: number;
-  students_present: number;
-  students_on_campus: number;
-  students_absent: number;
-  attendance_rate: number;
-  faculty_on_duty: number;
-  total_faculty: number;
-  gate_scans_today: number;
-  kiosks_online: number;
-  total_kiosks: number;
-  analytics?: {
-    rfid_count_today: number;
-    qr_count_today: number;
-    on_time_count: number;
-    tardy_count: number;
-    chronic_absent_count: number;
-    average_latency_ms: number;
-  };
-}
-
 interface LiveGpsCoords {
   latitude: number;
   longitude: number;
@@ -205,23 +169,25 @@ export const HomeScreen: React.FC = () => {
   const [geofenceConfig, setGeofenceConfig] = useState<GeofenceConfigData | null>(null);
   const [todayOverride, setTodayOverride] = useState<CalendarOverrideItem | null>(null);
   const [weekendRestEnabled, setWeekendRestEnabled] = useState<boolean>(false);
-  const [campusOverview, setCampusOverview] = useState<CampusOverviewData | null>(null);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [offlineCount, setOfflineCount] = useState<number>(0);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const [serverBase, setServerBase] = useState<string>('');
+  const [logoFailed, setLogoFailed] = useState<boolean>(false);
 
   // Live Automatic GPS Telemetry
   const [liveCoords, setLiveCoords] = useState<LiveGpsCoords | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Perimeter Breach Alarm State
+  // Perimeter Alert State
   const [showBreachAlarm, setShowBreachAlarm] = useState<boolean>(false);
   const [alarmAcknowledged, setAlarmAcknowledged] = useState<boolean>(false);
   const lastBreachAlertTime = useRef<number>(0);
 
   const isMounted = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const currentUser = user as Record<string, any> | null;
   const displayName =
@@ -229,7 +195,7 @@ export const HomeScreen: React.FC = () => {
     `${currentUser?.first_name || ''} ${currentUser?.last_name || ''}`.trim() ||
     currentUser?.faculty_name ||
     currentUser?.username ||
-    'Faculty Member';
+    'Faculty';
 
   const employeeId =
     currentUser?.employee_id ||
@@ -244,7 +210,7 @@ export const HomeScreen: React.FC = () => {
     schoolProfile?.school_name ||
     currentUser?.school_name ||
     geofenceConfig?.name ||
-    'Lapasan National High School';
+    'AttendSure Campus';
 
   const schoolSubHeader = [
     schoolProfile?.school_id ? `ID: ${schoolProfile.school_id}` : '',
@@ -253,13 +219,19 @@ export const HomeScreen: React.FC = () => {
     .filter(Boolean)
     .join(' • ');
 
-  const logoSource =
-    schoolProfile?.school_logo || schoolProfile?.left_logo
-      ? { uri: (schoolProfile.school_logo || schoolProfile.left_logo) as string }
-      : fallbackLogo;
+  // Safe Media URL Resolution
+  const resolvePhotoUrl = useCallback((path: string | null | undefined, base: string) => {
+    if (!path) return null;
+    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) {
+      return path;
+    }
+    const cleanBase = base.replace(/\/+$/, '');
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    return `${cleanBase}${cleanPath}`;
+  }, []);
 
   // ---------------------------------------------------------------------------
-  // LIVE GPS SUBSCRIPTION (Continuous Foreground Updates)
+  // LIVE GPS SUBSCRIPTION (Foreground Updates)
   // ---------------------------------------------------------------------------
   useEffect(() => {
     let watcherSubscription: Location.LocationSubscription | null = null;
@@ -275,13 +247,13 @@ export const HomeScreen: React.FC = () => {
 
         const isGpsActive = await Location.hasServicesEnabledAsync();
         if (!isGpsActive) {
-          if (isSubscribed) setGpsError('Phone GPS is turned off.');
+          if (isSubscribed) setGpsError('Phone GPS is disabled.');
           return;
         }
 
         if (isSubscribed) setGpsError(null);
 
-        // Initial single fix for fast rendering
+        // Quick Initial Fix
         const initial = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
@@ -296,12 +268,12 @@ export const HomeScreen: React.FC = () => {
           });
         }
 
-        // Live watcher updates coordinates continuously as the user moves
+        // Continuous watcher
         watcherSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,
-            timeInterval: 4000, // Update every 4 seconds
-            distanceInterval: 4,  // Or when moving 4 meters
+            timeInterval: 4000,
+            distanceInterval: 4,
           },
           (position) => {
             if (!isSubscribed) return;
@@ -317,7 +289,7 @@ export const HomeScreen: React.FC = () => {
         );
       } catch (err: any) {
         if (isSubscribed) {
-          setGpsError(err?.message || 'Searching for satellite GPS lock...');
+          setGpsError(err?.message || 'Searching for GPS signal...');
         }
       }
     };
@@ -333,7 +305,7 @@ export const HomeScreen: React.FC = () => {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // REAL-TIME HAVERSINE DISTANCE COMPUTATION
+  // HAVERSINE DISTANCE COMPUTATION
   // ---------------------------------------------------------------------------
   const campusCenter = useMemo(() => {
     const lat = geofenceConfig?.latitude ?? schoolProfile?.latitude ?? 8.4858;
@@ -376,9 +348,9 @@ export const HomeScreen: React.FC = () => {
 
   const dutyStatusLabel = hasTappedInToday
     ? hasTappedOutToday
-      ? 'GATE: CHECKED OUT'
-      : 'GATE: CHECKED IN'
-    : 'GATE: NO SCAN TODAY';
+      ? 'GATE: OUT'
+      : 'GATE: IN'
+    : 'GATE: NO SCAN';
 
   const dutyStatusColor = hasTappedInToday
     ? hasTappedOutToday
@@ -393,27 +365,31 @@ export const HomeScreen: React.FC = () => {
     : '#f1f5f9';
 
   // ---------------------------------------------------------------------------
-  // PERIMETER BREACH ALARM TRIGGER (Physical Vibration + Visual Alarm)
+  // CYBERSECURITY: PERIMETER ALARM WITH GPS ACCURACY FILTER
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    // Check if the user is outside the perimeter while on active duty
     if (isInsideCampusPerimeter === false && isOfficiallyOnCampus) {
+      // Accuracy Guard: Only alert if the user is truly outside beyond the accuracy margin
+      const accuracyMargin = liveCoords?.accuracy || 0;
+      const trueExcess = (liveDistanceMeters || 0) - campusCenter.radius;
+
+      // If accuracy error is larger than excess distance, ignore false alarm
+      if (trueExcess <= accuracyMargin) {
+        return;
+      }
+
       const now = Date.now();
-      // Trigger alarm if not acknowledged or if 5 minutes have elapsed since last alert
       if (!alarmAcknowledged || now - lastBreachAlertTime.current > 300000) {
         setShowBreachAlarm(true);
         lastBreachAlertTime.current = now;
-
-        // Emergency pulse vibration pattern: [wait, vibrate, wait, vibrate, wait, vibrate]
-        Vibration.vibrate([0, 600, 200, 600, 200, 800]);
+        Vibration.vibrate([0, 500, 200, 500]);
       }
     } else if (isInsideCampusPerimeter === true) {
-      // Auto-clear alarm once teacher returns inside campus grounds
       setShowBreachAlarm(false);
       setAlarmAcknowledged(false);
       Vibration.cancel();
     }
-  }, [isInsideCampusPerimeter, isOfficiallyOnCampus, alarmAcknowledged]);
+  }, [isInsideCampusPerimeter, isOfficiallyOnCampus, liveDistanceMeters, liveCoords, campusCenter.radius, alarmAcknowledged]);
 
   const handleDismissAlarm = () => {
     setShowBreachAlarm(false);
@@ -426,26 +402,34 @@ export const HomeScreen: React.FC = () => {
   // ---------------------------------------------------------------------------
   const loadCachedData = useCallback(async () => {
     try {
-      const [cachedSchool, cachedSections, cachedDtr, cachedGeo] = await Promise.all([
+      const [cachedSchool, cachedSections, cachedDtr, cachedGeo, activeBase] = await Promise.all([
         AsyncStorage.getItem('attendsure_cached_school'),
         AsyncStorage.getItem('attendsure_cached_sections'),
         AsyncStorage.getItem('attendsure_cached_dtr'),
         AsyncStorage.getItem('attendsure_cached_geofence'),
+        getServerBaseUrl(),
       ]);
 
       if (cachedSchool) setSchoolProfile(JSON.parse(cachedSchool));
       if (cachedSections) setSections(JSON.parse(cachedSections));
       if (cachedDtr) setDtrData(JSON.parse(cachedDtr));
       if (cachedGeo) setGeofenceConfig(JSON.parse(cachedGeo));
+      if (activeBase) setServerBase(activeBase);
     } catch {
       // Ignore cache read errors
     }
   }, []);
 
   // ---------------------------------------------------------------------------
-  // REMOTE DATA FETCHING
+  // REMOTE DATA FETCHING WITH ABORT CONTROLLER
   // ---------------------------------------------------------------------------
   const loadAllDynamicData = useCallback(async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     const todayDate = getLocalTodayStr();
     const now = new Date();
 
@@ -455,14 +439,12 @@ export const HomeScreen: React.FC = () => {
       dtrRes,
       geofenceRes,
       calendarRes,
-      overviewRes,
     ] = await Promise.allSettled([
-      apiClient.get('/classroom/roster/', { timeout: 8000 }),
-      apiClient.get('/settings/school/', { timeout: 8000 }),
-      apiClient.get(`/dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { timeout: 8000 }),
-      apiClient.get('/geofence/', { timeout: 8000 }),
-      apiClient.get('/calendar/exceptions/', { timeout: 8000 }),
-      apiClient.get('/dashboard/overview/', { timeout: 8000 }),
+      apiClient.get('/classroom/roster/', { signal: controller.signal }),
+      apiClient.get('/settings/school/', { signal: controller.signal }),
+      apiClient.get(`/dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal }),
+      apiClient.get('/geofence/', { signal: controller.signal }),
+      apiClient.get('/calendar/exceptions/', { signal: controller.signal }),
     ]);
 
     if (!isMounted.current) return;
@@ -504,10 +486,6 @@ export const HomeScreen: React.FC = () => {
       setTodayOverride(matched);
     }
 
-    if (overviewRes.status === 'fulfilled' && overviewRes.value.data) {
-      setCampusOverview(overviewRes.value.data);
-    }
-
     setLastSyncTime(
       new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     );
@@ -539,11 +517,14 @@ export const HomeScreen: React.FC = () => {
 
     return () => {
       isMounted.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
   }, [loadCachedData, loadAllDynamicData, checkOfflineStorage, refreshUser]);
 
   // ---------------------------------------------------------------------------
-  // CLASSROOM ATTENDANCE AGGREGATION
+  // ATTENDANCE STATS AGGREGATION
   // ---------------------------------------------------------------------------
   const totalClasses = sections.length;
 
@@ -602,13 +583,16 @@ export const HomeScreen: React.FC = () => {
 
   const isWeekendToday = [0, 6].includes(new Date().getDay());
 
+  // Resolved Logo
+  const rawLogoPath = schoolProfile?.school_logo || schoolProfile?.left_logo;
+  const resolvedLogoUri = resolvePhotoUrl(rawLogoPath, serverBase);
+  const logoSource = (resolvedLogoUri && !logoFailed) ? { uri: resolvedLogoUri } : fallbackLogo;
+
   return (
     <SafeAreaView style={styles.safeContainer} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
 
-      {/* ================================================================= */}
-      {/* EMERGENCY PERIMETER BREACH ALARM MODAL                            */}
-      {/* ================================================================= */}
+      {/* Emergency Perimeter Alert Modal */}
       <Modal
         visible={showBreachAlarm}
         transparent={true}
@@ -618,30 +602,30 @@ export const HomeScreen: React.FC = () => {
         <View style={styles.alarmModalOverlay}>
           <View style={styles.alarmModalCard}>
             <View style={styles.alarmIconCircle}>
-              <Ionicons name="warning" size={38} color="#ffffff" />
+              <Ionicons name="warning" size={36} color="#ffffff" />
             </View>
 
-            <Text style={styles.alarmModalTitle}>PERIMETER BREACH DETECTED</Text>
+            <Text style={styles.alarmModalTitle}>PERIMETER ALERT</Text>
             <Text style={styles.alarmModalSubtitle}>
-              You have stepped outside the official campus boundary while recorded on active duty.
+              You are currently outside the school boundary while logged in on duty.
             </Text>
 
             <View style={styles.alarmMetricsBox}>
               <View style={styles.alarmMetricItem}>
-                <Text style={styles.alarmMetricLabel}>CURRENT DISTANCE</Text>
+                <Text style={styles.alarmMetricLabel}>CURRENT</Text>
                 <Text style={styles.alarmMetricValue}>
-                  {liveDistanceMeters !== null ? formatDistance(liveDistanceMeters) : 'Calculating...'}
+                  {liveDistanceMeters !== null ? formatDistance(liveDistanceMeters) : '--'}
                 </Text>
               </View>
               <View style={styles.alarmDividerVertical} />
               <View style={styles.alarmMetricItem}>
-                <Text style={styles.alarmMetricLabel}>ALLOWED BOUNDARY</Text>
-                <Text style={styles.alarmMetricValue}>{campusCenter.radius} meters</Text>
+                <Text style={styles.alarmMetricLabel}>ALLOWED</Text>
+                <Text style={styles.alarmMetricValue}>{campusCenter.radius}m</Text>
               </View>
             </View>
 
             <Text style={styles.alarmWarningNotice}>
-              DepEd CSC Form 48 regulations require physical presence on campus during duty hours. Please return within perimeter grounds or secure an approved gate pass.
+              Please return to campus grounds or submit an excuse if on official travel.
             </Text>
 
             <TouchableOpacity
@@ -649,8 +633,8 @@ export const HomeScreen: React.FC = () => {
               onPress={handleDismissAlarm}
               activeOpacity={0.85}
             >
-              <Ionicons name="volume-mute-outline" size={18} color="#ffffff" />
-              <Text style={styles.alarmAcknowledgeBtnText}>Acknowledge &amp; Silence Alarm</Text>
+              <Ionicons name="volume-mute-outline" size={17} color="#ffffff" />
+              <Text style={styles.alarmAcknowledgeBtnText}>Silence Alert</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -659,7 +643,12 @@ export const HomeScreen: React.FC = () => {
       {/* Top Header */}
       <View style={styles.topHeader}>
         <View style={styles.brandGroup}>
-          <Image source={logoSource} style={styles.schoolLogo} contentFit="contain" />
+          <Image
+            source={logoSource}
+            style={styles.schoolLogo}
+            contentFit="contain"
+            onError={() => setLogoFailed(true)}
+          />
           <View style={styles.brandTextGroup}>
             <Text style={styles.schoolTitle} numberOfLines={1}>
               {schoolName}
@@ -674,7 +663,7 @@ export const HomeScreen: React.FC = () => {
         </View>
 
         <TouchableOpacity style={styles.refreshButton} onPress={onRefresh} activeOpacity={0.7}>
-          <Ionicons name="refresh" size={17} color="#004b87" />
+          <Ionicons name="refresh" size={16} color="#004b87" />
         </TouchableOpacity>
       </View>
 
@@ -686,22 +675,20 @@ export const HomeScreen: React.FC = () => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
         }
       >
-        {/* Anti-Cheating Alert: Fake / Mock GPS Detection */}
+        {/* Anti-Cheat Mock GPS Warning */}
         {liveCoords?.mocked && (
           <View style={styles.mockAlertCard}>
-            <Ionicons name="alert-circle" size={20} color="#dc2626" />
+            <Ionicons name="alert-circle" size={18} color="#dc2626" />
             <View style={{ flex: 1 }}>
-              <Text style={styles.mockAlertTitle}>Mock GPS Application Detected</Text>
+              <Text style={styles.mockAlertTitle}>Mock GPS Detected</Text>
               <Text style={styles.mockAlertSub}>
-                Disable fake location apps in device developer settings. Location presence is flagged.
+                Disable fake location apps. Telemetry has been flagged.
               </Text>
             </View>
           </View>
         )}
 
-        {/* ================================================================= */}
-        {/* 1. TOP LIVE CAMPUS GEOFENCE TELEMETRY CARD (NO MANUAL BUTTONS)    */}
-        {/* ================================================================= */}
+        {/* 1. Geofence Status Card */}
         <View style={styles.liveTelemetryCard}>
           <View style={styles.telemetryCardHeader}>
             <View style={styles.telemetryHeaderLeft}>
@@ -718,7 +705,7 @@ export const HomeScreen: React.FC = () => {
                   },
                 ]}
               />
-              <Text style={styles.telemetryHeaderLabel}>LIVE CAMPUS GEOFENCE TELEMETRY</Text>
+              <Text style={styles.telemetryHeaderLabel}>GEOFENCE STATUS</Text>
             </View>
 
             {liveCoords?.timestamp ? (
@@ -737,7 +724,7 @@ export const HomeScreen: React.FC = () => {
                     <Text style={styles.distanceBigText}>
                       {formatDistance(liveDistanceMeters)}
                     </Text>
-                    <Text style={styles.distanceSubUnit}>from campus center</Text>
+                    <Text style={styles.distanceSubUnit}>from campus</Text>
                   </View>
 
                   <View style={styles.perimeterNoticeRow}>
@@ -745,16 +732,14 @@ export const HomeScreen: React.FC = () => {
                       style={[
                         styles.perimeterStatusBadge,
                         {
-                          backgroundColor:
-                            isInsideCampusPerimeter ? '#ecfdf5' : '#fef2f2',
-                          borderColor:
-                            isInsideCampusPerimeter ? '#a7f3d0' : '#fecaca',
+                          backgroundColor: isInsideCampusPerimeter ? '#ecfdf5' : '#fef2f2',
+                          borderColor: isInsideCampusPerimeter ? '#a7f3d0' : '#fecaca',
                         },
                       ]}
                     >
                       <Ionicons
                         name={isInsideCampusPerimeter ? 'checkmark-circle' : 'alert-circle'}
-                        size={13}
+                        size={12}
                         color={isInsideCampusPerimeter ? '#059669' : '#dc2626'}
                       />
                       <Text
@@ -763,12 +748,12 @@ export const HomeScreen: React.FC = () => {
                           { color: isInsideCampusPerimeter ? '#047857' : '#b91c1c' },
                         ]}
                       >
-                        {isInsideCampusPerimeter ? 'INSIDE CAMPUS GROUNDS' : 'OUTSIDE CAMPUS BOUNDARY'}
+                        {isInsideCampusPerimeter ? 'INSIDE BOUNDARY' : 'OUTSIDE BOUNDARY'}
                       </Text>
                     </View>
 
                     <Text style={styles.allowedRadiusText}>
-                      Allowed: {campusCenter.radius}m
+                      Radius: {campusCenter.radius}m
                     </Text>
                   </View>
                 </>
@@ -776,35 +761,34 @@ export const HomeScreen: React.FC = () => {
                 <View style={styles.acquiringGpsBox}>
                   <ActivityIndicator size="small" color="#0284c7" />
                   <Text style={styles.acquiringGpsText}>
-                    {gpsError || 'Acquiring satellite GPS lock...'}
+                    {gpsError || 'Acquiring GPS fix...'}
                   </Text>
                 </View>
               )}
             </View>
           </View>
 
-          {/* Telemetry Footer with Precision Metrics */}
           <View style={styles.telemetryFooter}>
             <View style={styles.telemetryFooterItem}>
-              <Ionicons name="radio-outline" size={12} color="#64748b" />
+              <Ionicons name="radio-outline" size={11} color="#64748b" />
               <Text style={styles.telemetryFooterLabel}>
                 Accuracy: {liveCoords?.accuracy ? `±${Math.round(liveCoords.accuracy)}m` : 'Measuring...'}
               </Text>
             </View>
 
             <View style={styles.telemetryFooterItem}>
-              <Ionicons name="navigate-outline" size={12} color="#64748b" />
+              <Ionicons name="navigate-outline" size={11} color="#64748b" />
               <Text style={styles.telemetryFooterLabel}>
-                {liveCoords ? `${liveCoords.latitude.toFixed(5)}°N, ${liveCoords.longitude.toFixed(5)}°E` : 'GPS Inactive'}
+                {liveCoords ? `${liveCoords.latitude.toFixed(4)}°N, ${liveCoords.longitude.toFixed(4)}°E` : 'GPS Inactive'}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* Active Calendar Override or Weekend Notice */}
+        {/* Calendar Override or Weekend Notice */}
         {todayOverride ? (
           <View style={styles.calendarAlertBanner}>
-            <Ionicons name="calendar" size={18} color="#b91c1c" />
+            <Ionicons name="calendar" size={16} color="#b91c1c" />
             <View style={{ flex: 1 }}>
               <Text style={styles.calendarAlertTitle}>
                 {todayOverride.type}: {todayOverride.date}
@@ -814,19 +798,19 @@ export const HomeScreen: React.FC = () => {
           </View>
         ) : isWeekendToday && weekendRestEnabled ? (
           <View style={[styles.calendarAlertBanner, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
-            <Ionicons name="sunny-outline" size={18} color="#1d4ed8" />
+            <Ionicons name="sunny-outline" size={16} color="#1d4ed8" />
             <View style={{ flex: 1 }}>
               <Text style={[styles.calendarAlertTitle, { color: '#1e40af' }]}>
-                Weekend Rest Day Active
+                Weekend Rest Day
               </Text>
               <Text style={[styles.calendarAlertReason, { color: '#1e3a8a' }]}>
-                Classroom attendance logging is optional today.
+                Attendance logging is optional today.
               </Text>
             </View>
           </View>
         ) : null}
 
-        {/* 2. Faculty Identity & Official Gate Duty Status */}
+        {/* 2. Faculty Identity Card */}
         <View style={styles.dutyCard}>
           <View style={styles.dutyTopRow}>
             <View style={styles.dutyUserMeta}>
@@ -837,7 +821,7 @@ export const HomeScreen: React.FC = () => {
                 {displayName}
               </Text>
               {employeeId ? (
-                <Text style={styles.empIdBadgeText}>Employee ID: {employeeId}</Text>
+                <Text style={styles.empIdBadgeText}>ID: {employeeId}</Text>
               ) : null}
             </View>
 
@@ -850,22 +834,22 @@ export const HomeScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* 3. Offline Queue Notice */}
+        {/* 3. Offline Storage Notice */}
         {offlineCount > 0 && (
           <View style={styles.offlineWarningBanner}>
-            <Ionicons name="cloud-offline" size={16} color="#b45309" />
+            <Ionicons name="cloud-offline" size={15} color="#b45309" />
             <Text style={styles.offlineWarningText}>
-              {offlineCount} attendance record(s) queued on device. Will synchronize automatically.
+              {offlineCount} offline record(s) queued. Will sync automatically.
             </Text>
           </View>
         )}
 
-        {/* 4. Personal CSC Form 48 (DTR) Punches */}
+        {/* 4. DTR Punches */}
         {dtrData && (
           <>
             <View style={styles.sectionHeadingRow}>
               <Text style={styles.sectionHeadingTitle}>
-                CSC Form 48 Summary ({dtrData.month} {dtrData.year})
+                DTR Summary ({dtrData.month} {dtrData.year})
               </Text>
               <Text style={styles.syncTimestampText}>
                 {dtrData.days_present} Day(s) Present
@@ -894,7 +878,7 @@ export const HomeScreen: React.FC = () => {
 
               <View style={styles.dtrFooterRow}>
                 <Text style={styles.dtrFooterText}>
-                  Monthly Undertime: {dtrData.total_undertime_hours}h {dtrData.total_undertime_minutes}m
+                  Undertime: {dtrData.total_undertime_hours}h {dtrData.total_undertime_minutes}m
                 </Text>
                 <Text
                   style={[
@@ -919,9 +903,9 @@ export const HomeScreen: React.FC = () => {
           </>
         )}
 
-        {/* 5. Classroom Attendance Analytics */}
+        {/* 5. Classroom Attendance Summary */}
         <View style={styles.sectionHeadingRow}>
-          <Text style={styles.sectionHeadingTitle}>Classroom Attendance Summary</Text>
+          <Text style={styles.sectionHeadingTitle}>Classroom Attendance</Text>
           {lastSyncTime ? (
             <Text style={styles.syncTimestampText}>Synced {lastSyncTime}</Text>
           ) : null}
@@ -930,9 +914,9 @@ export const HomeScreen: React.FC = () => {
         <View style={styles.overallRateCard}>
           <View style={styles.rateHeaderRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rateCardTitle}>Overall Student Attendance Rate</Text>
+              <Text style={styles.rateCardTitle}>Student Attendance Rate</Text>
               <Text style={styles.rateCardSub}>
-                {totalAttended} of {totalStudentsEnrolled} learners present across {totalClasses} scheduled class(es)
+                {totalAttended} of {totalStudentsEnrolled} present across {totalClasses} class(es)
               </Text>
             </View>
             <Text style={styles.rateBigText}>{overallRate}%</Text>
@@ -942,23 +926,22 @@ export const HomeScreen: React.FC = () => {
             <View style={[styles.overallProgressFill, { width: `${Math.min(overallRate, 100)}%` }]} />
           </View>
 
-          {/* Gender Breakdown Row */}
           {totalStudentsEnrolled > 0 && (
             <View style={styles.genderBreakdownRow}>
               <View style={styles.genderStatChip}>
-                <Ionicons name="male" size={13} color="#0284c7" />
+                <Ionicons name="male" size={12} color="#0284c7" />
                 <Text style={styles.genderStatText}>
                   Male: {totalMalePresent}/{totalMaleEnrolled}
                 </Text>
               </View>
               <View style={styles.genderStatChip}>
-                <Ionicons name="female" size={13} color="#db2777" />
+                <Ionicons name="female" size={12} color="#db2777" />
                 <Text style={styles.genderStatText}>
                   Female: {totalFemalePresent}/{totalFemaleEnrolled}
                 </Text>
               </View>
               <View style={styles.genderStatChip}>
-                <Ionicons name="hourglass-outline" size={13} color="#64748b" />
+                <Ionicons name="hourglass-outline" size={12} color="#64748b" />
                 <Text style={styles.genderStatText}>Unscanned: {totalUnscanned}</Text>
               </View>
             </View>
@@ -969,7 +952,7 @@ export const HomeScreen: React.FC = () => {
         <View style={styles.kpiGrid}>
           <View style={styles.kpiTile}>
             <View style={[styles.kpiIconWrap, { backgroundColor: '#dcfce7' }]}>
-              <Ionicons name="checkmark-circle-outline" size={16} color="#16a34a" />
+              <Ionicons name="checkmark-circle-outline" size={15} color="#16a34a" />
             </View>
             <Text style={[styles.kpiValue, { color: '#16a34a' }]}>{totalPresent}</Text>
             <Text style={styles.kpiLabel}>Present</Text>
@@ -977,7 +960,7 @@ export const HomeScreen: React.FC = () => {
 
           <View style={styles.kpiTile}>
             <View style={[styles.kpiIconWrap, { backgroundColor: '#fef3c7' }]}>
-              <Ionicons name="time-outline" size={16} color="#d97706" />
+              <Ionicons name="time-outline" size={15} color="#d97706" />
             </View>
             <Text style={[styles.kpiValue, { color: '#d97706' }]}>{totalLate}</Text>
             <Text style={styles.kpiLabel}>Late</Text>
@@ -985,7 +968,7 @@ export const HomeScreen: React.FC = () => {
 
           <View style={styles.kpiTile}>
             <View style={[styles.kpiIconWrap, { backgroundColor: '#fee2e2' }]}>
-              <Ionicons name="close-circle-outline" size={16} color="#dc2626" />
+              <Ionicons name="close-circle-outline" size={15} color="#dc2626" />
             </View>
             <Text style={[styles.kpiValue, { color: '#dc2626' }]}>{totalAbsent}</Text>
             <Text style={styles.kpiLabel}>Absent</Text>
@@ -993,7 +976,7 @@ export const HomeScreen: React.FC = () => {
 
           <View style={styles.kpiTile}>
             <View style={[styles.kpiIconWrap, { backgroundColor: '#fae8ff' }]}>
-              <Ionicons name="shield-half-outline" size={16} color="#9333ea" />
+              <Ionicons name="shield-half-outline" size={15} color="#9333ea" />
             </View>
             <Text style={[styles.kpiValue, { color: '#9333ea' }]}>{totalAnomalies}</Text>
             <Text style={styles.kpiLabel}>Flagged</Text>
@@ -1003,14 +986,14 @@ export const HomeScreen: React.FC = () => {
         {/* Gate Anomalies Warning */}
         {totalAnomalies > 0 && (
           <View style={styles.anomalyBanner}>
-            <Ionicons name="warning" size={18} color="#9333ea" />
+            <Ionicons name="warning" size={16} color="#9333ea" />
             <View style={{ flex: 1 }}>
               <Text style={styles.anomalyBannerTitle}>
-                Gate Discrepancy ({totalAnomalies} Learner{totalAnomalies > 1 ? 's' : ''})
+                Gate Discrepancy ({totalAnomalies})
               </Text>
               <Text style={styles.anomalyBannerSub}>
-                {totalCutting > 0 ? `${totalCutting} Left school grounds • ` : ''}
-                {totalUnverified > 0 ? `${totalUnverified} Entered without gate scan` : ''}
+                {totalCutting > 0 ? `${totalCutting} Left early • ` : ''}
+                {totalUnverified > 0 ? `${totalUnverified} Entered unverified` : ''}
               </Text>
             </View>
           </View>
@@ -1018,7 +1001,7 @@ export const HomeScreen: React.FC = () => {
 
         {/* 6. Scheduled Classes */}
         <View style={styles.sectionHeadingRow}>
-          <Text style={styles.sectionHeadingTitle}>Scheduled Class Sessions</Text>
+          <Text style={styles.sectionHeadingTitle}>Class Sessions</Text>
           <Text style={styles.classCountText}>{sections.length} Scheduled</Text>
         </View>
 
@@ -1029,10 +1012,10 @@ export const HomeScreen: React.FC = () => {
           </View>
         ) : sections.length === 0 ? (
           <View style={styles.emptyClassCard}>
-            <Ionicons name="school-outline" size={38} color="#94a3b8" />
+            <Ionicons name="school-outline" size={34} color="#94a3b8" />
             <Text style={styles.emptyClassTitle}>No Classes Scheduled</Text>
             <Text style={styles.emptyClassSub}>
-              No teaching assignments are linked to your account for today.
+              No teaching assignments are linked to your profile today.
             </Text>
           </View>
         ) : (
@@ -1115,10 +1098,6 @@ export const HomeScreen: React.FC = () => {
   );
 };
 
-// ============================================================================
-// STYLES
-// ============================================================================
-
 const styles = StyleSheet.create({
   safeContainer: { flex: 1, backgroundColor: '#f8fafc' },
   topHeader: {
@@ -1132,15 +1111,15 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e2e8f0',
   },
   brandGroup: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  schoolLogo: { width: 36, height: 36, borderRadius: 8 },
+  schoolLogo: { width: 34, height: 34, borderRadius: 8 },
   brandTextGroup: { marginLeft: 10, flex: 1 },
   schoolTitle: { fontSize: 13, fontWeight: '800', color: '#003460' },
   subBrandRow: { flexDirection: 'row', alignItems: 'center', marginTop: 1, gap: 5 },
   activeDot: { width: 6, height: 6, borderRadius: 3 },
   protocolText: { fontSize: 9, fontWeight: '700', color: '#004b87', letterSpacing: 0.3 },
   refreshButton: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     borderRadius: 8,
     backgroundColor: '#f1f5f9',
     alignItems: 'center',
@@ -1150,8 +1129,6 @@ const styles = StyleSheet.create({
   },
   scrollArea: { flex: 1 },
   scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 },
-
-  // Emergency Perimeter Breach Modal Styles
   alarmModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.85)',
@@ -1162,43 +1139,38 @@ const styles = StyleSheet.create({
   alarmModalCard: {
     width: '100%',
     backgroundColor: '#ffffff',
-    borderRadius: 20,
-    padding: 24,
+    borderRadius: 18,
+    padding: 22,
     alignItems: 'center',
     borderWidth: 2,
     borderColor: '#f87171',
     ...Platform.select({
-      ios: {
-        shadowColor: '#dc2626',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 16,
-      },
+      ios: { shadowColor: '#dc2626', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 16 },
       android: { elevation: 8 },
     }),
   },
   alarmIconCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: '#dc2626',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
   },
   alarmModalTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '900',
     color: '#991b1b',
     textAlign: 'center',
     letterSpacing: 0.5,
   },
   alarmModalSubtitle: {
-    fontSize: 12,
+    fontSize: 11.5,
     color: '#475569',
     textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 17,
+    marginTop: 5,
+    lineHeight: 16,
   },
   alarmMetricsBox: {
     flexDirection: 'row',
@@ -1207,39 +1179,33 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef2f2',
     borderWidth: 1,
     borderColor: '#fecaca',
-    borderRadius: 12,
+    borderRadius: 10,
     width: '100%',
-    paddingVertical: 12,
-    marginVertical: 16,
+    paddingVertical: 10,
+    marginVertical: 14,
   },
   alarmMetricItem: { alignItems: 'center', flex: 1 },
-  alarmDividerVertical: { width: 1, height: 28, backgroundColor: '#fca5a5' },
+  alarmDividerVertical: { width: 1, height: 24, backgroundColor: '#fca5a5' },
   alarmMetricLabel: { fontSize: 8.5, fontWeight: '800', color: '#991b1b', letterSpacing: 0.4 },
-  alarmMetricValue: { fontSize: 16, fontWeight: '900', color: '#7f1d1d', marginTop: 2 },
+  alarmMetricValue: { fontSize: 15, fontWeight: '900', color: '#7f1d1d', marginTop: 1 },
   alarmWarningNotice: {
-    fontSize: 11,
+    fontSize: 10.5,
     color: '#64748b',
     textAlign: 'center',
-    lineHeight: 16,
-    marginBottom: 20,
+    lineHeight: 15,
+    marginBottom: 16,
   },
   alarmAcknowledgeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 6,
     backgroundColor: '#dc2626',
     width: '100%',
-    paddingVertical: 14,
-    borderRadius: 12,
+    paddingVertical: 12,
+    borderRadius: 10,
   },
-  alarmAcknowledgeBtnText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-
-  // Anti-Cheat Mock GPS Banner
+  alarmAcknowledgeBtnText: { color: '#ffffff', fontSize: 12.5, fontWeight: '800' },
   mockAlertCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1247,161 +1213,133 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#fca5a5',
     borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-    gap: 10,
+    padding: 10,
+    marginBottom: 10,
+    gap: 8,
   },
-  mockAlertTitle: { fontSize: 11.5, fontWeight: '800', color: '#991b1b' },
-  mockAlertSub: { fontSize: 10.5, color: '#b91c1c', marginTop: 1 },
-
-  // Live Automatic Geofence Telemetry Card (Top of Screen)
+  mockAlertTitle: { fontSize: 11, fontWeight: '800', color: '#991b1b' },
+  mockAlertSub: { fontSize: 10, color: '#b91c1c', marginTop: 1 },
   liveTelemetryCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
+    borderRadius: 14,
     padding: 14,
     borderWidth: 1.5,
     borderColor: '#e0f2fe',
-    marginBottom: 12,
+    marginBottom: 10,
     ...Platform.select({
-      ios: {
-        shadowColor: '#0284c7',
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.08,
-        shadowRadius: 8,
-      },
-      android: { elevation: 2.5 },
+      ios: { shadowColor: '#0284c7', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8 },
+      android: { elevation: 2 },
     }),
   },
   telemetryCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   telemetryHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   pulseDot: { width: 8, height: 8, borderRadius: 4 },
-  telemetryHeaderLabel: {
-    fontSize: 9.5,
-    fontWeight: '800',
-    color: '#0369a1',
-    letterSpacing: 0.5,
-  },
+  telemetryHeaderLabel: { fontSize: 9.5, fontWeight: '800', color: '#0369a1', letterSpacing: 0.5 },
   liveTimestampBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     backgroundColor: '#f1f5f9',
-    paddingHorizontal: 7,
+    paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
   },
   liveTimestampText: { fontSize: 9.5, color: '#475569', fontWeight: '600' },
-  telemetryMainRow: { marginVertical: 4 },
-  distanceMetricRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
-  distanceBigText: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#003460',
-    letterSpacing: -0.5,
-  },
-  distanceSubUnit: { fontSize: 12, fontWeight: '600', color: '#64748b' },
+  telemetryMainRow: { marginVertical: 3 },
+  distanceMetricRow: { flexDirection: 'row', alignItems: 'baseline', gap: 5 },
+  distanceBigText: { fontSize: 26, fontWeight: '900', color: '#003460', letterSpacing: -0.5 },
+  distanceSubUnit: { fontSize: 11.5, fontWeight: '600', color: '#64748b' },
   perimeterNoticeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 6,
+    marginTop: 5,
   },
   perimeterStatusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingVertical: 3.5,
-    paddingHorizontal: 8,
+    gap: 4,
+    paddingVertical: 3,
+    paddingHorizontal: 7,
     borderRadius: 6,
     borderWidth: 1,
   },
-  perimeterStatusText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
-  allowedRadiusText: { fontSize: 10.5, color: '#64748b', fontWeight: '600' },
-  acquiringGpsBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-  },
-  acquiringGpsText: { fontSize: 12, color: '#64748b', fontWeight: '600' },
+  perimeterStatusText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 },
+  allowedRadiusText: { fontSize: 10, color: '#64748b', fontWeight: '600' },
+  acquiringGpsBox: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 },
+  acquiringGpsText: { fontSize: 11.5, color: '#64748b', fontWeight: '600' },
   telemetryFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 10,
+    marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: '#f1f5f9',
   },
   telemetryFooterItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  telemetryFooterLabel: { fontSize: 9.5, color: '#64748b', fontWeight: '600' },
-
-  // Duty Meta Card
+  telemetryFooterLabel: { fontSize: 9, color: '#64748b', fontWeight: '600' },
   dutyCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
-    padding: 14,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     marginBottom: 10,
   },
   dutyTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   dutyUserMeta: { flex: 1, marginRight: 8 },
-  welcomeGreeting: { fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' },
-  facultyDisplayName: { fontSize: 15.5, fontWeight: '800', color: '#0f172a', marginTop: 1 },
-  empIdBadgeText: { fontSize: 10.5, color: '#004b87', fontWeight: '700', marginTop: 2 },
+  welcomeGreeting: { fontSize: 9.5, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' },
+  facultyDisplayName: { fontSize: 14.5, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  empIdBadgeText: { fontSize: 10, color: '#004b87', fontWeight: '700', marginTop: 1 },
   dutyBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingVertical: 5,
-    paddingHorizontal: 9,
-    borderRadius: 8,
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 7,
   },
-  dutyBadgeText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 },
-
+  dutyBadgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
   calendarAlertBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fef2f2',
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 10,
+    padding: 10,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#fecaca',
-    gap: 10,
+    gap: 8,
   },
-  calendarAlertTitle: { fontSize: 11.5, fontWeight: '800', color: '#991b1b' },
-  calendarAlertReason: { fontSize: 11, color: '#b91c1c', marginTop: 1 },
-
+  calendarAlertTitle: { fontSize: 11, fontWeight: '800', color: '#991b1b' },
+  calendarAlertReason: { fontSize: 10.5, color: '#b91c1c', marginTop: 1 },
   offlineWarningBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fffbeb',
     borderRadius: 10,
-    padding: 10,
+    padding: 9,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#fde68a',
-    gap: 8,
+    gap: 6,
   },
-  offlineWarningText: { flex: 1, fontSize: 10.5, color: '#92400e', fontWeight: '600' },
-
+  offlineWarningText: { flex: 1, fontSize: 10, color: '#92400e', fontWeight: '600' },
   sectionHeadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 14,
-    marginBottom: 8,
+    marginTop: 12,
+    marginBottom: 6,
   },
-  sectionHeadingTitle: { fontSize: 12.5, fontWeight: '800', color: '#334155', letterSpacing: 0.2 },
-  syncTimestampText: { fontSize: 10, fontWeight: '600', color: '#64748b' },
-
+  sectionHeadingTitle: { fontSize: 12, fontWeight: '800', color: '#334155', letterSpacing: 0.2 },
+  syncTimestampText: { fontSize: 9.5, fontWeight: '600', color: '#64748b' },
   dtrCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
@@ -1413,155 +1351,150 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     backgroundColor: '#f8fafc',
-    borderRadius: 10,
+    borderRadius: 8,
     paddingVertical: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
   },
   dtrPunchBox: { alignItems: 'center', flex: 1 },
-  dtrPunchLabel: { fontSize: 8.5, fontWeight: '800', color: '#64748b' },
-  dtrPunchTime: { fontSize: 12, fontWeight: '800', color: '#0f172a', marginTop: 2 },
+  dtrPunchLabel: { fontSize: 8, fontWeight: '800', color: '#64748b' },
+  dtrPunchTime: { fontSize: 11.5, fontWeight: '800', color: '#0f172a', marginTop: 1 },
   dtrFooterRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 8,
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
   },
-  dtrFooterText: { fontSize: 10.5, color: '#475569', fontWeight: '600' },
-  dtrStatusTag: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 },
-
+  dtrFooterText: { fontSize: 10, color: '#475569', fontWeight: '600' },
+  dtrStatusTag: { fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
   overallRateCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
-    padding: 14,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     marginBottom: 10,
   },
   rateHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  rateCardTitle: { fontSize: 13, fontWeight: '700', color: '#0f172a' },
-  rateCardSub: { fontSize: 10.5, color: '#64748b', marginTop: 2 },
-  rateBigText: { fontSize: 26, fontWeight: '900', color: '#004b87', marginLeft: 8 },
+  rateCardTitle: { fontSize: 12.5, fontWeight: '700', color: '#0f172a' },
+  rateCardSub: { fontSize: 10, color: '#64748b', marginTop: 1 },
+  rateBigText: { fontSize: 24, fontWeight: '900', color: '#004b87', marginLeft: 8 },
   overallProgressTrack: {
-    height: 6,
+    height: 5,
     backgroundColor: '#f1f5f9',
-    borderRadius: 3,
+    borderRadius: 2.5,
     overflow: 'hidden',
-    marginTop: 10,
+    marginTop: 8,
   },
-  overallProgressFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 3 },
+  overallProgressFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2.5 },
   genderBreakdownRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 10,
+    marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: '#f1f5f9',
   },
-  genderStatChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  genderStatText: { fontSize: 10.5, fontWeight: '700', color: '#334155' },
-
-  kpiGrid: { flexDirection: 'row', gap: 8 },
+  genderStatChip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  genderStatText: { fontSize: 10, fontWeight: '700', color: '#334155' },
+  kpiGrid: { flexDirection: 'row', gap: 6 },
   kpiTile: {
     flex: 1,
     backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 10,
+    borderRadius: 10,
+    padding: 8,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     alignItems: 'center',
   },
   kpiIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
+    width: 26,
+    height: 26,
+    borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 5,
+    marginBottom: 4,
   },
-  kpiValue: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
-  kpiLabel: { fontSize: 8.5, fontWeight: '700', color: '#64748b', marginTop: 2, textAlign: 'center' },
-
+  kpiValue: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  kpiLabel: { fontSize: 8, fontWeight: '700', color: '#64748b', marginTop: 1, textAlign: 'center' },
   anomalyBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#faf5ff',
-    borderRadius: 12,
-    padding: 11,
-    marginTop: 10,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 8,
     borderWidth: 1,
     borderColor: '#e9d5ff',
-    gap: 8,
+    gap: 6,
   },
-  anomalyBannerTitle: { fontSize: 11, fontWeight: '800', color: '#6b21a8' },
-  anomalyBannerSub: { fontSize: 10, color: '#7e22ce', marginTop: 1 },
-
-  classCountText: { fontSize: 11, fontWeight: '700', color: '#004b87' },
+  anomalyBannerTitle: { fontSize: 10.5, fontWeight: '800', color: '#6b21a8' },
+  anomalyBannerSub: { fontSize: 9.5, color: '#7e22ce', marginTop: 1 },
+  classCountText: { fontSize: 10.5, fontWeight: '700', color: '#004b87' },
   classScheduleCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 14,
+    borderRadius: 12,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   classCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  classSubjectTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
-  classTimeRoomSub: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
+  classSubjectTitle: { fontSize: 12.5, fontWeight: '800', color: '#0f172a' },
+  classTimeRoomSub: { fontSize: 10, color: '#64748b', marginTop: 1 },
   ratePill: {
     backgroundColor: '#ecfdf5',
-    paddingVertical: 3,
-    paddingHorizontal: 7,
-    borderRadius: 6,
+    paddingVertical: 2.5,
+    paddingHorizontal: 6,
+    borderRadius: 5,
     borderWidth: 1,
     borderColor: '#a7f3d0',
   },
-  ratePillText: { fontSize: 9.5, fontWeight: '800', color: '#047857' },
+  ratePillText: { fontSize: 9, fontWeight: '800', color: '#047857' },
   progressTrack: {
-    height: 5,
+    height: 4,
     backgroundColor: '#f1f5f9',
-    borderRadius: 2.5,
+    borderRadius: 2,
     overflow: 'hidden',
-    marginVertical: 10,
+    marginVertical: 8,
   },
-  progressFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2.5 },
+  progressFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2 },
   classMetricsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    padding: 8,
+    borderRadius: 6,
+    padding: 6,
   },
   classMetricItem: { alignItems: 'center' },
-  classMetricLabel: { fontSize: 7.5, fontWeight: '800', color: '#64748b' },
-  classMetricVal: { fontSize: 12, fontWeight: '800', color: '#0f172a', marginTop: 1 },
-
+  classMetricLabel: { fontSize: 7, fontWeight: '800', color: '#64748b' },
+  classMetricVal: { fontSize: 11, fontWeight: '800', color: '#0f172a', marginTop: 1 },
   loadingCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 24,
+    borderRadius: 10,
+    padding: 20,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  loadingCardText: { fontSize: 11.5, color: '#64748b', marginTop: 8 },
+  loadingCardText: { fontSize: 11, color: '#64748b', marginTop: 6 },
   emptyClassCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 26,
+    borderRadius: 12,
+    padding: 22,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  emptyClassTitle: { fontSize: 13.5, fontWeight: '700', color: '#0f172a', marginTop: 8 },
+  emptyClassTitle: { fontSize: 12.5, fontWeight: '700', color: '#0f172a', marginTop: 6 },
   emptyClassSub: {
-    fontSize: 11,
+    fontSize: 10.5,
     color: '#64748b',
     textAlign: 'center',
-    marginTop: 3,
-    lineHeight: 15,
+    marginTop: 2,
+    lineHeight: 14,
   },
 });
 

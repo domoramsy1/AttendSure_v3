@@ -5,7 +5,7 @@
 
 import axios, { type InternalAxiosRequestConfig } from 'axios';
 
-const CLOUDFLARE_HOST = 'https://sing-happened-plastics-wish.trycloudflare.com';
+const CLOUDFLARE_HOST = 'https://document-ser-lover-stating.trycloudflare.com';
 
 const resolveBaseHost = (): string => {
   if (typeof window !== 'undefined') {
