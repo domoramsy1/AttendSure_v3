@@ -1,16 +1,27 @@
-// AttendSure - Mobile Authentication Service
-// File: mobile/src/services/authService.ts
+// D:\AttendSure_V3\mobile\src\services\authService.ts
 
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { apiClient } from '../api/client';
 import { ENDPOINTS } from '../api/endpoints';
-import { AuthResponse, UserAccount } from '../types';
+
+export interface UserAccount {
+  id: number;
+  username: string;
+  email: string;
+  full_name: string;
+  employee_id?: string;
+  role: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: UserAccount;
+}
 
 const TOKEN_KEY = 'attendsure_auth_token';
 const USER_KEY = 'attendsure_user_data';
 
-// Web and native safe storage adapter
 const safeStorage = {
   async get(key: string): Promise<string | null> {
     if (Platform.OS === 'web') {
@@ -27,9 +38,7 @@ const safeStorage = {
     if (Platform.OS === 'web') {
       try {
         localStorage.setItem(key, value);
-      } catch {
-        // Fallback for private browsing
-      }
+      } catch {}
       return;
     }
     await SecureStore.setItemAsync(key, value);
@@ -39,9 +48,7 @@ const safeStorage = {
     if (Platform.OS === 'web') {
       try {
         localStorage.removeItem(key);
-      } catch {
-        // Fallback
-      }
+      } catch {}
       return;
     }
     await SecureStore.deleteItemAsync(key);

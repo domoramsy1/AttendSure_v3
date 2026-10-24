@@ -1,12 +1,11 @@
 /**
- * AttendSure - Official DepEd Reports Navigation & Export Action Bar
- * File: frontend/src/components/reports/ReportNavBar.tsx
+ * AttendSure - Official Reports Navigation & Export Action Bar
+ * File: web/src/components/reports/ReportNavBar.tsx
  *
- * 100% Dynamic:
- * - Real-time academic year, grade level, section, and date synchronization.
- * - Dynamic system month and calendar year defaults.
- * - Zero hardcoded export formats or static PDF orientation strings.
- * - Responsive flex-wrapped controls with Escape-key dismissible export menu.
+ * Cybersecurity & Performance:
+ * 1. RBAC Restriction: Hides SF4 form tabs for non-admin/non-principal accounts.
+ * 2. Strict Terminology: Uses FACULTY strictly without legacy teacher aliases.
+ * 3. Fluid Responsive Grid: Responsive flex-wrapped controls with Escape-key dismissible export menu.
  */
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
@@ -57,55 +56,37 @@ export interface ReportExportHandlers {
 export type LayoutMode = 'pages' | 'pageless';
 
 export interface ReportNavBarProps {
-  // 1. Report Form Selector Tabs
   reports?: ReportTabItem[];
   activeReportId: string;
   onSelectReport: (reportId: string) => void;
-
-  // 2. School Year / Academic Year Filter
   academicYears?: string[];
   selectedAcademicYear?: string;
   onAcademicYearChange?: (year: string) => void;
   showAcademicYearFilter?: boolean;
-
-  // 3. Grade Level Filter
   gradeLevels?: string[];
   selectedGradeLevel?: string;
   onGradeLevelChange?: (grade: string) => void;
   showGradeLevelFilter?: boolean;
-
-  // 4. Section Filter (Cascades with Grade Level)
   sections: SectionOption[];
   selectedSectionId: string | number;
   onSectionChange: (sectionId: string) => void;
   showSectionFilter?: boolean;
-
-  // 5. Specific Date Filter (For daily logs or specific date reports)
   showDateFilter?: boolean;
   selectedDate?: string;
   onDateChange?: (date: string) => void;
-
-  // 6. Month & Calendar Year Filter (SF2 & monthly forms)
   showMonthFilter?: boolean;
   selectedMonth?: string;
   onMonthChange?: (month: string) => void;
   monthsList?: string[];
-
   showCalendarYearFilter?: boolean;
   selectedCalendarYear?: number;
   onCalendarYearChange?: (year: number) => void;
-
-  // 7. In-Report Learner Search (by Name or LRN)
   searchQuery?: string;
   onSearchChange?: (query: string) => void;
   showSearch?: boolean;
-
-  // 8. Direct Pages vs. Pageless Layout Toggle
   layoutMode?: LayoutMode;
   onToggleLayoutMode?: (mode: LayoutMode) => void;
   showLayoutModeToggle?: boolean;
-
-  // 9. Actions (Refresh, Page Setup, Download, Print)
   onRefresh?: () => void;
   isRefreshing?: boolean;
   onOpenPageSetup?: () => void;
@@ -179,7 +160,17 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click or Escape key press
+  const userRole = (localStorage.getItem('attendsure_role') || '').toUpperCase();
+  const isAdminOrPrincipal = userRole === 'ADMIN' || userRole === 'PRINCIPAL';
+
+  // Filter out SF4 for non-admin/non-principal users
+  const filteredReports = useMemo(() => {
+    return reports.filter((rep) => {
+      if (rep.id === 'sf4' && !isAdminOrPrincipal) return false;
+      return true;
+    });
+  }, [reports, isAdminOrPrincipal]);
+
   useEffect(() => {
     if (!isExportDropdownOpen) return;
 
@@ -203,7 +194,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
     };
   }, [isExportDropdownOpen]);
 
-  // Filter sections dynamically when a specific grade level is selected
   const filteredSections = useMemo(() => {
     if (!selectedGradeLevel || selectedGradeLevel === 'ALL') {
       return sections;
@@ -215,7 +205,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
     });
   }, [sections, selectedGradeLevel]);
 
-  // Extract unique grade levels dynamically if none were explicitly provided
   const availableGradeLevels = useMemo(() => {
     if (gradeLevels.length > 0) return gradeLevels;
     const extracted = Array.from(new Set(sections.map((s) => s.grade_level).filter(Boolean))) as string[];
@@ -229,13 +218,10 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
 
   return (
     <div className="no-print" style={navBarWrapperStyle}>
-      {/* ======================================================== */}
-      {/* TIER 1: REPORT FORM TABS                                 */}
-      {/* ======================================================== */}
       <div style={topTabBarStyle}>
         <span style={reportFormLabelStyle}>REPORT FORM:</span>
         <div style={pillContainerStyle}>
-          {reports.map((rep) => {
+          {filteredReports.map((rep) => {
             const Icon = rep.icon;
             const isActive = rep.id === activeReportId;
             return (
@@ -246,7 +232,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 style={{
                   ...tabButtonStyle,
                   backgroundColor: isActive ? '#ffffff' : 'transparent',
-                  color: isActive ? '#0284c7' : '#64748b',
+                  color: isActive ? '#004b87' : '#64748b',
                   boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
                 }}
               >
@@ -258,13 +244,8 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
         </div>
       </div>
 
-      {/* ======================================================== */}
-      {/* TIER 2: ESSENTIAL ACADEMIC FILTERS & REPORT ACTIONS      */}
-      {/* ======================================================== */}
       <div style={bottomActionBarStyle}>
-        {/* Left Side: Filter Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          {/* 1. School Year Filter */}
           {showAcademicYearFilter && onAcademicYearChange && academicYears.length > 0 && (
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>School Year:</span>
@@ -273,9 +254,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 onChange={(e) => onAcademicYearChange(e.target.value)}
                 style={selectInputStyle}
               >
-                {!selectedAcademicYear && (
-                  <option value="">-- Select S.Y. --</option>
-                )}
+                {!selectedAcademicYear && <option value="">-- Select S.Y. --</option>}
                 {academicYears.map((sy) => (
                   <option key={sy} value={sy}>{sy}</option>
                 ))}
@@ -283,7 +262,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </div>
           )}
 
-          {/* 2. Grade Level Filter */}
           {showGradeLevelFilter && onGradeLevelChange && (
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>Grade Level:</span>
@@ -300,7 +278,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </div>
           )}
 
-          {/* 3. Class Section Filter */}
           {showSectionFilter && (
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>Section:</span>
@@ -309,9 +286,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 onChange={(e) => onSectionChange(e.target.value)}
                 style={selectInputStyle}
               >
-                {!selectedSectionId && (
-                  <option value="">-- Choose Section --</option>
-                )}
+                {!selectedSectionId && <option value="">-- Choose Section --</option>}
                 {filteredSections.length === 0 ? (
                   <option value="" disabled>No sections available</option>
                 ) : (
@@ -325,7 +300,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </div>
           )}
 
-          {/* 4. Specific Date Filter */}
           {showDateFilter && onDateChange && (
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>Date:</span>
@@ -341,7 +315,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </div>
           )}
 
-          {/* 5. Month Filter */}
           {showMonthFilter && onMonthChange && (
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>Month:</span>
@@ -357,7 +330,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </div>
           )}
 
-          {/* 6. Calendar Year Filter */}
           {showCalendarYearFilter && onCalendarYearChange && (
             <div style={filterGroupStyle}>
               <span style={filterLabelStyle}>Year:</span>
@@ -370,7 +342,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </div>
           )}
 
-          {/* 7. Quick Learner Search */}
           {showSearch && onSearchChange && (
             <div style={searchContainerStyle}>
               <Search size={14} color="#94a3b8" />
@@ -395,9 +366,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
           )}
         </div>
 
-        {/* Right Side: Primary Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {/* Refresh Action */}
           {onRefresh && (
             <button
               type="button"
@@ -411,7 +380,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </button>
           )}
 
-          {/* Direct Pages vs. Pageless Layout Toggle */}
           {showLayoutModeToggle && onToggleLayoutMode && (
             <button
               type="button"
@@ -419,9 +387,9 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               title={layoutMode === 'pageless' ? 'Switch to Paginated Sheets view' : 'Switch to Continuous Pageless view'}
               style={{
                 ...btnActionSecondaryStyle,
-                borderColor: layoutMode === 'pageless' ? '#0284c7' : '#cbd5e1',
+                borderColor: layoutMode === 'pageless' ? '#004b87' : '#cbd5e1',
                 backgroundColor: layoutMode === 'pageless' ? '#f0f9ff' : '#f8fafc',
-                color: layoutMode === 'pageless' ? '#0284c7' : '#334155',
+                color: layoutMode === 'pageless' ? '#004b87' : '#334155',
               }}
             >
               {layoutMode === 'pageless' ? <Maximize2 size={14} /> : <FileText size={14} />}
@@ -429,7 +397,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </button>
           )}
 
-          {/* Page Setup Action */}
           {onOpenPageSetup && (
             <button
               type="button"
@@ -442,7 +409,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </button>
           )}
 
-          {/* Download Report Dropdown */}
           {exportHandlers && (
             <div style={{ position: 'relative' }} ref={dropdownRef}>
               <button
@@ -477,7 +443,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                         onClick={() => handleExportAction(exportHandlers.onExportPdf)}
                         style={dropdownOptionButtonStyle}
                       >
-                        <Download size={15} color="#0284c7" />
+                        <Download size={15} color="#004b87" />
                         <div style={{ flex: 1, textAlign: 'left' }}>
                           <div style={{ fontWeight: 700, color: '#0f172a' }}>Adobe PDF (.pdf)</div>
                           <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Official Document Format</div>
@@ -586,7 +552,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             </div>
           )}
 
-          {/* Print Action */}
           {onPrint && (
             <button
               type="button"
@@ -606,9 +571,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
 
 export default ReportNavBar;
 
-// ==========================================
-// STYLES
-// ==========================================
+// Styles
 const navBarWrapperStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -776,7 +739,7 @@ const btnPrintStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 6,
   padding: '6px 16px',
-  backgroundColor: '#0284c7',
+  backgroundColor: '#004b87',
   border: 'none',
   borderRadius: 6,
   fontSize: '0.8rem',

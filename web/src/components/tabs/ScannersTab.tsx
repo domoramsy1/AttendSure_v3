@@ -1,5 +1,5 @@
 /**
- * AttendSure - IoT Kiosks & Hardware Scanners Management
+ * AttendSure - IoT Management
  * File: frontend/src/components/tabs/ScannersTab.tsx
  *
  * Key Highlights:
@@ -488,7 +488,7 @@ export const ScannersTab: React.FC = () => {
       {/* 2. Main Hardware List Table */}
       <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
-          title="IoT Kiosks & Hardware Scanners"
+          title="IoT"
           subtitle="Manage campus gate scanners, RFID readers, and microcontrollers registered in the database."
           searchPlaceholder="Search terminal code, name, or location..."
           searchValue={search}

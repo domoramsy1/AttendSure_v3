@@ -1,11 +1,13 @@
 /**
  * AttendSure - Faculty & Staff Directory
- * File: frontend/src/components/tabs/FacultyTab.tsx
+ * File: web/src/components/tabs/FacultyTab.tsx
  *
- * Key Upgrades:
- * 1. REUSABLE PAGINATION & CSV: Uses <Pagination /> and `exportToCsv` from common/Pagination.tsx.
- * 2. RACE-CONDITION SHIELD: AbortController cancels stale search requests.
- * 3. STRICT INPUT SANITIZATION: Cleans RFID UIDs, Employee IDs, and phone numbers.
+ * Cybersecurity & Performance:
+ * 1. Fluid Responsive Layout: Replaces rigid 4-column styles with minmax auto-fit.
+ * 2. Instant Input Sanitization: Normalizes Employee IDs, RFID tokens, and phone numbers.
+ * 3. Race-Condition Defense: AbortController cancels stale in-flight requests.
+ * 4. SVG Vector Standards: All visual indicators use Lucide icons with zero emojis.
+ * 5. Simple English Terms: Clean labels for "Faculty and staff directory", "Add faculty member", and "ID Card".
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -35,10 +37,6 @@ import {
   Printer,
   Download,
 } from 'lucide-react';
-
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
 
 export interface Faculty {
   id: number;
@@ -144,10 +142,6 @@ const INITIAL_FORM_DATA = {
   photo: null as string | null,
 };
 
-// ============================================================================
-// PROFILE AVATAR COMPONENT
-// ============================================================================
-
 interface ProfileAvatarProps {
   photoUrl?: string | null;
   name?: string;
@@ -205,27 +199,22 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   );
 };
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-
 export const FacultyTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
 
-  // --- Table & Filter State ---
   const [facultys, setFacultys] = useState<Faculty[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
 
-  // --- Pagination State ---
+  // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
 
-  // --- CRUD Modal Dialog States ---
+  // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFaculty, setEditingFaculty] = useState<Faculty | null>(null);
   const [inspectingFaculty, setInspectingFaculty] = useState<Faculty | null>(null);
@@ -238,10 +227,6 @@ export const FacultyTab: React.FC = () => {
   const activeAbortController = useRef<AbortController | null>(null);
   const isInteracting = useRef(false);
   isInteracting.current = isModalOpen || Boolean(inspectingFaculty);
-
-  // ============================================================================
-  // CLIPBOARD HELPER
-  // ============================================================================
 
   const handleCopy = async (text: string, id: string) => {
     let success = false;
@@ -273,10 +258,6 @@ export const FacultyTab: React.FC = () => {
       setTimeout(() => setCopiedKey(null), 2000);
     }
   };
-
-  // ============================================================================
-  // DATABASE DATA FETCHING & LIVE POLLING
-  // ============================================================================
 
   const fetchFacultys = useCallback(
     async (page = 1, size = 25, query = '', deptVal = '', silent = false) => {
@@ -313,9 +294,7 @@ export const FacultyTab: React.FC = () => {
           setCurrentPage(1);
         }
       } catch (err: any) {
-        if (err.name === 'CanceledError' || err.name === 'AbortError') {
-          return;
-        }
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
         if (!silent) {
           setError('Unable to load faculty records. Please check server connectivity.');
         }
@@ -356,7 +335,6 @@ export const FacultyTab: React.FC = () => {
     fetchFacultys(1, newSize, search, departmentFilter, false);
   };
 
-  // Uses shared `exportToCsv` from Pagination.tsx
   const handleExportFacultyCsv = () => {
     const suffix = pageSize >= ALL_ROWS_SIZE ? 'ALL' : `Page${currentPage}_${pageSize}rows`;
     const exported = exportToCsv(
@@ -380,23 +358,8 @@ export const FacultyTab: React.FC = () => {
         message: `Exported ${facultys.length} faculty records to CSV.`,
         type: 'success',
       });
-    } else {
-      showAlert({
-        title: 'Nothing to Export',
-        message: 'No faculty records available to export.',
-        type: 'info',
-      });
     }
   };
-
-  // Telemetry Calculations
-  const activeFacultyCount = facultys.filter((f) => f.is_active).length;
-  const pairedCardsCount = facultys.filter((f) => Boolean(f.rfid_uid && f.rfid_uid.trim().length > 0)).length;
-  const uniqueDepartments = new Set(facultys.map((f) => f.department).filter(Boolean)).size;
-
-  // ============================================================================
-  // SECURE PHOTO UPLOAD HANDLER
-  // ============================================================================
 
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -429,13 +392,6 @@ export const FacultyTab: React.FC = () => {
       setPhotoPreview(base64String);
       setFormData((prev) => ({ ...prev, photo: base64String }));
     };
-    reader.onerror = () => {
-      showAlert({
-        title: 'Upload Error',
-        message: 'Could not read the selected image file.',
-        type: 'error',
-      });
-    };
     reader.readAsDataURL(file);
   };
 
@@ -444,10 +400,6 @@ export const FacultyTab: React.FC = () => {
     setFormData((prev) => ({ ...prev, photo: '' }));
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
-
-  // ============================================================================
-  // CRUD ACTIONS
-  // ============================================================================
 
   const handleOpenCreate = () => {
     setEditingFaculty(null);
@@ -505,7 +457,7 @@ export const FacultyTab: React.FC = () => {
         setFacultys((prev) => prev.map((f) => (f.id === editingFaculty.id ? res.data : f)));
         showAlert({
           title: 'Profile Updated',
-          message: `Changes saved for ${editingFaculty.first_name} ${editingFaculty.last_name}.`,
+          message: `Saved changes for ${editingFaculty.first_name} ${editingFaculty.last_name}.`,
           type: 'success',
         });
       } else {
@@ -525,7 +477,7 @@ export const FacultyTab: React.FC = () => {
         err.response?.data?.rfid_uid?.[0] ||
         err.response?.data?.email?.[0] ||
         err.response?.data?.detail ||
-        'Failed to save faculty record. Please verify all details.';
+        'Failed to save faculty record. Please verify details.';
 
       showAlert({
         title: 'Save Failed',
@@ -540,7 +492,7 @@ export const FacultyTab: React.FC = () => {
   const promptDelete = (faculty: Faculty) => {
     showConfirm({
       title: 'Delete Faculty Member',
-      message: `Permanently delete ${faculty.full_name || faculty.first_name} (${faculty.employee_id}) from the faculty registry? This action cannot be undone.`,
+      message: `Permanently delete ${faculty.full_name || faculty.first_name} (${faculty.employee_id}) from the faculty registry?`,
       confirmLabel: 'Delete Faculty',
       isDestructive: true,
       onConfirm: async () => {
@@ -565,44 +517,34 @@ export const FacultyTab: React.FC = () => {
     });
   };
 
+  const activeFacultyCount = facultys.filter((f) => f.is_active).length;
+  const pairedCardsCount = facultys.filter((f) => Boolean(f.rfid_uid && f.rfid_uid.trim().length > 0)).length;
+  const uniqueDepartments = new Set(facultys.map((f) => f.department).filter(Boolean)).size;
+
   const allPositions = FACULTY_POSITIONS.flatMap((p) => p.ranks);
   const isCustomPosition = Boolean(formData.position && !allPositions.includes(formData.position));
   const isCustomDepartment = Boolean(formData.department && !FACULTY_DEPARTMENTS.includes(formData.department));
   const isCustomSuffix = Boolean(formData.suffix && !SUFFIX_OPTIONS.includes(formData.suffix));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <style>{`
-        @media print {
-          body * { visibility: hidden !important; }
-          #printable-faculty-id-card, #printable-faculty-id-card * { visibility: visible !important; }
-          #printable-faculty-id-card {
-            position: fixed !important;
-            left: 50% !important;
-            top: 20% !important;
-            transform: translate(-50%, -20%) !important;
-            border: 1px solid #000 !important;
-          }
-        }
-      `}</style>
-
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
       {/* 1. Live Faculty Telemetry Cards */}
       <div style={statsContainer}>
         <div style={statCard}>
           <div style={statLabel}>TOTAL REGISTERED FACULTY</div>
           <div style={statValue}>{totalCount || facultys.length}</div>
-          <div style={statHelp}>Permanent and contractual employee</div>
+          <div style={statHelp}>Permanent and contractual staff</div>
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>ACTIVE ON DUTY (LOADED)</div>
+          <div style={statLabel}>ACTIVE ON DUTY</div>
           <div style={{ ...statValue, color: '#059669' }}>{activeFacultyCount}</div>
-          <div style={statHelp}>Eligible for Form 48 gate tracking</div>
+          <div style={statHelp}>Eligible for DTR gate tracking</div>
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>RFID CARDS PAIRED (LOADED)</div>
-          <div style={{ ...statValue, color: '#0284c7' }}>
+          <div style={statLabel}>RFID CARDS PAIRED</div>
+          <div style={{ ...statValue, color: '#004b87' }}>
             {pairedCardsCount}
             <span style={{ fontSize: '0.80rem', color: '#94a3b8', fontWeight: 500 }}> / {facultys.length}</span>
           </div>
@@ -610,15 +552,15 @@ export const FacultyTab: React.FC = () => {
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>DEPARTMENTS (LOADED)</div>
+          <div style={statLabel}>DEPARTMENTS</div>
           <div style={{ ...statValue, color: '#d97706' }}>{uniqueDepartments}</div>
-          <div style={statHelp}>Academic and admin units</div>
+          <div style={statHelp}>Academic and admin divisions</div>
         </div>
       </div>
 
-      {/* 2. Header Control Bar */}
+      {/* 2. Control Bar */}
       <div style={controlBar}>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <select
             value={departmentFilter}
             onChange={(e) => setDepartmentFilter(e.target.value)}
@@ -633,14 +575,10 @@ export const FacultyTab: React.FC = () => {
           </select>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" onClick={handleExportFacultyCsv} style={exportCsvBtnStyle}>
-            <Download size={14} />
-            <span>
-              {pageSize >= ALL_ROWS_SIZE
-                ? `Export All CSV (${facultys.length})`
-                : `Export Page CSV (${facultys.length})`}
-            </span>
+            <Download size={13} />
+            <span>Export CSV ({facultys.length})</span>
           </button>
 
           <Button
@@ -648,20 +586,20 @@ export const FacultyTab: React.FC = () => {
             size="md"
             type="button"
             onClick={handleOpenCreate}
-            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, backgroundColor: '#004b87', borderColor: '#004b87' }}
           >
-            <Plus size={16} />
+            <Plus size={15} />
             Add Faculty Member
           </Button>
         </div>
       </div>
 
-      {/* 3. Main Faculty Table + Reusable Pagination Component */}
-      <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+      {/* 3. Main Faculty Table */}
+      <div style={{ backgroundColor: '#ffffff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
           title="Faculty & Staff Directory"
-          subtitle="Manage faculty credentials, academic departments, and physical security access."
-          searchPlaceholder="Search by Employee ID, Name, or Department..."
+          subtitle="Manage verified faculty credentials, academic departments, and physical security access."
+          searchPlaceholder="Search by Employee ID, name, or department..."
           searchValue={search}
           onSearchChange={setSearch}
           loading={loading}
@@ -672,19 +610,19 @@ export const FacultyTab: React.FC = () => {
             {
               header: 'Faculty Member',
               render: (t) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <ProfileAvatar
                     photoUrl={t.photo_url || t.photo}
                     name={t.full_name}
-                    size={40}
-                    iconSize={20}
+                    size={38}
+                    iconSize={19}
                   />
 
                   <div>
-                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.88rem' }}>
+                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.86rem' }}>
                       {t.full_name}
                     </div>
-                    <div style={{ fontSize: '0.74rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                    <div style={{ fontSize: '0.72rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
                       <Mail size={12} color="#94a3b8" /> {t.email || 'No email registered'}
                     </div>
                   </div>
@@ -708,32 +646,32 @@ export const FacultyTab: React.FC = () => {
               ),
             },
             {
-              header: 'Position & Dept',
+              header: 'Position & Department',
               render: (t) => (
                 <div>
-                  <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Briefcase size={12} color="#0284c7" /> {t.position}
+                  <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.80rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Briefcase size={12} color="#004b87" /> {t.position}
                   </div>
-                  <div style={{ fontSize: '0.74rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                  <div style={{ fontSize: '0.72rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
                     <Building size={12} color="#94a3b8" /> {t.department}
                   </div>
                 </div>
               ),
             },
             {
-              header: 'RFID Card',
+              header: 'School Gate Card',
               render: (t) => (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <CreditCard size={14} color={t.rfid_uid ? '#059669' : '#94a3b8'} />
                   <span
                     style={{
                       fontFamily: 'monospace',
-                      fontSize: '0.76rem',
+                      fontSize: '0.74rem',
                       fontWeight: t.rfid_uid ? 700 : 400,
                       color: t.rfid_uid ? '#059669' : '#94a3b8',
                     }}
                   >
-                    {t.rfid_uid ? t.rfid_uid : 'Not Paired'}
+                    {t.rfid_uid || 'Not Paired'}
                   </span>
                 </div>
               ),
@@ -754,9 +692,9 @@ export const FacultyTab: React.FC = () => {
               render: (t) => (
                 <span
                   style={{
-                    padding: '3px 9px',
+                    padding: '3px 8px',
                     borderRadius: 12,
-                    fontSize: '0.70rem',
+                    fontSize: '0.68rem',
                     fontWeight: 800,
                     letterSpacing: '0.3px',
                     backgroundColor: t.is_active ? '#ecfdf5' : '#fef2f2',
@@ -776,28 +714,28 @@ export const FacultyTab: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setInspectingFaculty(t)}
-                    title="View Digital ID Card"
+                    title="View Gate ID Card"
                     style={actionBtn}
                   >
-                    <QrCode size={13} color="#0284c7" />
+                    <QrCode size={13} color="#004b87" />
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleOpenEdit(t)}
                     title="Edit Faculty Record"
-                    style={{ ...actionBtn, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}
+                    style={actionBtn}
                   >
-                    <Pencil size={13} color="#0284c7" />
+                    <Pencil size={13} color="#004b87" />
                   </button>
 
                   <button
                     type="button"
                     onClick={() => promptDelete(t)}
                     title="Delete Faculty Member"
-                    style={{ ...actionBtn, backgroundColor: '#fff1f2', borderColor: '#fecdd3' }}
+                    style={{ ...actionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
                   >
-                    <Trash2 size={13} color="#e11d48" />
+                    <Trash2 size={13} color="#dc2626" />
                   </button>
                 </div>
               ),
@@ -805,7 +743,6 @@ export const FacultyTab: React.FC = () => {
           ]}
         />
 
-        {/* Shared Reusable Pagination Bar */}
         <Pagination
           currentPage={currentPage}
           totalPages={totalPages}
@@ -818,27 +755,27 @@ export const FacultyTab: React.FC = () => {
         />
       </div>
 
-      {/* 4. MODAL: REGISTER & EDIT FACULTY */}
+      {/* 4. Registration & Edit Modal */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingFaculty ? `Edit Profile: ${editingFaculty.full_name}` : 'Register Faculty Member'}
+        title={editingFaculty ? `Edit Faculty: ${editingFaculty.full_name}` : 'Register Faculty Member'}
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={photoUploadContainer}>
             <ProfileAvatar
               photoUrl={photoPreview}
               name={formData.first_name || 'Preview'}
-              size={58}
+              size={56}
               iconSize={28}
             />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-              <span style={{ fontSize: '0.80rem', fontWeight: 800, color: '#0f172a' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0f172a' }}>
                 Official Portrait Photo
               </span>
-              <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
-                Upload JPEG, PNG, or WebP under 2.5 MB. Defaults to standard user icon if left empty.
+              <span style={{ fontSize: '0.68rem', color: '#64748b' }}>
+                JPEG, PNG, or WebP under 2.5 MB.
               </span>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
@@ -849,17 +786,14 @@ export const FacultyTab: React.FC = () => {
                   style={{ display: 'none' }}
                   onChange={handlePhotoSelect}
                 />
-                <label
-                  onClick={() => fileInputRef.current?.click()}
-                  style={uploadBtnLabel}
-                >
+                <label onClick={() => fileInputRef.current?.click()} style={uploadBtnLabel}>
                   <Camera size={13} />
                   <span>{photoPreview ? 'Change Photo' : 'Upload Photo'}</span>
                 </label>
 
                 {photoPreview && (
                   <button type="button" onClick={handleRemovePhoto} style={removePhotoBtn}>
-                    <X size={13} />
+                    <X size={12} />
                     <span>Remove</span>
                   </button>
                 )}
@@ -879,7 +813,7 @@ export const FacultyTab: React.FC = () => {
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
             <div>
               <label style={labelStyle}>First Name *</label>
               <input
@@ -933,13 +867,9 @@ export const FacultyTab: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
             <div>
-              <label style={labelStyle}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Briefcase size={12} color="#0284c7" /> Position / Official Rank *
-                </span>
-              </label>
+              <label style={labelStyle}>Position / Official Rank *</label>
               <select
                 required
                 value={formData.position}
@@ -960,11 +890,7 @@ export const FacultyTab: React.FC = () => {
             </div>
 
             <div>
-              <label style={labelStyle}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Building size={12} color="#0284c7" /> Assigned Department *
-                </span>
-              </label>
+              <label style={labelStyle}>Assigned Department *</label>
               <select
                 required
                 value={formData.department}
@@ -981,13 +907,9 @@ export const FacultyTab: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
             <div>
-              <label style={labelStyle}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Mail size={12} color="#64748b" /> Email Address
-                </span>
-              </label>
+              <label style={labelStyle}>Email Address</label>
               <input
                 type="email"
                 placeholder="faculty@attendsure.edu.ph"
@@ -997,11 +919,7 @@ export const FacultyTab: React.FC = () => {
               />
             </div>
             <div>
-              <label style={labelStyle}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Phone size={12} color="#64748b" /> Contact Number
-                </span>
-              </label>
+              <label style={labelStyle}>Contact Number</label>
               <input
                 type="text"
                 placeholder="09171234567"
@@ -1013,11 +931,7 @@ export const FacultyTab: React.FC = () => {
           </div>
 
           <div>
-            <label style={labelStyle}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <CreditCard size={12} color="#059669" /> Security RFID Card UID
-              </span>
-            </label>
+            <label style={labelStyle}>School Gate Card UID (RFID)</label>
             <input
               type="text"
               placeholder="e.g. 5A92B1C4"
@@ -1031,7 +945,7 @@ export const FacultyTab: React.FC = () => {
             <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" size="md" type="submit" disabled={saving}>
+            <Button variant="primary" size="md" type="submit" disabled={saving} style={{ backgroundColor: '#004b87', borderColor: '#004b87' }}>
               {saving ? <Loader2 className="animate-spin" size={16} /> : null}
               {editingFaculty ? 'Save Changes' : 'Register Faculty'}
             </Button>
@@ -1039,17 +953,17 @@ export const FacultyTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 5. MODAL: INSPECT DIGITAL FACULTY ID CARD */}
+      {/* 5. Printable ID Card Modal */}
       {inspectingFaculty && (
         <Modal
           isOpen={Boolean(inspectingFaculty)}
           onClose={() => setInspectingFaculty(null)}
           title="Digital Faculty ID Card"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-            <div id="printable-faculty-id-card" style={idCardFrame}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+            <div style={idCardFrame}>
               <div style={idCardHeader}>
-                <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#ffffff', letterSpacing: '0.5px' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#ffffff', letterSpacing: '0.5px' }}>
                   FACULTY &amp; STAFF CREDENTIAL
                 </span>
                 <span style={{ fontSize: '0.62rem', color: '#bfdbfe' }}>AttendSure</span>
@@ -1059,18 +973,18 @@ export const FacultyTab: React.FC = () => {
                 <ProfileAvatar
                   photoUrl={inspectingFaculty.photo_url || inspectingFaculty.photo}
                   name={inspectingFaculty.full_name}
-                  size={72}
-                  iconSize={36}
+                  size={68}
+                  iconSize={34}
                 />
 
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '1rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
+                  <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
                     {inspectingFaculty.full_name}
                   </div>
-                  <div style={{ fontSize: '0.74rem', color: '#0284c7', fontWeight: 700, marginTop: 4 }}>
+                  <div style={{ fontSize: '0.74rem', color: '#004b87', fontWeight: 700, marginTop: 3 }}>
                     {inspectingFaculty.position}
                   </div>
-                  <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>
+                  <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 1 }}>
                     {inspectingFaculty.department}
                   </div>
                   <div style={{ fontSize: '0.72rem', color: '#334155', marginTop: 3 }}>
@@ -1080,43 +994,37 @@ export const FacultyTab: React.FC = () => {
               </div>
 
               <div style={idCardFooter}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <CreditCard size={13} color="#059669" />
                   <span style={{ fontSize: '0.72rem', fontFamily: 'monospace', fontWeight: 700, color: '#059669' }}>
                     {inspectingFaculty.rfid_uid || 'NO RFID CARD'}
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <ShieldCheck size={13} color="#0284c7" />
+                  <ShieldCheck size={13} color="#004b87" />
                   <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600 }}>DEPED CSC 48</span>
                 </div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, width: '100%', justifyContent: 'flex-end', marginTop: 4 }}>
               <Button
                 variant="secondary"
                 size="md"
                 type="button"
                 onClick={() => window.print()}
-                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
               >
                 <Printer size={14} />
                 Print ID
               </Button>
               <Button
-                variant="secondary"
+                variant="primary"
                 size="md"
                 type="button"
-                onClick={() => {
-                  const toEdit = inspectingFaculty;
-                  setInspectingFaculty(null);
-                  handleOpenEdit(toEdit);
-                }}
+                onClick={() => setInspectingFaculty(null)}
+                style={{ backgroundColor: '#004b87', borderColor: '#004b87' }}
               >
-                Edit Faculty
-              </Button>
-              <Button variant="primary" size="md" type="button" onClick={() => setInspectingFaculty(null)}>
                 Close
               </Button>
             </div>
@@ -1136,22 +1044,23 @@ export default FacultyTab;
 
 const statsContainer: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
-  gap: 14,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
+  gap: 12,
 };
 
 const statCard: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
   border: '1px solid #e2e8f0',
-  padding: '14px 16px',
+  padding: '12px 16px',
 };
 
 const statLabel: React.CSSProperties = {
-  fontSize: '0.66rem',
-  fontWeight: 700,
+  fontSize: '0.64rem',
+  fontWeight: 800,
   color: '#64748b',
   marginBottom: 4,
+  letterSpacing: '0.4px',
 };
 
 const statValue: React.CSSProperties = {
@@ -1164,7 +1073,7 @@ const statValue: React.CSSProperties = {
 const statHelp: React.CSSProperties = {
   fontSize: '0.68rem',
   color: '#94a3b8',
-  marginTop: 4,
+  marginTop: 3,
 };
 
 const controlBar: React.CSSProperties = {
@@ -1175,13 +1084,15 @@ const controlBar: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
   border: '1px solid #e2e8f0',
+  flexWrap: 'wrap',
+  gap: 10,
 };
 
 const selectPill: React.CSSProperties = {
   border: '1px solid #cbd5e1',
-  borderRadius: 8,
+  borderRadius: 6,
   padding: '6px 12px',
-  fontSize: '0.80rem',
+  fontSize: '0.78rem',
   color: '#334155',
   outline: 'none',
   backgroundColor: '#ffffff',
@@ -1192,12 +1103,12 @@ const exportCsvBtnStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  padding: '7px 12px',
+  padding: '6px 12px',
   borderRadius: 6,
   border: '1px solid #cbd5e1',
   backgroundColor: '#f8fafc',
   color: '#334155',
-  fontSize: '0.78rem',
+  fontSize: '0.76rem',
   fontWeight: 700,
   cursor: 'pointer',
 };
@@ -1205,10 +1116,10 @@ const exportCsvBtnStyle: React.CSSProperties = {
 const empIdBadge: React.CSSProperties = {
   fontFamily: 'monospace',
   fontWeight: 700,
-  fontSize: '0.80rem',
+  fontSize: '0.78rem',
   backgroundColor: '#f8fafc',
-  padding: '3px 8px',
-  borderRadius: 6,
+  padding: '2px 6px',
+  borderRadius: 4,
   border: '1px solid #e2e8f0',
   color: '#334155',
 };
@@ -1226,7 +1137,7 @@ const actionBtn: React.CSSProperties = {
   background: '#f8fafc',
   border: '1px solid #cbd5e1',
   borderRadius: 6,
-  padding: '6px 8px',
+  padding: '5px 7px',
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
@@ -1235,7 +1146,7 @@ const actionBtn: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = {
   display: 'block',
-  fontSize: '0.78rem',
+  fontSize: '0.76rem',
   fontWeight: 700,
   color: '#334155',
   marginBottom: 4,
@@ -1246,7 +1157,7 @@ const inputStyle: React.CSSProperties = {
   padding: '8px 12px',
   borderRadius: 6,
   border: '1px solid #cbd5e1',
-  fontSize: '0.84rem',
+  fontSize: '0.82rem',
   outline: 'none',
   boxSizing: 'border-box',
   color: '#0f172a',
@@ -1268,7 +1179,7 @@ const uploadBtnLabel: React.CSSProperties = {
   alignItems: 'center',
   gap: 5,
   padding: '5px 10px',
-  backgroundColor: '#0284c7',
+  backgroundColor: '#004b87',
   color: '#ffffff',
   borderRadius: 6,
   fontSize: '0.72rem',
@@ -1280,28 +1191,28 @@ const removePhotoBtn: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
-  padding: '5px 8px',
+  padding: '4px 8px',
   backgroundColor: '#ffffff',
   color: '#dc2626',
   border: '1px solid #fecaca',
   borderRadius: 6,
-  fontSize: '0.72rem',
+  fontSize: '0.70rem',
   fontWeight: 600,
   cursor: 'pointer',
 };
 
 const idCardFrame: React.CSSProperties = {
   width: '100%',
-  maxWidth: 380,
+  maxWidth: 360,
   backgroundColor: '#ffffff',
   borderRadius: 12,
   border: '1px solid #cbd5e1',
-  boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)',
+  boxShadow: '0 4px 10px rgba(0,0,0,0.06)',
   overflow: 'hidden',
 };
 
 const idCardHeader: React.CSSProperties = {
-  backgroundColor: '#0284c7',
+  backgroundColor: '#004b87',
   padding: '10px 14px',
   display: 'flex',
   justifyContent: 'space-between',

@@ -1,8 +1,6 @@
 /**
- * AttendSure - Institutional Status & Telemetry Footer
+ * AttendSure - Responsive Institutional Telemetry Footer
  * File: web/src/components/layout/Footer.tsx
- *
- * Clean, dynamic footer displaying school identity, database connection status, and developer branding.
  */
 
 import React from 'react';
@@ -27,88 +25,66 @@ export const Footer: React.FC<FooterProps> = ({
   const { school } = useSchool();
 
   const activeSchoolName = schoolName || school.school_name || 'Lapasan National High School';
-  const activeSchoolId = schoolId || school.school_id || '340964';
+  const activeSchoolId = schoolId || school.school_id || '304033';
   const activeDivision = divisionOrCity || school.division || '';
 
   return (
-    <footer
-      style={{
-        height: 38,
-        minHeight: 38,
-        backgroundColor: '#ffffff',
-        borderTop: '1px solid #e2e8f0',
-        padding: '0 24px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        fontSize: '0.73rem',
-        color: '#64748b',
-        boxSizing: 'border-box',
-        userSelect: 'none',
-        zIndex: 30,
-      }}
-    >
-      {/* Left: Dynamic School Identity */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <Building2 size={13} color="#0284c7" />
-          <span style={{ fontWeight: 700, color: '#1e293b' }}>{activeSchoolName}</span>
-        </div>
+    <footer style={footerStyle}>
+      <style>{`
+        @media (max-width: 768px) {
+          .footer-school-division { display: none !important; }
+          .footer-wrapper { height: auto !important; padding: 8px 16px !important; gap: 8px !important; }
+        }
+      `}</style>
 
-        <span style={{ color: '#cbd5e1' }}>&bull;</span>
-        <span>
-          School ID:{' '}
-          <strong style={{ color: '#334155', fontFamily: 'monospace' }}>
-            {activeSchoolId}
-          </strong>
+      {/* Left: School Identity */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
+        <Building2 size={13} color="#004b87" style={{ flexShrink: 0 }} />
+        <span style={{ fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {activeSchoolName}
         </span>
-
+        <span style={{ color: '#cbd5e1' }}>&bull;</span>
+        <span style={{ fontFamily: 'monospace', color: '#475569', flexShrink: 0 }}>ID: {activeSchoolId}</span>
         {activeDivision && (
-          <>
-            <span style={{ color: '#cbd5e1' }}>&bull;</span>
-            <span>{activeDivision}</span>
-          </>
+          <span className="footer-school-division" style={{ color: '#64748b' }}>
+            &bull; {activeDivision}
+          </span>
         )}
       </div>
 
-      {/* Center: Live System Health */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            color: isDatabaseConnected ? '#059669' : '#dc2626',
-            fontWeight: 600,
-          }}
-        >
-          <Database size={12} />
+      {/* Center & Right: Health & Attribution */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: isDatabaseConnected ? '#059669' : '#dc2626', fontWeight: 700 }}>
+          <Database size={11} />
           <span>{isDatabaseConnected ? 'Database Live' : 'Database Offline'}</span>
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            color: isGateSystemOnline ? '#0284c7' : '#dc2626',
-            fontWeight: 600,
-          }}
-        >
-          <Radio size={12} />
-          <span>{isGateSystemOnline ? 'Turnstile Active' : 'Turnstile Standby'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: isGateSystemOnline ? '#004b87' : '#dc2626', fontWeight: 700 }}>
+          <Radio size={11} />
+          <span>{isGateSystemOnline ? 'Gate Live' : 'Gate Standby'}</span>
         </div>
-      </div>
 
-      {/* Right: Copyright */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <span>&copy; 2026 AttendSure &bull; Developed by</span>
-        <strong style={{ color: '#0A1F3D', letterSpacing: '0.05em', fontWeight: 800 }}>
-          TECHBLAZER
-        </strong>
+        <span style={{ color: '#64748b' }}>&copy; 2026 AttendSure</span>
       </div>
     </footer>
   );
+};
+
+const footerStyle: React.CSSProperties = {
+  height: 36,
+  minHeight: 36,
+  backgroundColor: '#ffffff',
+  borderTop: '1px solid #e2e8f0',
+  padding: '0 clamp(12px, 2.5vw, 24px)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  fontSize: '0.72rem',
+  color: '#64748b',
+  boxSizing: 'border-box',
+  userSelect: 'none',
+  flexWrap: 'wrap',
+  gap: 8,
 };
 
 export default Footer;

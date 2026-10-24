@@ -2,35 +2,11 @@ import base64
 import uuid
 from django.core.files.base import ContentFile
 from rest_framework import serializers
+from apps.api.views.common import safe_photo_url
 
 MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
-def safe_photo_url(photo_field, request=None):
-    if not photo_field:
-        return None
-    try:
-        if isinstance(photo_field, str):
-            val = photo_field.strip()
-            if not val or val.lower() in ('none', 'null', 'undefined'):
-                return None
-            if val.startswith(('http://', 'https://', 'data:image/')):
-                return val
-            if val.startswith('/media/') and request:
-                return request.build_absolute_uri(val)
-            return val
-
-        if hasattr(photo_field, 'name') and photo_field.name:
-            val_name = str(photo_field.name).strip()
-            if val_name.startswith(('data:image/', 'http://', 'https://')):
-                return val_name
-            url = photo_field.url
-            if request:
-                return request.build_absolute_uri(url)
-            return url
-    except Exception:
-        return None
-    return None
 
 class FlexibleImageField(serializers.Field):
     def to_representation(self, value):

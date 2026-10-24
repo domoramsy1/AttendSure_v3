@@ -4,8 +4,13 @@
     "slug": "attendsure-mobile",
     "version": "3.0.9",
     "orientation": "portrait",
-    "icon": "./assets/attendsure-logo.svg",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -15,7 +20,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/attendsure-logo.svg",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "package": "ph.gov.deped.attendsure",
@@ -27,19 +32,17 @@
       ]
     },
     "web": {
+      "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
     "plugins": [
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "AttendSure requires location access to verify presence inside campus boundaries for Civil Service Form 48."
+          "locationWhenInUsePermission": "AttendSure requires location access to verify presence inside campus boundaries for Civil Service DTR."
         }
       ],
-      "expo-image",
-      "expo-splash-screen",
-      "expo-status-bar",
-      "expo-secure-store"
+      "expo-splash-screen"
     ]
   }
 }

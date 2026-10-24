@@ -108,7 +108,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='smsoutbox',
             name='trigger_event',
-            field=models.CharField(choices=[('CLASS_TAP', 'Classroom Attendance Tap'), ('GATE_TAP', 'Gate Kiosk RFID Tap'), ('GATE_PASS', 'Gate Pass Issuance'), ('LOAFING_ALERT', 'Campus Perimeter Breach Alert'), ('SARDO_WARNING', 'SARDO (5-Day Consecutive Absence) Alert'), ('MANUAL_ANNOUNCEMENT', 'Institutional School Broadcast')], default='CLASS_TAP', max_length=50),
+            field=models.CharField(choices=[('CLASS_TAP', 'Classroom Attendance Tap'), ('GATE_TAP', 'Gate Kiosk RFID Tap'), ('GATE_PASS', 'Gate Pass Issuance'), ('LOAFING_ALERT', 'Geofence Breach Alert'), ('SARDO_WARNING', 'SARDO (5-Day Consecutive Absence) Alert'), ('MANUAL_ANNOUNCEMENT', 'Institutional School Broadcast')], default='CLASS_TAP', max_length=50),
         ),
         migrations.AlterField(
             model_name='facultygatelog',

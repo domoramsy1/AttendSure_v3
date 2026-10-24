@@ -6,7 +6,7 @@
  * - Dynamic session identity, role badges, and initial avatar fallback.
  * - Dynamic backend admin routing (avoids hardcoded 127.0.0.1 loops).
  * - Keyboard accessibility (Escape key dismissal & outside click detection).
- * - Quick shortcuts to DTR (CSC Form 48), User Management, and Settings.
+ * - Quick shortcuts to DTR (CSC DTR), User Management, and Settings.
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
@@ -157,7 +157,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
 
       {/* 2. Quick Actions */}
       <div style={{ padding: '6px' }}>
-        {/* CSC Form 48 DTR Link */}
+        {/* CSC DTR DTR Link */}
         <button
           type="button"
           onClick={() => handleAction('dtr')}
@@ -173,7 +173,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
               My Daily Time Record
             </div>
             <div style={actionSubtextStyle}>
-              CSC Form 48 logs &amp; hours
+              CSC DTR logs &amp; hours
             </div>
           </div>
         </button>

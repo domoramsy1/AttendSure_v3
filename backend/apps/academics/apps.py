@@ -20,7 +20,7 @@ class AcademicsConfig(AppConfig):
         """
         Connect signals safely when Django boots.
         Applies cybersecurity safeguards:
-        1. Prevents duplicate signal triggers on gate turnstiles.
+        1. Prevents duplicate signal triggers on gate Gate Scanners.
         2. Logs failed imports instead of crashing campus hardware.
         3. Skips signal execution during database migrations.
         """

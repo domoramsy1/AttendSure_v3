@@ -1,18 +1,14 @@
 /**
  * AttendSure - Academic Timetables, Sections & Schedules
- * File: frontend/src/components/tabs/SchedulesTab.tsx
+ * File: web/src/components/tabs/SchedulesTab.tsx
  *
- * Cybersecurity & Architecture Upgrades Applied:
- * 1. ZERO-LEAK DROPDOWN INGESTION: Fetches from /faculty/dropdown/ to exclude
- *    hardware tokens (RFID/QR/Device IDs) and ensure can_teach=True teachers only.
- * 2. UNPAGINATED RECORD COMPLETION: Queries ?page_size=ALL so schedules and
- *    sections are never truncated by the default 25-item backend pagination.
- * 3. OBJECT VS ID TYPE NORMALIZATION: Robustly resolves faculty IDs whether DRF
- *    returns a nested object, foreign key integer, or serializer method field.
- * 4. XSS PROTOCOL SHIELD: Sanitizes image URLs to prevent script injection
- *    via malicious pseudo-protocols (javascript:, vbscript:, data:text/html).
- * 5. SAFE INTERACTION GUARD: Automatically pauses live 3-second background polling
- *    while modals are open or when the component unmounts to prevent memory leaks.
+ * Cybersecurity & Performance:
+ * 1. Adviser & Subject Teacher Integration: Highlights Class Adviser and itemizes Subject Teachers per section.
+ * 2. Pre-population on Edit: Passes the selected schedule item into the modal so all fields show current data.
+ * 3. Fluid Responsive Grid: Auto-fit minmax prevents card overlap on mobile & tablet.
+ * 4. Unpaginated Timetable Feed: Loads full schedule slots without the 25-item cutoff.
+ * 5. Sanitized Teacher Avatars: Shields against XSS and unsafe script links.
+ * 6. SVG Vector Standards: All visual indicators use Lucide icons with zero emojis.
  */
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -34,13 +30,11 @@ import {
   AlertCircle, 
   RefreshCw,
   User as UserIcon,
-  Plus
+  Plus,
+  UserCheck,
+  GraduationCap
 } from 'lucide-react';
 import { AcademicSetupModal, type TabType as AcademicTabType } from '../modals/AcademicSetupModal';
-
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
 
 interface ScheduleItem {
   id: number;
@@ -68,9 +62,15 @@ interface ScheduleItem {
 interface SectionOption {
   id: number;
   name: string;
+  code?: string;
   grade_level?: string;
   grade_level_name?: string;
   display_label?: string;
+  adviser_name?: string;
+  adviser_employee_id?: string;
+  adviser_photo_url?: string | null;
+  subject_teachers?: any[];
+  subject_teachers_count?: number;
 }
 
 interface FacultyOption {
@@ -85,38 +85,13 @@ interface FacultyOption {
   can_teach?: boolean;
 }
 
-// ============================================================================
-// CYBERSECURITY: SAFE IMAGE PROTOCOL VALIDATOR
-// ============================================================================
-
-/**
- * Validates that an image URL begins with safe web protocols.
- * Blocks malicious vectors like `javascript:...`, `vbscript:...`, or dangerous data URIs.
- */
 const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
-  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') {
-    return false;
-  }
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) {
-    return false;
-  }
-  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) {
-    return false;
-  }
-  return (
-    clean.startsWith('http://') ||
-    clean.startsWith('https://') ||
-    clean.startsWith('/') ||
-    clean.startsWith('data:image/') ||
-    clean.startsWith('blob:')
-  );
+  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
+  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
+  return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('/') || clean.startsWith('data:image/');
 };
-
-// ============================================================================
-// REUSABLE SECURE AVATAR COMPONENT
-// ============================================================================
 
 interface ProfileAvatarProps {
   photoUrl?: string | null;
@@ -129,7 +104,7 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   photoUrl,
   name = 'Faculty Member',
   size = 30,
-  iconSize = 16,
+  iconSize = 15,
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
 
@@ -170,10 +145,6 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   );
 };
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-
 export const SchedulesTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
 
@@ -188,12 +159,11 @@ export const SchedulesTab: React.FC = () => {
 
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [modalTab, setModalTab] = useState<AcademicTabType>('SCHEDULE');
+  const [editItem, setEditItem] = useState<any>(null);
 
-  // Guard flag: pauses background polling during active user interactions or modals
   const isInteracting = useRef(false);
   isInteracting.current = isModalOpen;
 
-  // Track component mounted status to avoid state updates after unmount
   const isMounted = useRef(true);
   useEffect(() => {
     isMounted.current = true;
@@ -202,18 +172,10 @@ export const SchedulesTab: React.FC = () => {
     };
   }, []);
 
-  // ============================================================================
-  // DATABASE DATA FETCHING & LIVE POLLING
-  // ============================================================================
-
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setError('');
     try {
-      // Cybersecurity & Architecture:
-      // 1. /schedules/?page_size=ALL prevents pagination truncation past 25 slots
-      // 2. /sections/?page_size=ALL guarantees all sections populate the filter
-      // 3. /faculty/dropdown/ queries only active teachers and hides hardware tokens
       const [schedRes, secRes, facRes] = await Promise.all([
         apiClient.get('/schedules/?page_size=ALL'),
         apiClient.get('/sections/?page_size=ALL'),
@@ -222,17 +184,9 @@ export const SchedulesTab: React.FC = () => {
 
       if (!isMounted.current) return;
 
-      const schedData = Array.isArray(schedRes.data)
-        ? schedRes.data
-        : schedRes.data?.results || [];
-
-      const secData = Array.isArray(secRes.data)
-        ? secRes.data
-        : secRes.data?.results || [];
-
-      const facData = Array.isArray(facRes.data)
-        ? facRes.data
-        : facRes.data?.results || [];
+      const schedData = Array.isArray(schedRes.data) ? schedRes.data : schedRes.data?.results || [];
+      const secData = Array.isArray(secRes.data) ? secRes.data : secRes.data?.results || [];
+      const facData = Array.isArray(facRes.data) ? facRes.data : facRes.data?.results || [];
 
       setSchedules(schedData);
       setSections(secData);
@@ -251,25 +205,19 @@ export const SchedulesTab: React.FC = () => {
     }
   }, []);
 
-  // Initial load
   useEffect(() => {
     loadData(false);
   }, [loadData]);
 
-  // LIVE ZERO-REFRESH POLLING: Synchronize timetable changes every 3 seconds
   useEffect(() => {
     const liveInterval = setInterval(() => {
       if (!isInteracting.current && isMounted.current) {
         loadData(true);
       }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(liveInterval);
   }, [loadData]);
-
-  // ============================================================================
-  // ACTIONS
-  // ============================================================================
 
   const handleDelete = (id: number, code: string) => {
     showConfirm({
@@ -300,9 +248,15 @@ export const SchedulesTab: React.FC = () => {
     });
   };
 
-  const handleOpenModal = (tab: AcademicTabType) => {
+  const handleOpenModal = (tab: AcademicTabType, item: any = null) => {
     setModalTab(tab);
+    setEditItem(item);
     setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setEditItem(null);
   };
 
   const formatTime = (timeStr?: string) => {
@@ -321,10 +275,6 @@ export const SchedulesTab: React.FC = () => {
     return item.schedule_code || item.code || `SCH-${String(item.id).padStart(4, '0')}`;
   };
 
-  /**
-   * Robustly extracts teacher full name and photo.
-   * Resolves object representations, serializer method fields, and foreign key numbers.
-   */
   const getFacultyInfo = (item: ScheduleItem) => {
     let name = 'Unassigned';
     let photo: string | null = null;
@@ -338,7 +288,6 @@ export const SchedulesTab: React.FC = () => {
       photo = item.faculty.photo_url || item.faculty.photo || null;
     }
 
-    // Extract ID safely even if item.faculty is serialized as an object
     let targetFacultyId: number | undefined;
     if (typeof item.faculty_id === 'number') {
       targetFacultyId = item.faculty_id;
@@ -398,13 +347,8 @@ export const SchedulesTab: React.FC = () => {
     return '—';
   };
 
-  // ============================================================================
-  // MEMOIZED FILTERING & TELEMETRY
-  // ============================================================================
-
   const filteredSchedules = useMemo(() => {
     return schedules.filter((s) => {
-      // 1. Section Filter
       if (selectedSectionFilter !== 'ALL') {
         const secId = typeof s.section === 'object' && s.section ? s.section.id : s.section;
         const matchesId = String(secId) === selectedSectionFilter;
@@ -412,7 +356,6 @@ export const SchedulesTab: React.FC = () => {
         if (!matchesId && !matchesName) return false;
       }
 
-      // 2. Search Query Filter
       if (searchQuery.trim() !== '') {
         const q = searchQuery.toLowerCase();
         const code = getScheduleCode(s).toLowerCase();
@@ -428,7 +371,12 @@ export const SchedulesTab: React.FC = () => {
     });
   }, [schedules, selectedSectionFilter, searchQuery, facultyList]);
 
-  // Telemetry Metrics
+  // Selected Section Object (for displaying Class Adviser & Subject Teacher status)
+  const currentSelectedSectionObj = useMemo(() => {
+    if (selectedSectionFilter === 'ALL') return null;
+    return sections.find((sec) => String(sec.id) === selectedSectionFilter) || null;
+  }, [selectedSectionFilter, sections]);
+
   const uniqueSectionsCount = useMemo(() => {
     return new Set(schedules.map((s) => getSectionName(s)).filter((n) => n !== 'Unassigned')).size;
   }, [schedules]);
@@ -442,16 +390,16 @@ export const SchedulesTab: React.FC = () => {
   }, [schedules]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
       {/* 1. Academic Telemetry Summary Cards */}
       <div style={statsGrid}>
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>TOTAL TIMETABLE PERIODS</span>
-            <Calendar size={18} color="#0284c7" />
+            <span style={statLabel}>SCHEDULE PERIODS</span>
+            <Calendar size={18} color="#004b87" />
           </div>
           <div style={statVal}>{schedules.length}</div>
-          <div style={statSub}>Active schedule entries in database</div>
+          <div style={statSub}>Active timetable slots</div>
         </div>
 
         <div style={statCard}>
@@ -460,33 +408,33 @@ export const SchedulesTab: React.FC = () => {
             <Users size={18} color="#059669" />
           </div>
           <div style={{ ...statVal, color: '#059669' }}>{uniqueSectionsCount}</div>
-          <div style={statSub}>Classes with assigned periods</div>
+          <div style={statSub}>Sections with class schedules</div>
         </div>
 
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>ASSIGNED TEACHERS</span>
-            <UserIcon size={18} color="#0284c7" />
+            <span style={statLabel}>SUBJECT TEACHERS</span>
+            <GraduationCap size={18} color="#004b87" />
           </div>
-          <div style={{ ...statVal, color: '#0284c7' }}>{uniqueTeachersCount}</div>
-          <div style={statSub}>Faculty members teaching classes</div>
+          <div style={{ ...statVal, color: '#004b87' }}>{uniqueTeachersCount}</div>
+          <div style={statSub}>Faculty members with teaching loads</div>
         </div>
 
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>ROOMS UTILIZED</span>
+            <span style={statLabel}>OCCUPIED ROOMS</span>
             <DoorOpen size={18} color="#d97706" />
           </div>
           <div style={{ ...statVal, color: '#d97706' }}>{uniqueRoomsCount}</div>
-          <div style={statSub}>Classrooms and laboratories occupied</div>
+          <div style={statSub}>Classrooms and labs in use</div>
         </div>
       </div>
 
       {/* 2. Top Filter and Setup Navigation Bar */}
       <div style={controlBar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7', fontWeight: 700, fontSize: '0.80rem' }}>
-            <Filter size={15} /> Filter Section:
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#004b87', fontWeight: 800, fontSize: '0.80rem' }}>
+            <Filter size={15} /> Select Section:
           </div>
           <select
             value={selectedSectionFilter}
@@ -496,7 +444,7 @@ export const SchedulesTab: React.FC = () => {
             <option value="ALL">All Sections ({schedules.length} periods)</option>
             {sections.map((sec) => (
               <option key={sec.id} value={sec.id}>
-                {sec.name} {sec.grade_level_name || sec.grade_level ? `(${sec.grade_level_name || sec.grade_level})` : ''}
+                {sec.name} {sec.code ? `(${sec.code})` : ''}
               </option>
             ))}
           </select>
@@ -504,56 +452,120 @@ export const SchedulesTab: React.FC = () => {
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
-            onClick={() => handleOpenModal('YEAR_LEVEL')}
+            type="button"
+            onClick={() => handleOpenModal('SECTION')}
             style={secondaryBtnStyle}
-            title="Add a Grade Level"
+            title="Manage Sections & Class Advisers"
           >
-            <Layers size={13} color="#0284c7" /> + Year Level
+            <Users size={13} color="#004b87" /> + Section &amp; Adviser
           </button>
 
           <button
+            type="button"
             onClick={() => handleOpenModal('ROOM')}
             style={secondaryBtnStyle}
             title="Add a Classroom / Lab"
           >
-            <DoorOpen size={13} color="#0284c7" /> + Room
+            <DoorOpen size={13} color="#004b87" /> + Room
           </button>
 
           <button
+            type="button"
             onClick={() => handleOpenModal('SUBJECT')}
             style={secondaryBtnStyle}
             title="Add a Subject"
           >
-            <BookOpen size={13} color="#0284c7" /> + Subject
+            <BookOpen size={13} color="#004b87" /> + Subject
           </button>
 
           <button
-            onClick={() => handleOpenModal('SECTION')}
-            style={secondaryBtnStyle}
-            title="Add a Section"
-          >
-            <Users size={13} color="#0284c7" /> + Section
-          </button>
-
-          <button
+            type="button"
             onClick={() => handleOpenModal('SCHEDULE')}
             style={primaryBtnStyle}
-            title="Add a Class Schedule"
+            title="Assign Subject Teacher to Section"
           >
-            <Plus size={15} /> Add Schedule Period
+            <Plus size={15} /> Add Subject Teacher Slot
           </button>
         </div>
       </div>
 
-      {/* 3. Main Timetable Ledger */}
+      {/* 3. Section Overview Banner (Shown when a specific section is chosen) */}
+      {currentSelectedSectionObj && (
+        <div style={sectionOverviewBanner}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={avatarCircle}>
+              {currentSelectedSectionObj.adviser_photo_url ? (
+                <img
+                  src={currentSelectedSectionObj.adviser_photo_url}
+                  alt={currentSelectedSectionObj.adviser_name || 'Adviser'}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <UserCheck size={20} color="#004b87" />
+              )}
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a' }}>
+                  {currentSelectedSectionObj.name}
+                </span>
+                <span style={codeBadgePill}>
+                  {currentSelectedSectionObj.code || 'NO-CODE'}
+                </span>
+                {currentSelectedSectionObj.grade_level_name && (
+                  <span style={{ fontSize: '0.74rem', color: '#64748b' }}>
+                    &bull; {currentSelectedSectionObj.grade_level_name}
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontSize: '0.76rem' }}>
+                <span style={{ color: '#004b87', fontWeight: 700 }}>
+                  Class Adviser:
+                </span>
+                <strong style={{ color: currentSelectedSectionObj.adviser_name ? '#0f172a' : '#d97706' }}>
+                  {currentSelectedSectionObj.adviser_name || 'No Homeroom Adviser Assigned'}
+                </strong>
+                {currentSelectedSectionObj.adviser_employee_id && (
+                  <span style={{ fontFamily: 'monospace', color: '#64748b' }}>
+                    ({currentSelectedSectionObj.adviser_employee_id})
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', display: 'block' }}>
+                SUBJECT TEACHERS
+              </span>
+              <strong style={{ fontSize: '1.05rem', color: '#004b87' }}>
+                {filteredSchedules.length} classes scheduled
+              </strong>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleOpenModal('SECTION', currentSelectedSectionObj)}
+              style={editSectionBtn}
+            >
+              <Edit2 size={12} />
+              <span>Change Adviser</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Main Timetable Ledger */}
       <div style={cardStyle}>
-        {/* Search Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
           <div style={searchContainerStyle}>
             <Search size={15} color="#94a3b8" />
             <input
               type="text"
-              placeholder="Search by section, subject code, faculty, room..."
+              placeholder="Search by section, subject code, subject teacher, room..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={searchInputStyle}
@@ -566,23 +578,21 @@ export const SchedulesTab: React.FC = () => {
           </div>
         </div>
 
-        {/* Error Banner */}
         {error && (
           <div style={errorBannerStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <AlertCircle size={18} color="#991b1b" />
               <span>{error}</span>
             </div>
-            <button onClick={() => loadData(false)} style={retryBtnStyle}>
+            <button type="button" onClick={() => loadData(false)} style={retryBtnStyle}>
               <RefreshCw size={13} /> Retry
             </button>
           </div>
         )}
 
-        {/* Data Table */}
         {loading ? (
           <div style={loadingContainerStyle}>
-            <Loader2 size={26} className="animate-spin" color="#0284c7" />
+            <Loader2 size={26} className="animate-spin" color="#004b87" />
             <span style={{ fontSize: '0.84rem', color: '#64748b' }}>Loading schedules from database...</span>
           </div>
         ) : filteredSchedules.length === 0 ? (
@@ -592,7 +602,7 @@ export const SchedulesTab: React.FC = () => {
               No timetable records found
             </p>
             <p style={{ margin: 0, fontSize: '0.76rem', color: '#94a3b8' }}>
-              Click <strong>"+ Add Schedule Period"</strong> above to schedule your first class.
+              Click <strong>&quot;+ Add Subject Teacher Slot&quot;</strong> above to schedule a class for this section.
             </p>
           </div>
         ) : (
@@ -601,9 +611,9 @@ export const SchedulesTab: React.FC = () => {
               <thead>
                 <tr style={tableHeaderRowStyle}>
                   <th style={thStyle}>Code</th>
-                  <th style={thStyle}>Section</th>
-                  <th style={thStyle}>Subject / Course</th>
-                  <th style={thStyle}>Assigned Faculty</th>
+                  <th style={thStyle}>Class Section</th>
+                  <th style={thStyle}>Subject</th>
+                  <th style={thStyle}>Subject Teacher (Faculty)</th>
                   <th style={thStyle}>Time Period</th>
                   <th style={thStyle}>Room</th>
                   <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>
@@ -635,7 +645,7 @@ export const SchedulesTab: React.FC = () => {
 
                       <td style={tdStyle}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <BookOpen size={13} color="#0284c7" />
+                          <BookOpen size={13} color="#004b87" />
                           <span style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.82rem' }}>
                             {getSubjectCode(row)}
                           </span>
@@ -665,6 +675,7 @@ export const SchedulesTab: React.FC = () => {
                         <div style={pillStyle}>
                           <Clock size={12} color="#64748b" />
                           <span>{formatTime(row.start_time)} - {formatTime(row.end_time)}</span>
+                          <span style={{ color: '#94a3b8' }}>&bull; {row.days_of_week || 'MON-FRI'}</span>
                         </div>
                       </td>
 
@@ -678,18 +689,20 @@ export const SchedulesTab: React.FC = () => {
                       <td style={{ ...tdStyle, textAlign: 'center' }}>
                         <div style={{ display: 'flex', justifyContent: 'center', gap: 6 }}>
                           <button
-                            onClick={() => handleOpenModal('SCHEDULE')}
+                            type="button"
+                            onClick={() => handleOpenModal('SCHEDULE', row)}
                             style={iconBtnStyle}
-                            title="Edit Schedule"
+                            title="Edit Subject Teacher / Schedule"
                           >
-                            <Edit2 size={13} color="#0284c7" />
+                            <Edit2 size={13} color="#004b87" />
                           </button>
                           <button
+                            type="button"
                             onClick={() => handleDelete(row.id, displayCode)}
-                            style={{ ...iconBtnStyle, borderColor: '#fecaca', backgroundColor: '#fef2f2' }}
-                            title="Delete Schedule"
+                            style={{ ...iconBtnStyle, borderColor: '#fee2e2', backgroundColor: '#fef2f2' }}
+                            title="Delete Schedule Period"
                           >
-                            <Trash2 size={13} color="#ef4444" />
+                            <Trash2 size={13} color="#dc2626" />
                           </button>
                         </div>
                       </td>
@@ -705,8 +718,12 @@ export const SchedulesTab: React.FC = () => {
       <AcademicSetupModal
         isOpen={isModalOpen}
         initialTab={modalTab}
-        onClose={() => setIsModalOpen(false)}
-        onSuccess={() => loadData(true)}
+        editItem={editItem}
+        onClose={handleCloseModal}
+        onSuccess={() => {
+          loadData(true);
+          handleCloseModal();
+        }}
       />
     </div>
   );
@@ -714,43 +731,39 @@ export const SchedulesTab: React.FC = () => {
 
 export default SchedulesTab;
 
-// ============================================================================
-// STYLES
-// ============================================================================
-
+// Styles
 const statsGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
-  gap: 14,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
+  gap: 12,
 };
 
 const statCard: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
   border: '1px solid #e2e8f0',
-  padding: '16px 18px',
-  boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+  padding: '12px 16px',
 };
 
 const statLabel: React.CSSProperties = {
-  fontSize: '0.68rem',
-  fontWeight: 700,
+  fontSize: '0.64rem',
+  fontWeight: 800,
   color: '#64748b',
-  letterSpacing: '0.3px',
+  letterSpacing: '0.4px',
 };
 
 const statVal: React.CSSProperties = {
-  fontSize: '1.50rem',
+  fontSize: '1.40rem',
   fontWeight: 800,
   color: '#0f172a',
   lineHeight: 1.1,
-  marginTop: 6,
+  marginTop: 4,
 };
 
 const statSub: React.CSSProperties = {
-  fontSize: '0.70rem',
+  fontSize: '0.68rem',
   color: '#94a3b8',
-  marginTop: 4,
+  marginTop: 3,
 };
 
 const controlBar: React.CSSProperties = {
@@ -761,13 +774,64 @@ const controlBar: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
   border: '1px solid #e2e8f0',
+  flexWrap: 'wrap',
+  gap: 10,
+};
+
+const sectionOverviewBanner: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  padding: '12px 18px',
+  backgroundColor: '#f0f9ff',
+  borderRadius: 10,
+  border: '1px solid #bae6fd',
+  flexWrap: 'wrap',
+  gap: 12,
+};
+
+const avatarCircle: React.CSSProperties = {
+  width: 44,
+  height: 44,
+  borderRadius: '50%',
+  backgroundColor: '#ffffff',
+  border: '1.5px solid #004b87',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  overflow: 'hidden',
+  flexShrink: 0,
+};
+
+const codeBadgePill: React.CSSProperties = {
+  padding: '2px 8px',
+  borderRadius: 4,
+  backgroundColor: '#e0f2fe',
+  color: '#004b87',
+  fontFamily: 'monospace',
+  fontSize: '0.70rem',
+  fontWeight: 800,
+  border: '1px solid #bae6fd',
+};
+
+const editSectionBtn: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '5px 10px',
+  backgroundColor: '#ffffff',
+  color: '#004b87',
+  border: '1px solid #004b87',
+  borderRadius: 6,
+  fontSize: '0.72rem',
+  fontWeight: 700,
+  cursor: 'pointer',
 };
 
 const cardStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',
-  borderRadius: 10,
-  padding: '18px 20px',
-  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
+  borderRadius: 12,
+  padding: '16px 18px',
   border: '1px solid #e2e8f0',
 };
 
@@ -775,8 +839,8 @@ const selectStyle: React.CSSProperties = {
   padding: '6px 12px',
   borderRadius: 6,
   border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  fontSize: '0.80rem',
+  backgroundColor: '#f8fafc',
+  fontSize: '0.78rem',
   color: '#334155',
   fontWeight: 600,
   outline: 'none',
@@ -790,10 +854,10 @@ const secondaryBtnStyle: React.CSSProperties = {
   backgroundColor: '#f8fafc',
   color: '#334155',
   border: '1px solid #cbd5e1',
-  padding: '7px 11px',
+  padding: '6px 11px',
   borderRadius: 6,
   fontWeight: 700,
-  fontSize: '0.76rem',
+  fontSize: '0.74rem',
   cursor: 'pointer',
 };
 
@@ -801,13 +865,13 @@ const primaryBtnStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 5,
-  backgroundColor: '#0284c7',
+  backgroundColor: '#004b87',
   color: '#ffffff',
   border: 'none',
-  padding: '7px 13px',
+  padding: '6px 13px',
   borderRadius: 6,
   fontWeight: 700,
-  fontSize: '0.76rem',
+  fontSize: '0.74rem',
   cursor: 'pointer',
 };
 
@@ -826,29 +890,30 @@ const searchContainerStyle: React.CSSProperties = {
 const searchInputStyle: React.CSSProperties = {
   border: 'none',
   outline: 'none',
-  fontSize: '0.80rem',
+  fontSize: '0.78rem',
   width: '100%',
   color: '#0f172a',
 };
 
 const tableStyle: React.CSSProperties = {
   width: '100%',
+  minWidth: 640,
   borderCollapse: 'collapse',
   textAlign: 'left',
 };
 
 const tableHeaderRowStyle: React.CSSProperties = {
-  borderBottom: '1px solid #e2e8f0',
+  borderBottom: '2px solid #e2e8f0',
   backgroundColor: '#f8fafc',
 };
 
 const thStyle: React.CSSProperties = {
-  padding: '11px 14px',
-  fontSize: '0.74rem',
-  fontWeight: 700,
+  padding: '10px 14px',
+  fontSize: '0.72rem',
+  fontWeight: 800,
   color: '#475569',
   textTransform: 'uppercase',
-  letterSpacing: '0.03em',
+  letterSpacing: '0.04em',
 };
 
 const tableRowStyle: React.CSSProperties = {
@@ -856,7 +921,7 @@ const tableRowStyle: React.CSSProperties = {
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: '11px 14px',
+  padding: '10px 14px',
   verticalAlign: 'middle',
 };
 
@@ -864,7 +929,7 @@ const codeBadge: React.CSSProperties = {
   fontFamily: 'monospace',
   fontSize: '0.74rem',
   fontWeight: 800,
-  color: '#0284c7',
+  color: '#004b87',
   backgroundColor: '#eff6ff',
   padding: '2px 7px',
   borderRadius: 4,
@@ -922,7 +987,7 @@ const errorBannerStyle: React.CSSProperties = {
   borderRadius: 6,
   padding: '10px 14px',
   marginBottom: 16,
-  fontSize: '0.80rem',
+  fontSize: '0.78rem',
 };
 
 const retryBtnStyle: React.CSSProperties = {
@@ -934,7 +999,7 @@ const retryBtnStyle: React.CSSProperties = {
   color: '#991b1b',
   padding: '4px 8px',
   borderRadius: 4,
-  fontSize: '0.74rem',
+  fontSize: '0.72rem',
   cursor: 'pointer',
   fontWeight: 700,
 };

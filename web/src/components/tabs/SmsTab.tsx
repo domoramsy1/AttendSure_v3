@@ -1,5 +1,5 @@
 /**
- * AttendSure - SMS Gateway & Outbox Dispatcher (Full Admin CRUD & RBAC Hardened)
+ * AttendSure - SMS & Outbox Dispatcher (Full Admin CRUD & RBAC Hardened)
  * File: web/src/components/tabs/SmsTab.tsx
  *
  * Cybersecurity & Stability Hardening:
@@ -1211,7 +1211,7 @@ export const SmsTab: React.FC = () => {
       {/* 4. Main SMS Logs Table */}
       <div style={{ backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1, borderStyle: 'solid', borderColor: '#e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
-          title="SMS Gateway & Outbox Dispatcher"
+          title="SMS & Outbox Dispatcher"
           subtitle="Real-time log of automated school notifications: gate taps, classroom attendance, announcements, and 2FA OTPs."
           searchPlaceholder="Search phone number, student name, or message text..."
           searchValue={search}
@@ -1696,7 +1696,7 @@ export const SmsTab: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 <UserCheck size={14} color="#0284c7" />
                 <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#0f172a' }}>
-                  Quick Fill Guardian from Student Directory:
+                  Quick Fill Guardian from Students:
                 </span>
               </div>
               <select

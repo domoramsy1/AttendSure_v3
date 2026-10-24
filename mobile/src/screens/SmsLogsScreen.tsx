@@ -1,4 +1,4 @@
-// mobile/src/screens/SmsLogsScreen.tsx
+// D:\AttendSure_V3\mobile\src\screens\SmsLogsScreen.tsx
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -153,20 +153,90 @@ export const SmsLogsScreen: React.FC = () => {
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {/* Top Header */}
       <View style={styles.topHeader}>
-        <View>
-          <Text style={styles.screenTitle}>SMS Gateway Logs</Text>
-          <Text style={styles.screenSub}>Parent Alerts & GSM Modem Outbox Queue</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.screenTitle}>SMS Alerts</Text>
+          <Text style={styles.screenSub}>Parent Attendance Notifications</Text>
         </View>
-        {metrics?.modem_port ? (
-          <View style={styles.modemBadge}>
-            <View style={styles.modemDot} />
-            <Text style={styles.modemBadgeText}>
-              {metrics.modem_port} ({metrics.modem_baudrate})
-            </Text>
-          </View>
-        ) : null}
+
+        {canManageSms && (metrics?.failed || 0) > 0 && (
+          <TouchableOpacity
+            style={[styles.retryAllBtn, actionBusy && { opacity: 0.6 }]}
+            onPress={handleRetryAllFailed}
+            disabled={actionBusy}
+          >
+            {actionBusy ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <>
+                <Ionicons name="refresh" size={14} color="#ffffff" />
+                <Text style={styles.retryAllBtnText}>Retry Failed</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
 
+      {/* Metrics Row */}
+      <View style={styles.metricsRow}>
+        <View style={[styles.metricCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
+          <Text style={[styles.metricNumber, { color: '#16a34a' }]}>
+            {metrics?.sent_today ?? 0}
+          </Text>
+          <Text style={styles.metricLabel}>Sent Today</Text>
+        </View>
+
+        <View style={[styles.metricCard, { backgroundColor: '#fffbeb', borderColor: '#fef3c7' }]}>
+          <Text style={[styles.metricNumber, { color: '#d97706' }]}>
+            {metrics?.pending ?? 0}
+          </Text>
+          <Text style={styles.metricLabel}>Pending</Text>
+        </View>
+
+        <View style={[styles.metricCard, { backgroundColor: '#fef2f2', borderColor: '#fecaca' }]}>
+          <Text style={[styles.metricNumber, { color: '#dc2626' }]}>
+            {metrics?.failed ?? 0}
+          </Text>
+          <Text style={styles.metricLabel}>Failed</Text>
+        </View>
+      </View>
+
+      {/* Search & Filter Bar */}
+      <View style={styles.filterSection}>
+        <View style={styles.searchBox}>
+          <Ionicons name="search-outline" size={16} color="#64748b" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search parent name, phone, or text..."
+            placeholderTextColor="#94a3b8"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={16} color="#94a3b8" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={styles.statusChipsRow}>
+          {(['ALL', 'SENT', 'PENDING', 'FAILED'] as const).map((st) => {
+            const active = statusFilter === st;
+            return (
+              <TouchableOpacity
+                key={st}
+                style={[styles.statusChip, active && styles.statusChipActive]}
+                onPress={() => setStatusFilter(st)}
+              >
+                <Text style={[styles.statusChipText, active && styles.statusChipTextActive]}>
+                  {st}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* Message Ledger */}
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -174,112 +244,47 @@ export const SmsLogsScreen: React.FC = () => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
         }
       >
-        {/* 1. Live Database Metrics */}
-        {metrics && (
-          <View style={styles.metricsRow}>
-            <View style={styles.metricTile}>
-              <Text style={styles.metricVal}>{metrics.total_today}</Text>
-              <Text style={styles.metricLabel}>Today</Text>
-            </View>
-            <View style={styles.metricTile}>
-              <Text style={[styles.metricVal, { color: '#16a34a' }]}>{metrics.sent_today}</Text>
-              <Text style={styles.metricLabel}>Sent</Text>
-            </View>
-            <View style={styles.metricTile}>
-              <Text style={[styles.metricVal, { color: '#d97706' }]}>{metrics.pending}</Text>
-              <Text style={styles.metricLabel}>Pending</Text>
-            </View>
-            <View style={styles.metricTile}>
-              <Text style={[styles.metricVal, { color: '#dc2626' }]}>{metrics.failed}</Text>
-              <Text style={styles.metricLabel}>Failed</Text>
-            </View>
+        {loading ? (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="small" color={COLORS.primary} />
+            <Text style={styles.loadingText}>Loading SMS logs...</Text>
           </View>
-        )}
-
-        {/* 2. Search & Status Filter Card */}
-        <View style={styles.card}>
-          <View style={styles.searchBox}>
-            <Ionicons name="search-outline" size={16} color="#64748b" style={{ marginRight: 8 }} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search recipient name, number, or message..."
-              placeholderTextColor="#94a3b8"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={16} color="#94a3b8" />
-              </TouchableOpacity>
-            )}
+        ) : logs.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Ionicons name="chatbubble-ellipses-outline" size={36} color="#94a3b8" />
+            <Text style={styles.emptyTitle}>No Messages Found</Text>
+            <Text style={styles.emptySub}>
+              No automated SMS parent alerts match the active filter criteria.
+            </Text>
           </View>
+        ) : (
+          logs.map((item) => {
+            const isSent = item.status === 'SENT';
+            const isPending = item.status === 'PENDING';
+            const isFailed = item.status === 'FAILED';
 
-          <View style={styles.filterRow}>
-            {(['ALL', 'SENT', 'PENDING', 'FAILED'] as const).map((st) => (
-              <TouchableOpacity
-                key={st}
-                style={[styles.filterPill, statusFilter === st && styles.filterPillActive]}
-                onPress={() => setStatusFilter(st)}
-              >
-                <Text
-                  style={[
-                    styles.filterPillText,
-                    statusFilter === st && styles.filterPillTextActive,
-                  ]}
-                >
-                  {st}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+            return (
+              <View key={String(item.id)} style={styles.logCard}>
+                <View style={styles.logCardHeader}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={styles.recipientName}>{item.recipient_name || 'Parent / Guardian'}</Text>
+                    <Text style={styles.recipientPhone}>{item.recipient_number}</Text>
+                  </View>
 
-          {canManageSms && (metrics?.failed ?? 0) > 0 && (
-            <TouchableOpacity
-              style={[styles.retryAllBtn, actionBusy && { opacity: 0.6 }]}
-              onPress={handleRetryAllFailed}
-              disabled={actionBusy}
-            >
-              <Ionicons name="refresh-circle-outline" size={16} color="#ffffff" />
-              <Text style={styles.retryAllBtnText}>
-                Retry All Failed Messages ({metrics?.failed})
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* 3. Outbox Messages List */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>SMS DISPATCH RECORDS ({logs.length})</Text>
-
-          {loading ? (
-            <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 16 }} />
-          ) : logs.length === 0 ? (
-            <Text style={styles.emptyText}>No SMS records match your current filter.</Text>
-          ) : (
-            logs.map((item) => (
-              <View key={String(item.id)} style={styles.smsItemRow}>
-                <View style={styles.smsHeaderLine}>
-                  <Text style={styles.recipientNameText}>
-                    {item.recipient_name || item.recipient_number}
-                  </Text>
                   <View
                     style={[
-                      styles.statusBadge,
-                      item.status === 'SENT'
-                        ? styles.badgeSent
-                        : item.status === 'PENDING'
-                        ? styles.badgePending
-                        : styles.badgeFailed,
+                      styles.statusPill,
+                      isSent && { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' },
+                      isPending && { backgroundColor: '#fffbeb', borderColor: '#fde68a' },
+                      isFailed && { backgroundColor: '#fef2f2', borderColor: '#fca5a5' },
                     ]}
                   >
                     <Text
                       style={[
-                        styles.statusBadgeText,
-                        item.status === 'SENT'
-                          ? styles.textSent
-                          : item.status === 'PENDING'
-                          ? styles.textPending
-                          : styles.textFailed,
+                        styles.statusPillText,
+                        isSent && { color: '#059669' },
+                        isPending && { color: '#d97706' },
+                        isFailed && { color: '#dc2626' },
                       ]}
                     >
                       {item.status}
@@ -287,28 +292,27 @@ export const SmsLogsScreen: React.FC = () => {
                   </View>
                 </View>
 
-                <Text style={styles.phoneText}>
-                  {item.recipient_number} • {formatTimestamp(item.sent_at || item.created_at)}
-                </Text>
-                <Text style={styles.messageBodyText}>{item.message_body}</Text>
+                <Text style={styles.messageBody}>{item.message_body}</Text>
 
-                {item.error_message ? (
-                  <Text style={styles.errorText}>Error: {item.error_message}</Text>
-                ) : null}
+                <View style={styles.logCardFooter}>
+                  <Text style={styles.timestampText}>
+                    {formatTimestamp(item.sent_at || item.created_at)}
+                  </Text>
 
-                {canManageSms && item.status === 'FAILED' && (
-                  <TouchableOpacity
-                    style={styles.singleRetryBtn}
-                    onPress={() => handleRetrySingle(item.id)}
-                  >
-                    <Ionicons name="reload" size={12} color="#004b87" />
-                    <Text style={styles.singleRetryText}>Retry Send</Text>
-                  </TouchableOpacity>
-                )}
+                  {canManageSms && isFailed && (
+                    <TouchableOpacity
+                      style={styles.singleRetryBtn}
+                      onPress={() => handleRetrySingle(item.id)}
+                    >
+                      <Ionicons name="reload-outline" size={12} color="#dc2626" />
+                      <Text style={styles.singleRetryBtnText}>Resend</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
-            ))
-          )}
-        </View>
+            );
+          })
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -320,117 +324,110 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
   },
-  screenTitle: { fontSize: 18, fontWeight: '800', color: '#003460' },
+  screenTitle: { fontSize: 17, fontWeight: '800', color: '#003460' },
   screenSub: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
-  modemBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#e6f0fa',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 10,
-    gap: 4,
-  },
-  modemDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#004b87' },
-  modemBadgeText: { fontSize: 9, fontWeight: '800', color: '#004b87' },
-  scrollContent: { padding: 16, gap: 12 },
-  metricsRow: { flexDirection: 'row', gap: 8 },
-  metricTile: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    alignItems: 'center',
-  },
-  metricVal: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
-  metricLabel: { fontSize: 9, fontWeight: '700', color: '#64748b', marginTop: 2 },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 15,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    paddingHorizontal: 12,
-    height: 40,
-    marginBottom: 10,
-  },
-  searchInput: { flex: 1, fontSize: 12, color: '#0f172a' },
-  filterRow: { flexDirection: 'row', gap: 6 },
-  filterPill: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: '#f1f5f9',
-  },
-  filterPillActive: { backgroundColor: '#004b87' },
-  filterPillText: { fontSize: 10, fontWeight: '800', color: '#64748b' },
-  filterPillTextActive: { color: '#ffffff' },
   retryAllBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
     backgroundColor: '#dc2626',
-    paddingVertical: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
     borderRadius: 8,
-    marginTop: 10,
-    gap: 6,
   },
-  retryAllBtnText: { color: '#ffffff', fontSize: 11.5, fontWeight: '700' },
-  sectionTitle: {
-    fontSize: 10.5,
-    fontWeight: '800',
-    color: '#004b87',
-    letterSpacing: 0.4,
-    marginBottom: 8,
+  retryAllBtnText: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
+  metricsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
   },
-  emptyText: { fontSize: 11.5, color: '#94a3b8', textAlign: 'center', paddingVertical: 14 },
-  smsItemRow: {
+  metricCard: {
+    flex: 1,
+    borderRadius: 12,
     paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    alignItems: 'center',
+    borderWidth: 1,
   },
-  smsHeaderLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  recipientNameText: { fontSize: 12.5, fontWeight: '700', color: '#0f172a' },
-  phoneText: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
-  messageBodyText: { fontSize: 11.5, color: '#334155', marginTop: 4, lineHeight: 16 },
-  errorText: { fontSize: 10.5, color: '#dc2626', fontWeight: '600', marginTop: 3 },
-  statusBadge: { paddingVertical: 3, paddingHorizontal: 7, borderRadius: 6 },
-  badgeSent: { backgroundColor: '#dcfce7' },
-  textSent: { color: '#16a34a' },
-  badgePending: { backgroundColor: '#fef3c7' },
-  textPending: { color: '#d97706' },
-  badgeFailed: { backgroundColor: '#fee2e2' },
-  textFailed: { color: '#dc2626' },
-  statusBadgeText: { fontSize: 8.5, fontWeight: '800' },
+  metricNumber: { fontSize: 18, fontWeight: '800' },
+  metricLabel: { fontSize: 9.5, fontWeight: '700', color: '#64748b', marginTop: 1 },
+  filterSection: { paddingHorizontal: 16, paddingTop: 10 },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 38,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    gap: 8,
+  },
+  searchInput: { flex: 1, fontSize: 12, color: '#0f172a' },
+  statusChipsRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
+  statusChip: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 6,
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  statusChipActive: { backgroundColor: '#004b87', borderColor: '#004b87' },
+  statusChipText: { fontSize: 10, fontWeight: '700', color: '#64748b' },
+  statusChipTextActive: { color: '#ffffff' },
+  scrollContent: { padding: 16, paddingBottom: 110, gap: 10 },
+  loadingBox: { padding: 32, alignItems: 'center' },
+  loadingText: { fontSize: 11, color: '#64748b', marginTop: 8 },
+  emptyCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  emptyTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginTop: 8 },
+  emptySub: { fontSize: 11, color: '#64748b', textAlign: 'center', marginTop: 4, lineHeight: 15 },
+  logCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  logCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  recipientName: { fontSize: 12.5, fontWeight: '700', color: '#0f172a' },
+  recipientPhone: { fontSize: 10.5, color: '#64748b', marginTop: 1, fontFamily: 'monospace' },
+  statusPill: { paddingVertical: 2.5, paddingHorizontal: 7, borderRadius: 6, borderWidth: 1 },
+  statusPillText: { fontSize: 8.5, fontWeight: '800', letterSpacing: 0.3 },
+  messageBody: { fontSize: 11.5, color: '#334155', lineHeight: 16, marginVertical: 8 },
+  logCardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    paddingTop: 6,
+  },
+  timestampText: { fontSize: 9.5, color: '#94a3b8' },
   singleRetryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: '#e6f0fa',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    marginTop: 6,
-    gap: 4,
+    gap: 3,
+    backgroundColor: '#fee2e2',
+    paddingVertical: 3,
+    paddingHorizontal: 7,
+    borderRadius: 5,
   },
-  singleRetryText: { fontSize: 10, fontWeight: '700', color: '#004b87' },
+  singleRetryBtnText: { fontSize: 9.5, fontWeight: '700', color: '#dc2626' },
 });
 
 export default SmsLogsScreen;

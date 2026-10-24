@@ -2,6 +2,7 @@ import math
 from django.db import models
 from django.contrib.auth.hashers import make_password, check_password
 
+
 class AcademicYear(models.Model):
     id = models.BigAutoField(primary_key=True)
     code = models.CharField(max_length=20, unique=True, help_text="e.g., S.Y. 2026-2027")
@@ -23,32 +24,41 @@ class AcademicYear(models.Model):
         super().save(*args, **kwargs)
 
 
+
 class SchoolProfile(models.Model):
+    # 1. School Hierarchy & Identification
     school_id = models.CharField(max_length=50, unique=True, help_text="Official DepEd School ID")
     school_name = models.CharField(max_length=255)
     region = models.CharField(max_length=100, blank=True, default='')
     division = models.CharField(max_length=100, blank=True, default='')
     district = models.CharField(max_length=100, blank=True, default='')
-    address = models.TextField(blank=True, default='')
-    contact_number = models.CharField(max_length=50, blank=True, default='')
-    email = models.EmailField(blank=True, default='')
+    academic_year = models.CharField(max_length=20, blank=True, default='2026-2027', help_text="Active School Year (e.g., 2026-2027)")
 
+    # 2. Official DepEd Document Footer & Contact Details
+    address = models.TextField(blank=True, default='', help_text="Complete physical school address for document footers")
+    contact_number = models.CharField(max_length=50, blank=True, default='', help_text="Official telephone or mobile numbers")
+    email = models.EmailField(blank=True, default='', help_text="Official DepEd institutional email")
+    website = models.URLField(max_length=200, blank=True, default='', help_text="Official school or division website URL")
+
+    # 3. School Leadership & Division Administration
     principal_faculty = models.ForeignKey(
-        'academics.FacultyProfile',
+        'FacultyProfile',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='schools_as_principal',
         help_text="Faculty member serving as School Head / Principal"
     )
-
     principal_name = models.CharField(max_length=255, blank=True, default='')
     principal_title = models.CharField(max_length=150, blank=True, default='Secondary School Principal IV')
+    superintendent_name = models.CharField(max_length=255, blank=True, default='', help_text="Schools Division Superintendent (SDS)")
 
-    school_logo = models.TextField(blank=True, null=True)
-    left_logo = models.TextField(blank=True, null=True)
-    right_logo = models.TextField(blank=True, null=True)
+    # 4. DMOS Seals & Logos
+    school_logo = models.TextField(blank=True, null=True, help_text="Primary school emblem (Base64 data URI)")
+    left_logo = models.TextField(blank=True, null=True, help_text="Left letterhead seal (DepEd / Kagawaran Seal)")
+    right_logo = models.TextField(blank=True, null=True, help_text="Right letterhead seal (Division / School Seal)")
 
+    # 5. IoT & Campus GPS Geofence Security
     latitude = models.DecimalField(max_digits=10, decimal_places=7, default=8.4858000)
     longitude = models.DecimalField(max_digits=10, decimal_places=7, default=124.6567000)
     geofence_radius_meters = models.IntegerField(default=150)
@@ -69,6 +79,10 @@ class SchoolProfile(models.Model):
         super().save(*args, **kwargs)
 
     def calculate_distance_meters(self, user_lat, user_lon) -> float:
+        """
+        Anti-Spoofing / Haversine Formula:
+        Calculates physical distance in meters between user GPS and campus center.
+        """
         try:
             u_lat = float(user_lat)
             u_lon = float(user_lon)
@@ -77,7 +91,7 @@ class SchoolProfile(models.Model):
         except (TypeError, ValueError):
             return float('inf')
 
-        r = 6371000
+        r = 6371000  # Earth's radius in meters
         phi1 = math.radians(c_lat)
         phi2 = math.radians(u_lat)
         delta_phi = math.radians(u_lat - c_lat)
@@ -90,7 +104,6 @@ class SchoolProfile(models.Model):
 
     def __str__(self):
         return f"{self.school_name} ({self.school_id})"
-
 
 class ClassSchedule(models.Model):
     id = models.BigAutoField(primary_key=True)

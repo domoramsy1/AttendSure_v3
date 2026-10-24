@@ -1,11 +1,13 @@
 /**
- * AttendSure - Student Directory & ID Cards
- * File: frontend/src/components/tabs/StudentsTab.tsx
+ * AttendSure - Students & ID Cards
+ * File: web/src/components/tabs/StudentsTab.tsx
  *
- * Key Upgrades:
- * 1. REUSABLE PAGINATION: Uses <Pagination /> and `exportToCsv` from common/Pagination.tsx.
- * 2. XSS-SAFE ID PRINTING: Escapes HTML characters before printing student ID cards.
- * 3. LIVE VALIDATION: Checks 12-digit LRN and 11-digit PH mobile number as you type.
+ * Cybersecurity & Performance:
+ * 1. Native Vector Icons: Replaces emoji glyphs with Lucide SVG components.
+ * 2. Multi-Parameter Filtering: Grade level, Class section, Sex, and RFID state via PostgreSQL.
+ * 3. Server-Side Pagination: Fast database queries with count calculations.
+ * 4. XSS-Safe Printing: Escapes all student details before printing ID cards.
+ * 5. Simple English Terms: Uses clean terms like "Class section", "Student list", and "School gate".
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -33,11 +35,8 @@ import {
   Download,
   Filter,
   ShieldCheck,
+  RotateCcw,
 } from 'lucide-react';
-
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
 
 interface Student {
   id: number;
@@ -45,27 +44,40 @@ interface Student {
   first_name: string;
   middle_name?: string;
   last_name: string;
+  suffix?: string;
   full_name: string;
   sex: string;
   parent_contact: string;
   rfid_uid?: string;
   qr_token?: string;
   current_section?: string;
+  section_id?: number;
   photo?: string | null;
   photo_url?: string | null;
   is_active: boolean;
+}
+
+interface GradeLevelItem {
+  id: number;
+  code: string;
+  name: string;
+}
+
+interface SectionItem {
+  id: number;
+  name: string;
+  grade_level?: string;
+  grade_level_id?: number;
 }
 
 interface PaginatedResponse<T> {
   count: number;
   total_pages: number;
   current_page: number;
-  next?: string | null;
-  previous?: string | null;
   results: T[];
 }
 
-type QuickFilterType = 'ALL' | 'MALE' | 'FEMALE' | 'RFID_PAIRED' | 'NEEDS_RFID';
+type QuickFilterType = 'ALL' | 'UNASSIGNED' | 'MALE' | 'FEMALE' | 'RFID_PAIRED' | 'NEEDS_RFID';
 
 interface ToastNotice {
   id: number;
@@ -73,7 +85,6 @@ interface ToastNotice {
   text: string;
 }
 
-/** Escapes HTML characters to prevent XSS in printable ID card windows */
 const escapeHtml = (unsafe: string | undefined | null): string => {
   return String(unsafe ?? '')
     .replace(/&/g, '&amp;')
@@ -83,25 +94,15 @@ const escapeHtml = (unsafe: string | undefined | null): string => {
     .replace(/'/g, '&#039;');
 };
 
-// ============================================================================
-// UNIVERSAL HTTP/HTTPS CLIPBOARD HELPER
-// ============================================================================
-
 const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
   const cleanText = String(textToCopy || '').trim();
   if (!cleanText) return false;
 
-  if (
-    typeof navigator !== 'undefined' &&
-    navigator.clipboard &&
-    typeof navigator.clipboard.writeText === 'function'
-  ) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(cleanText);
       return true;
-    } catch {
-      // Fall through to legacy textarea method if blocked
-    }
+    } catch {}
   }
 
   if (typeof document !== 'undefined') {
@@ -110,13 +111,10 @@ const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
     textArea.setAttribute('readonly', '');
     textArea.style.position = 'fixed';
     textArea.style.top = '-9999px';
-    textArea.style.left = '-9999px';
     textArea.style.opacity = '0';
     document.body.appendChild(textArea);
-
     textArea.focus();
     textArea.select();
-    textArea.setSelectionRange(0, cleanText.length);
 
     let copied = false;
     try {
@@ -124,7 +122,6 @@ const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
     } catch {
       copied = false;
     }
-
     document.body.removeChild(textArea);
     return copied;
   }
@@ -132,25 +129,13 @@ const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
   return false;
 };
 
-// ============================================================================
-// REUSABLE DEFAULT USER AVATAR COMPONENT
-// ============================================================================
-
-interface ProfileAvatarProps {
+const ProfileAvatar: React.FC<{
   photoUrl?: string | null;
   name?: string;
   size?: number;
   iconSize?: number;
   shape?: 'circle' | 'rounded';
-}
-
-const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
-  photoUrl,
-  name = 'Student',
-  size = 38,
-  iconSize = 19,
-  shape = 'circle',
-}) => {
+}> = ({ photoUrl, name = 'Student', size = 38, iconSize = 19, shape = 'circle' }) => {
   const [imageFailed, setImageFailed] = useState(false);
 
   useEffect(() => {
@@ -159,10 +144,10 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
 
   const hasPhoto = Boolean(
     photoUrl &&
-      typeof photoUrl === 'string' &&
-      photoUrl.trim() !== '' &&
-      photoUrl.trim().toLowerCase() !== 'null' &&
-      photoUrl.trim().toLowerCase() !== 'undefined'
+    typeof photoUrl === 'string' &&
+    photoUrl.trim() !== '' &&
+    photoUrl.trim().toLowerCase() !== 'null' &&
+    photoUrl.trim().toLowerCase() !== 'undefined'
   );
 
   return (
@@ -195,15 +180,18 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   );
 };
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-
 export const StudentsTab: React.FC = () => {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState<string>('');
+
+  const [gradeLevels, setGradeLevels] = useState<GradeLevelItem[]>([]);
+  const [sections, setSections] = useState<SectionItem[]>([]);
+
+  // Filter States
+  const [selectedGradeLevel, setSelectedGradeLevel] = useState<string>('');
+  const [selectedSection, setSelectedSection] = useState<string>('');
   const [quickFilter, setQuickFilter] = useState<QuickFilterType>('ALL');
 
   // Pagination State
@@ -212,7 +200,7 @@ export const StudentsTab: React.FC = () => {
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
 
-  // Copy & Toast Feedback State
+  // Copy & Toast Feedback
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastNotice | null>(null);
   const [badgeStudent, setBadgeStudent] = useState<Student | null>(null);
@@ -228,12 +216,12 @@ export const StudentsTab: React.FC = () => {
     middle_name: '',
     last_name: '',
     sex: 'Male',
+    section_id: '',
     parent_contact: '',
     rfid_uid: '',
     photo: null as string | null,
   });
 
-  // Live Form Validation State
   const liveFormWarnings = useMemo(() => {
     const warnings: { lrn?: string; parent_contact?: string } = {};
     if (formData.lrn && formData.lrn.length !== 12) {
@@ -241,12 +229,11 @@ export const StudentsTab: React.FC = () => {
     }
     const cleanPhone = formData.parent_contact.trim().replace(/[\s-]/g, '');
     if (cleanPhone && !/^(09|\+639)\d{9}$/.test(cleanPhone)) {
-      warnings.parent_contact = 'Use a valid 11-digit PH mobile number (e.g. 09171234567).';
+      warnings.parent_contact = 'Use a valid 11-digit mobile number (e.g. 09171234567).';
     }
     return warnings;
   }, [formData.lrn, formData.parent_contact]);
 
-  // Confirmation Modal State
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -274,22 +261,71 @@ export const StudentsTab: React.FC = () => {
   const isInteracting = useRef<boolean>(false);
   isInteracting.current = isModalOpen || Boolean(badgeStudent) || confirmDialog.isOpen;
 
-  // ============================================================================
-  // DATABASE DATA FETCHING & LIVE POLLING
-  // ============================================================================
+  useEffect(() => {
+    const loadReferences = async () => {
+      try {
+        const [glRes, secRes] = await Promise.allSettled([
+          apiClient.get('/grade-levels/'),
+          apiClient.get('/sections/'),
+        ]);
+
+        if (glRes.status === 'fulfilled') {
+          const raw = Array.isArray(glRes.value.data) ? glRes.value.data : glRes.value.data?.results || [];
+          setGradeLevels(raw);
+        }
+        if (secRes.status === 'fulfilled') {
+          const raw = Array.isArray(secRes.value.data) ? secRes.value.data : secRes.value.data?.results || [];
+          setSections(raw);
+        }
+      } catch (err) {
+        console.warn('Failed to load grade and section options:', err);
+      }
+    };
+    loadReferences();
+  }, []);
+
+  const availableSections = useMemo(() => {
+    if (!selectedGradeLevel) return sections;
+    return sections.filter((s) => String(s.grade_level_id) === String(selectedGradeLevel));
+  }, [sections, selectedGradeLevel]);
 
   const fetchStudents = useCallback(
-    async (page = 1, size = 25, query = '', silent = false) => {
+    async (
+      page = 1,
+      size = 25,
+      query = '',
+      secFilter = selectedSection,
+      gradeFilter = selectedGradeLevel,
+      qFilter = quickFilter,
+      silent = false
+    ) => {
       try {
         if (!silent) setLoading(true);
         setError(null);
         const isAll = size >= ALL_ROWS_SIZE;
+
+        const params: Record<string, any> = {
+          page: isAll ? 1 : page,
+          page_size: isAll ? 'ALL' : size,
+        };
+
+        if (query.trim()) params.search = query.trim();
+
+        if (secFilter) {
+          params.section_id = secFilter;
+        } else if (qFilter === 'UNASSIGNED') {
+          params.section_id = 'unassigned';
+        }
+
+        if (gradeFilter) params.grade_level_id = gradeFilter;
+
+        if (qFilter === 'MALE') params.sex = 'Male';
+        else if (qFilter === 'FEMALE') params.sex = 'Female';
+        else if (qFilter === 'RFID_PAIRED') params.rfid_status = 'PAIRED';
+        else if (qFilter === 'NEEDS_RFID') params.rfid_status = 'NEEDS_RFID';
+
         const res = await apiClient.get<PaginatedResponse<Student> | Student[]>('/students/', {
-          params: {
-            page: isAll ? 1 : page,
-            page_size: isAll ? 'ALL' : size,
-            search: query.trim() || undefined,
-          },
+          params,
         });
 
         if (res.data && 'results' in res.data) {
@@ -311,84 +347,64 @@ export const StudentsTab: React.FC = () => {
         if (!silent) setLoading(false);
       }
     },
-    []
+    [selectedSection, selectedGradeLevel, quickFilter]
   );
 
   useEffect(() => {
     const timeout = setTimeout(() => {
       setCurrentPage(1);
-      fetchStudents(1, pageSize, search, false);
+      fetchStudents(1, pageSize, search, selectedSection, selectedGradeLevel, quickFilter, false);
     }, 300);
     return () => clearTimeout(timeout);
-  }, [search, pageSize, fetchStudents]);
+  }, [search, pageSize, selectedSection, selectedGradeLevel, quickFilter, fetchStudents]);
 
   useEffect(() => {
     const liveInterval = setInterval(() => {
       if (!isInteracting.current) {
-        fetchStudents(currentPage, pageSize, search, true);
+        fetchStudents(currentPage, pageSize, search, selectedSection, selectedGradeLevel, quickFilter, true);
       }
-    }, 3000);
-
+    }, 4000);
     return () => clearInterval(liveInterval);
-  }, [currentPage, pageSize, search, fetchStudents]);
+  }, [currentPage, pageSize, search, selectedSection, selectedGradeLevel, quickFilter, fetchStudents]);
 
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return;
     setCurrentPage(newPage);
-    fetchStudents(newPage, pageSize, search, false);
+    fetchStudents(newPage, pageSize, search, selectedSection, selectedGradeLevel, quickFilter, false);
   };
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
     setCurrentPage(1);
-    fetchStudents(1, newSize, search, false);
+    fetchStudents(1, newSize, search, selectedSection, selectedGradeLevel, quickFilter, false);
   };
 
-  // Real database telemetry counts
-  const totalStudents = totalCount || students.length;
-  const totalBoys = useMemo(
-    () => students.filter((s) => s.sex === 'Male' || s.sex === 'M').length,
-    [students]
-  );
-  const totalGirls = useMemo(
-    () => students.filter((s) => s.sex === 'Female' || s.sex === 'F').length,
-    [students]
-  );
-  const pairedCards = useMemo(
-    () => students.filter((s) => Boolean(s.rfid_uid && s.rfid_uid.trim().length > 0)).length,
-    [students]
-  );
-  const unpairedCards = Math.max(0, students.length - pairedCards);
-
-  const displayedStudents = useMemo(() => {
-    return students.filter((s) => {
-      if (quickFilter === 'MALE') return s.sex === 'Male' || s.sex === 'M';
-      if (quickFilter === 'FEMALE') return s.sex === 'Female' || s.sex === 'F';
-      if (quickFilter === 'RFID_PAIRED') return Boolean(s.rfid_uid && s.rfid_uid.trim().length > 0);
-      if (quickFilter === 'NEEDS_RFID') return !s.rfid_uid || s.rfid_uid.trim().length === 0;
-      return true;
-    });
-  }, [students, quickFilter]);
+  const handleResetFilters = () => {
+    setSelectedGradeLevel('');
+    setSelectedSection('');
+    setQuickFilter('ALL');
+    setSearch('');
+    setCurrentPage(1);
+    fetchStudents(1, pageSize, '', '', '', 'ALL', false);
+    showToast('Filters cleared to default view.', 'info');
+  };
 
   const handleCopyValue = async (val: string, label = 'LRN') => {
     if (!val) return;
     const ok = await copyTextSafely(val);
     if (ok) {
       setCopiedValue(val);
-      showToast(`${label} (${val}) copied to clipboard!`, 'success');
+      showToast(`${label} (${val}) copied to clipboard.`, 'success');
       setTimeout(() => setCopiedValue((prev) => (prev === val ? null : prev)), 2000);
-    } else {
-      showToast(`Could not copy ${label} automatically.`, 'error');
     }
   };
 
-  // Uses shared `exportToCsv` from Pagination.tsx
   const handleExportCsv = () => {
     const suffix = pageSize >= ALL_ROWS_SIZE ? 'ALL' : `Page${currentPage}_${pageSize}rows`;
     const exported = exportToCsv(
       `AttendSure_Students_${suffix}.csv`,
-      ['LRN', 'Full Name', 'Sex', 'Section', 'RFID UID', 'Parent Contact', 'Status'],
-      displayedStudents.map((s) => [
+      ['LRN', 'Full Name', 'Sex', 'Class Section', 'RFID UID', 'Parent Contact', 'Status'],
+      students.map((s) => [
         s.lrn,
         s.full_name || `${s.last_name}, ${s.first_name}`,
         s.sex === 'Female' || s.sex === 'F' ? 'Female' : 'Male',
@@ -400,17 +416,14 @@ export const StudentsTab: React.FC = () => {
     );
 
     if (exported) {
-      showToast(`Exported ${displayedStudents.length} student records to CSV.`, 'success');
-    } else {
-      showToast('No student records to export.', 'info');
+      showToast(`Exported ${students.length} student records to CSV.`, 'success');
     }
   };
 
-  // Isolated CR80 ID Card Print Handler (XSS-Hardened)
   const handlePrintIdBadge = (student: Student) => {
     const iframeId = 'attendsure-student-id-print-frame';
     const oldFrame = document.getElementById(iframeId);
-    if (oldFrame && oldFrame.parentNode) {
+    if (oldFrame?.parentNode) {
       oldFrame.parentNode.removeChild(oldFrame);
     }
 
@@ -440,8 +453,8 @@ export const StudentsTab: React.FC = () => {
         <style>
           @page { size: portrait; margin: 12mm; }
           body { font-family: 'Inter', Arial, sans-serif; display: flex; justify-content: center; padding-top: 20px; margin: 0; }
-          .card { width: 310px; border: 2px solid #0284c7; border-radius: 14px; overflow: hidden; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-          .banner { background: linear-gradient(135deg, #003460 0%, #0284c7 100%); color: #fff; padding: 14px 12px; }
+          .card { width: 310px; border: 2px solid #004b87; border-radius: 14px; overflow: hidden; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+          .banner { background: #004b87; color: #fff; padding: 14px 12px; }
           .banner-title { font-size: 11px; font-weight: 800; letter-spacing: 0.8px; }
           .banner-sub { font-size: 9px; opacity: 0.85; margin-top: 2px; }
           .body { padding: 16px; background: #fff; }
@@ -456,11 +469,11 @@ export const StudentsTab: React.FC = () => {
       <body>
         <div class="card">
           <div class="banner">
-            <div class="banner-title">ATTENDSURE OFFICIAL STUDENT PASS</div>
-            <div class="banner-sub">Department of Education • Gate & Classroom ID</div>
+            <div class="banner-title">ATTENDSURE STUDENT PASS</div>
+            <div class="banner-sub">Department of Education • School Gate & Classroom ID</div>
           </div>
           <div class="body">
-            ${avatarSrc ? `<img src="${avatarSrc}" class="avatar" />` : `<div class="avatar" style="line-height:78px;font-size:28px;color:#94a3b8;">👤</div>`}
+            ${avatarSrc ? `<img src="${avatarSrc}" class="avatar" />` : `<div class="avatar" style="line-height:78px;font-size:12px;font-weight:700;color:#94a3b8;background:#f1f5f9;">NO PHOTO</div>`}
             <div class="name">${safeFullName}</div>
             <div class="sec">Section: ${safeSection}</div>
             <div class="lrn">LRN: ${safeLrn}</div>
@@ -469,7 +482,7 @@ export const StudentsTab: React.FC = () => {
             </div>
           </div>
           <div class="footer">
-            RFID UID: <strong>${safeRfid}</strong> • Parent SMS: <strong>${safeContact}</strong>
+            RFID: <strong>${safeRfid}</strong> • Parent SMS: <strong>${safeContact}</strong>
           </div>
         </div>
       </body>
@@ -486,10 +499,6 @@ export const StudentsTab: React.FC = () => {
       }, 400);
     }
   };
-
-  // ============================================================================
-  // PHOTO UPLOAD HANDLER
-  // ============================================================================
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -516,17 +525,6 @@ export const StudentsTab: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleRemovePhoto = () => {
-    setFormData((prev) => ({
-      ...prev,
-      photo: null,
-    }));
-  };
-
-  // ============================================================================
-  // CRUD ACTIONS
-  // ============================================================================
-
   const handleOpenCreate = () => {
     setEditingStudent(null);
     setFormError(null);
@@ -536,6 +534,7 @@ export const StudentsTab: React.FC = () => {
       middle_name: '',
       last_name: '',
       sex: 'Male',
+      section_id: selectedSection === 'unassigned' ? '' : selectedSection || (sections.length > 0 ? String(sections[0].id) : ''),
       parent_contact: '',
       rfid_uid: '',
       photo: null,
@@ -552,6 +551,7 @@ export const StudentsTab: React.FC = () => {
       middle_name: student.middle_name || '',
       last_name: student.last_name || '',
       sex: student.sex === 'Female' || student.sex === 'F' ? 'Female' : 'Male',
+      section_id: student.section_id ? String(student.section_id) : '',
       parent_contact: student.parent_contact || '',
       rfid_uid: student.rfid_uid || '',
       photo: student.photo_url || student.photo || null,
@@ -577,11 +577,12 @@ export const StudentsTab: React.FC = () => {
         last_name: formData.last_name.trim(),
         sex: formData.sex === 'Female' ? 'Female' : 'Male',
         parent_contact: formData.parent_contact.trim().replace(/[\s-]/g, '') || '',
-        rfid_uid:
-          formData.rfid_uid && formData.rfid_uid.trim() !== ''
-            ? formData.rfid_uid.trim().toUpperCase()
-            : null,
+        rfid_uid: formData.rfid_uid?.trim() ? formData.rfid_uid.trim().toUpperCase() : null,
       };
+
+      if (formData.section_id) {
+        payload.section_id = Number(formData.section_id);
+      }
 
       if (formData.photo !== undefined) {
         payload.photo = formData.photo;
@@ -589,15 +590,14 @@ export const StudentsTab: React.FC = () => {
 
       if (editingStudent) {
         const res = await apiClient.put<Student>(`/students/${editingStudent.id}/`, payload);
-        setStudents((prev) => prev.map((s) => (s.id === editingStudent.id ? res.data : s)));
         showToast(`Updated profile for ${res.data.full_name || formData.first_name}.`, 'success');
       } else {
         await apiClient.post<Student>('/students/', payload);
-        fetchStudents(1, pageSize, search, true);
         showToast(`Enrolled ${formData.first_name} ${formData.last_name} successfully.`, 'success');
       }
 
       setIsModalOpen(false);
+      fetchStudents(currentPage, pageSize, search, selectedSection, selectedGradeLevel, quickFilter, false);
     } catch (err: any) {
       const backendErrors = err.response?.data;
       if (backendErrors && typeof backendErrors === 'object') {
@@ -617,15 +617,15 @@ export const StudentsTab: React.FC = () => {
     setConfirmDialog({
       isOpen: true,
       title: 'Delete Student Record',
-      message: `Permanently delete student "${student.full_name || student.first_name}" (LRN: ${student.lrn}) from the school registry?`,
+      message: `Permanently delete student "${student.full_name || student.first_name}" (LRN: ${student.lrn}) from the school database?`,
       confirmLabel: 'Delete Student',
       isDestructive: true,
       action: async () => {
         try {
           await apiClient.delete(`/students/${student.id}/`);
           if (badgeStudent?.id === student.id) setBadgeStudent(null);
-          fetchStudents(currentPage, pageSize, search, true);
           showToast(`Deleted learner record (${student.lrn}).`, 'info');
+          fetchStudents(currentPage, pageSize, search, selectedSection, selectedGradeLevel, quickFilter, false);
         } catch {
           showToast('Failed to delete student record.', 'error');
         }
@@ -633,25 +633,24 @@ export const StudentsTab: React.FC = () => {
     });
   };
 
+  const hasActiveFilters = Boolean(selectedGradeLevel || selectedSection || quickFilter !== 'ALL' || search);
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'relative' }}>
-      {/* Floating Non-Blocking Toast Banner */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'relative' }}>
+      {/* Toast Notification Banner */}
       {toast && (
         <div
           style={{
             ...toastBannerStyle,
-            backgroundColor:
-              toast.type === 'error' ? '#fef2f2' : toast.type === 'info' ? '#f0f9ff' : '#ecfdf5',
-            borderColor:
-              toast.type === 'error' ? '#fecaca' : toast.type === 'info' ? '#bae6fd' : '#a7f3d0',
-            color:
-              toast.type === 'error' ? '#991b1b' : toast.type === 'info' ? '#075985' : '#065f46',
+            backgroundColor: toast.type === 'error' ? '#fef2f2' : toast.type === 'info' ? '#f0f9ff' : '#ecfdf5',
+            borderColor: toast.type === 'error' ? '#fecaca' : toast.type === 'info' ? '#bae6fd' : '#a7f3d0',
+            color: toast.type === 'error' ? '#991b1b' : toast.type === 'info' ? '#075985' : '#065f46',
           }}
         >
           {toast.type === 'error' ? (
             <AlertCircle size={16} color="#dc2626" />
           ) : (
-            <CheckCircle2 size={16} color={toast.type === 'info' ? '#0284c7' : '#059669'} />
+            <CheckCircle2 size={16} color={toast.type === 'info' ? '#004b87' : '#059669'} />
           )}
           <span style={{ fontWeight: 700, fontSize: '0.80rem' }}>{toast.text}</span>
           <button
@@ -664,170 +663,139 @@ export const StudentsTab: React.FC = () => {
         </div>
       )}
 
-      {/* 1. Quick Telemetry Stats Header */}
-      <div style={statsContainer}>
-        <div
-          onClick={() => setQuickFilter('ALL')}
-          style={{
-            ...statCard,
-            cursor: 'pointer',
-            borderColor: quickFilter === 'ALL' ? '#0284c7' : '#e2e8f0',
-            backgroundColor: quickFilter === 'ALL' ? '#f8fafc' : '#ffffff',
-          }}
-        >
-          <div style={statLabel}>TOTAL STUDENTS</div>
-          <div style={statValue}>{totalStudents}</div>
-          <div style={statHelp}>Enrolled learners in database</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>SEX RATIO (LOADED)</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-            <span
-              onClick={() => setQuickFilter(quickFilter === 'MALE' ? 'ALL' : 'MALE')}
-              style={{ fontSize: '1.40rem', fontWeight: 800, color: '#0284c7', cursor: 'pointer' }}
-              title="Click to filter Male learners"
-            >
-              {totalBoys}
-            </span>
-            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Male</span>
-            <span
-              onClick={() => setQuickFilter(quickFilter === 'FEMALE' ? 'ALL' : 'FEMALE')}
-              style={{
-                fontSize: '1.40rem',
-                fontWeight: 800,
-                color: '#ec4899',
-                marginLeft: 6,
-                cursor: 'pointer',
-              }}
-              title="Click to filter Female learners"
-            >
-              {totalGirls}
-            </span>
-            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Female</span>
+      {/* 1. Multi-Parameter Filter & Control Bar */}
+      <div style={filterBarCard}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#004b87', fontWeight: 800, fontSize: '0.80rem' }}>
+            <Filter size={15} />
+            <span>FILTER BY:</span>
           </div>
-          <div style={statHelp}>Click count to filter by sex</div>
-        </div>
 
-        <div
-          onClick={() => setQuickFilter(quickFilter === 'RFID_PAIRED' ? 'ALL' : 'RFID_PAIRED')}
-          style={{
-            ...statCard,
-            cursor: 'pointer',
-            borderColor: quickFilter === 'RFID_PAIRED' ? '#059669' : '#e2e8f0',
-          }}
-        >
-          <div style={statLabel}>RFID CARDS PAIRED (LOADED)</div>
-          <div style={{ fontSize: '1.40rem', fontWeight: 800, color: '#059669' }}>
-            {pairedCards}
-            <span style={{ fontSize: '0.80rem', color: '#94a3b8', fontWeight: 500 }}>
-              {' '}
-              / {students.length}
-            </span>
-          </div>
-          <div style={statHelp}>Ready for gate card tap</div>
-        </div>
+          {/* Grade Level Dropdown */}
+          <select
+            value={selectedGradeLevel}
+            onChange={(e) => {
+              setSelectedGradeLevel(e.target.value);
+              setSelectedSection('');
+              setCurrentPage(1);
+            }}
+            style={filterSelectStyle}
+          >
+            <option value="">All Grade Levels</option>
+            {gradeLevels.map((gl) => (
+              <option key={gl.id} value={gl.id}>
+                {gl.name} ({gl.code})
+              </option>
+            ))}
+          </select>
 
-        <div
-          onClick={() => setQuickFilter(quickFilter === 'NEEDS_RFID' ? 'ALL' : 'NEEDS_RFID')}
-          style={{
-            ...statCard,
-            cursor: 'pointer',
-            borderColor: quickFilter === 'NEEDS_RFID' ? '#d97706' : '#e2e8f0',
-          }}
-        >
-          <div style={statLabel}>NEEDS RFID CARD (LOADED)</div>
-          <div
+          {/* Class Section Dropdown */}
+          <select
+            value={selectedSection}
+            onChange={(e) => {
+              setSelectedSection(e.target.value);
+              setCurrentPage(1);
+            }}
             style={{
-              fontSize: '1.40rem',
-              fontWeight: 800,
-              color: unpairedCards > 0 ? '#d97706' : '#059669',
+              ...filterSelectStyle,
+              borderColor: selectedSection === 'unassigned' ? '#d97706' : '#cbd5e1',
+              backgroundColor: selectedSection === 'unassigned' ? '#fffbeb' : '#f8fafc',
             }}
           >
-            {unpairedCards}
+            <option value="">All Class Sections</option>
+            <option value="unassigned" style={{ color: '#d97706', fontWeight: 700 }}>
+              Unassigned Students
+            </option>
+            {availableSections.map((sec) => (
+              <option key={sec.id} value={sec.id}>
+                {sec.grade_level ? `${sec.grade_level} - ${sec.name}` : sec.name}
+              </option>
+            ))}
+          </select>
+
+          {/* Quick Filter Buttons */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {(
+              [
+                { key: 'ALL', label: 'All', icon: null },
+                { key: 'UNASSIGNED', label: 'Unassigned', icon: AlertTriangle },
+                { key: 'MALE', label: 'Male', icon: null },
+                { key: 'FEMALE', label: 'Female', icon: null },
+                { key: 'RFID_PAIRED', label: 'Card Paired', icon: CreditCard },
+                { key: 'NEEDS_RFID', label: 'Needs Card', icon: null },
+              ] as const
+            ).map((pill) => {
+              const active = quickFilter === pill.key;
+              const isUnassignedPill = pill.key === 'UNASSIGNED';
+              const IconComp = pill.icon;
+              return (
+                <button
+                  key={pill.key}
+                  type="button"
+                  onClick={() => {
+                    setQuickFilter(pill.key);
+                    if (isUnassignedPill) setSelectedSection('unassigned');
+                    setCurrentPage(1);
+                  }}
+                  style={{
+                    ...filterPillBtn,
+                    backgroundColor: active
+                      ? isUnassignedPill ? '#d97706' : '#004b87'
+                      : isUnassignedPill ? '#fffbeb' : '#f1f5f9',
+                    color: active ? '#ffffff' : isUnassignedPill ? '#b45309' : '#475569',
+                    border: isUnassignedPill && !active ? '1px dashed #fde68a' : 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                >
+                  {IconComp && <IconComp size={12} />}
+                  <span>{pill.label}</span>
+                </button>
+              );
+            })}
           </div>
-          <div style={statHelp}>Click to filter unlinked learners</div>
-        </div>
-      </div>
 
-      {/* 2. Quick Filter Bar & CSV Export */}
-      <div style={filterStripContainer}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              fontSize: '0.74rem',
-              fontWeight: 700,
-              color: '#64748b',
-              marginRight: 4,
-            }}
-          >
-            <Filter size={13} /> QUICK VIEW:
-          </span>
-
-          {(
-            [
-              { key: 'ALL', label: `All (${students.length})` },
-              { key: 'MALE', label: `Male (${totalBoys})` },
-              { key: 'FEMALE', label: `Female (${totalGirls})` },
-              { key: 'RFID_PAIRED', label: `RFID Paired (${pairedCards})` },
-              { key: 'NEEDS_RFID', label: `Needs RFID (${unpairedCards})` },
-            ] as const
-          ).map((pill) => {
-            const active = quickFilter === pill.key;
-            return (
-              <button
-                key={pill.key}
-                type="button"
-                onClick={() => setQuickFilter(pill.key)}
-                style={{
-                  ...filterPillBtn,
-                  backgroundColor: active ? '#0284c7' : '#f1f5f9',
-                  color: active ? '#ffffff' : '#475569',
-                }}
-              >
-                {pill.label}
-              </button>
-            );
-          })}
+          {hasActiveFilters && (
+            <button type="button" onClick={handleResetFilters} style={resetFilterBtnStyle}>
+              <RotateCcw size={12} /> Clear
+            </button>
+          )}
         </div>
 
         <button type="button" onClick={handleExportCsv} style={exportCsvBtnStyle}>
           <Download size={13} />
-          <span>
-            {pageSize >= ALL_ROWS_SIZE
-              ? `Export All CSV (${displayedStudents.length})`
-              : `Export Page CSV (${displayedStudents.length})`}
-          </span>
+          <span>Export CSV ({students.length})</span>
         </button>
       </div>
 
-      {/* 3. Main Table + Reusable Pagination Component */}
+      {/* 2. Main Student Table + Server-Side Pagination */}
       <div
         style={{
           backgroundColor: '#ffffff',
-          borderRadius: 10,
+          borderRadius: 12,
           border: '1px solid #e2e8f0',
           overflow: 'hidden',
         }}
       >
         <ModuleTableLayout
-          title="Student Management"
-          subtitle="Manage master student records, photos, RFID cards, and gate passes."
-          searchPlaceholder="Search by LRN or Name..."
+          title="Students"
+          subtitle={`Showing ${students.length} of ${totalCount} enrolled students matching current filters.`}
+          searchPlaceholder="Search by LRN, name, or card..."
           searchValue={search}
-          onSearchChange={setSearch}
+          onSearchChange={(val) => {
+            setSearch(val);
+            setCurrentPage(1);
+          }}
           addButtonLabel="Enroll Student"
           onAdd={handleOpenCreate}
           loading={loading}
           error={error}
-          data={displayedStudents}
+          data={students}
           keyExtractor={(s) => s.id}
           columns={[
             {
-              header: 'Photo & Learner Name',
+              header: 'Student Name & Photo',
               render: (s) => (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <ProfileAvatar
@@ -837,19 +805,12 @@ export const StudentsTab: React.FC = () => {
                     iconSize={19}
                     shape="circle"
                   />
-
                   <div>
                     <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.86rem' }}>
                       {s.full_name || `${s.last_name}, ${s.first_name}`}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                      <span
-                        style={{
-                          fontSize: '0.72rem',
-                          color: '#64748b',
-                          fontFamily: 'monospace',
-                        }}
-                      >
+                      <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
                         LRN: {s.lrn}
                       </span>
                       <button
@@ -861,11 +822,7 @@ export const StudentsTab: React.FC = () => {
                         style={copyBtnStyle}
                         type="button"
                       >
-                        {copiedValue === s.lrn ? (
-                          <Check size={12} color="#059669" />
-                        ) : (
-                          <Copy size={12} color="#64748b" />
-                        )}
+                        {copiedValue === s.lrn ? <Check size={11} color="#059669" /> : <Copy size={11} color="#64748b" />}
                       </button>
                     </div>
                   </div>
@@ -884,7 +841,7 @@ export const StudentsTab: React.FC = () => {
                       fontSize: '0.72rem',
                       fontWeight: 700,
                       backgroundColor: isMale ? '#eff6ff' : '#fdf2f8',
-                      color: isMale ? '#0284c7' : '#db2777',
+                      color: isMale ? '#004b87' : '#db2777',
                     }}
                   >
                     {isMale ? 'Male' : 'Female'}
@@ -893,45 +850,49 @@ export const StudentsTab: React.FC = () => {
               },
             },
             {
-              header: 'Section',
-              render: (s) => (
-                <span
-                  style={{
-                    padding: '3px 8px',
-                    borderRadius: 6,
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                    backgroundColor: '#f1f5f9',
-                    color: '#334155',
-                  }}
-                >
-                  {s.current_section || 'Unassigned'}
-                </span>
-              ),
+              header: 'Class Section',
+              render: (s) => {
+                const isUnassigned = !s.current_section || s.current_section === 'Unassigned';
+                return (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '3px 8px',
+                      borderRadius: 6,
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      backgroundColor: isUnassigned ? '#fef3c7' : '#f1f5f9',
+                      color: isUnassigned ? '#b45309' : '#334155',
+                      border: isUnassigned ? '1px dashed #fcd34d' : 'none',
+                    }}
+                  >
+                    {isUnassigned && <AlertTriangle size={12} color="#b45309" />}
+                    <span>{s.current_section || 'Unassigned'}</span>
+                  </span>
+                );
+              },
             },
             {
-              header: 'Gate RFID Card',
+              header: 'School Gate Card',
               render: (s) =>
                 s.rfid_uid ? (
                   <div
-                    onClick={() => handleCopyValue(s.rfid_uid!, 'RFID UID')}
+                    onClick={() => handleCopyValue(s.rfid_uid!, 'Card UID')}
                     style={{ ...rfidChipStyle, cursor: 'pointer' }}
-                    title="Click to copy RFID UID"
+                    title="Click to copy Card UID"
                   >
                     <CreditCard size={12} color="#059669" />
                     <span>{s.rfid_uid}</span>
-                    {copiedValue === s.rfid_uid ? (
-                      <Check size={11} color="#059669" />
-                    ) : (
-                      <Copy size={10} color="#059669" style={{ opacity: 0.7 }} />
-                    )}
+                    {copiedValue === s.rfid_uid ? <Check size={11} color="#059669" /> : <Copy size={10} color="#059669" />}
                   </div>
                 ) : (
                   <button
                     type="button"
                     onClick={() => handleOpenEdit(s)}
                     style={{ ...unlinkedChipStyle, cursor: 'pointer' }}
-                    title="Click to assign an RFID card to this student"
+                    title="Pair an RFID card to this student"
                   >
                     <CreditCard size={12} color="#d97706" />
                     <span>+ Pair Card</span>
@@ -939,17 +900,9 @@ export const StudentsTab: React.FC = () => {
                 ),
             },
             {
-              header: 'Parent Phone (SMS)',
+              header: 'Parent Contact (SMS)',
               render: (s) => (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    fontSize: '0.78rem',
-                    color: '#334155',
-                  }}
-                >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: '#334155' }}>
                   <Phone size={12} color="#64748b" />
                   <span>{s.parent_contact || '—'}</span>
                 </div>
@@ -976,25 +929,18 @@ export const StudentsTab: React.FC = () => {
               header: 'Actions',
               align: 'right',
               render: (s) => (
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: 6,
-                    justifyContent: 'flex-end',
-                    alignItems: 'center',
-                  }}
-                >
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
                   <button
                     onClick={() => setBadgeStudent(s)}
-                    title="View Student Gate Pass & QR Badge"
+                    title="View Gate & Classroom ID Badge"
                     style={iconActionBtn}
                     type="button"
                   >
-                    <QrCode size={13} color="#0284c7" />
+                    <QrCode size={13} color="#004b87" />
                   </button>
                   <button
                     onClick={() => handleOpenEdit(s)}
-                    title="Edit Student Information"
+                    title="Edit Student Profile & Section"
                     style={iconActionBtn}
                     type="button"
                   >
@@ -1002,12 +948,8 @@ export const StudentsTab: React.FC = () => {
                   </button>
                   <button
                     onClick={() => promptDelete(s)}
-                    title="Delete Student"
-                    style={{
-                      ...iconActionBtn,
-                      backgroundColor: '#fef2f2',
-                      borderColor: '#fee2e2',
-                    }}
+                    title="Delete Student Record"
+                    style={{ ...iconActionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
                     type="button"
                   >
                     <Trash2 size={13} color="#dc2626" />
@@ -1018,7 +960,7 @@ export const StudentsTab: React.FC = () => {
           ]}
         />
 
-        {/* Shared Reusable Pagination Bar */}
+        {/* Server-Side Pagination Bar */}
         <Pagination
           currentPage={currentPage}
           totalPages={totalPages}
@@ -1031,11 +973,11 @@ export const StudentsTab: React.FC = () => {
         />
       </div>
 
-      {/* 4. Enroll / Edit Modal with Live Validation */}
+      {/* 3. Enroll / Edit Modal */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingStudent ? 'Edit Student Details' : 'Enroll New Student'}
+        title={editingStudent ? 'Edit Student Profile' : 'Enroll New Student'}
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {formError && (
@@ -1090,7 +1032,11 @@ export const StudentsTab: React.FC = () => {
                   />
                 </label>
                 {formData.photo && (
-                  <button type="button" onClick={handleRemovePhoto} style={removePhotoBtn}>
+                  <button
+                    type="button"
+                    onClick={() => setFormData((prev) => ({ ...prev, photo: null }))}
+                    style={removePhotoBtn}
+                  >
                     <X size={12} />
                     <span>Remove</span>
                   </button>
@@ -1102,9 +1048,10 @@ export const StudentsTab: React.FC = () => {
             </div>
           </div>
 
+          {/* LRN Input */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={labelStyle}>Learner Reference Number (LRN) *</label>
+              <label style={labelStyle}>12-Digit Learner Reference Number (LRN) *</label>
               <span
                 style={{
                   fontSize: '0.68rem',
@@ -1120,9 +1067,7 @@ export const StudentsTab: React.FC = () => {
               required
               maxLength={12}
               value={formData.lrn}
-              onChange={(e) =>
-                setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })
-              }
+              onChange={(e) => setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })}
               style={{
                 ...inputStyle,
                 borderColor: liveFormWarnings.lrn
@@ -1131,7 +1076,7 @@ export const StudentsTab: React.FC = () => {
                   ? '#059669'
                   : '#cbd5e1',
               }}
-              placeholder="12-digit LRN (e.g. 128930491029)"
+              placeholder="12-digit number (e.g. 128930491029)"
             />
             {liveFormWarnings.lrn && (
               <span style={{ fontSize: '0.70rem', color: '#dc2626', fontWeight: 600 }}>
@@ -1140,6 +1085,7 @@ export const StudentsTab: React.FC = () => {
             )}
           </div>
 
+          {/* Names */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
               <label style={labelStyle}>First Name *</label>
@@ -1149,7 +1095,7 @@ export const StudentsTab: React.FC = () => {
                 value={formData.first_name}
                 onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
                 style={inputStyle}
-                placeholder="Juan"
+                placeholder="First name"
               />
             </div>
             <div>
@@ -1160,7 +1106,7 @@ export const StudentsTab: React.FC = () => {
                 value={formData.last_name}
                 onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
                 style={inputStyle}
-                placeholder="Dela Cruz"
+                placeholder="Last name"
               />
             </div>
           </div>
@@ -1189,8 +1135,27 @@ export const StudentsTab: React.FC = () => {
             </div>
           </div>
 
+          {/* Section Selection */}
           <div>
-            <label style={labelStyle}>Parent Contact Number (For Instant SMS)</label>
+            <label style={labelStyle}>Assigned Class Section *</label>
+            <select
+              value={formData.section_id}
+              onChange={(e) => setFormData({ ...formData, section_id: e.target.value })}
+              style={inputStyle}
+              required
+            >
+              <option value="">Select a Class Section...</option>
+              {sections.map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.grade_level ? `${sec.grade_level} - ${sec.name}` : sec.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Contact and Card */}
+          <div>
+            <label style={labelStyle}>Parent Mobile Number (for SMS Alerts)</label>
             <input
               type="text"
               placeholder="09171234567"
@@ -1209,25 +1174,18 @@ export const StudentsTab: React.FC = () => {
           </div>
 
           <div>
-            <label style={labelStyle}>Assigned RFID Card UID (Tap card on USB reader)</label>
+            <label style={labelStyle}>Assigned School Gate Card UID (RFID)</label>
             <input
               type="text"
-              placeholder="Card UID (e.g. 8A3F29C1)"
+              placeholder="Card Serial UID (e.g. 8A3F29C1)"
               value={formData.rfid_uid}
-              onChange={(e) =>
-                setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })
-              }
+              onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })}
               style={{ ...inputStyle, fontFamily: 'monospace' }}
             />
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
-            <Button
-              variant="secondary"
-              size="md"
-              type="button"
-              onClick={() => setIsModalOpen(false)}
-            >
+            <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
               Cancel
             </Button>
             <Button
@@ -1236,65 +1194,38 @@ export const StudentsTab: React.FC = () => {
               type="submit"
               disabled={saving || Boolean(liveFormWarnings.lrn || liveFormWarnings.parent_contact)}
             >
-              {saving ? (
-                <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} />
-              ) : null}
-              {editingStudent ? 'Save Changes' : 'Enroll Student'}
+              {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : null}
+              {editingStudent ? 'Save Profile' : 'Enroll Student'}
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* 5. Official Student ID Pass Modal */}
+      {/* 4. Student ID Pass Modal */}
       {badgeStudent && (
         <Modal
           isOpen={Boolean(badgeStudent)}
           onClose={() => setBadgeStudent(null)}
-          title="Official Student Gate & Classroom ID Pass"
+          title="Student Gate & Classroom ID Pass"
         >
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              textAlign: 'center',
-              padding: '6px 0',
-            }}
-          >
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '6px 0' }}>
             <div
               style={{
                 width: 300,
                 backgroundColor: '#ffffff',
-                border: '2px solid #0284c7',
+                border: '2px solid #004b87',
                 borderRadius: 14,
                 overflow: 'hidden',
-                boxShadow: '0 8px 24px rgba(2, 132, 199, 0.12)',
-                boxSizing: 'border-box',
+                boxShadow: '0 8px 24px rgba(0, 75, 135, 0.12)',
               }}
             >
-              <div
-                style={{
-                  background: 'linear-gradient(135deg, #003460 0%, #0284c7 100%)',
-                  color: '#ffffff',
-                  padding: '12px 14px',
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 5,
-                    fontSize: '0.68rem',
-                    fontWeight: 800,
-                    letterSpacing: '0.6px',
-                  }}
-                >
+              <div style={{ background: '#004b87', color: '#ffffff', padding: '12px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: '0.68rem', fontWeight: 800 }}>
                   <ShieldCheck size={14} color="#38bdf8" />
                   <span>ATTENDSURE STUDENT PASS</span>
                 </div>
                 <div style={{ fontSize: '0.58rem', color: '#e0f2fe', marginTop: 2 }}>
-                  Official Campus Turnstile & Classroom QR Pass
+                  Official School Gate & Classroom QR Pass
                 </div>
               </div>
 
@@ -1309,25 +1240,11 @@ export const StudentsTab: React.FC = () => {
                   />
                 </div>
 
-                <div
-                  style={{
-                    fontSize: '0.98rem',
-                    fontWeight: 800,
-                    color: '#0f172a',
-                    lineHeight: 1.2,
-                  }}
-                >
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
                   {badgeStudent.full_name || `${badgeStudent.first_name} ${badgeStudent.last_name}`}
                 </div>
 
-                <div
-                  style={{
-                    fontSize: '0.74rem',
-                    fontWeight: 600,
-                    color: '#64748b',
-                    marginTop: 3,
-                  }}
-                >
+                <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b', marginTop: 3 }}>
                   Section: {badgeStudent.current_section || 'Unassigned'}
                 </div>
 
@@ -1386,36 +1303,18 @@ export const StudentsTab: React.FC = () => {
                   color: '#64748b',
                 }}
               >
-                RFID:{' '}
+                Card UID:{' '}
                 <strong style={{ color: badgeStudent.rfid_uid ? '#059669' : '#d97706' }}>
                   {badgeStudent.rfid_uid || 'No Card Linked'}
                 </strong>
               </div>
             </div>
 
-            <div
-              style={{
-                display: 'flex',
-                gap: 10,
-                marginTop: 16,
-                width: '100%',
-                justifyContent: 'center',
-              }}
-            >
-              <Button
-                variant="secondary"
-                size="md"
-                type="button"
-                onClick={() => setBadgeStudent(null)}
-              >
+            <div style={{ display: 'flex', gap: 10, marginTop: 16, width: '100%', justifyContent: 'center' }}>
+              <Button variant="secondary" size="md" type="button" onClick={() => setBadgeStudent(null)}>
                 Close
               </Button>
-              <Button
-                variant="primary"
-                size="md"
-                type="button"
-                onClick={() => handlePrintIdBadge(badgeStudent)}
-              >
+              <Button variant="primary" size="md" type="button" onClick={() => handlePrintIdBadge(badgeStudent)}>
                 <Printer size={15} style={{ marginRight: 6 }} />
                 Print ID Card
               </Button>
@@ -1424,7 +1323,7 @@ export const StudentsTab: React.FC = () => {
         </Modal>
       )}
 
-      {/* 6. Modern Confirmation Modal */}
+      {/* 5. Delete Confirmation Modal */}
       <Modal
         isOpen={confirmDialog.isOpen}
         onClose={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
@@ -1444,11 +1343,7 @@ export const StudentsTab: React.FC = () => {
                 flexShrink: 0,
               }}
             >
-              {confirmDialog.isDestructive ? (
-                <AlertTriangle size={20} color="#dc2626" />
-              ) : (
-                <AlertCircle size={20} color="#0284c7" />
-              )}
+              {confirmDialog.isDestructive ? <AlertTriangle size={20} color="#dc2626" /> : <AlertCircle size={20} color="#004b87" />}
             </div>
             <div style={{ fontSize: '0.84rem', color: '#334155', lineHeight: 1.5, marginTop: 4 }}>
               {confirmDialog.message}
@@ -1474,11 +1369,7 @@ export const StudentsTab: React.FC = () => {
                 await confirmDialog.action();
                 setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
               }}
-              style={
-                confirmDialog.isDestructive
-                  ? { backgroundColor: '#dc2626', borderColor: '#dc2626', color: '#ffffff' }
-                  : {}
-              }
+              style={confirmDialog.isDestructive ? { backgroundColor: '#dc2626', borderColor: '#dc2626', color: '#ffffff' } : {}}
             >
               {saving ? <Loader2 className="animate-spin" size={16} /> : confirmDialog.confirmLabel}
             </Button>
@@ -1488,10 +1379,6 @@ export const StudentsTab: React.FC = () => {
     </div>
   );
 };
-
-// ============================================================================
-// STYLES
-// ============================================================================
 
 const toastBannerStyle: React.CSSProperties = {
   position: 'fixed',
@@ -1507,41 +1394,7 @@ const toastBannerStyle: React.CSSProperties = {
   boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.12)',
 };
 
-const statsContainer: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
-  gap: 14,
-};
-
-const statCard: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 10,
-  border: '1px solid #e2e8f0',
-  padding: '14px 16px',
-  transition: 'all 0.15s ease',
-};
-
-const statLabel: React.CSSProperties = {
-  fontSize: '0.66rem',
-  fontWeight: 700,
-  color: '#64748b',
-  marginBottom: 4,
-};
-
-const statValue: React.CSSProperties = {
-  fontSize: '1.40rem',
-  fontWeight: 800,
-  color: '#0f172a',
-  lineHeight: 1.1,
-};
-
-const statHelp: React.CSSProperties = {
-  fontSize: '0.68rem',
-  color: '#94a3b8',
-  marginTop: 4,
-};
-
-const filterStripContainer: React.CSSProperties = {
+const filterBarCard: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
@@ -1553,14 +1406,40 @@ const filterStripContainer: React.CSSProperties = {
   gap: 10,
 };
 
+const filterSelectStyle: React.CSSProperties = {
+  padding: '6px 10px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  fontSize: '0.78rem',
+  fontWeight: 600,
+  color: '#334155',
+  backgroundColor: '#f8fafc',
+  outline: 'none',
+  cursor: 'pointer',
+};
+
 const filterPillBtn: React.CSSProperties = {
   border: 'none',
   borderRadius: 6,
-  padding: '5px 11px',
+  padding: '5px 10px',
   fontSize: '0.74rem',
   fontWeight: 700,
   cursor: 'pointer',
   transition: 'all 0.15s ease',
+};
+
+const resetFilterBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '4px 8px',
+  borderRadius: 6,
+  border: '1px solid #fecaca',
+  backgroundColor: '#fef2f2',
+  color: '#dc2626',
+  fontSize: '0.72rem',
+  fontWeight: 700,
+  cursor: 'pointer',
 };
 
 const exportCsvBtnStyle: React.CSSProperties = {
@@ -1582,7 +1461,7 @@ const uploadPhotoBtn: React.CSSProperties = {
   alignItems: 'center',
   gap: 5,
   padding: '6px 12px',
-  backgroundColor: '#0284c7',
+  backgroundColor: '#004b87',
   color: '#ffffff',
   borderRadius: 6,
   fontSize: '0.74rem',

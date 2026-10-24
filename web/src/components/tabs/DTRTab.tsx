@@ -314,7 +314,7 @@ export const DTRTab: React.FC = () => {
 
     showConfirm({
       title: 'Submit Daily Time Record',
-      message: `Certify and submit your official Form 48 for ${dtrData.month} ${dtrData.year} to your Department Head for verification?`,
+      message: `Certify and submit your official DTR for ${dtrData.month} ${dtrData.year} to your Department Head for verification?`,
       confirmLabel: 'Certify & Submit',
       isDestructive: false,
       onConfirm: async () => {
@@ -330,14 +330,14 @@ export const DTRTab: React.FC = () => {
           });
           showAlert({
             title: 'DTR Submitted',
-            message: 'Your Form 48 DTR has been submitted to your Department Head for endorsement.',
+            message: 'Your DTR DTR has been submitted to your Department Head for endorsement.',
             type: 'success',
           });
           fetchDTR(true);
         } catch (err: any) {
           showAlert({
             title: 'Submission Failed',
-            message: err?.response?.data?.error || 'Failed to submit Form 48 DTR.',
+            message: err?.response?.data?.error || 'Failed to submit DTR DTR.',
             type: 'error',
           });
         } finally {
@@ -352,7 +352,7 @@ export const DTRTab: React.FC = () => {
 
     showConfirm({
       title: 'Approve Official DTR',
-      message: `Approve official Form 48 for ${dtrData.faculty_name} (${dtrData.month} ${dtrData.year})? This will endorse records, remove the DRAFT watermark, and unlock official hard-copy printing.`,
+      message: `Approve official DTR for ${dtrData.faculty_name} (${dtrData.month} ${dtrData.year})? This will endorse records, remove the DRAFT watermark, and unlock official hard-copy printing.`,
       confirmLabel: 'Approve & Endorse',
       isDestructive: false,
       onConfirm: async () => {
@@ -366,7 +366,7 @@ export const DTRTab: React.FC = () => {
           });
           showAlert({
             title: 'DTR Endorsed',
-            message: `Official Form 48 for ${dtrData.faculty_name} has been verified and cleared for printing.`,
+            message: `Official DTR for ${dtrData.faculty_name} has been verified and cleared for printing.`,
             type: 'success',
           });
           fetchDTR(true);
@@ -784,7 +784,7 @@ export const DTRTab: React.FC = () => {
               style={selectControl}
             >
               <option value="BOTH">Full Form (Front &amp; Back)</option>
-              <option value="FRONT">Front Side Only (Form 48)</option>
+              <option value="FRONT">Front Side Only (DTR)</option>
               <option value="BACK">Back Side Only (Instructions)</option>
             </select>
           </div>
@@ -827,7 +827,7 @@ export const DTRTab: React.FC = () => {
             size="md"
             onClick={handleDownloadPdf}
             disabled={exportingPdf || !dtrData || !dtrData.dept_head_approved}
-            title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before exporting.' : 'Export Form 48 PDF'}
+            title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before exporting.' : 'Export DTR PDF'}
           >
             {exportingPdf ? <Loader2 className="animate-spin" size={14} /> : !dtrData?.dept_head_approved ? <Lock size={14} color="#dc2626" /> : <Download size={14} />}
             <span style={{ marginLeft: 6 }}>Export PDF</span>
@@ -838,10 +838,10 @@ export const DTRTab: React.FC = () => {
             size="md"
             onClick={handlePrint}
             disabled={!dtrData || !dtrData.dept_head_approved}
-            title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before printing.' : 'Print Hard Copy Form 48'}
+            title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before printing.' : 'Print Hard Copy DTR'}
           >
             {!dtrData?.dept_head_approved ? <Lock size={14} /> : <Printer size={14} />}
-            <span style={{ marginLeft: 6 }}>Print Form 48</span>
+            <span style={{ marginLeft: 6 }}>Print DTR</span>
           </Button>
         </div>
       </div>

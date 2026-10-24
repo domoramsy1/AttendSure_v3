@@ -256,7 +256,7 @@ class StudentGateLogAdmin(SecureAuditLogAdmin):
 
 @admin.register(FacultyGateLog)
 class FacultyGateLogAdmin(SecureAuditLogAdmin):
-    """Immutable: Faculty turnstile gate taps cannot be forged or altered."""
+    """Immutable: Faculty gate scanner gate taps cannot be forged or altered."""
     list_display = ('faculty', 'direction_badge', 'scan_method', 'scan_time', 'kiosk')
     list_filter = ('direction', 'scan_method', 'scan_time')
     search_fields = ('faculty__employee_id', 'faculty__last_name', 'faculty__first_name', 'raw_identifier', 'kiosk__kiosk_code')

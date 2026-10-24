@@ -28,7 +28,7 @@ import MenuScreen from '../screens/MenuScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import SmsLogsScreen from '../screens/SmsLogsScreen';
 
-// All Reports Live in components/reports/
+// Reports
 import DTRReportView, { DTRReportData } from '../components/reports/DTRReportView';
 
 export type TabType =
@@ -39,7 +39,7 @@ export type TabType =
   | 'menu'
   | 'settings'
   | 'sms'
-  | 'roster'
+  | 'class_list'
   | 'dtr'
   | 'dept_monitor'
   | 'gate_feed'
@@ -51,7 +51,16 @@ export const MainTabNavigator: React.FC = () => {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('home');
 
-  // Direct DTR State (No DTRScreen.tsx needed)
+  // Role-Based Authorization
+  const currentUser = user as Record<string, any> | null;
+  const userRole = String(
+    currentUser?.role || currentUser?.system_role || 'EMPLOYEE'
+  ).trim().toUpperCase();
+
+  const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR'].includes(userRole);
+  const isEmployee = ['EMPLOYEE', 'FACULTY', 'TEACHER', 'STAFF'].includes(userRole);
+
+  // Direct DTR State
   const [dtrMonth, setDtrMonth] = useState<number>(new Date().getMonth() + 1);
   const [dtrYear, setDtrYear] = useState<number>(new Date().getFullYear());
   const [dtrData, setDtrData] = useState<DTRReportData | null>(null);
@@ -71,7 +80,7 @@ export const MainTabNavigator: React.FC = () => {
     } catch {}
 
     try {
-      const res = await apiClient.get<DTRReportData>('/reports/dtr/', {
+      const res = await apiClient.get<DTRReportData>('reports/dtr/', {
         params: { month: dtrMonth, year: dtrYear },
       });
       if (isMounted.current) {
@@ -101,7 +110,7 @@ export const MainTabNavigator: React.FC = () => {
     if (!dtrData) return;
     setDtrSubmitting(true);
     try {
-      await apiClient.post(`/reports/dtr/${dtrData.faculty_id}/`, {
+      await apiClient.post(`reports/dtr/${dtrData.faculty_id}/`, {
         action: 'SUBMIT_DTR',
         faculty_id: dtrData.faculty_id,
         month: dtrData.month_number,
@@ -118,7 +127,6 @@ export const MainTabNavigator: React.FC = () => {
     }
   };
 
-  // Sub-header for screens navigated from Menu
   const renderSubHeader = (title: string) => (
     <View style={[styles.subScreenHeader, { paddingTop: Math.max(insets.top, 12) }]}>
       <TouchableOpacity
@@ -136,16 +144,13 @@ export const MainTabNavigator: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      {/* Active Screen Container */}
       <View style={styles.screenContainer}>
-        {/* The 5 Main Tabs */}
         {activeTab === 'home' && <HomeScreen />}
         {activeTab === 'calendar' && <CalendarScreen />}
         {activeTab === 'scanner' && <ScannerScreen />}
         {activeTab === 'reports' && <ReportsScreen />}
         {activeTab === 'menu' && <MenuScreen onSelectScreen={setActiveTab} />}
 
-        {/* Sub-Screens Navigated from Menu */}
         {activeTab === 'settings' && (
           <View style={{ flex: 1 }}>
             {renderSubHeader('Settings')}
@@ -153,7 +158,6 @@ export const MainTabNavigator: React.FC = () => {
           </View>
         )}
 
-        {/* Direct Form 48 DTR Component from components/reports/ */}
         {activeTab === 'dtr' && (
           <View style={{ flex: 1 }}>
             {renderSubHeader('Civil Service Form No. 48')}
@@ -171,7 +175,7 @@ export const MainTabNavigator: React.FC = () => {
               {dtrLoading && !dtrData ? (
                 <View style={styles.loadingBox}>
                   <ActivityIndicator size="small" color={COLORS.primary} />
-                  <Text style={styles.loadingText}>Loading Form 48 records...</Text>
+                  <Text style={styles.loadingText}>Loading DTR records...</Text>
                 </View>
               ) : (
                 <DTRReportView
@@ -198,15 +202,14 @@ export const MainTabNavigator: React.FC = () => {
           </View>
         )}
 
-        {/* Placeholders for Future Modules */}
-        {activeTab === 'roster' && (
+        {activeTab === 'class_list' && (
           <View style={styles.placeholderContainer}>
-            {renderSubHeader('Class Roster')}
+            {renderSubHeader('Class List')}
             <View style={styles.placeholderBody}>
               <Ionicons name="people-circle-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Class Roster</Text>
+              <Text style={styles.placeholderTitle}>Class List</Text>
               <Text style={styles.placeholderText}>
-                Student list, guardian info, and attendance status.
+                Active learners, guardian contacts, and classroom attendance.
               </Text>
             </View>
           </View>
@@ -214,12 +217,12 @@ export const MainTabNavigator: React.FC = () => {
 
         {activeTab === 'dept_monitor' && (
           <View style={styles.placeholderContainer}>
-            {renderSubHeader('Faculty Attendance')}
+            {renderSubHeader('Employee Attendance')}
             <View style={styles.placeholderBody}>
               <Ionicons name="analytics-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Faculty Attendance</Text>
+              <Text style={styles.placeholderTitle}>Employee Attendance</Text>
               <Text style={styles.placeholderText}>
-                Department faculty attendance within campus geofence.
+                Department employee attendance inside campus geofence.
               </Text>
             </View>
           </View>
@@ -227,12 +230,12 @@ export const MainTabNavigator: React.FC = () => {
 
         {activeTab === 'gate_feed' && (
           <View style={styles.placeholderContainer}>
-            {renderSubHeader('Gate Feed')}
+            {renderSubHeader('Gate Scanner Feed')}
             <View style={styles.placeholderBody}>
               <Ionicons name="videocam-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Gate Feed</Text>
+              <Text style={styles.placeholderTitle}>Gate Scanner Feed</Text>
               <Text style={styles.placeholderText}>
-                Live RFID and QR scans at campus turnstiles.
+                Live RFID and QR taps at Campus Gate Kiosks.
               </Text>
             </View>
           </View>
@@ -245,7 +248,7 @@ export const MainTabNavigator: React.FC = () => {
               <Ionicons name="shield-checkmark-outline" size={64} color="#004b87" />
               <Text style={styles.placeholderTitle}>Device Approvals</Text>
               <Text style={styles.placeholderText}>
-                Manage verified faculty mobile devices.
+                Manage verified employee mobile devices.
               </Text>
             </View>
           </View>
@@ -253,19 +256,19 @@ export const MainTabNavigator: React.FC = () => {
 
         {activeTab === 'kiosk_health' && (
           <View style={styles.placeholderContainer}>
-            {renderSubHeader('Kiosk Health')}
+            {renderSubHeader('Gate Kiosk Health')}
             <View style={styles.placeholderBody}>
               <Ionicons name="hardware-chip-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Kiosk Health</Text>
+              <Text style={styles.placeholderTitle}>Gate Kiosk Health</Text>
               <Text style={styles.placeholderText}>
-                Hardware online status, ping latency, and queue health.
+                Scanner online status, ping latency, and offline queue logs.
               </Text>
             </View>
           </View>
         )}
       </View>
 
-      {/* 5-Item Bottom Bar */}
+      {/* Role-Filtered Bottom Navigation Bar */}
       <View
         style={[
           styles.bottomBar,
@@ -275,7 +278,6 @@ export const MainTabNavigator: React.FC = () => {
           },
         ]}
       >
-        {/* Tab 1: Dashboard */}
         <TouchableOpacity
           style={styles.tabItem}
           onPress={() => setActiveTab('home')}
@@ -294,7 +296,6 @@ export const MainTabNavigator: React.FC = () => {
           </Text>
         </TouchableOpacity>
 
-        {/* Tab 2: Calendar */}
         <TouchableOpacity
           style={styles.tabItem}
           onPress={() => setActiveTab('calendar')}
@@ -313,18 +314,18 @@ export const MainTabNavigator: React.FC = () => {
           </Text>
         </TouchableOpacity>
 
-        {/* Tab 3: Scanner */}
-        <TouchableOpacity
-          style={styles.centerFab}
-          onPress={() => setActiveTab('scanner')}
-          activeOpacity={0.85}
-        >
-          <View style={[styles.fabBox, activeTab === 'scanner' && styles.fabBoxActive]}>
-            <Ionicons name="qr-code" size={24} color="#ffffff" />
-          </View>
-        </TouchableOpacity>
+        {(isAdmin || isEmployee) && (
+          <TouchableOpacity
+            style={styles.centerFab}
+            onPress={() => setActiveTab('scanner')}
+            activeOpacity={0.85}
+          >
+            <View style={[styles.fabBox, activeTab === 'scanner' && styles.fabBoxActive]}>
+              <Ionicons name="qr-code" size={24} color="#ffffff" />
+            </View>
+          </TouchableOpacity>
+        )}
 
-        {/* Tab 4: Reports */}
         <TouchableOpacity
           style={styles.tabItem}
           onPress={() => setActiveTab('reports')}
@@ -343,7 +344,6 @@ export const MainTabNavigator: React.FC = () => {
           </Text>
         </TouchableOpacity>
 
-        {/* Tab 5: Menu */}
         <TouchableOpacity
           style={styles.tabItem}
           onPress={() => setActiveTab('menu')}
@@ -351,29 +351,33 @@ export const MainTabNavigator: React.FC = () => {
         >
           <Ionicons
             name={
-              activeTab === 'menu' ||
-              activeTab === 'settings' ||
-              activeTab === 'sms' ||
-              activeTab === 'roster' ||
-              activeTab === 'dtr' ||
-              activeTab === 'dept_monitor' ||
-              activeTab === 'gate_feed' ||
-              activeTab === 'device_approval' ||
-              activeTab === 'kiosk_health'
+              [
+                'menu',
+                'settings',
+                'sms',
+                'class_list',
+                'dtr',
+                'dept_monitor',
+                'gate_feed',
+                'device_approval',
+                'kiosk_health',
+              ].includes(activeTab)
                 ? 'menu'
                 : 'menu-outline'
             }
             size={22}
             color={
-              activeTab === 'menu' ||
-              activeTab === 'settings' ||
-              activeTab === 'sms' ||
-              activeTab === 'roster' ||
-              activeTab === 'dtr' ||
-              activeTab === 'dept_monitor' ||
-              activeTab === 'gate_feed' ||
-              activeTab === 'device_approval' ||
-              activeTab === 'kiosk_health'
+              [
+                'menu',
+                'settings',
+                'sms',
+                'class_list',
+                'dtr',
+                'dept_monitor',
+                'gate_feed',
+                'device_approval',
+                'kiosk_health',
+              ].includes(activeTab)
                 ? COLORS.primary
                 : COLORS.textMuted
             }
@@ -381,16 +385,17 @@ export const MainTabNavigator: React.FC = () => {
           <Text
             style={[
               styles.tabLabel,
-              (activeTab === 'menu' ||
-                activeTab === 'settings' ||
-                activeTab === 'sms' ||
-                activeTab === 'roster' ||
-                activeTab === 'dtr' ||
-                activeTab === 'dept_monitor' ||
-                activeTab === 'gate_feed' ||
-                activeTab === 'device_approval' ||
-                activeTab === 'kiosk_health') &&
-                styles.tabLabelActive,
+              [
+                'menu',
+                'settings',
+                'sms',
+                'class_list',
+                'dtr',
+                'dept_monitor',
+                'gate_feed',
+                'device_approval',
+                'kiosk_health',
+              ].includes(activeTab) && styles.tabLabelActive,
             ]}
             numberOfLines={1}
           >

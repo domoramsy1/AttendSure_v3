@@ -743,7 +743,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                 </div>
 
                 <button type="submit" disabled={loading} className="submit-btn" style={{ marginTop: 4 }}>
-                  {loading ? <Loader2 className="animate-spin" size={18} /> : 'Sign In to Dashboard'}
+                  {loading ? <Loader2 className="animate-spin" size={18} /> : 'Log In'}
                 </button>
 
                 <div

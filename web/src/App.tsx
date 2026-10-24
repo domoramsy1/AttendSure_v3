@@ -85,6 +85,7 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'students',
     'dtr',
     'gate-passes',
+    'reports',
   ],
   TEACHER: [
     'dashboard',
@@ -92,6 +93,8 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'students',
     'dtr',
     'gate-passes',
+    'reports',
+
   ],
   GUARD: [
     'dashboard',
@@ -316,18 +319,18 @@ const AppContent: React.FC = () => {
     const currentSchool = school.school_name ? `${school.school_name} ` : '';
 
     switch (activeTab) {
-      case 'dashboard': return `${currentSchool}Dashboard Overview`;
-      case 'my-classes': return 'My Assigned Classes & Student Roster';
+      case 'dashboard': return `${currentSchool}Dashboard`;
+      case 'my-classes': return 'Classes';
       case 'gate-logs': return 'Gate Logs';
-      case 'students': return 'Student Directory & ID Cards';
+      case 'students': return 'Students & ID Cards';
       case 'facultys': return 'Faculty & Staff Directory';
-      case 'users': return 'User Accounts & Roles';
+      case 'users': return 'Users & Roles';
       case 'gate-passes': return 'Gate Passes & Exit Permits';
       case 'schedules': return 'Class Schedules & Sections';
-      case 'dtr': return 'Faculty Daily Time Records (Form 48)';
-      case 'geofence': return 'Campus Perimeter Boundary';
+      case 'dtr': return 'Faculty Daily Time Records (DTR)';
+      case 'geofence': return 'Geofence Boundary';
       case 'scanners': return 'Gate Scanners & Readers';
-      case 'sms': return 'SMS Gateway & Hardware Outbox';
+      case 'sms': return 'SMS & Hardware Outbox';
       case 'reports':
         if (selectedReport === 'sf1') return 'School Register (Form 1)';
         if (selectedReport === 'sf2') return 'Daily Attendance Register (Form 2)';

@@ -1,4 +1,4 @@
-// mobile/src/services/offlineQueue.ts
+// D:\AttendSure_V3\mobile\src\services\offlineQueue.ts
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
@@ -29,9 +29,6 @@ export interface OfflineQueueItem {
   telemetryPayload?: QueuedTelemetryPayload;
 }
 
-/**
- * Reads all pending offline records from device storage.
- */
 export const getOfflineQueue = async (): Promise<OfflineQueueItem[]> => {
   try {
     const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
@@ -43,24 +40,15 @@ export const getOfflineQueue = async (): Promise<OfflineQueueItem[]> => {
   }
 };
 
-/**
- * Saves the updated queue list to device storage.
- */
 const saveOfflineQueue = async (queue: OfflineQueueItem[]): Promise<void> => {
   await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
 };
 
-/**
- * Returns the total number of unsynced records for HomeScreen and SettingsScreen.
- */
 export const getUnsyncedCount = async (): Promise<number> => {
   const queue = await getOfflineQueue();
   return queue.length;
 };
 
-/**
- * Queues a student QR/LRN scan when the phone has no connection to the server.
- */
 export const enqueueOfflineScan = async (
   scheduleId: number,
   qrToken: string,
@@ -87,9 +75,6 @@ export const enqueueOfflineScan = async (
   return newItem;
 };
 
-/**
- * Queues a faculty GPS heartbeat when the phone has no connection to the server.
- */
 export const enqueueOfflineHeartbeat = async (
   payload: QueuedTelemetryPayload
 ): Promise<OfflineQueueItem> => {
@@ -106,10 +91,6 @@ export const enqueueOfflineHeartbeat = async (
   return newItem;
 };
 
-/**
- * Uploads all queued scans and GPS pings to the PostgreSQL backend.
- * Removes items that succeed and keeps items that fail due to network drops.
- */
 export const syncOfflineQueue = async (): Promise<{
   syncedCount: number;
   failedCount: number;
@@ -127,10 +108,10 @@ export const syncOfflineQueue = async (): Promise<{
   for (const item of queue) {
     try {
       if (item.type === 'CLASSROOM_SCAN' && item.scanPayload) {
-        await apiClient.post('/api/classroom/batch-scan/', item.scanPayload);
+        await apiClient.post('classroom/batch-scan/', item.scanPayload);
         syncedCount += 1;
       } else if (item.type === 'TELEMETRY_HEARTBEAT' && item.telemetryPayload) {
-        await apiClient.post('/api/telemetry/heartbeat/', item.telemetryPayload);
+        await apiClient.post('telemetry/heartbeat/', item.telemetryPayload);
         syncedCount += 1;
       }
     } catch (err: any) {
@@ -143,8 +124,6 @@ export const syncOfflineQueue = async (): Promise<{
         'Sync error';
       lastError = serverMsg;
 
-      // Keep in queue only if it was a network/timeout error or 5xx server error.
-      // If the server rejected it with 400/403/404 (e.g., unrecognized LRN), drop it so it doesn't block the queue forever.
       if (!status || status >= 500) {
         remainingItems.push(item);
       }
@@ -152,17 +131,5 @@ export const syncOfflineQueue = async (): Promise<{
   }
 
   await saveOfflineQueue(remainingItems);
-
-  return {
-    syncedCount,
-    failedCount: remainingItems.length,
-    lastError,
-  };
-};
-
-/**
- * Clears all offline items from device storage.
- */
-export const clearOfflineQueue = async (): Promise<void> => {
-  await AsyncStorage.removeItem(OFFLINE_QUEUE_KEY);
+  return { syncedCount, failedCount: remainingItems.length, lastError };
 };

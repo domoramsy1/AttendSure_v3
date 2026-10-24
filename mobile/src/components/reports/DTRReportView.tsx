@@ -166,7 +166,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
     }
   };
 
-  // Front Form 48 Sheet
+  // Front DTR Sheet
   const renderFrontSheet = () => (
     <View style={styles.sheetContainer}>
       {/* Draft Watermark */}
@@ -497,7 +497,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
               onPress={() => setViewSide(side)}
             >
               <Text style={[styles.sideToggleText, active && styles.sideToggleTextActive]}>
-                {side === 'FRONT' ? 'Front (Form 48)' : side === 'BACK' ? 'Back (Instructions)' : 'Full View'}
+                {side === 'FRONT' ? 'Front (DTR)' : side === 'BACK' ? 'Back (Instructions)' : 'Full View'}
               </Text>
             </TouchableOpacity>
           );

@@ -1,12 +1,4 @@
-/**
- * AttendSure - DepEd School Form 4 (SF 4) Monthly Learner's Movement and Attendance
- * File: frontend/src/components/tabs/SF4ReportTab.tsx
- *
- * Fixes Applied:
- * 1. RESOLVED UNUSED STYLES: Connected dmosFooterStyle and dmosFooterDetailsStyle in renderSummaryFooter().
- * 2. EXPORT SUITE COMPLETE: Configured handlers for PDF, Excel, Word, CSV, and JSON.
- * 3. HEADER LOCKED TO PAGE 1: The official DepEd letterhead only appears on page 1.
- */
+// web/src/components/tabs/SF4ReportTab.tsx
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import apiClient from '../../api/client';
@@ -18,6 +10,7 @@ import { usePageSetup } from '../../hooks/usePageSetup';
 import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
 
 export interface MetricTriplet {
   m: number;
@@ -60,6 +53,9 @@ export interface SF4ReportData {
   month: string;
   year: number;
   school_head: string;
+  school_address?: string;
+  school_contact?: string;
+  school_email?: string;
   left_logo?: string | null;
   right_logo?: string | null;
   grade_groups: SF4GradeGroup[];
@@ -67,7 +63,7 @@ export interface SF4ReportData {
   total_summary: SF4SectionRecord;
 }
 
-interface SF4PageChunk {
+export interface SF4PageChunk {
   pageNumber: number;
   totalPages?: number;
   groups: SF4GradeGroup[];
@@ -243,7 +239,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         timestamp: new Date().toISOString(),
       });
     } catch {
-      // Offline fallback
+      // Non-blocking offline fallback
     }
   };
 
@@ -331,7 +327,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
             pageNumber: pages.length + 1,
             groups: currentGroups,
             isFinalPage: false,
-            showFullHeader: pages.length === 0, // ONLY Page 1 gets header
+            showFullHeader: pages.length === 0,
           });
         }
         currentGroups = [g];
@@ -344,7 +340,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         pageNumber: pages.length + 1,
         groups: currentGroups,
         isFinalPage: true,
-        showFullHeader: pages.length === 0, // ONLY Page 1 gets header
+        showFullHeader: pages.length === 0,
       });
     }
 
@@ -558,139 +554,6 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     showAlert({ title: 'JSON Exported', message: 'SF4 JSON export ready.', type: 'success' });
   };
 
-  const renderHeader = () => {
-    const effectiveLeftLogo = reportData?.left_logo || school.left_logo;
-    const effectiveRightLogo = reportData?.right_logo || school.right_logo;
-    const effectiveSchoolName = reportData?.school_name || school.school_name;
-    const effectiveSchoolId = reportData?.school_id || school.school_id;
-    const effectiveDivision = reportData?.division || school.division;
-    const effectiveRegion = reportData?.region || school.region;
-    const effectiveDistrict = reportData?.district || school.district;
-
-    return (
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
-        <div style={{ flexShrink: 0, width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {effectiveLeftLogo ? (
-            <img src={effectiveLeftLogo} alt="Left Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-          ) : null}
-        </div>
-
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ textAlign: 'center', marginBottom: 6 }}>
-            <div style={republicStyle}>Republic of the Philippines</div>
-            <div style={depedTitleStyle}>Department of Education</div>
-            {effectiveRegion && <div style={regionalOfficeStyle}>{effectiveRegion.toUpperCase()}</div>}
-            {effectiveDivision && <div style={officeStyle}>{effectiveDivision.toUpperCase()}</div>}
-            <div style={{ fontFamily: 'Tahoma, Arial, sans-serif', fontSize: '10.5pt', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: 4, color: '#000000' }}>
-              School Form 4 (SF 4) Monthly Learner's Movement and Attendance
-            </div>
-            <div style={{ fontSize: '6.0pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
-              (Consolidated Learner Movement and Monthly Attendance Summary)
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-                <span style={fieldLabelStyle}>School ID</span>
-                <div style={{ ...fieldBoxStyle, width: 90 }}>{effectiveSchoolId || ''}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-                <span style={fieldLabelStyle}>Region</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4 }}>{effectiveRegion || ''}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '25%', paddingLeft: 6 }}>
-                <span style={fieldLabelStyle}>Division</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4 }}>{effectiveDivision || ''}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '25%', paddingLeft: 6 }}>
-                <span style={fieldLabelStyle}>District</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4 }}>{effectiveDistrict || ''}</div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', width: '48%' }}>
-                <span style={fieldLabelStyle}>School Name</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4, marginRight: 6 }}>
-                  {effectiveSchoolName || ''}
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '24%' }}>
-                <span style={fieldLabelStyle}>School Year</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, marginRight: 6 }}>{reportData?.school_year || selectedAcademicYear}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '28%' }}>
-                <span style={{ ...fieldLabelStyle, width: 130 }}>Report for Month of</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 4 }}>
-                  {reportData?.month || selectedMonth} {reportData?.year || selectedYear}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ flexShrink: 0, width: '0.76in', height: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          {effectiveRightLogo ? (
-            <img src={effectiveRightLogo} alt="Right Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-          ) : null}
-        </div>
-      </div>
-    );
-  };
-
-  const renderTableHeader = () => (
-    <>
-      <colgroup>
-        <col style={{ width: '8.8%' }} />
-        <col style={{ width: '7.0%' }} />
-        <col style={{ width: '6.6%' }} />
-        {Array.from({ length: 36 }).map((_, i) => (
-          <col key={`col-${i}`} style={{ width: '2.155%' }} />
-        ))}
-      </colgroup>
-      <thead>
-        <tr>
-          <th rowSpan={3} style={{ width: '8.8%', ...thCell }}>NAME OF ADVISER</th>
-          <th rowSpan={3} style={{ width: '7.0%', ...thCell }}>
-            GRADE/<br />YEAR<br />LEVEL
-          </th>
-          <th rowSpan={3} style={{ width: '6.6%', ...thCell }}>SECTION</th>
-          <th colSpan={3} rowSpan={2} style={{ width: '6.467%', ...thCell }}>
-            REGISTERED LEARNER<br />
-            <span style={subHeaderSpan}>(As of End of Month)</span>
-          </th>
-          <th colSpan={6} style={{ width: '12.934%', ...thCell }}>ATTENDANCE</th>
-          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>DROPPED OUT</th>
-          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>TRANSFERRED OUT</th>
-          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>TRANSFERRED IN</th>
-        </tr>
-        <tr>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.6pt' }}>Daily Average</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.6pt' }}>Percentage for Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
-          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
-        </tr>
-        <tr>
-          {Array.from({ length: 12 }).map((_, i) => (
-            <React.Fragment key={`triplet-${i}`}>
-              <th style={thSubCell}>M</th>
-              <th style={thSubCell}>F</th>
-              <th style={{ ...thSubCell, fontWeight: 800 }}>T</th>
-            </React.Fragment>
-          ))}
-        </tr>
-      </thead>
-    </>
-  );
-
   const renderMetricCells = (triplet?: MetricTriplet) => (
     <>
       <td style={centerCell}>{triplet ? triplet.m : 0}</td>
@@ -728,26 +591,15 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         </div>
       </div>
 
-      {/* Official DepEd Manual of Style Footer */}
-      <div style={dmosFooterStyle}>
-        <div style={{ width: '0.76in', height: '0.76in', minWidth: '0.76in', minHeight: '0.76in', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {(school.school_logo || school.left_logo) ? (
-            <img
-              src={school.school_logo || school.left_logo || ''}
-              alt="School Seal"
-              style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }}
-            />
-          ) : null}
-        </div>
-
-        <div style={dmosFooterDetailsStyle}>
-          <div><strong>Address:</strong> {school.address || 'Lapasan, Cagayan de Oro City, Northern Mindanao, 9000'}</div>
-          <div>
-            <strong>Contact No.:</strong> {school.contact_number || '(088) 856-1234'} &bull; <strong>Email:</strong> {school.email || 'lapasan.nhs@deped.gov.ph'}
-          </div>
-        </div>
-      </div>
-    </div>
+        {/* Centralized Dynamic DepEd DMOS Footer Sourced From Database */}
+        <DepEdReportFooter
+          sealUrl={school.school_logo}
+          address={reportData?.school_address || school.address}
+          contactNumber={reportData?.school_contact || school.contact_number}
+          email={reportData?.school_email || school.email}
+          reportData={reportData}
+        />
+    </div> 
   );
 
   return (
@@ -903,11 +755,64 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
                       breakBefore: page.pageNumber > 1 ? 'page' : 'auto',
                     }}
                   >
-                    {/* Header ALWAYS ONLY on Page 1 */}
-                    {page.pageNumber === 1 && renderHeader()}
+                    {/* Header strictly on Page 1 */}
+                    {page.pageNumber === 1 && (
+                      <DepEdReportHeader
+                        formTitle="School Form 4 (SF 4) Monthly Learner's Movement and Attendance"
+                        formSubtitle="(Consolidated Learner Movement and Monthly Attendance Summary)"
+                        formType="SF4"
+                        reportData={reportData}
+                      />
+                    )}
 
                     <table style={mainTableStyle}>
-                      {renderTableHeader()}
+                      <colgroup>
+                        <col style={{ width: '8.8%' }} />
+                        <col style={{ width: '7.0%' }} />
+                        <col style={{ width: '6.6%' }} />
+                        {Array.from({ length: 36 }).map((_, i) => (
+                          <col key={`col-${i}`} style={{ width: '2.155%' }} />
+                        ))}
+                      </colgroup>
+                      <thead>
+                        <tr>
+                          <th rowSpan={3} style={{ width: '8.8%', ...thCell }}>NAME OF ADVISER</th>
+                          <th rowSpan={3} style={{ width: '7.0%', ...thCell }}>
+                            GRADE/<br />YEAR<br />LEVEL
+                          </th>
+                          <th rowSpan={3} style={{ width: '6.6%', ...thCell }}>SECTION</th>
+                          <th colSpan={3} rowSpan={2} style={{ width: '6.467%', ...thCell }}>
+                            REGISTERED LEARNER<br />
+                            <span style={subHeaderSpan}>(As of End of Month)</span>
+                          </th>
+                          <th colSpan={6} style={{ width: '12.934%', ...thCell }}>ATTENDANCE</th>
+                          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>DROPPED OUT</th>
+                          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>TRANSFERRED OUT</th>
+                          <th colSpan={9} style={{ width: '19.4%', ...thCell }}>TRANSFERRED IN</th>
+                        </tr>
+                        <tr>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.6pt' }}>Daily Average</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.6pt' }}>Percentage for Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A) Cumulative as of<br />Previous Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(B) For the Month</th>
+                          <th colSpan={3} style={{ ...thCell, fontSize: '5.0pt' }}>(A+B) Cumulative as of<br />End of Month</th>
+                        </tr>
+                        <tr>
+                          {Array.from({ length: 12 }).map((_, i) => (
+                            <React.Fragment key={`triplet-${i}`}>
+                              <th style={thSubCell}>M</th>
+                              <th style={thSubCell}>F</th>
+                              <th style={{ ...thSubCell, fontWeight: 800 }}>T</th>
+                            </React.Fragment>
+                          ))}
+                        </tr>
+                      </thead>
                       <tbody>
                         <tr style={{ height: '17px', backgroundColor: '#ffffff' }}>
                           <td colSpan={39} style={{ ...adviserCell, fontWeight: 800, fontSize: '6.8pt' }}>
@@ -1157,61 +1062,6 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 
 export default SF4ReportTab;
 
-const republicStyle: React.CSSProperties = {
-  fontFamily: "'Old English Text MT', 'Old English Text MT Fallback', 'UnifrakturMaguntia', serif",
-  fontSize: '12pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.15,
-};
-
-const depedTitleStyle: React.CSSProperties = {
-  fontFamily: "'Old English Text MT', 'Old English Text MT Fallback', 'UnifrakturMaguntia', serif",
-  fontSize: '18pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.15,
-  marginTop: '1px',
-};
-
-const regionalOfficeStyle: React.CSSProperties = {
-  fontFamily: 'Tahoma, Arial, sans-serif',
-  fontSize: '10pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.2,
-  marginTop: '3px',
-};
-
-const officeStyle: React.CSSProperties = {
-  fontFamily: 'Tahoma, Arial, sans-serif',
-  fontSize: '10pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.2,
-  marginTop: '1px',
-};
-
-const dmosFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-  gap: '12px',
-  width: '100%',
-  marginTop: '10px',
-  paddingTop: '6px',
-  borderTop: '1px solid #000000',
-  boxSizing: 'border-box',
-};
-
-const dmosFooterDetailsStyle: React.CSSProperties = {
-  fontFamily: 'Calibri, "Segoe UI", Arial, sans-serif',
-  fontSize: '10pt',
-  color: '#000000',
-  lineHeight: 1.3,
-  textAlign: 'left',
-};
-
 const controlStripStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -1239,28 +1089,6 @@ const zoomBtnStyle: React.CSSProperties = {
   border: '1px solid #cbd5e1',
   backgroundColor: '#ffffff',
   cursor: 'pointer',
-};
-
-const fieldLabelStyle: React.CSSProperties = {
-  fontFamily: 'Tahoma, sans-serif',
-  fontWeight: 700,
-  fontSize: '8.2pt',
-  color: '#000000',
-  marginRight: 4,
-};
-
-const fieldBoxStyle: React.CSSProperties = {
-  minHeight: 17,
-  lineHeight: '17px',
-  border: '1.2px solid #000000',
-  backgroundColor: '#ffffff',
-  textAlign: 'center',
-  fontWeight: 700,
-  fontFamily: 'Tahoma, sans-serif',
-  fontSize: '8.2pt',
-  color: '#000000',
-  padding: '0 4px',
-  boxSizing: 'border-box',
 };
 
 const viewerScrollContainerStyle: React.CSSProperties = {

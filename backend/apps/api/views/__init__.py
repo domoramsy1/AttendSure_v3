@@ -1,8 +1,8 @@
 from .auth import DatabaseLoginView, LoginAPIView, CurrentUserView, CurrentUserProfileView, LiveFieldValidationAPIView, RegisterPushTokenAPIView
 from .dashboard import DashboardOverviewAPIView
 from .sections import SectionListAPIView, SectionDetailAPIView
-from .gate import GateScanAPIView, GateLogsAPIView
-from .classroom import FacultyClassroomRosterAPIView, ClassroomBatchScanAPIView, MyAssignedClassesAPIView
+from .gate import GateLogsAPIView
+from .classroom import FacultyClassroomListAPIView, FacultyClassroomRosterAPIView, ClassroomBatchScanAPIView, MyAssignedClassesAPIView
 from .reports import (
     DepEdSF1DataAPIView, DepEdSF2DataAPIView, DepEdSF4DataAPIView, DTRListAPIView,
     UnifiedReportExportAPIView, UnifiedReportPrintAPIView, ReportAuditLogAPIView
@@ -18,8 +18,8 @@ from .geofence import GeofenceStatusAPIView, GeofenceCheckInAPIView, FacultyDevi
 __all__ = [
     'DatabaseLoginView', 'LoginAPIView', 'CurrentUserView', 'CurrentUserProfileView',
     'LiveFieldValidationAPIView', 'RegisterPushTokenAPIView', 'DashboardOverviewAPIView',
-    'SectionListAPIView', 'SectionDetailAPIView', 'GateScanAPIView', 'GateLogsAPIView',
-    'FacultyClassroomRosterAPIView', 'ClassroomBatchScanAPIView', 'MyAssignedClassesAPIView',
+    'SectionListAPIView', 'SectionDetailAPIView', 'GateLogsAPIView',
+    'FacultyClassroomListAPIView', 'FacultyClassroomRosterAPIView', 'ClassroomBatchScanAPIView', 'MyAssignedClassesAPIView',
     'DepEdSF1DataAPIView', 'DepEdSF2DataAPIView', 'DepEdSF4DataAPIView', 'DTRListAPIView',
     'UnifiedReportExportAPIView', 'UnifiedReportPrintAPIView', 'ReportAuditLogAPIView',
     'PendingSmsDispatchAPIView', 'BulkSmsStatusAPIView', 'MarkSmsStatusAPIView',

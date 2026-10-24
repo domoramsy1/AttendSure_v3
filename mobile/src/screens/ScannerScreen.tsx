@@ -12,23 +12,25 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { COLORS } from '../constants/theme';
+import configService from '../services/configService';
 import {
   playScanSuccessSound,
   playScanWarningSound,
   playScanErrorSound,
 } from '../services/soundService';
 
-interface StudentRosterItem {
+interface StudentItem {
   id: number;
   lrn: string;
   qr_token: string;
@@ -39,10 +41,10 @@ interface StudentRosterItem {
   photo_url?: string | null;
   parent_contact?: string;
   guardian_name?: string;
-  attendance_status: 'PRESENT' | 'LATE' | 'CUTTING' | 'UNVERIFIED' | 'UNSCANNED' | string;
+  attendance_status: string;
 }
 
-interface SectionRoster {
+interface SectionClass {
   schedule_id: number;
   section_id: number;
   section_name: string;
@@ -51,13 +53,14 @@ interface SectionRoster {
   subject_code: string;
   faculty_name?: string;
   room: string;
-  start_time: string;
-  end_time: string;
+  start_time?: string | null;
+  end_time?: string | null;
   total_students: number;
-  students: StudentRosterItem[];
+  students: StudentItem[];
 }
 
 interface ScanResultData {
+  student_id?: number;
   name: string;
   lrn: string;
   rfid_uid?: string;
@@ -70,30 +73,36 @@ interface ScanResultData {
   scan_time: string;
 }
 
+const formatTime = (timeStr?: string | null): string => {
+  if (!timeStr || typeof timeStr !== 'string') return '--:--';
+  return timeStr.slice(0, 5);
+};
+
 export const ScannerScreen: React.FC = () => {
   const { user } = useAuth();
 
-  // Camera State
+  // Camera & Device Controls
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const [enableTorch, setEnableTorch] = useState<boolean>(false);
   const [isScanningLocked, setIsScanningLocked] = useState<boolean>(false);
 
-  // Time & Ingestion Mode
+  // Time & Configuration
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const [scanMode, setScanMode] = useState<'PRESENT' | 'LATE'>('PRESENT');
   const [vibrateEnabled, setVibrateEnabled] = useState<boolean>(true);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const [serverBase, setServerBase] = useState<string>('');
 
-  // Faculty Roster Data
-  const [sections, setSections] = useState<SectionRoster[]>([]);
+  // Class Roster
+  const [sections, setSections] = useState<SectionClass[]>([]);
   const [activeSectionIndex, setActiveSectionIndex] = useState<number>(0);
-  const [rosterLoading, setRosterLoading] = useState<boolean>(true);
-  const [showRosterDrawer, setShowRosterDrawer] = useState<boolean>(false);
+  const [listLoading, setRosterLoading] = useState<boolean>(true);
+  const [showStudentListModal, setShowRosterDrawer] = useState<boolean>(false);
   const [showSectionPicker, setShowSectionPicker] = useState<boolean>(false);
 
-  // Verification & Manual Input
+  // Verification Results
   const [manualInputVisible, setManualInputVisible] = useState<boolean>(false);
   const [manualCode, setManualCode] = useState<string>('');
   const [scanLoading, setScanLoading] = useState<boolean>(false);
@@ -101,7 +110,31 @@ export const ScannerScreen: React.FC = () => {
   const [lastScannedStudent, setLastScannedStudent] = useState<ScanResultData | null>(null);
   const [modalImageFailed, setModalImageFailed] = useState<boolean>(false);
 
+  // Student Profile Edit Modal
+  const [editingStudent, setEditingStudent] = useState<StudentItem | null>(null);
+  const [editContact, setEditContact] = useState<string>('');
+  const [editRfid, setEditRfid] = useState<string>('');
+  const [savingProfile, setSavingProfile] = useState<boolean>(false);
+
   const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Helper to ensure full URL for images
+  const resolvePhotoUri = useCallback(
+    (url?: string | null) => {
+      if (!url) return null;
+      if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:image/')) {
+        return url;
+      }
+      const base = serverBase.replace(/\/+$/, '');
+      const path = url.startsWith('/') ? url : `/${url}`;
+      return `${base}${path}`;
+    },
+    [serverBase]
+  );
+
+  useEffect(() => {
+    configService.getServerBaseUrl().then((url) => setServerBase(url));
+  }, []);
 
   useEffect(() => {
     const update = () => {
@@ -138,25 +171,41 @@ export const ScannerScreen: React.FC = () => {
     } catch {}
   };
 
-  const fetchFacultyRoster = useCallback(async () => {
+  const fetchFacultyStudentList = useCallback(async () => {
     setRosterLoading(true);
     try {
-      const res = await apiClient.get('/api/classroom/roster/');
-      const data: SectionRoster[] = res.data || [];
-      setSections(data);
-      if (data.length > 0 && activeSectionIndex >= data.length) {
+      const res = await apiClient.get('/api/classroom/student_list/');
+      const rawData = Array.isArray(res.data) ? res.data : [];
+
+      const normalizedData: SectionClass[] = rawData.map((item: any) => ({
+        schedule_id: item.schedule_id || item.id || 0,
+        section_id: item.section_id || item.id || 0,
+        section_name: item.section_name || item.name || 'Section',
+        grade_level: item.grade_level || '—',
+        subject_name: item.subject_name || item.subject_title || 'Subject',
+        subject_code: item.subject_code || 'SUBJ',
+        faculty_name: item.faculty_name || '',
+        room: item.room || item.room_number || 'Room —',
+        start_time: typeof item.start_time === 'string' ? item.start_time : '',
+        end_time: typeof item.end_time === 'string' ? item.end_time : '',
+        total_students: Array.isArray(item.students) ? item.students.length : Number(item.total_students) || 0,
+        students: Array.isArray(item.students) ? item.students : [],
+      }));
+
+      setSections(normalizedData);
+      if (normalizedData.length > 0 && activeSectionIndex >= normalizedData.length) {
         setActiveSectionIndex(0);
       }
     } catch {
-      Alert.alert('Roster Sync Notice', 'Unable to fetch assigned classroom sections from server.');
+      Alert.alert('Class List Notice', 'Unable to fetch assigned classroom sections from server.');
     } finally {
       setRosterLoading(false);
     }
   }, [activeSectionIndex]);
 
   useEffect(() => {
-    fetchFacultyRoster();
-  }, [fetchFacultyRoster]);
+    fetchFacultyStudentList();
+  }, [fetchFacultyStudentList]);
 
   const activeSection = sections[activeSectionIndex] || null;
 
@@ -181,7 +230,7 @@ export const ScannerScreen: React.FC = () => {
   };
 
   const processStudentScan = async (rawCode: string) => {
-    const cleanCode = rawCode.trim();
+    const cleanCode = rawCode ? String(rawCode).trim().replace(/[\r\n\t]/g, '').slice(0, 64) : '';
     if (!cleanCode) return;
 
     if (!activeSection) {
@@ -199,23 +248,13 @@ export const ScannerScreen: React.FC = () => {
       return;
     }
 
-    const enrolledMatch = activeSection.students.find(
+    const studentList = activeSection.students || [];
+    let enrolledMatch = studentList.find(
       (s) =>
-        s.lrn.toLowerCase() === cleanCode.toLowerCase() ||
+        (s.lrn && s.lrn.toLowerCase() === cleanCode.toLowerCase()) ||
         (s.qr_token && s.qr_token.toLowerCase() === cleanCode.toLowerCase()) ||
         (s.rfid_uid && s.rfid_uid.toLowerCase() === cleanCode.toLowerCase())
     );
-
-    if (!enrolledMatch) {
-      if (soundEnabled) await playScanErrorSound();
-      if (vibrateEnabled) Vibration.vibrate([0, 150, 100, 150]);
-      Alert.alert(
-        'Student Not in Class',
-        `This learner is not registered in ${activeSection.section_name}. Please switch to their assigned class section.`,
-        [{ text: 'OK', onPress: unlockScanningDebounce }]
-      );
-      return;
-    }
 
     setIsScanningLocked(true);
     setScanLoading(true);
@@ -230,6 +269,12 @@ export const ScannerScreen: React.FC = () => {
       const isAnomaly = Boolean(processed?.is_anomaly);
       const resultingStatus = processed?.status || scanMode;
 
+      if (!enrolledMatch && processed) {
+        enrolledMatch = studentList.find(
+          (s) => s.lrn === processed.lrn || s.id === processed.student_id
+        );
+      }
+
       if (isAnomaly) {
         if (soundEnabled) await playScanWarningSound();
         if (vibrateEnabled) Vibration.vibrate([0, 200, 100, 200]);
@@ -243,20 +288,31 @@ export const ScannerScreen: React.FC = () => {
           if (idx !== activeSectionIndex) return sec;
           return {
             ...sec,
-            students: sec.students.map((st) =>
-              st.id === enrolledMatch.id ? { ...st, attendance_status: resultingStatus } : st
-            ),
+            students: (sec.students || []).map((st) => {
+              const isTarget =
+                (enrolledMatch && st.id === enrolledMatch.id) ||
+                st.lrn === processed?.lrn ||
+                st.qr_token === cleanCode;
+              return isTarget ? { ...st, attendance_status: resultingStatus } : st;
+            }),
           };
         })
       );
 
+      const resolvedPhoto =
+        processed?.photo_url ||
+        enrolledMatch?.photo_url ||
+        enrolledMatch?.photo ||
+        null;
+
       setModalImageFailed(false);
       setLastScannedStudent({
-        name: processed?.name || enrolledMatch.full_name,
-        lrn: enrolledMatch.lrn,
-        rfid_uid: processed?.rfid_uid || enrolledMatch.rfid_uid || '',
-        photo_url: processed?.photo_url || enrolledMatch.photo_url || enrolledMatch.photo || null,
-        parent_contact: processed?.parent_contact || enrolledMatch.parent_contact || '',
+        student_id: processed?.student_id || enrolledMatch?.id,
+        name: processed?.name || enrolledMatch?.full_name || 'Learner',
+        lrn: processed?.lrn || enrolledMatch?.lrn || cleanCode,
+        rfid_uid: processed?.rfid_uid || enrolledMatch?.rfid_uid || '',
+        photo_url: resolvePhotoUri(resolvedPhoto),
+        parent_contact: processed?.parent_contact || enrolledMatch?.parent_contact || '',
         section: activeSection.section_name,
         status: resultingStatus,
         is_anomaly: isAnomaly,
@@ -270,24 +326,79 @@ export const ScannerScreen: React.FC = () => {
     } catch (err: any) {
       if (soundEnabled) await playScanErrorSound();
       if (vibrateEnabled) Vibration.vibrate([0, 100, 100, 100]);
-      const msg = err?.response?.data?.error || err?.response?.data?.detail || 'Unable to verify student attendance.';
-      Alert.alert('Scan Incomplete', msg, [{ text: 'Continue', onPress: unlockScanningDebounce }]);
+      const msg =
+        err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        `This student is not registered in ${activeSection.section_name}.`;
+      Alert.alert('Student Not in Class', msg, [{ text: 'Continue', onPress: unlockScanningDebounce }]);
     } finally {
       setScanLoading(false);
     }
   };
 
-  const presentCount = activeSection?.students.filter((s) => s.attendance_status === 'PRESENT').length || 0;
-  const lateCount = activeSection?.students.filter((s) => s.attendance_status === 'LATE').length || 0;
-  const anomalyCount =
-    activeSection?.students.filter(
-      (s) => s.attendance_status === 'UNVERIFIED' || s.attendance_status === 'CUTTING'
-    ).length || 0;
-  const unscannedCount = activeSection?.students.filter((s) => s.attendance_status === 'UNSCANNED').length || 0;
+  // Open Edit Profile for Student
+  const handleOpenEditStudent = (st: StudentItem | null) => {
+    if (!st) return;
+    setEditingStudent(st);
+    setEditContact(st.parent_contact || '');
+    setEditRfid(st.rfid_uid || '');
+  };
+
+  // Save Student Profile Details
+  const handleSaveStudentProfile = async () => {
+    if (!editingStudent) return;
+    setSavingProfile(true);
+
+    try {
+      const payload: Record<string, any> = {
+        parent_contact: editContact.trim(),
+      };
+      if (editRfid.trim()) {
+        payload.rfid_uid = editRfid.trim().toUpperCase();
+      }
+
+      const res = await apiClient.patch(`/api/students/${editingStudent.id}/`, payload);
+      Alert.alert('Updated', 'Student profile details updated successfully.');
+
+      // Update local state immediately
+      setSections((prev) =>
+        prev.map((sec) => ({
+          ...sec,
+          students: sec.students.map((s) =>
+            s.id === editingStudent.id
+              ? { ...s, parent_contact: editContact.trim(), rfid_uid: editRfid.trim().toUpperCase() }
+              : s
+          ),
+        }))
+      );
+
+      if (lastScannedStudent && lastScannedStudent.student_id === editingStudent.id) {
+        setLastScannedStudent((prev) =>
+          prev
+            ? { ...prev, parent_contact: editContact.trim(), rfid_uid: editRfid.trim().toUpperCase() }
+            : null
+        );
+      }
+
+      setEditingStudent(null);
+    } catch (err: any) {
+      Alert.alert('Save Error', err?.response?.data?.error || 'Could not update student profile.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const currentStudents = activeSection?.students || [];
+  const presentCount = currentStudents.filter((s) => s.attendance_status === 'PRESENT').length;
+  const lateCount = currentStudents.filter((s) => s.attendance_status === 'LATE').length;
+  const anomalyCount = currentStudents.filter(
+    (s) => s.attendance_status === 'UNVERIFIED' || s.attendance_status === 'CUTTING'
+  ).length;
+  const unscannedCount = currentStudents.filter((s) => s.attendance_status === 'UNSCANNED').length;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      {/* 1. Compact Terminal Clock & Scan Mode Toggle */}
+      {/* 1. Terminal Clock & Scan Mode */}
       <View style={styles.clockCard}>
         <View style={styles.clockTopRow}>
           <View style={styles.terminalIndicator}>
@@ -322,10 +433,10 @@ export const ScannerScreen: React.FC = () => {
       </View>
 
       {/* 2. Assigned Class Selector Banner */}
-      {rosterLoading ? (
+      {listLoading ? (
         <View style={styles.loadingBanner}>
           <ActivityIndicator size="small" color={COLORS.primary} />
-          <Text style={styles.loadingBannerText}>Synchronizing assigned teaching rosters...</Text>
+          <Text style={styles.loadingBannerText}>Synchronizing assigned teaching class lists...</Text>
         </View>
       ) : activeSection ? (
         <View style={styles.sectionHeaderBox}>
@@ -339,15 +450,15 @@ export const ScannerScreen: React.FC = () => {
               {`${activeSection.subject_name} • ${activeSection.section_name}`}
             </Text>
             <Text style={styles.sectionSubDetails}>
-              {activeSection.room} ({activeSection.start_time.slice(0, 5)} - {activeSection.end_time.slice(0, 5)})
+              {activeSection.room || 'Room —'} ({formatTime(activeSection.start_time)} - {formatTime(activeSection.end_time)})
             </Text>
           </TouchableOpacity>
 
           <View style={styles.sectionActionsRow}>
             <TouchableOpacity
               style={styles.refreshIconBtn}
-              onPress={fetchFacultyRoster}
-              accessibilityLabel="Reload Roster"
+              onPress={fetchFacultyStudentList}
+              accessibilityLabel="Reload Student List"
             >
               <Ionicons name="refresh" size={15} color={COLORS.primary} />
             </TouchableOpacity>
@@ -398,22 +509,20 @@ export const ScannerScreen: React.FC = () => {
         </View>
       </View>
 
-      {/* 4. Scanning Camera Viewfinder / Web Placeholder */}
+      {/* 4. Scanning Camera Viewfinder */}
       <View style={styles.viewfinderContainer}>
         <View style={styles.cameraBox}>
           {Platform.OS === 'web' ? (
             <View style={styles.permissionBox}>
               <Ionicons name="desktop-outline" size={36} color="#94a3b8" />
               <Text style={styles.permissionText}>
-                Optical QR hardware scanning is disabled in the web browser. Please use the Manual LRN button below to log students.
+                Camera scanning is active. You can scan student QR passes directly or enter the 12-digit LRN below.
               </Text>
             </View>
           ) : !permission?.granted ? (
             <View style={styles.permissionBox}>
               <Ionicons name="camera-outline" size={32} color="#94a3b8" />
-              <Text style={styles.permissionText}>
-                Camera access is required to scan student QR passes
-              </Text>
+              <Text style={styles.permissionText}>Camera access is required to scan student QR passes</Text>
               <TouchableOpacity style={styles.grantBtn} onPress={requestPermission}>
                 <Text style={styles.grantBtnText}>Grant Camera Permission</Text>
               </TouchableOpacity>
@@ -483,7 +592,7 @@ export const ScannerScreen: React.FC = () => {
           )}
         </View>
         <Text style={styles.helperText}>
-          {Platform.OS === 'web' 
+          {Platform.OS === 'web'
             ? `Logging attendance manually as ${scanMode}`
             : `Align student QR pass within viewfinder (Logging as ${scanMode})`}
         </Text>
@@ -492,13 +601,13 @@ export const ScannerScreen: React.FC = () => {
       {/* 5. Utility Controls */}
       <View style={styles.utilityRow}>
         <TouchableOpacity
-          style={[styles.rosterDrawerBtn, !activeSection && styles.btnDisabled]}
+          style={[styles.studentListBtn, !activeSection && styles.btnDisabled]}
           disabled={!activeSection}
           onPress={() => setShowRosterDrawer(true)}
         >
           <Ionicons name="people-outline" size={16} color={COLORS.primary} />
-          <Text style={styles.rosterDrawerBtnText}>
-            Class Roster ({activeSection?.total_students || 0})
+          <Text style={styles.studentListBtnText}>
+            Class Student List ({activeSection?.total_students || activeSection?.students?.length || 0})
           </Text>
         </TouchableOpacity>
 
@@ -512,7 +621,7 @@ export const ScannerScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Section Switcher Modal */}
+      {/* 6. Section Switcher Modal */}
       <Modal visible={showSectionPicker} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.pickerModalSheet}>
@@ -546,7 +655,7 @@ export const ScannerScreen: React.FC = () => {
                         {item.subject_name} • {item.section_name}
                       </Text>
                       <Text style={styles.sectionOptionSub}>
-                        {item.room} • {item.total_students} Enrolled Students
+                        {item.room || 'Room —'} • {item.total_students || item.students?.length || 0} Enrolled Students
                       </Text>
                     </View>
                     {isSelected && (
@@ -560,14 +669,14 @@ export const ScannerScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* Class Student Roster Modal */}
-      <Modal visible={showRosterDrawer} animationType="slide">
+      {/* 7. Class Student List Modal */}
+      <Modal visible={showStudentListModal} animationType="slide">
         <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
-          <View style={styles.rosterModalHeader}>
+          <View style={styles.studentListModalHeader}>
             <View>
-              <Text style={styles.rosterModalTitle}>{activeSection?.section_name} Students</Text>
-              <Text style={styles.rosterModalSub}>
-                Tap any learner row to mark them {scanMode} manually
+              <Text style={styles.studentListModalTitle}>{activeSection?.section_name} Students</Text>
+              <Text style={styles.studentListModalSub}>
+                Tap learner to mark {scanMode}, or tap the pencil icon to edit profile
               </Text>
             </View>
             <TouchableOpacity onPress={() => setShowRosterDrawer(false)} style={styles.closeBtn}>
@@ -585,61 +694,76 @@ export const ScannerScreen: React.FC = () => {
               const isFlagged =
                 item.attendance_status === 'UNVERIFIED' || item.attendance_status === 'CUTTING';
               const isUnscanned = item.attendance_status === 'UNSCANNED';
-              const avatarUri = item.photo_url || item.photo || null;
+              const avatarUri = resolvePhotoUri(item.photo_url || item.photo);
 
               return (
-                <TouchableOpacity
-                  style={styles.studentRosterRow}
-                  onPress={() => {
-                    setShowRosterDrawer(false);
-                    processStudentScan(item.lrn);
-                  }}
-                >
-                  <View style={styles.rosterAvatarBox}>
-                    {avatarUri ? (
-                      <Image source={{ uri: avatarUri }} style={styles.rosterAvatarImg} />
-                    ) : (
-                      <Ionicons name="person" size={18} color="#94a3b8" />
-                    )}
-                  </View>
-
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <Text style={styles.studentRowName}>{item.full_name}</Text>
-                    <Text style={styles.studentRowLrn}>
-                      LRN: {item.lrn}
-                      {item.rfid_uid ? ` • RFID: ${item.rfid_uid}` : ''}
-                    </Text>
-                  </View>
-
-                  <View
-                    style={[
-                      styles.statusPillSmall,
-                      isPresent && { backgroundColor: '#ecfdf5' },
-                      isLate && { backgroundColor: '#fffbeb' },
-                      isFlagged && { backgroundColor: '#fef2f2' },
-                      isUnscanned && { backgroundColor: '#f1f5f9' },
-                    ]}
+                <View style={styles.studentListRow}>
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                    onPress={() => {
+                      setShowRosterDrawer(false);
+                      processStudentScan(item.lrn);
+                    }}
                   >
-                    <Text
+                    <View style={styles.studentAvatarBox}>
+                      {avatarUri ? (
+                        <Image
+                          source={{ uri: avatarUri }}
+                          style={styles.studentAvatarImg}
+                          contentFit="cover"
+                          transition={150}
+                        />
+                      ) : (
+                        <Ionicons name="person" size={18} color="#94a3b8" />
+                      )}
+                    </View>
+
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.studentRowName}>{item.full_name}</Text>
+                      <Text style={styles.studentRowLrn}>
+                        LRN: {item.lrn}
+                        {item.rfid_uid ? ` • RFID: ${item.rfid_uid}` : ''}
+                      </Text>
+                    </View>
+
+                    <View
                       style={[
-                        styles.statusPillSmallText,
-                        isPresent && { color: '#059669' },
-                        isLate && { color: '#d97706' },
-                        isFlagged && { color: '#dc2626' },
-                        isUnscanned && { color: '#64748b' },
+                        styles.statusPillSmall,
+                        isPresent && { backgroundColor: '#ecfdf5' },
+                        isLate && { backgroundColor: '#fffbeb' },
+                        isFlagged && { backgroundColor: '#fef2f2' },
+                        isUnscanned && { backgroundColor: '#f1f5f9' },
                       ]}
                     >
-                      {item.attendance_status}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
+                      <Text
+                        style={[
+                          styles.statusPillSmallText,
+                          isPresent && { color: '#059669' },
+                          isLate && { color: '#d97706' },
+                          isFlagged && { color: '#dc2626' },
+                          isUnscanned && { color: '#64748b' },
+                        ]}
+                      >
+                        {item.attendance_status}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Edit Student Profile Button */}
+                  <TouchableOpacity
+                    style={styles.editStudentIconBtn}
+                    onPress={() => handleOpenEditStudent(item)}
+                  >
+                    <Ionicons name="create-outline" size={18} color="#004b87" />
+                  </TouchableOpacity>
+                </View>
               );
             }}
           />
         </SafeAreaView>
       </Modal>
 
-      {/* Manual LRN Dialog */}
+      {/* 8. Manual LRN Input Dialog */}
       <Modal visible={manualInputVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.inputModalSheet}>
@@ -685,7 +809,7 @@ export const ScannerScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* Verification Result Modal */}
+      {/* 9. Verification Result Modal with Real Image & Quick Edit */}
       <Modal visible={modalVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalSheet}>
@@ -707,6 +831,7 @@ export const ScannerScreen: React.FC = () => {
               </Text>
             </View>
 
+            {/* Real Student Image Circle */}
             <View
               style={[
                 styles.studentAvatarRing,
@@ -717,12 +842,14 @@ export const ScannerScreen: React.FC = () => {
                 <Image
                   source={{ uri: lastScannedStudent.photo_url }}
                   style={styles.studentAvatarImage}
+                  contentFit="cover"
+                  transition={200}
                   onError={() => setModalImageFailed(true)}
                 />
               ) : (
                 <Ionicons
                   name="person"
-                  size={38}
+                  size={42}
                   color={lastScannedStudent?.is_anomaly ? '#d97706' : COLORS.primary}
                 />
               )}
@@ -761,6 +888,30 @@ export const ScannerScreen: React.FC = () => {
               <Text style={styles.statusPillTime}>Recorded at {lastScannedStudent?.scan_time}</Text>
             </View>
 
+            {/* Quick Edit Profile Trigger */}
+            <TouchableOpacity
+              style={styles.editProfileLink}
+              onPress={() => {
+                const matched = activeSection?.students.find((s) => s.lrn === lastScannedStudent?.lrn);
+                if (matched) {
+                  handleOpenEditStudent(matched);
+                } else if (lastScannedStudent?.student_id) {
+                  handleOpenEditStudent({
+                    id: lastScannedStudent.student_id,
+                    lrn: lastScannedStudent.lrn,
+                    full_name: lastScannedStudent.name,
+                    qr_token: '',
+                    rfid_uid: lastScannedStudent.rfid_uid,
+                    parent_contact: lastScannedStudent.parent_contact,
+                    attendance_status: lastScannedStudent.status,
+                  });
+                }
+              }}
+            >
+              <Ionicons name="create-outline" size={14} color="#004b87" />
+              <Text style={styles.editProfileLinkText}>Update Student Photo or Profile</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity
               style={styles.confirmModalBtn}
               onPress={() => {
@@ -773,6 +924,81 @@ export const ScannerScreen: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      {/* 10. Student Profile Quick Editor Modal */}
+      {editingStudent && (
+        <Modal visible={Boolean(editingStudent)} transparent animationType="slide">
+          <View style={styles.modalBackdrop}>
+            <View style={styles.editProfileModalCard}>
+              <View style={styles.editProfileHeader}>
+                <Text style={styles.editProfileTitle}>Edit Student Profile</Text>
+                <TouchableOpacity onPress={() => setEditingStudent(null)}>
+                  <Ionicons name="close" size={20} color="#64748b" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <View style={{ alignItems: 'center', marginVertical: 12 }}>
+                  <View style={styles.studentAvatarRing}>
+                    {editingStudent.photo_url || editingStudent.photo ? (
+                      <Image
+                        source={{ uri: resolvePhotoUri(editingStudent.photo_url || editingStudent.photo) }}
+                        style={styles.studentAvatarImage}
+                        contentFit="cover"
+                      />
+                    ) : (
+                      <Ionicons name="person" size={38} color="#004b87" />
+                    )}
+                  </View>
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a', marginTop: 4 }}>
+                    {editingStudent.full_name}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: '#64748b' }}>LRN: {editingStudent.lrn}</Text>
+                </View>
+
+                <Text style={styles.inputFieldLabel}>Parent Mobile Contact (for SMS Alerts):</Text>
+                <TextInput
+                  style={styles.modalTextInput}
+                  value={editContact}
+                  onChangeText={setEditContact}
+                  placeholder="09123456789"
+                  keyboardType="phone-pad"
+                />
+
+                <Text style={styles.inputFieldLabel}>RFID Card UID (Optional):</Text>
+                <TextInput
+                  style={styles.modalTextInput}
+                  value={editRfid}
+                  onChangeText={setEditRfid}
+                  placeholder="e.g. CE826413"
+                  autoCapitalize="characters"
+                />
+
+                <View style={styles.modalActionsRow}>
+                  <TouchableOpacity
+                    style={styles.cancelBtn}
+                    onPress={() => setEditingStudent(null)}
+                  >
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.submitBtn, savingProfile && { opacity: 0.6 }]}
+                    onPress={handleSaveStudentProfile}
+                    disabled={savingProfile}
+                  >
+                    {savingProfile ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={styles.submitBtnText}>Save Profile</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 };
@@ -945,7 +1171,7 @@ const styles = StyleSheet.create({
   loadingOverlayText: { color: '#ffffff', fontSize: 11, fontWeight: '600', marginTop: 8 },
   helperText: { fontSize: 10.5, color: '#64748b', marginTop: 6, textAlign: 'center', fontWeight: '600' },
   utilityRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  rosterDrawerBtn: {
+  studentListBtn: {
     flex: 1.5,
     flexDirection: 'row',
     alignItems: 'center',
@@ -957,7 +1183,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#b8d6f0',
   },
-  rosterDrawerBtnText: { fontSize: 11.5, fontWeight: '700', color: '#004b87' },
+  studentListBtnText: { fontSize: 11.5, fontWeight: '700', color: '#004b87' },
   manualBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -1005,7 +1231,7 @@ const styles = StyleSheet.create({
   sectionOptionActive: { backgroundColor: '#f0f9ff', marginHorizontal: -18, paddingHorizontal: 18 },
   sectionOptionTitle: { fontSize: 13, fontWeight: '700', color: '#0f172a' },
   sectionOptionSub: { fontSize: 11, color: '#64748b', marginTop: 2 },
-  rosterModalHeader: {
+  studentListModalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -1014,17 +1240,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  rosterModalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
-  rosterModalSub: { fontSize: 11, color: '#64748b', marginTop: 1 },
+  studentListModalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+  studentListModalSub: { fontSize: 11, color: '#64748b', marginTop: 1 },
   closeBtn: { padding: 4 },
-  studentRosterRow: {
+  studentListRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  rosterAvatarBox: {
+  studentAvatarBox: {
     width: 38,
     height: 38,
     borderRadius: 19,
@@ -1035,14 +1262,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  rosterAvatarImg: { width: '100%', height: '100%' },
+  studentAvatarImg: { width: '100%', height: '100%' },
   studentRowName: { fontSize: 13, fontWeight: '700', color: '#0f172a' },
   studentRowLrn: { fontSize: 11, color: '#64748b', marginTop: 1 },
   statusPillSmall: { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 },
   statusPillSmallText: { fontSize: 9.5, fontWeight: '800' },
+  editStudentIconBtn: { padding: 8, marginLeft: 4 },
   inputModalSheet: { width: '100%', backgroundColor: '#ffffff', borderRadius: 20, padding: 18 },
   inputModalTitle: { fontSize: 15, fontWeight: '700', color: '#0f172a' },
   inputModalSub: { fontSize: 11.5, color: '#64748b', marginTop: 2, marginBottom: 12 },
+  inputFieldLabel: { fontSize: 11.5, fontWeight: '700', color: '#475569', marginBottom: 4 },
   modalTextInput: {
     borderWidth: 1,
     borderColor: '#cbd5e1',
@@ -1052,8 +1281,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     backgroundColor: '#f8fafc',
     marginBottom: 12,
+    color: '#0f172a',
   },
-  modalActionsRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
+  modalActionsRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
   cancelBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#f1f5f9' },
   cancelBtnText: { fontSize: 12, fontWeight: '600', color: '#475569' },
   submitBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, backgroundColor: '#004b87' },
@@ -1068,11 +1298,11 @@ const styles = StyleSheet.create({
   successHeadingGroup: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   modalHeadingText: { fontSize: 14, fontWeight: '800', color: '#065f46' },
   studentAvatarRing: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
     backgroundColor: '#f0f9ff',
-    borderWidth: 2.5,
+    borderWidth: 3,
     borderColor: '#004b87',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1105,15 +1335,40 @@ const styles = StyleSheet.create({
   },
   statusPillTitle: { fontSize: 13, fontWeight: '800', color: '#047857' },
   statusPillTime: { fontSize: 10.5, color: '#065f46', marginTop: 1 },
+  editProfileLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  editProfileLinkText: { fontSize: 11.5, fontWeight: '700', color: '#004b87', textDecorationLine: 'underline' },
   confirmModalBtn: {
     width: '100%',
     backgroundColor: '#004b87',
     borderRadius: 10,
     paddingVertical: 11,
     alignItems: 'center',
-    marginTop: 14,
+    marginTop: 10,
   },
   confirmModalBtnText: { color: '#ffffff', fontSize: 12.5, fontWeight: '800' },
+  editProfileModalCard: {
+    width: '100%',
+    maxHeight: '80%',
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 18,
+  },
+  editProfileHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  editProfileTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
 });
 
 export default ScannerScreen;

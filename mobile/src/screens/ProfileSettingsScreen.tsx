@@ -144,7 +144,7 @@ export const ProfileSettingsScreen: React.FC = () => {
     sessionUser?.bound_device_id ||
     null;
 
-  // Real-time clearance payload formatted for gate turnstile scanners
+  // Real-time clearance payload formatted for gate gate scanner scanners
   const gatePassPayload = JSON.stringify({
     app: 'ATTENDSURE_GATE_V3',
     emp_id: displayId,

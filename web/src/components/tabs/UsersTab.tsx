@@ -1,12 +1,14 @@
 /**
- * AttendSure - User Accounts & Role-Based Access Control (RBAC)
- * File: frontend/src/components/tabs/UsersTab.tsx
+ * AttendSure - Users & Security Access Management
+ * File: web/src/components/tabs/UsersTab.tsx
  *
- * Key Capabilities:
- * 1. Explicit support for Admin, Faculty/Admin, Principal, Dept Head, Faculty, and Guard.
- * 2. Dual-Role toggle lets Principals, Dept Heads, and Admins also teach classes.
- * 3. Live field validation (username availability, email format, password complexity).
- * 4. Self-lockout guard prevents the active admin from deleting or suspending their own account.
+ * Cybersecurity & Architecture:
+ * 1. Single Point Registration: All staff and faculty are enrolled here.
+ * 2. Automated Directory Filtering: Users with "Can Teach" enabled automatically appear
+ *    in the Faculty tab; non-teaching users show only in the Users tab.
+ * 3. Complete Attribute Ingestion: Employee ID, Name, Department, Position, Contact, and RFID UID.
+ * 4. Password Security: Passwords hashed securely on the server with real-time complexity checks.
+ * 5. Simple English Terms: Clean labels with Lucide SVG icons (no emojis).
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -32,22 +34,29 @@ import {
   Check,
   BookOpen,
   CheckCircle2,
-  Clock,
+  Phone,
+  Briefcase,
+  Building,
+  CreditCard,
+  GraduationCap,
 } from 'lucide-react';
-
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
 
 export interface SystemUser {
   id: number;
   username: string;
-  email?: string;
+  employee_id?: string;
   first_name?: string;
+  middle_name?: string;
   last_name?: string;
+  suffix?: string;
+  full_name?: string;
+  email?: string;
+  contact_number?: string;
+  department?: string;
+  position?: string;
+  rfid_uid?: string;
   role?: string;
   current_role?: string;
-  role_display?: string;
   is_teaching?: boolean;
   can_teach?: boolean;
   is_profile_completed?: boolean;
@@ -57,28 +66,56 @@ export interface SystemUser {
   is_active: boolean;
 }
 
-interface PaginatedResponse<T> {
-  count: number;
-  total_pages?: number;
-  current_page?: number;
-  results: T[];
-}
-
-// Standardized RBAC Security Roles (Including Faculty / Admin Dual Role)
 const RBAC_ROLES = [
-  { value: 'ADMIN', label: 'System Administrator', color: '#6366f1', bg: '#e0e7ff' },
-  { value: 'FACULTY_ADMIN', label: 'Faculty / System Admin (Dual Role)', color: '#4f46e5', bg: '#eef2ff' },
+  { value: 'FACULTY', label: 'Classroom Teacher', color: '#004b87', bg: '#e0f2fe' },
+  { value: 'FACULTY_ADMIN', label: 'Faculty / Admin (Dual Role)', color: '#4f46e5', bg: '#eef2ff' },
+  { value: 'ADMIN', label: 'System Administrator', color: '#0f172a', bg: '#f1f5f9' },
   { value: 'PRINCIPAL', label: 'School Principal', color: '#059669', bg: '#d1fae5' },
   { value: 'DEPT_HEAD', label: 'Department Head', color: '#0284c7', bg: '#e0f2fe' },
-  { value: 'FACULTY', label: 'Classroom Faculty / Teacher', color: '#0d9488', bg: '#ccfbf1' },
-  { value: 'GUARD', label: 'Gate Security / Guard', color: '#d97706', bg: '#fef3c7' },
+  { value: 'GUARD', label: 'Gate Security Guard', color: '#d97706', bg: '#fef3c7' },
+];
+
+const DEPARTMENTS_LIST = [
+  'Junior High School',
+  'Senior High School',
+  'English Department',
+  'Science Department',
+  'Mathematics Department',
+  'Filipino Department',
+  'Araling Panlipunan Department',
+  'MAPEH Department',
+  'TLE / TVL Department',
+  'Values Education (EsP) Department',
+  'Office of the Principal / Administration',
+  'Security & Gate Operations',
+];
+
+const POSITIONS_LIST = [
+  'Faculty I',
+  'Faculty II',
+  'Faculty III',
+  'Master Faculty I',
+  'Master Faculty II',
+  'Head Faculty I',
+  'Head Faculty II',
+  'Secondary School Principal IV',
+  'Assistant School Principal',
+  'Security Officer',
+  'Administrative Assistant',
 ];
 
 const INITIAL_FORM = {
   username: '',
-  email: '',
+  employee_id: '',
   first_name: '',
+  middle_name: '',
   last_name: '',
+  suffix: '',
+  email: '',
+  contact_number: '',
+  department: 'Junior High School',
+  position: 'Faculty I',
+  rfid_uid: '',
   role: 'FACULTY',
   is_teaching: true,
   is_active: true,
@@ -86,24 +123,17 @@ const INITIAL_FORM = {
   photo: null as string | null,
 };
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-
 export const UsersTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
-
-  // Active logged-in username to prevent self-deletion
   const currentLoggedUsername = (localStorage.getItem('attendsure_username') || '').trim().toLowerCase();
 
-  // --- Table & Filter State ---
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState<string>('');
   const [roleFilter, setRoleFilter] = useState<string>('');
+  const [teachingFilter, setTeachingFilter] = useState<string>('');
 
-  // --- CRUD Modal Dialog States ---
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingUser, setEditingUser] = useState<SystemUser | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
@@ -117,7 +147,6 @@ export const UsersTab: React.FC = () => {
   const isInteracting = useRef<boolean>(false);
   isInteracting.current = isModalOpen;
 
-  // --- Live Validation State ---
   const [liveErrors, setLiveErrors] = useState<{
     username?: string;
     email?: string;
@@ -125,7 +154,7 @@ export const UsersTab: React.FC = () => {
   }>({});
   const [isCheckingUsername, setIsCheckingUsername] = useState(false);
 
-  // 1. Live Format & Password Strength Check (Instant as you type)
+  // Real-time field validation
   useEffect(() => {
     const newErrors: { username?: string; email?: string; password?: string } = {};
 
@@ -157,7 +186,7 @@ export const UsersTab: React.FC = () => {
     }));
   }, [formData.username, formData.email, formData.password]);
 
-  // 2. Live Database Duplicate Check for Username (Debounced 400ms)
+  // Real-time server check for username availability
   useEffect(() => {
     const cleanUser = formData.username.trim();
     if (!isModalOpen || cleanUser.length < 3 || /\s/.test(cleanUser)) return;
@@ -173,7 +202,7 @@ export const UsersTab: React.FC = () => {
           },
         });
         if (!res.data.valid) {
-          setLiveErrors((prev) => ({ ...prev, username: res.data.message }));
+          setLiveErrors((prev) => ({ ...prev, username: res.data.message || 'Username already taken.' }));
         } else {
           setLiveErrors((prev) => ({
             ...prev,
@@ -181,7 +210,6 @@ export const UsersTab: React.FC = () => {
           }));
         }
       } catch {
-        // Ignore network errors during silent check
       } finally {
         setIsCheckingUsername(false);
       }
@@ -192,44 +220,14 @@ export const UsersTab: React.FC = () => {
 
   const hasLiveErrors = Boolean(liveErrors.username || liveErrors.email || liveErrors.password);
 
-  // ============================================================================
-  // CLIPBOARD HELPER
-  // ============================================================================
-
   const handleCopy = async (text: string, id: string) => {
-    let success = false;
-    if (navigator.clipboard && window.isSecureContext) {
-      try {
-        await navigator.clipboard.writeText(text);
-        success = true;
-      } catch {
-        success = false;
-      }
-    }
-    if (!success) {
-      try {
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        success = document.execCommand('copy');
-        textArea.remove();
-      } catch (err) {
-        console.error('Clipboard copy error:', err);
-      }
-    }
-    if (success) {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
       setCopiedKey(id);
       setTimeout(() => setCopiedKey(null), 2000);
-    }
+    } catch {}
   };
-
-  // ============================================================================
-  // DATABASE DATA FETCHING & LIVE POLLING
-  // ============================================================================
 
   const fetchUsers = useCallback(async (query = '', silent = false) => {
     if (activeAbortController.current) {
@@ -242,10 +240,8 @@ export const UsersTab: React.FC = () => {
       if (!silent) setLoading(true);
       setError(null);
 
-      const res = await apiClient.get<PaginatedResponse<SystemUser> | SystemUser[]>('/users/', {
-        params: {
-          search: query.trim() || undefined,
-        },
+      const res = await apiClient.get('/users/', {
+        params: { search: query.trim() || undefined },
         signal: controller.signal,
       });
 
@@ -257,11 +253,9 @@ export const UsersTab: React.FC = () => {
         : [];
       setUsers(items);
     } catch (err: any) {
-      if (err.name === 'CanceledError' || err.name === 'AbortError') {
-        return;
-      }
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       if (!silent) {
-        setError('Unable to load user accounts. System Administrator privileges are required.');
+        setError('Unable to load user accounts. Administrator permissions required.');
       }
     } finally {
       if (!silent) setLoading(false);
@@ -273,32 +267,16 @@ export const UsersTab: React.FC = () => {
     return () => clearTimeout(timeout);
   }, [search, fetchUsers]);
 
-  useEffect(() => {
-    const liveInterval = setInterval(() => {
-      if (!isInteracting.current) {
-        fetchUsers(search, true);
-      }
-    }, 3000);
-
-    return () => clearInterval(liveInterval);
-  }, [search, fetchUsers]);
-
-  // ============================================================================
-  // PHOTO UPLOAD HANDLER
-  // ============================================================================
-
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedTypes.includes(file.type)) {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
       showAlert({
-        title: 'Unsupported Image Format',
-        message: 'Only JPG, PNG, and WebP images are permitted.',
+        title: 'Unsupported Image',
+        message: 'Only JPG, PNG, and WebP images are allowed.',
         type: 'error',
       });
-      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
@@ -308,28 +286,17 @@ export const UsersTab: React.FC = () => {
         message: 'Profile picture must be 2.5 MB or smaller.',
         type: 'error',
       });
-      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
     const reader = new FileReader();
     reader.onloadend = () => {
-      const base64String = reader.result as string;
-      setPhotoPreview(base64String);
-      setFormData((prev) => ({ ...prev, photo: base64String }));
+      const b64 = reader.result as string;
+      setPhotoPreview(b64);
+      setFormData((prev) => ({ ...prev, photo: b64 }));
     };
     reader.readAsDataURL(file);
   };
-
-  const handleRemovePhoto = () => {
-    setPhotoPreview(null);
-    setFormData((prev) => ({ ...prev, photo: '' }));
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  // ============================================================================
-  // CRUD ACTIONS
-  // ============================================================================
 
   const handleOpenCreate = () => {
     setEditingUser(null);
@@ -337,7 +304,6 @@ export const UsersTab: React.FC = () => {
     setLiveErrors({});
     setPhotoPreview(null);
     setShowPassword(false);
-    if (fileInputRef.current) fileInputRef.current.value = '';
     setIsModalOpen(true);
   };
 
@@ -348,19 +314,25 @@ export const UsersTab: React.FC = () => {
         ? Boolean(user.is_teaching)
         : user.can_teach !== undefined
         ? Boolean(user.can_teach)
-        : rawRole !== 'GUARD' && rawRole !== 'ADMIN';
+        : rawRole !== 'GUARD';
 
-    const effectiveDropdownRole =
-      rawRole === 'ADMIN' && isTeach ? 'FACULTY_ADMIN' : rawRole;
+    const effectiveRole = rawRole === 'ADMIN' && isTeach ? 'FACULTY_ADMIN' : rawRole;
 
     setEditingUser(user);
     setLiveErrors({});
     setFormData({
       username: user.username || '',
-      email: user.email || '',
+      employee_id: user.employee_id || user.username || '',
       first_name: user.first_name || '',
+      middle_name: user.middle_name || '',
       last_name: user.last_name || '',
-      role: effectiveDropdownRole,
+      suffix: user.suffix || '',
+      email: user.email || '',
+      contact_number: user.contact_number || '',
+      department: user.department || 'Junior High School',
+      position: user.position || 'Faculty I',
+      rfid_uid: user.rfid_uid || '',
+      role: effectiveRole,
       is_teaching: isTeach,
       is_active: user.is_active ?? true,
       password: '',
@@ -368,7 +340,6 @@ export const UsersTab: React.FC = () => {
     });
     setPhotoPreview(user.photo_url || user.photo || null);
     setShowPassword(false);
-    if (fileInputRef.current) fileInputRef.current.value = '';
     setIsModalOpen(true);
   };
 
@@ -377,7 +348,7 @@ export const UsersTab: React.FC = () => {
 
     if (hasLiveErrors) {
       showAlert({
-        title: 'Validation Error',
+        title: 'Form Notice',
         message: 'Please resolve the highlighted field errors before saving.',
         type: 'error',
       });
@@ -387,8 +358,8 @@ export const UsersTab: React.FC = () => {
     const cleanUsername = formData.username.trim().replace(/\s+/g, '');
     if (!cleanUsername) {
       showAlert({
-        title: 'Invalid Username',
-        message: 'Username cannot be empty or contain spaces.',
+        title: 'Username Required',
+        message: 'Username cannot be blank or contain spaces.',
         type: 'error',
       });
       return;
@@ -396,7 +367,7 @@ export const UsersTab: React.FC = () => {
 
     if (!editingUser && formData.password.trim().length < 8) {
       showAlert({
-        title: 'Weak Password',
+        title: 'Password Required',
         message: 'Initial password must be at least 8 characters long.',
         type: 'error',
       });
@@ -405,22 +376,20 @@ export const UsersTab: React.FC = () => {
 
     setSaving(true);
     try {
-      const isFacultyAdmin = formData.role === 'FACULTY_ADMIN';
-      const finalBackendRole = isFacultyAdmin ? 'ADMIN' : formData.role;
-      const finalIsTeaching =
-        isFacultyAdmin || formData.role === 'FACULTY'
-          ? true
-          : formData.role === 'GUARD'
-          ? false
-          : formData.is_teaching;
-
       const payload: Record<string, any> = {
         username: cleanUsername,
-        email: formData.email.trim().toLowerCase(),
+        employee_id: (formData.employee_id.trim() || cleanUsername).toUpperCase(),
         first_name: formData.first_name.trim(),
+        middle_name: formData.middle_name.trim(),
         last_name: formData.last_name.trim(),
-        role: finalBackendRole,
-        is_teaching: finalIsTeaching,
+        suffix: formData.suffix.trim(),
+        email: formData.email.trim().toLowerCase(),
+        contact_number: formData.contact_number.trim(),
+        department: formData.department.trim(),
+        position: formData.position.trim(),
+        rfid_uid: formData.rfid_uid.trim().toUpperCase() || null,
+        role: formData.role,
+        is_teaching: formData.is_teaching,
         is_active: formData.is_active,
       };
 
@@ -433,34 +402,31 @@ export const UsersTab: React.FC = () => {
       }
 
       if (editingUser) {
-        const res = await apiClient.put<SystemUser>(`/users/${editingUser.id}/`, payload);
-        setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? res.data : u)));
+        await apiClient.put(`/users/${editingUser.id}/`, payload);
         showAlert({
-          title: 'Account Updated',
-          message: `Saved changes for @${cleanUsername}.`,
+          title: 'Account Saved',
+          message: `Saved updates for @${cleanUsername}. Teaching permissions synchronized.`,
           type: 'success',
         });
       } else {
-        const res = await apiClient.post<SystemUser>('/users/', payload);
-        setUsers((prev) => [res.data, ...prev]);
+        await apiClient.post('/users/', payload);
         showAlert({
-          title: 'User Created & Synced to Faculty',
-          message: `Account @${cleanUsername} created. It now reflects in the Faculty tab, and the user will complete their profile upon first login.`,
+          title: 'Account Registered',
+          message: `@${cleanUsername} is registered. ${formData.is_teaching ? 'This faculty member now appears in the Faculty tab.' : 'Non-teaching user stored only in Users tab.'}`,
           type: 'success',
         });
       }
+
       setIsModalOpen(false);
       fetchUsers(search, true);
     } catch (err: any) {
       const errMsg =
         err.response?.data?.username?.[0] ||
-        err.response?.data?.password?.[0] ||
-        err.response?.data?.email?.[0] ||
-        err.response?.data?.detail ||
         err.response?.data?.error ||
+        err.response?.data?.detail ||
         'Failed to save user account.';
       showAlert({
-        title: 'Operation Failed',
+        title: 'Save Failed',
         message: errMsg,
         type: 'error',
       });
@@ -472,7 +438,7 @@ export const UsersTab: React.FC = () => {
   const promptDelete = (user: SystemUser) => {
     if (user.username.trim().toLowerCase() === currentLoggedUsername) {
       showAlert({
-        title: 'Action Blocked',
+        title: 'Action Denied',
         message: 'You cannot delete your own active administrator account.',
         type: 'error',
       });
@@ -480,8 +446,8 @@ export const UsersTab: React.FC = () => {
     }
 
     showConfirm({
-      title: 'Delete System Account',
-      message: `Permanently delete user account "@${user.username}"?`,
+      title: 'Delete User Account',
+      message: `Permanently delete account "@${user.username}"? Associated teaching and roster profiles will also be unlinked.`,
       confirmLabel: 'Delete Account',
       isDestructive: true,
       onConfirm: async () => {
@@ -489,14 +455,14 @@ export const UsersTab: React.FC = () => {
           await apiClient.delete(`/users/${user.id}/`);
           setUsers((prev) => prev.filter((u) => u.id !== user.id));
           showAlert({
-            title: 'Account Deleted',
-            message: `User @${user.username} has been removed.`,
+            title: 'Account Removed',
+            message: `User @${user.username} was deleted.`,
             type: 'info',
           });
-        } catch (err: any) {
+        } catch {
           showAlert({
-            title: 'Delete Failed',
-            message: err?.response?.data?.detail || 'Failed to delete user account.',
+            title: 'Delete Error',
+            message: 'Unable to delete user account.',
             type: 'error',
           });
         }
@@ -504,135 +470,84 @@ export const UsersTab: React.FC = () => {
     });
   };
 
-  const getRoleBadge = (user: SystemUser) => {
-    const baseRole = (user.role || 'FACULTY').toUpperCase();
-    const isTeach = Boolean(user.is_teaching ?? user.can_teach ?? baseRole === 'FACULTY');
-    const lookupRole = baseRole === 'ADMIN' && isTeach ? 'FACULTY_ADMIN' : baseRole;
-
-    const matched = RBAC_ROLES.find((r) => r.value === lookupRole) || {
-      label: lookupRole,
-      color: '#475569',
-      bg: '#f1f5f9',
-    };
-
-    const showSecondaryFacultyBadge =
-      (baseRole === 'PRINCIPAL' || baseRole === 'DEPT_HEAD') && isTeach;
-
-    return (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-            padding: '3px 9px',
-            borderRadius: 12,
-            fontSize: '0.72rem',
-            fontWeight: 800,
-            color: matched.color,
-            backgroundColor: matched.bg,
-            border: `1px solid ${matched.color}30`,
-          }}
-        >
-          <Shield size={11} color={matched.color} />
-          {matched.label}
-        </span>
-
-        {showSecondaryFacultyBadge && (
-          <span
-            title="Holds dual role: Leadership + Classroom Faculty"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: '2px 7px',
-              borderRadius: 10,
-              fontSize: '0.68rem',
-              fontWeight: 700,
-              color: '#0d9488',
-              backgroundColor: '#f0fdfa',
-              border: '1px solid #99f6e4',
-            }}
-          >
-            <BookOpen size={10} color="#0d9488" />
-            + Faculty
-          </span>
-        )}
-      </div>
-    );
-  };
-
-  // Client-side search and role filter
   const filteredUsers = users.filter((u) => {
     const q = search.toLowerCase();
     const name = `${u.first_name || ''} ${u.last_name || ''}`.toLowerCase();
     const matchesSearch =
       (u.username || '').toLowerCase().includes(q) ||
       (u.email || '').toLowerCase().includes(q) ||
+      (u.employee_id || '').toLowerCase().includes(q) ||
       name.includes(q);
 
-    if (!roleFilter) return matchesSearch;
+    const matchesRole = !roleFilter || (u.current_role || u.role || '').toUpperCase() === roleFilter;
 
-    const baseRole = (u.role || 'FACULTY').toUpperCase();
-    const isTeach = Boolean(u.is_teaching ?? u.can_teach ?? baseRole === 'FACULTY');
-    const effectiveRole = baseRole === 'ADMIN' && isTeach ? 'FACULTY_ADMIN' : baseRole;
-
-    if (roleFilter === 'FACULTY') {
-      return matchesSearch && (effectiveRole === 'FACULTY' || isTeach);
+    let matchesTeaching = true;
+    if (teachingFilter === 'CAN_TEACH') {
+      matchesTeaching = Boolean(u.is_teaching ?? u.can_teach);
+    } else if (teachingFilter === 'CANT_TEACH') {
+      matchesTeaching = !Boolean(u.is_teaching ?? u.can_teach);
     }
-    return matchesSearch && (effectiveRole === roleFilter || baseRole === roleFilter);
+
+    return matchesSearch && matchesRole && matchesTeaching;
   });
 
-  // Telemetry Counters
   const activeCount = users.filter((u) => u.is_active).length;
-  const leadershipCount = users.filter((u) =>
-    ['ADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes((u.current_role || u.role || '').toUpperCase())
-  ).length;
-  const pendingProfileCount = users.filter((u) => u.is_profile_completed === false).length;
+  const canTeachCount = users.filter((u) => Boolean(u.is_teaching ?? u.can_teach)).length;
+  const cantTeachCount = users.length - canTeachCount;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* 1. Telemetry Summary Cards */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
+      {/* 1. System Account Telemetry Summary */}
       <div style={statsGrid}>
         <div style={statCard}>
-          <div style={statLabel}>TOTAL SYSTEM ACCOUNTS</div>
+          <div style={statLabel}>TOTAL REGISTERED USERS</div>
           <div style={statValue}>{users.length}</div>
-          <div style={statHelp}>Linked to Faculty &amp; Staff Directory</div>
+          <div style={statHelp}>System master user accounts</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={statLabel}>CAN TEACH (IN FACULTY TAB)</div>
+          <div style={{ ...statValue, color: '#004b87' }}>{canTeachCount}</div>
+          <div style={statHelp}>Visible in Faculty tab &amp; schedules</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={statLabel}>CANNOT TEACH (USERS ONLY)</div>
+          <div style={{ ...statValue, color: '#64748b' }}>{cantTeachCount}</div>
+          <div style={statHelp}>Staff, guards &amp; admin-only</div>
         </div>
 
         <div style={statCard}>
           <div style={statLabel}>ACTIVE ACCOUNTS</div>
           <div style={{ ...statValue, color: '#059669' }}>{activeCount}</div>
-          <div style={statHelp}>Authorized for portal &amp; mobile login</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>ADMIN, PRINCIPAL &amp; DEPT HEAD</div>
-          <div style={{ ...statValue, color: '#0284c7' }}>{leadershipCount}</div>
-          <div style={statHelp}>Includes dual-role Faculty / Admin users</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>PENDING PROFILE SETUP</div>
-          <div style={{ ...statValue, color: '#d97706' }}>{pendingProfileCount}</div>
-          <div style={statHelp}>Awaiting user completion on login</div>
+          <div style={statHelp}>Authorized for portal login</div>
         </div>
       </div>
 
-      {/* 2. Header Control Bar */}
+      {/* 2. Control Bar with Filters & Add Button */}
       <div style={controlBar}>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <select
             value={roleFilter}
             onChange={(e) => setRoleFilter(e.target.value)}
             style={selectPill}
           >
-            <option value="">All Security Roles</option>
+            <option value="">All Roles</option>
             {RBAC_ROLES.map((r) => (
               <option key={r.value} value={r.value}>
                 {r.label}
               </option>
             ))}
+          </select>
+
+          <select
+            value={teachingFilter}
+            onChange={(e) => setTeachingFilter(e.target.value)}
+            style={selectPill}
+          >
+            <option value="">All Status</option>
+            <option value="CAN_TEACH">Can Teach (In Faculty Tab)</option>
+            <option value="CANT_TEACH">Cannot Teach (Users Tab Only)</option>
           </select>
         </div>
 
@@ -641,187 +556,190 @@ export const UsersTab: React.FC = () => {
           size="md"
           type="button"
           onClick={handleOpenCreate}
-          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, backgroundColor: '#004b87', borderColor: '#004b87' }}
         >
-          <Plus size={16} />
-          Add User Account
+          <Plus size={15} />
+          Register User / Faculty
         </Button>
       </div>
 
       {/* 3. Main Users Table */}
-      <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-        <ModuleTableLayout
-          title="User Accounts & Security"
-          subtitle="Create accounts for Admin, Faculty/Admin, Principal, Dept Head, and Faculty. Created users automatically appear in the Faculty tab."
-          searchPlaceholder="Search by username, full name, or email..."
-          searchValue={search}
-          onSearchChange={setSearch}
-          loading={loading}
-          error={error}
-          data={filteredUsers}
-          keyExtractor={(u) => u.id}
-          columns={[
-            {
-              header: 'User Identity',
-              render: (u) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={avatarBox}>
-                    {u.photo_url || u.photo ? (
-                      <img
-                        src={u.photo_url || u.photo || ''}
-                        alt={u.username}
-                        style={avatarImg}
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <User size={20} color="#94a3b8" />
-                    )}
-                  </div>
-
-                  <div>
-                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.88rem' }}>
-                      {u.first_name || u.last_name
-                        ? `${u.first_name || ''} ${u.last_name || ''}`.trim()
-                        : u.username}
+      <div style={{ backgroundColor: '#ffffff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <ModuleTableLayout
+            title="Users & Access Control"
+            subtitle="All faculty, guards, and leadership are registered here. Enabling 'Can Teach' automatically displays the member in the Faculty tab."
+            searchPlaceholder="Search by username, name, employee ID, or email..."
+            searchValue={search}
+            onSearchChange={setSearch}
+            loading={loading}
+            error={error}
+            data={filteredUsers}
+            keyExtractor={(u) => u.id}
+            columns={[
+              {
+                header: 'User Profile & Identity',
+                render: (u) => (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={avatarBox}>
+                      {u.photo_url || u.photo ? (
+                        <img src={u.photo_url || u.photo || ''} alt={u.username} style={avatarImg} />
+                      ) : (
+                        <User size={18} color="#94a3b8" />
+                      )}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                      <span style={{ fontSize: '0.74rem', color: '#64748b', fontFamily: 'monospace' }}>
-                        @{u.username}
+                    <div>
+                      <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.86rem' }}>
+                        {u.full_name || `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                        <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
+                          ID: {u.employee_id || u.username}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(u.username, `user-${u.id}`)}
+                          title="Copy Username"
+                          style={copyMiniBtn}
+                        >
+                          {copiedKey === `user-${u.id}` ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                header: 'Role & Faculty Visibility',
+                render: (u) => {
+                  const canTeach = Boolean(u.is_teaching ?? u.can_teach);
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ ...rolePillStyle, backgroundColor: '#eff6ff', color: '#004b87' }}>
+                        <Shield size={11} /> {u.current_role || u.role || 'FACULTY'}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopy(u.username, `user-${u.id}`)}
-                        title="Copy Username"
-                        style={copyMiniBtn}
+                      <span
+                        style={{
+                          ...rolePillStyle,
+                          backgroundColor: canTeach ? '#ecfdf5' : '#f1f5f9',
+                          color: canTeach ? '#047857' : '#64748b',
+                          border: `1px solid ${canTeach ? '#a7f3d0' : '#e2e8f0'}`,
+                        }}
                       >
-                        {copiedKey === `user-${u.id}` ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
-                      </button>
+                        {canTeach ? <GraduationCap size={11} /> : <User size={11} />}
+                        {canTeach ? 'Can Teach (In Faculty Tab)' : 'Cannot Teach (Users Only)'}
+                      </span>
+                    </div>
+                  );
+                },
+              },
+              {
+                header: 'Department & Position',
+                render: (u) => (
+                  <div>
+                    <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.80rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Briefcase size={12} color="#004b87" /> {u.position || 'Classroom Teacher'}
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                      <Building size={12} color="#94a3b8" /> {u.department || 'Junior High School'}
                     </div>
                   </div>
-                </div>
-              ),
-            },
-            {
-              header: 'Email Address',
-              render: (u) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', color: '#334155' }}>
-                  <Mail size={13} color="#64748b" />
-                  {u.email ? (
-                    <span>{u.email}</span>
-                  ) : (
-                    <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>Pending user setup</span>
-                  )}
-                </div>
-              ),
-            },
-            {
-              header: 'Security Role & Duties',
-              render: (u) => getRoleBadge(u),
-            },
-            {
-              header: 'Profile Setup',
-              render: (u) => {
-                const completed = u.is_profile_completed ?? Boolean(u.first_name && u.last_name);
-                return (
+                ),
+              },
+              {
+                header: 'Contact & Gate Card',
+                render: (u) => (
+                  <div>
+                    <div style={{ fontSize: '0.74rem', color: '#334155', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Phone size={11} color="#64748b" /> {u.contact_number || '—'}
+                    </div>
+                    <div style={{ fontSize: '0.70rem', color: u.rfid_uid ? '#059669' : '#94a3b8', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                      <CreditCard size={11} /> {u.rfid_uid || 'No Card'}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                header: 'Status',
+                render: (u) => (
                   <span
                     style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      fontSize: '0.72rem',
-                      fontWeight: 700,
-                      color: completed ? '#059669' : '#d97706',
+                      padding: '3px 8px',
+                      borderRadius: 12,
+                      fontSize: '0.68rem',
+                      fontWeight: 800,
+                      backgroundColor: u.is_active ? '#ecfdf5' : '#fef2f2',
+                      color: u.is_active ? '#059669' : '#dc2626',
+                      border: `1px solid ${u.is_active ? '#a7f3d0' : '#fecaca'}`,
                     }}
                   >
-                    {completed ? <CheckCircle2 size={13} /> : <Clock size={13} />}
-                    {completed ? 'Completed' : 'Pending User Setup'}
+                    {u.is_active ? 'ACTIVE' : 'SUSPENDED'}
                   </span>
-                );
+                ),
               },
-            },
-            {
-              header: 'Status',
-              render: (u) => (
-                <span
-                  style={{
-                    padding: '3px 8px',
-                    borderRadius: 12,
-                    fontSize: '0.70rem',
-                    fontWeight: 800,
-                    letterSpacing: '0.3px',
-                    backgroundColor: u.is_active ? '#ecfdf5' : '#fef2f2',
-                    color: u.is_active ? '#059669' : '#dc2626',
-                    border: `1px solid ${u.is_active ? '#a7f3d0' : '#fecaca'}`,
-                  }}
-                >
-                  {u.is_active ? 'ACTIVE' : 'SUSPENDED'}
-                </span>
-              ),
-            },
-            {
-              header: 'Actions',
-              align: 'right',
-              render: (u) => {
-                const isSelf = u.username.trim().toLowerCase() === currentLoggedUsername;
-                return (
-                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEdit(u)}
-                      title="Edit User & Role"
-                      style={{ ...actionBtn, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}
-                    >
-                      <Pencil size={13} color="#0284c7" />
-                    </button>
+              {
+                header: 'Actions',
+                align: 'right',
+                render: (u) => {
+                  const isSelf = u.username.trim().toLowerCase() === currentLoggedUsername;
+                  return (
+                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEdit(u)}
+                        title="Edit User & Permissions"
+                        style={actionBtn}
+                      >
+                        <Pencil size={13} color="#004b87" />
+                      </button>
 
-                    <button
-                      type="button"
-                      disabled={isSelf}
-                      onClick={() => promptDelete(u)}
-                      title={isSelf ? 'Cannot delete your own active account' : 'Delete User'}
-                      style={{
-                        ...actionBtn,
-                        backgroundColor: '#fff1f2',
-                        borderColor: '#fecdd3',
-                        opacity: isSelf ? 0.35 : 1,
-                        cursor: isSelf ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      <Trash2 size={13} color="#e11d48" />
-                    </button>
-                  </div>
-                );
+                      <button
+                        type="button"
+                        disabled={isSelf}
+                        onClick={() => promptDelete(u)}
+                        title={isSelf ? 'Cannot delete your active account' : 'Delete Account'}
+                        style={{
+                          ...actionBtn,
+                          backgroundColor: '#fef2f2',
+                          borderColor: '#fee2e2',
+                          opacity: isSelf ? 0.35 : 1,
+                          cursor: isSelf ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        <Trash2 size={13} color="#dc2626" />
+                      </button>
+                    </div>
+                  );
+                },
               },
-            },
-          ]}
-        />
+            ]}
+          />
+        </div>
       </div>
 
-      {/* 4. MODAL: CREATE & EDIT USER (WITH LIVE VALIDATION) */}
+      {/* 4. Complete Registration & Edit Modal */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingUser ? `Edit Account: @${editingUser.username}` : 'Create System Account'}
+        title={editingUser ? `Edit User: @${editingUser.username}` : 'Register User / Faculty'}
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Portrait Photo Upload Area */}
+          {/* Photo Upload */}
           <div style={photoUploadContainer}>
             <div style={photoPreviewBox}>
               {photoPreview ? (
-                <img src={photoPreview} alt="Avatar Preview" style={photoPreviewImg} />
+                <img src={photoPreview} alt="Preview" style={photoPreviewImg} />
               ) : (
-                <User size={30} color="#94a3b8" />
+                <User size={28} color="#94a3b8" />
               )}
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-              <span style={{ fontSize: '0.80rem', fontWeight: 800, color: '#0f172a' }}>
-                Profile Picture (Optional)
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0f172a' }}>
+                Profile Portrait Picture
               </span>
-              <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
-                User can also upload their own photo when completing their profile.
+              <span style={{ fontSize: '0.68rem', color: '#64748b' }}>
+                JPEG, PNG, or WebP under 2.5 MB.
               </span>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
@@ -838,8 +756,15 @@ export const UsersTab: React.FC = () => {
                 </label>
 
                 {photoPreview && (
-                  <button type="button" onClick={handleRemovePhoto} style={removePhotoBtn}>
-                    <X size={13} />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPhotoPreview(null);
+                      setFormData((p) => ({ ...p, photo: '' }));
+                    }}
+                    style={removePhotoBtn}
+                  >
+                    <X size={12} />
                     <span>Remove</span>
                   </button>
                 )}
@@ -847,43 +772,44 @@ export const UsersTab: React.FC = () => {
             </div>
           </div>
 
-          {/* Username / Employee ID with Live Validation */}
-          <div>
-            <label style={labelStyle}>Username / Employee ID *</label>
-            <input
-              type="text"
-              required
-              value={formData.username}
-              onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-              style={{
-                ...inputStyle,
-                borderColor: liveErrors.username ? '#dc2626' : formData.username.length >= 3 ? '#059669' : '#cbd5e1',
-              }}
-              placeholder="e.g. EMP-2026-001 or maria_santos"
-            />
-            {isCheckingUsername && (
-              <span style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 3, display: 'block' }}>
-                Checking availability...
-              </span>
-            )}
-            {!isCheckingUsername && liveErrors.username && (
-              <span style={{ fontSize: '0.72rem', color: '#dc2626', fontWeight: 600, marginTop: 3, display: 'block' }}>
-                {liveErrors.username}
-              </span>
-            )}
-            {!isCheckingUsername && !liveErrors.username && formData.username.length >= 3 && (
-              <span style={{ fontSize: '0.72rem', color: '#059669', fontWeight: 600, marginTop: 3, display: 'block' }}>
-                ✓ Username is available
-              </span>
-            )}
-          </div>
-
-          {/* First & Last Name */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {/* Credentials: Username & Employee ID */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
             <div>
-              <label style={labelStyle}>First Name (User can complete later)</label>
+              <label style={labelStyle}>Username (Login ID) *</label>
               <input
                 type="text"
+                required
+                value={formData.username}
+                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                style={{
+                  ...inputStyle,
+                  borderColor: liveErrors.username ? '#dc2626' : formData.username.length >= 3 ? '#059669' : '#cbd5e1',
+                }}
+                placeholder="e.g. maria_santos"
+              />
+              {liveErrors.username && <span style={errorTextStyle}>{liveErrors.username}</span>}
+            </div>
+
+            <div>
+              <label style={labelStyle}>Employee ID *</label>
+              <input
+                type="text"
+                required
+                value={formData.employee_id}
+                onChange={(e) => setFormData({ ...formData, employee_id: e.target.value.toUpperCase() })}
+                style={inputStyle}
+                placeholder="e.g. EMP-2026-004"
+              />
+            </div>
+          </div>
+
+          {/* Full Name Fields */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 10 }}>
+            <div>
+              <label style={labelStyle}>First Name *</label>
+              <input
+                type="text"
+                required
                 value={formData.first_name}
                 onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
                 style={inputStyle}
@@ -891,164 +817,173 @@ export const UsersTab: React.FC = () => {
               />
             </div>
             <div>
-              <label style={labelStyle}>Last Name (User can complete later)</label>
+              <label style={labelStyle}>Middle Name</label>
               <input
                 type="text"
+                value={formData.middle_name}
+                onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })}
+                style={inputStyle}
+                placeholder="Optional"
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>Last Name *</label>
+              <input
+                type="text"
+                required
                 value={formData.last_name}
                 onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
                 style={inputStyle}
                 placeholder="Last name"
               />
             </div>
+            <div>
+              <label style={labelStyle}>Suffix</label>
+              <input
+                type="text"
+                value={formData.suffix}
+                onChange={(e) => setFormData({ ...formData, suffix: e.target.value })}
+                style={inputStyle}
+                placeholder="Jr., III..."
+              />
+            </div>
           </div>
 
-          {/* Email Address with Live Validation */}
-          <div>
-            <label style={labelStyle}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Mail size={12} color="#64748b" /> Email Address
-              </span>
-            </label>
-            <input
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              style={{
-                ...inputStyle,
-                borderColor: liveErrors.email ? '#dc2626' : '#cbd5e1',
-              }}
-              placeholder="user@attendsure.edu.ph"
-            />
-            {liveErrors.email && (
-              <span style={{ fontSize: '0.72rem', color: '#dc2626', fontWeight: 600, marginTop: 3, display: 'block' }}>
-                {liveErrors.email}
-              </span>
-            )}
+          {/* Contact Details */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
+            <div>
+              <label style={labelStyle}>Email Address</label>
+              <input
+                type="email"
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                style={inputStyle}
+                placeholder="faculty@attendsure.edu.ph"
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>Phone Number (For SMS &amp; 2FA)</label>
+              <input
+                type="text"
+                value={formData.contact_number}
+                onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
+                style={inputStyle}
+                placeholder="09171234567"
+              />
+            </div>
           </div>
 
-          {/* Security Role */}
+          {/* Role & Teaching Clearance */}
           <div>
-            <label style={labelStyle}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Shield size={12} color="#0284c7" /> RBAC Permission Tier *
-              </span>
-            </label>
+            <label style={labelStyle}>RBAC System Role *</label>
             <select
               value={formData.role}
               onChange={(e) => {
                 const newRole = e.target.value;
+                const canTeachDefault = newRole === 'FACULTY' || newRole === 'FACULTY_ADMIN';
                 setFormData({
                   ...formData,
                   role: newRole,
-                  is_teaching:
-                    newRole === 'FACULTY' || newRole === 'FACULTY_ADMIN'
-                      ? true
-                      : newRole === 'GUARD' || newRole === 'ADMIN'
-                      ? false
-                      : true,
+                  is_teaching: newRole === 'GUARD' ? false : canTeachDefault ? true : formData.is_teaching,
                 });
               }}
               style={inputStyle}
             >
-              {RBAC_ROLES.map((role) => (
-                <option key={role.value} value={role.value}>
-                  {role.label}
+              {RBAC_ROLES.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
                 </option>
               ))}
             </select>
           </div>
 
-          {/* Dual-Role Checkbox for Principal, Dept Head, or Admin */}
-          {(formData.role === 'PRINCIPAL' || formData.role === 'DEPT_HEAD' || formData.role === 'ADMIN') && (
-            <label style={checkboxCard}>
-              <input
-                type="checkbox"
-                checked={formData.is_teaching}
-                onChange={(e) => setFormData({ ...formData, is_teaching: e.target.checked })}
-                style={{ width: 16, height: 16, accentColor: '#0284c7', cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: '0.80rem', fontWeight: 800, color: '#0f172a' }}>
-                  Also serves as Classroom Faculty (Dual Role)
-                </span>
-                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                  Enables the "My Assigned Classes" tab for this {formData.role.replace('_', ' ')} so they can manage their own teaching load.
-                </span>
-              </div>
-            </label>
-          )}
+          {/* "Can Teach" Checkbox */}
+          <label style={teachingCardStyle(formData.is_teaching)}>
+            <input
+              type="checkbox"
+              checked={formData.is_teaching}
+              onChange={(e) => setFormData({ ...formData, is_teaching: e.target.checked })}
+              style={{ width: 18, height: 18, accentColor: '#004b87', cursor: 'pointer' }}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{ fontSize: '0.80rem', fontWeight: 800, color: formData.is_teaching ? '#004b87' : '#0f172a' }}>
+                Can Teach Classes (Visible in Faculty Tab &amp; Timetables)
+              </span>
+              <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
+                {formData.is_teaching
+                  ? 'Active: This member will appear in the Faculty tab, advisee sections, and class schedules.'
+                  : 'Inactive: Non-teaching user. Will appear ONLY in the Users tab.'}
+              </span>
+            </div>
+          </label>
 
-          {/* Account Active / Suspended Switch (When Editing) */}
-          {editingUser && editingUser.username.trim().toLowerCase() !== currentLoggedUsername && (
-            <label style={checkboxCard}>
-              <input
-                type="checkbox"
-                checked={formData.is_active}
-                onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                style={{ width: 16, height: 16, accentColor: '#059669', cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: '0.80rem', fontWeight: 800, color: '#0f172a' }}>
-                  Account Active (Permit Login)
-                </span>
-                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                  Uncheck to suspend this user's access immediately while keeping their historical DTR and attendance records.
-                </span>
-              </div>
-            </label>
-          )}
+          {/* Department, Position & RFID */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
+            <div>
+              <label style={labelStyle}>Department</label>
+              <select
+                value={formData.department}
+                onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                style={inputStyle}
+              >
+                {DEPARTMENTS_LIST.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {/* Password Field with Show/Hide Toggle & Live Strength Indicator */}
+            <div>
+              <label style={labelStyle}>Official Position / Title</label>
+              <select
+                value={formData.position}
+                onChange={(e) => setFormData({ ...formData, position: e.target.value })}
+                style={inputStyle}
+              >
+                {POSITIONS_LIST.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Gate Scanner RFID Card UID</label>
+            <input
+              type="text"
+              placeholder="e.g. 5A92B1C4"
+              value={formData.rfid_uid}
+              onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })}
+              style={{ ...inputStyle, fontFamily: 'monospace' }}
+            />
+          </div>
+
+          {/* Password */}
           <div>
             <label style={labelStyle}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Lock size={12} color="#64748b" />{' '}
-                {editingUser ? 'Reset Password (Optional, min 8 chars)' : 'Temporary Password (Min 8 chars) *'}
-              </span>
+              {editingUser ? 'Reset Password (Optional, min 8 chars)' : 'Initial Password (Min 8 chars) *'}
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 type={showPassword ? 'text' : 'password'}
                 required={!editingUser}
                 minLength={8}
-                placeholder={editingUser ? 'Leave blank to keep current password' : 'Minimum 8 characters (letters + numbers)'}
+                placeholder={editingUser ? 'Leave blank to preserve current password' : 'Minimum 8 characters'}
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                style={{
-                  ...inputStyle,
-                  paddingRight: 38,
-                  borderColor: liveErrors.password ? '#dc2626' : formData.password.length >= 8 ? '#059669' : '#cbd5e1',
-                }}
+                style={{ ...inputStyle, paddingRight: 36 }}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                style={{
-                  position: 'absolute',
-                  right: 10,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  color: '#64748b',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                }}
+                style={eyeToggleBtn}
               >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </div>
-            {liveErrors.password && (
-              <span style={{ fontSize: '0.72rem', color: '#dc2626', fontWeight: 600, marginTop: 3, display: 'block' }}>
-                {liveErrors.password}
-              </span>
-            )}
-            {!liveErrors.password && formData.password.length >= 8 && (
-              <span style={{ fontSize: '0.72rem', color: '#059669', fontWeight: 600, marginTop: 3, display: 'block' }}>
-                ✓ Strong password
-              </span>
-            )}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
@@ -1060,9 +995,10 @@ export const UsersTab: React.FC = () => {
               size="md"
               type="submit"
               disabled={saving || hasLiveErrors || isCheckingUsername}
+              style={{ backgroundColor: '#004b87', borderColor: '#004b87' }}
             >
-              {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : null}
-              {editingUser ? 'Save Updates' : 'Create User Account'}
+              {saving ? <Loader2 className="animate-spin" size={16} /> : null}
+              {editingUser ? 'Save Updates' : 'Register User'}
             </Button>
           </div>
         </form>
@@ -1071,30 +1007,26 @@ export const UsersTab: React.FC = () => {
   );
 };
 
-export default UsersTab;
-
-// ============================================================================
-// STYLES
-// ============================================================================
-
+// Styles
 const statsGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
-  gap: 14,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
+  gap: 12,
 };
 
 const statCard: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
   border: '1px solid #e2e8f0',
-  padding: '14px 16px',
+  padding: '12px 16px',
 };
 
 const statLabel: React.CSSProperties = {
-  fontSize: '0.66rem',
-  fontWeight: 700,
+  fontSize: '0.64rem',
+  fontWeight: 800,
   color: '#64748b',
   marginBottom: 4,
+  letterSpacing: '0.4px',
 };
 
 const statValue: React.CSSProperties = {
@@ -1107,7 +1039,7 @@ const statValue: React.CSSProperties = {
 const statHelp: React.CSSProperties = {
   fontSize: '0.68rem',
   color: '#94a3b8',
-  marginTop: 4,
+  marginTop: 3,
 };
 
 const controlBar: React.CSSProperties = {
@@ -1118,13 +1050,15 @@ const controlBar: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 10,
   border: '1px solid #e2e8f0',
+  flexWrap: 'wrap',
+  gap: 10,
 };
 
 const selectPill: React.CSSProperties = {
   border: '1px solid #cbd5e1',
-  borderRadius: 8,
+  borderRadius: 6,
   padding: '6px 12px',
-  fontSize: '0.80rem',
+  fontSize: '0.78rem',
   color: '#334155',
   outline: 'none',
   backgroundColor: '#ffffff',
@@ -1132,8 +1066,8 @@ const selectPill: React.CSSProperties = {
 };
 
 const avatarBox: React.CSSProperties = {
-  width: 40,
-  height: 40,
+  width: 38,
+  height: 38,
   borderRadius: '50%',
   backgroundColor: '#f1f5f9',
   border: '1px solid #e2e8f0',
@@ -1159,11 +1093,22 @@ const copyMiniBtn: React.CSSProperties = {
   alignItems: 'center',
 };
 
+const rolePillStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 7px',
+  borderRadius: 10,
+  fontSize: '0.68rem',
+  fontWeight: 700,
+  width: 'fit-content',
+};
+
 const actionBtn: React.CSSProperties = {
   background: '#f8fafc',
   border: '1px solid #cbd5e1',
   borderRadius: 6,
-  padding: '6px 8px',
+  padding: '5px 7px',
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
@@ -1172,7 +1117,7 @@ const actionBtn: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = {
   display: 'block',
-  fontSize: '0.78rem',
+  fontSize: '0.76rem',
   fontWeight: 700,
   color: '#334155',
   marginBottom: 4,
@@ -1183,37 +1128,37 @@ const inputStyle: React.CSSProperties = {
   padding: '8px 12px',
   borderRadius: 6,
   border: '1px solid #cbd5e1',
-  fontSize: '0.84rem',
+  fontSize: '0.82rem',
   outline: 'none',
   boxSizing: 'border-box',
   color: '#0f172a',
   backgroundColor: '#ffffff',
 };
 
-const checkboxCard: React.CSSProperties = {
+const teachingCardStyle = (isActive: boolean): React.CSSProperties => ({
   display: 'flex',
   alignItems: 'flex-start',
   gap: 10,
   padding: '10px 12px',
-  backgroundColor: '#f8fafc',
+  backgroundColor: isActive ? '#f0f9ff' : '#f8fafc',
   borderRadius: 8,
-  border: '1px solid #cbd5e1',
+  border: `1.5px solid ${isActive ? '#004b87' : '#cbd5e1'}`,
   cursor: 'pointer',
-};
+});
 
 const photoUploadContainer: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 14,
-  padding: '12px 14px',
+  padding: '10px 12px',
   backgroundColor: '#f8fafc',
   borderRadius: 8,
   border: '1px solid #e2e8f0',
 };
 
 const photoPreviewBox: React.CSSProperties = {
-  width: 58,
-  height: 58,
+  width: 52,
+  height: 52,
   borderRadius: '50%',
   backgroundColor: '#ffffff',
   border: '1px solid #cbd5e1',
@@ -1235,7 +1180,7 @@ const uploadBtnLabel: React.CSSProperties = {
   alignItems: 'center',
   gap: 5,
   padding: '5px 10px',
-  backgroundColor: '#0284c7',
+  backgroundColor: '#004b87',
   color: '#ffffff',
   borderRadius: 6,
   fontSize: '0.72rem',
@@ -1247,12 +1192,35 @@ const removePhotoBtn: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
-  padding: '5px 8px',
+  padding: '4px 8px',
   backgroundColor: '#ffffff',
   color: '#dc2626',
   border: '1px solid #fecaca',
   borderRadius: 6,
-  fontSize: '0.72rem',
+  fontSize: '0.70rem',
   fontWeight: 600,
   cursor: 'pointer',
 };
+
+const eyeToggleBtn: React.CSSProperties = {
+  position: 'absolute',
+  right: 10,
+  top: '50%',
+  transform: 'translateY(-50%)',
+  background: 'none',
+  border: 'none',
+  color: '#64748b',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+};
+
+const errorTextStyle: React.CSSProperties = {
+  fontSize: '0.70rem',
+  color: '#dc2626',
+  fontWeight: 600,
+  marginTop: 3,
+  display: 'block',
+};
+
+export default UsersTab;

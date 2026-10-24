@@ -1,35 +1,37 @@
 """
 AttendSure V3 - API Routing Architecture
 File: backend/apps/api/urls.py
-
-Cybersecurity & Performance:
-1. Constant O(1) Route Matching: Clean ordering prevents route collisions.
-2. Conflict-Free Imports: Separates scanner and telemetry views cleanly.
-3. Parametric Protection: Uses strict <int:...> path converters to prevent path traversal attacks.
-4. Fast Telemetry: Dedicated asynchronous heartbeat route without duplicate handlers.
 """
 
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-# Gate Turnstile & Mobile Wake-Up Views
+# Gate Scanner & Mobile Wake-Up Views
 from apps.scanners.views import KioskHeartbeatView, GateScanAPIView
 
 # Live Telemetry & Anti-Cheating View
 from apps.telemetry.views import AsyncTelemetryHeartbeatView
 
-# Geofence & Hardware Device Lock Views
-from .geofence_views import (
+# Direct Geofence Views from views/geofence.py
+from .views.geofence import (
     FacultyDeviceResetAPIView,
     GeofenceCheckInAPIView,
     GeofenceStatusAPIView,
+)
+
+# Classroom Attendance & Class List Views (Direct Import)
+from .views.classroom import (
+    ClassListAPIView,
+    ClassroomBatchScanAPIView,
+    FacultyClassroomListAPIView, FacultyClassroomRosterAPIView,
+    MyAssignedClassesAPIView,
+    StudentListAPIView,
 )
 
 # Core API Views
 from .views import (
     BulkSmsStatusAPIView,
     CalendarExceptionAPIView,
-    ClassroomBatchScanAPIView,
     CurrentUserProfileView,
     CurrentUserView,
     DashboardOverviewAPIView,
@@ -38,7 +40,6 @@ from .views import (
     DepEdSF2DataAPIView,
     DepEdSF4DataAPIView,
     DTRListAPIView,
-    FacultyClassroomRosterAPIView,
     FacultyViewSet,
     GateLogsAPIView,
     GatePassViewSet,
@@ -46,7 +47,6 @@ from .views import (
     LiveFieldValidationAPIView,
     LoginAPIView,
     MarkSmsStatusAPIView,
-    MyAssignedClassesAPIView,
     PendingSmsDispatchAPIView,
     RegisterPushTokenAPIView,
     ReportAuditLogAPIView,
@@ -86,7 +86,7 @@ router.register(r'grade-levels', GradeLevelViewSet, basename='grade-levels')
 router.register(r'sms-outbox', SmsOutboxViewSet, basename='sms-outbox')
 
 # ============================================================================
-# 2. MAIN URL ROUTING (ORDER OF SPECIFICITY ENFORCED)
+# 2. MAIN URL ROUTING
 # ============================================================================
 urlpatterns = [
     # --- Authentication, Profile & Hardware Push Registration ---
@@ -98,7 +98,7 @@ urlpatterns = [
     path('validate-field/', LiveFieldValidationAPIView.as_view(), name='api-validate-field'),
     path('users/register-push-token/', RegisterPushTokenAPIView.as_view(), name='api-register-push-token'),
 
-    # --- SMS Gateway Management ---
+    # --- SMS Management ---
     path(
         'sms-outbox/delete-delivered/',
         SmsOutboxViewSet.as_view({'delete': 'delete_delivered', 'post': 'delete_delivered'}),
@@ -151,14 +151,19 @@ urlpatterns = [
     path('geofence/', GeofenceStatusAPIView.as_view(), name='api-geofence'),
     path('campus/geofence/', GeofenceStatusAPIView.as_view(), name='api-campus-geofence-alias'),
     path('geofence/checkin/', GeofenceCheckInAPIView.as_view(), name='api-geofence-checkin'),
+    path('geofence/check-in/', GeofenceCheckInAPIView.as_view(), name='api-geofence-checkin-alias'),
 
     # --- Gate Scanner Operations (Card Taps & Barcode Scans) ---
     path('gate/scan/', GateScanAPIView.as_view(), name='api-gate-scan'),
     path('gate/logs/', GateLogsAPIView.as_view(), name='api-gate-logs'),
     path('faculty-gate-logs/', GateLogsAPIView.as_view(), name='api-faculty-gate-logs-alias'),
 
-    # --- Classroom Roster & Attendance ---
-    path('classroom/roster/', FacultyClassroomRosterAPIView.as_view(), name='api-classroom-roster'),
+    # --- Classroom Class List & Attendance (Resolves Mobile 404s) ---
+    path('classroom/class_list/', ClassListAPIView.as_view(), name='api-classroom-class-list'),
+    path('classroom/class-list/', ClassListAPIView.as_view(), name='api-classroom-class-list-dash'),
+    path('classroom/classes/', ClassListAPIView.as_view(), name='api-classroom-classes-alias'),
+    path('classroom/student_list/', FacultyClassroomListAPIView.as_view(), name='api-classroom-student_list'),
+    path('classroom/student-list/', FacultyClassroomListAPIView.as_view(), name='api-classroom-student_list-dash'),
     path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='api-classroom-batch-scan'),
     path('classroom/my-classes/', MyAssignedClassesAPIView.as_view(), name='api-classroom-my-classes'),
     path('my-classes/', MyAssignedClassesAPIView.as_view(), name='api-my-classes-root'),
@@ -167,7 +172,7 @@ urlpatterns = [
     path('scanners/heartbeat/', KioskHeartbeatView.as_view(), name='api-kiosk-heartbeat'),
     path('telemetry/heartbeat/', AsyncTelemetryHeartbeatView.as_view(), name='api-telemetry-heartbeat'),
 
-    # --- CSC Form 48 / DTR Records ---
+    # --- CSC DTR / Form 48 Records ---
     path('dtr/', DTRListAPIView.as_view(), name='api-dtr'),
     path('dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='api-dtr-detail'),
     path('faculty/dtr/', DTRListAPIView.as_view(), name='api-faculty-dtr-alias'),
@@ -193,6 +198,6 @@ urlpatterns = [
     path('core/maintenance/db-check/', db_check, name='db-check'),
     path('core/maintenance/flush-cache/', flush_cache, name='flush-cache'),
 
-    # --- ViewSet Router (Placed Last for Catch-All Resolution) ---
+    # --- ViewSet Router ---
     path('', include(router.urls)),
 ]

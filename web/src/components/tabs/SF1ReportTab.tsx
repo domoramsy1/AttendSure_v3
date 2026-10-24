@@ -1,11 +1,6 @@
 /**
  * AttendSure - DepEd School Form 1 (SF 1) School Register
- * File: frontend/src/components/tabs/SF1ReportTab.tsx
- *
- * Fixes Applied:
- * 1. IMPLEMENTED EXPORT HANDLERS: Added handleExportWord and mapped handleExportJSON to onExportJson.
- * 2. HEADER LOCKED TO PAGE 1: DepEd letterhead only appears on page 1 across all layout modes.
- * 3. DMOS COMPLIANCE: 0.76" seals, Old English Text MT, Tahoma headings, and Calibri footer.
+ * File: web/src/components/tabs/SF1ReportTab.tsx
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -18,6 +13,7 @@ import { usePageSetup } from '../../hooks/usePageSetup';
 import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2, Users, Split } from 'lucide-react';
+import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
 
 interface Learner {
   id: number;
@@ -54,8 +50,12 @@ interface SF1Data {
   as_of_date?: string;
   section_name: string;
   grade_level: string;
+  school_address?: string;
+  school_contact?: string;
+  school_email?: string;
   left_logo?: string | null;
   right_logo?: string | null;
+  school_logo?: string | null;
   has_enrolled_students?: boolean;
   notice?: string;
   total_male: number;
@@ -67,9 +67,9 @@ interface SF1Data {
   learners?: Learner[];
 }
 
-interface SF1PageChunk {
+export interface SF1PageChunk {
   pageNumber: number;
-  totalPages?: number;
+  totalPages: number;
   learners: Learner[];
   startIndex: number;
   showFullHeader: boolean;
@@ -303,11 +303,11 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     [reportData, maleCount, femaleCount]
   );
 
-  const activeRosterList = useMemo(() => {
+  const activeStudentList = useMemo(() => {
     return groupingMode === 'COMBINED' ? sortedCombinedLearners : [...maleLearners, ...femaleLearners];
   }, [groupingMode, sortedCombinedLearners, maleLearners, femaleLearners]);
 
-  const isRosterEmpty = activeRosterList.length === 0;
+  const isListEmpty = activeStudentList.length === 0;
 
   const auditMeta = useMemo(() => {
     const now = new Date();
@@ -344,17 +344,18 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         timestamp: new Date().toISOString(),
       });
     } catch {
-      // Offline fallback
+      // Non-blocking offline fallback
     }
   };
 
+  // Clean 2-Page Pagination without Blank Page Glitches
   const paginatedPages = useMemo(() => {
-    if (activePageConfig.layoutMode === 'pageless' || activeRosterList.length <= 25) {
+    if (activePageConfig.layoutMode === 'pageless') {
       return [
         {
           pageNumber: 1,
           totalPages: 1,
-          learners: activeRosterList,
+          learners: activeStudentList,
           startIndex: 0,
           showFullHeader: true,
           showFooter: true,
@@ -370,18 +371,18 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     const fullHeaderH = 1.35;
     const theadH = 0.40;
     const trackingH = 0.22;
-    const footerH = 2.10;
-    const rowH = 0.18;
+    const footerH = 2.45;
+    const rowH = 0.20;
 
     const singlePageOverhead = fullHeaderH + theadH + footerH + trackingH;
     const singlePageCapacity = Math.floor((printableHeight - singlePageOverhead) / rowH);
 
-    if (activeRosterList.length <= singlePageCapacity) {
+    if (activeStudentList.length <= singlePageCapacity) {
       return [
         {
           pageNumber: 1,
           totalPages: 1,
-          learners: activeRosterList,
+          learners: activeStudentList,
           startIndex: 0,
           showFullHeader: true,
           showFooter: true,
@@ -389,58 +390,30 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       ];
     }
 
-    const pages: SF1PageChunk[] = [];
-    let currentIdx = 0;
-    const totalLearners = activeRosterList.length;
+    // Clean 2-Page split: Page 1 holds full header & ~24 rows; Page 2 holds rest + summary/footer
+    const page1Capacity = Math.max(10, Math.floor((printableHeight - (fullHeaderH + theadH + trackingH)) / rowH));
+    const page1Learners = activeStudentList.slice(0, page1Capacity);
+    const page2Learners = activeStudentList.slice(page1Capacity);
 
-    while (currentIdx < totalLearners) {
-      const pageNum: number = pages.length + 1;
-      const isFirstPage = pageNum === 1;
-      const showFullHeader = isFirstPage; // STRICT: Only Page 1 gets the letterhead
-
-      const remaining = totalLearners - currentIdx;
-      const overheadWithFooter = (showFullHeader ? fullHeaderH : 0) + theadH + footerH + trackingH;
-      const capacityWithFooter = Math.floor((printableHeight - overheadWithFooter) / rowH);
-
-      if (remaining <= capacityWithFooter) {
-        pages.push({
-          pageNumber: pageNum,
-          learners: activeRosterList.slice(currentIdx, currentIdx + remaining),
-          startIndex: currentIdx,
-          showFullHeader,
-          showFooter: true,
-        });
-        currentIdx += remaining;
-      } else {
-        const overheadWithoutFooter = (showFullHeader ? fullHeaderH : 0) + theadH + trackingH;
-        const capacityWithoutFooter = Math.max(5, Math.floor((printableHeight - overheadWithoutFooter) / rowH));
-        const sliceCount = Math.min(remaining, capacityWithoutFooter);
-
-        pages.push({
-          pageNumber: pageNum,
-          learners: activeRosterList.slice(currentIdx, currentIdx + sliceCount),
-          startIndex: currentIdx,
-          showFullHeader,
-          showFooter: false,
-        });
-        currentIdx += sliceCount;
-      }
-    }
-
-    if (pages.length > 0 && !pages[pages.length - 1].showFooter) {
-      const pageNum: number = pages.length + 1;
-      pages.push({
-        pageNumber: pageNum,
-        learners: [],
-        startIndex: totalLearners,
+    return [
+      {
+        pageNumber: 1,
+        totalPages: 2,
+        learners: page1Learners,
+        startIndex: 0,
+        showFullHeader: true,
+        showFooter: false,
+      },
+      {
+        pageNumber: 2,
+        totalPages: 2,
+        learners: page2Learners,
+        startIndex: page1Capacity,
         showFullHeader: false,
         showFooter: true,
-      });
-    }
-
-    const totalPages: number = pages.length;
-    return pages.map((p) => ({ ...p, totalPages }));
-  }, [activePageConfig, activeRosterList, pageHeightInches]);
+      },
+    ];
+  }, [activePageConfig, activeStudentList, pageHeightInches]);
 
   const parseGuardian = (name: string, rel: string) => {
     const commonRel = ['MOTHER', 'FATHER', 'AUNT', 'UNCLE', 'GRANDMOTHER', 'GRANDFATHER', 'GUARDIAN'];
@@ -608,7 +581,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       'Contact Number', 'Remarks'
     ];
 
-    const rows = activeRosterList.map((l, idx) => {
+    const rows = activeStudentList.map((l, idx) => {
       const { gName, gRel } = parseGuardian(l.guardian_name, l.guardian_relationship);
       return [
         idx + 1,
@@ -656,98 +629,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
     await saveFileWithPicker(blob, `${getBaseFilename()}.json`, 'application/json', 'json', 'JSON Document (*.json)');
     showAlert({ title: 'JSON Exported', message: 'SF1 JSON export ready.', type: 'success' });
-  };
-
-  const renderHeader = () => {
-    const effectiveLeftLogo = reportData?.left_logo || school.left_logo;
-    const effectiveRightLogo = reportData?.right_logo || school.right_logo;
-    const effectiveSchoolName = reportData?.school_name || school.school_name;
-    const effectiveSchoolId = reportData?.school_id || school.school_id;
-    const effectiveDivision = reportData?.division || school.division;
-    const effectiveRegion = reportData?.region || school.region;
-    const effectiveDistrict = reportData?.district || school.district;
-
-    return (
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
-        <div style={{ flexShrink: 0, width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {effectiveLeftLogo ? (
-            <img src={effectiveLeftLogo} alt="Left Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-          ) : null}
-        </div>
-
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ textAlign: 'center', marginBottom: 6 }}>
-            <div style={republicStyle}>
-              Republic of the Philippines
-            </div>
-            <div style={depedTitleStyle}>
-              Department of Education
-            </div>
-            {effectiveRegion && (
-              <div style={regionalOfficeStyle}>
-                {effectiveRegion.toUpperCase()}
-              </div>
-            )}
-            {effectiveDivision && (
-              <div style={officeStyle}>
-                {effectiveDivision.toUpperCase()}
-              </div>
-            )}
-
-            <div style={{ fontFamily: 'Tahoma, Arial, sans-serif', fontSize: '10.5pt', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: 4, color: '#000000' }}>
-              School Form 1 (SF 1) School Register
-            </div>
-            <div style={{ fontSize: '6.0pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
-              (This replaces Form 1, Master List &amp; STS Form 2-Family Background and Profile)
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', width: '22%' }}>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 62, flexShrink: 0, color: '#000000' }}>School ID</span>
-                <div style={{ ...fieldBoxStyle, width: 88 }}>{effectiveSchoolId}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '26%', paddingRight: 8 }}>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 48, flexShrink: 0, color: '#000000' }}>Region</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{effectiveRegion}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '28%', paddingRight: 8 }}>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 52, flexShrink: 0, color: '#000000' }}>Division</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{effectiveDivision}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '24%' }}>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 48, flexShrink: 0, color: '#000000' }}>District</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{effectiveDistrict}</div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', width: '42%' }}>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 78, flexShrink: 0, color: '#000000' }}>School Name</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 8 }}>{effectiveSchoolName}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '25%', paddingRight: 8 }}>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 68, flexShrink: 0, color: '#000000' }}>School Year</span>
-                <div style={{ ...fieldBoxStyle, flex: 1 }}>{reportData?.academic_year}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '33%' }}>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 62, flexShrink: 0, color: '#000000' }}>Grade Level</span>
-                <div style={{ ...fieldBoxStyle, width: 48, flexShrink: 0, marginRight: 8 }}>{reportData?.grade_level}</div>
-                <span style={{ fontWeight: 700, fontSize: '7.2pt', width: 42, flexShrink: 0, color: '#000000' }}>Section</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>{reportData?.section_name}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ flexShrink: 0, width: '0.76in', height: '0.76in', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          {effectiveRightLogo ? (
-            <img src={effectiveRightLogo} alt="Right Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-          ) : null}
-        </div>
-      </div>
-    );
   };
 
   const renderTableHeader = () => (
@@ -913,25 +794,14 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         </tbody>
       </table>
 
-      {/* Official DepEd Manual of Style Footer */}
-      <div style={dmosFooterStyle}>
-        <div style={{ width: '0.76in', height: '0.76in', minWidth: '0.76in', minHeight: '0.76in', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {(school.school_logo || school.left_logo) ? (
-            <img
-              src={school.school_logo || school.left_logo || ''}
-              alt="School Seal"
-              style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }}
-            />
-          ) : null}
-        </div>
-
-        <div style={dmosFooterDetailsStyle}>
-          <div><strong>Address:</strong> {school.address || 'Lapasan, Cagayan de Oro City, Northern Mindanao, 9000'}</div>
-          <div>
-            <strong>Contact No.:</strong> {school.contact_number || '(088) 856-1234'} &bull; <strong>Email:</strong> {school.email || 'lapasan.nhs@deped.gov.ph'}
-          </div>
-        </div>
-      </div>
+      {/* Centralized Dynamic DepEd DMOS Footer Sourced From Database */}
+      <DepEdReportFooter
+        sealUrl={school.school_logo}
+        address={reportData?.school_address || school.address}
+        contactNumber={reportData?.school_contact || school.contact_number}
+        email={reportData?.school_email || school.email}
+        reportData={reportData}
+      />
     </div>
   );
 
@@ -976,7 +846,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         isExporting={exportingPdf}
       />
 
-      {/* Control Strip */}
       <div className="no-print" style={controlStripStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -991,9 +860,8 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
           <div style={{ height: 20, width: 1, backgroundColor: '#cbd5e1' }} />
 
-          {/* Roster Grouping Mode Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Roster Layout:</span>
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Student List Layout:</span>
             <div style={{ display: 'flex', backgroundColor: '#f1f5f9', padding: 2, borderRadius: 6, border: '1px solid #cbd5e1' }}>
               <button
                 type="button"
@@ -1003,7 +871,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                   backgroundColor: groupingMode === 'COMBINED' ? '#0284c7' : 'transparent',
                   color: groupingMode === 'COMBINED' ? '#ffffff' : '#64748b',
                 }}
-                title="Single combined alphabetical learner roster (Default)"
+                title="Single combined alphabetical learner student list (Default)"
               >
                 <Users size={12} />
                 <span>One List (Default)</span>
@@ -1017,7 +885,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                   backgroundColor: groupingMode === 'SEPARATED' ? '#0284c7' : 'transparent',
                   color: groupingMode === 'SEPARATED' ? '#ffffff' : '#64748b',
                 }}
-                title="Separate male and female roster sections"
+                title="Separate male and female student list sections"
               >
                 <Split size={12} />
                 <span>Separate by Sex</span>
@@ -1067,7 +935,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         </div>
       </div>
 
-      {/* Synchronized Viewport Preview Container */}
       <div ref={viewportContainerRef} style={viewerScrollContainerStyle}>
         {loading ? (
           <div style={loadingStateStyle}>
@@ -1121,16 +988,22 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                       padding: `${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in`,
                       backgroundColor: activePageConfig.pageColor || '#ffffff',
                       fontSize: fontSizes.table,
-                      pageBreakBefore: page.pageNumber > 1 ? 'always' : 'auto',
                     }}
                   >
-                    {/* Header ALWAYS ONLY on Page 1 */}
-                    {page.pageNumber === 1 && renderHeader()}
+                    {/* Header strictly on Page 1 */}
+                    {page.pageNumber === 1 && (
+                      <DepEdReportHeader
+                        formTitle="School Form 1 (SF 1) School Register"
+                        formSubtitle="(This replaces Form 1, Master List & STS Form 2-Family Background and Profile)"
+                        formType="SF1"
+                        reportData={reportData}
+                      />
+                    )}
 
                     <table style={mainTableStyle}>
                       {renderTableHeader()}
                       <tbody>
-                        {isRosterEmpty ? (
+                        {isListEmpty ? (
                           <tr>
                             <td colSpan={20} style={{ textAlign: 'center', padding: '36px', fontWeight: 'bold', fontSize: '7.5pt' }}>
                               {reportData.notice || `Notice: No students enrolled in Section ${reportData.section_name} as of ${selectedDate}.`}
@@ -1376,8 +1249,8 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
           .sf1-page-sheet {
             width: ${pageWidthInches}in !important;
-            min-width: ${pageWidthInches}in !important;
             max-width: ${pageWidthInches}in !important;
+            min-width: ${pageWidthInches}in !important;
             min-height: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`} !important;
             box-sizing: border-box !important;
             margin: 0 auto !important;
@@ -1412,61 +1285,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 };
 
 export default SF1ReportTab;
-
-const republicStyle: React.CSSProperties = {
-  fontFamily: "'Old English Text MT', 'Old English Text MT Fallback', 'UnifrakturMaguntia', serif",
-  fontSize: '12pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.15,
-};
-
-const depedTitleStyle: React.CSSProperties = {
-  fontFamily: "'Old English Text MT', 'Old English Text MT Fallback', 'UnifrakturMaguntia', serif",
-  fontSize: '18pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.15,
-  marginTop: '1px',
-};
-
-const regionalOfficeStyle: React.CSSProperties = {
-  fontFamily: 'Tahoma, Arial, sans-serif',
-  fontSize: '10pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.2,
-  marginTop: '3px',
-};
-
-const officeStyle: React.CSSProperties = {
-  fontFamily: 'Tahoma, Arial, sans-serif',
-  fontSize: '10pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.2,
-  marginTop: '1px',
-};
-
-const dmosFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-  gap: '12px',
-  width: '100%',
-  marginTop: '10px',
-  paddingTop: '6px',
-  borderTop: '1px solid #000000',
-  boxSizing: 'border-box',
-};
-
-const dmosFooterDetailsStyle: React.CSSProperties = {
-  fontFamily: 'Calibri, "Segoe UI", Arial, sans-serif',
-  fontSize: '10pt',
-  color: '#000000',
-  lineHeight: 1.3,
-  textAlign: 'left',
-};
 
 const controlStripStyle: React.CSSProperties = {
   display: 'flex',
@@ -1518,22 +1336,6 @@ const zoomBtnStyle: React.CSSProperties = {
   border: '1px solid #cbd5e1',
   backgroundColor: '#ffffff',
   cursor: 'pointer',
-};
-
-const fieldBoxStyle: React.CSSProperties = {
-  minHeight: 18,
-  lineHeight: '18px',
-  border: '1.2px solid #000000',
-  backgroundColor: '#ffffff',
-  textAlign: 'center',
-  fontWeight: 700,
-  fontSize: '7.4pt',
-  color: '#000000',
-  padding: '0 4px',
-  boxSizing: 'border-box',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
 };
 
 const viewerScrollContainerStyle: React.CSSProperties = {

@@ -1,7 +1,10 @@
+# backend/apps/api/serializers/faculty.py
+
 import secrets
 from rest_framework import serializers
 from apps.academics.models import FacultyProfile
 from .base import FlexibleImageField, safe_photo_url
+
 
 class FacultyDropdownSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(read_only=True)
@@ -11,12 +14,17 @@ class FacultyDropdownSerializer(serializers.ModelSerializer):
         model = FacultyProfile
         fields = [
             'id', 'employee_id', 'first_name', 'last_name', 'suffix',
-            'full_name', 'department', 'position', 'can_teach', 'is_active', 'photo_url',
+            'full_name', 'department', 'position', 'contact_number', 'email',
+            'can_teach', 'is_active', 'photo_url',
         ]
 
     def get_photo_url(self, obj):
         request = self.context.get('request')
-        return safe_photo_url(getattr(obj, 'photo', None), request)
+        if obj.photo:
+            return safe_photo_url(obj.photo, request)
+        if hasattr(obj, 'account') and obj.account and obj.account.avatar:
+            return safe_photo_url(obj.account.avatar, request)
+        return None
 
 
 class FacultyProfileSerializer(serializers.ModelSerializer):
@@ -50,7 +58,11 @@ class FacultyProfileSerializer(serializers.ModelSerializer):
 
     def get_photo_url(self, obj):
         request = self.context.get('request')
-        return safe_photo_url(getattr(obj, 'photo', None), request)
+        if obj.photo:
+            return safe_photo_url(obj.photo, request)
+        if hasattr(obj, 'account') and obj.account and obj.account.avatar:
+            return safe_photo_url(obj.account.avatar, request)
+        return None
 
     def create(self, validated_data):
         if not validated_data.get('qr_token'):

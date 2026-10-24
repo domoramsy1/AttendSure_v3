@@ -7,12 +7,12 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
+import { useAuth } from '../../context/AuthContext';
+import { DepEdReportHeader, DepEdReportFooter } from './DepEdReportHeaderFooter';
 
-interface Learner {
+export interface Learner {
   id: number;
   lrn: string;
   name: string;
@@ -35,15 +35,44 @@ interface Learner {
   remarks: string;
 }
 
-interface SF1ReportViewProps {
+export interface SF1ReportViewProps {
   data: any;
   learners: Learner[];
 }
 
 export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) => {
+  const { user } = useAuth();
+
   if (!data) return null;
 
   const [groupingMode, setGroupingMode] = useState<'COMBINED' | 'SEPARATED'>('COMBINED');
+
+  // Dynamic Adviser Resolution:
+  // If the active logged-in employee is an assigned Teacher/Faculty, prioritize their verified name
+  // to avoid showing placeholder/mock database seeds like "Christine Reyes".
+  const currentUser = user as Record<string, any> | null;
+  const activeUserFullName =
+    currentUser?.full_name ||
+    `${currentUser?.first_name || ''} ${currentUser?.last_name || ''}`.trim() ||
+    currentUser?.faculty_name ||
+    currentUser?.username ||
+    '';
+
+  const userRole = String(
+    currentUser?.role || currentUser?.system_role || 'EMPLOYEE'
+  ).trim().toUpperCase();
+
+  const isTeachingRole = ['TEACHER', 'FACULTY', 'EMPLOYEE'].includes(userRole);
+
+  const resolvedAdviserName =
+    (isTeachingRole && activeUserFullName.length > 0
+      ? activeUserFullName
+      : null) ||
+    data.adviser_name ||
+    activeUserFullName ||
+    'Class Adviser';
+
+  const resolvedSchoolHead = (data.school_head || 'School Head').trim();
 
   const sortedCombinedLearners = useMemo(() => {
     if (data.has_enrolled_students === false) return [];
@@ -68,8 +97,9 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
   const femaleCount = data.total_female ?? femaleLearners.length;
   const totalCount = data.total_combined ?? (maleCount + femaleCount);
 
-  const activeRosterList = groupingMode === 'COMBINED' ? sortedCombinedLearners : [...maleLearners, ...femaleLearners];
-  const isRosterEmpty = activeRosterList.length === 0;
+  const activeStudentList =
+    groupingMode === 'COMBINED' ? sortedCombinedLearners : [...maleLearners, ...femaleLearners];
+  const isListEmpty = activeStudentList.length === 0;
 
   const parseGuardian = (name: string, rel: string) => {
     const commonRel = ['MOTHER', 'FATHER', 'AUNT', 'UNCLE', 'GRANDMOTHER', 'GRANDFATHER', 'GUARDIAN'];
@@ -88,14 +118,20 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
     <View style={styles.sheetContainer}>
       {/* Layout Mode Control Bar */}
       <View style={styles.controlBar}>
-        <Text style={styles.controlLabel}>Roster Layout:</Text>
+        <Text style={styles.controlLabel}>Class List Layout:</Text>
         <View style={styles.toggleRow}>
           <TouchableOpacity
             style={[styles.toggleBtn, groupingMode === 'COMBINED' && styles.toggleBtnActive]}
             onPress={() => setGroupingMode('COMBINED')}
           >
-            <Ionicons name="people-outline" size={13} color={groupingMode === 'COMBINED' ? '#ffffff' : '#64748b'} />
-            <Text style={[styles.toggleText, groupingMode === 'COMBINED' && styles.toggleTextActive]}>
+            <Ionicons
+              name="people-outline"
+              size={13}
+              color={groupingMode === 'COMBINED' ? '#ffffff' : '#64748b'}
+            />
+            <Text
+              style={[styles.toggleText, groupingMode === 'COMBINED' && styles.toggleTextActive]}
+            >
               One List
             </Text>
           </TouchableOpacity>
@@ -103,64 +139,87 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
             style={[styles.toggleBtn, groupingMode === 'SEPARATED' && styles.toggleBtnActive]}
             onPress={() => setGroupingMode('SEPARATED')}
           >
-            <Ionicons name="git-branch-outline" size={13} color={groupingMode === 'SEPARATED' ? '#ffffff' : '#64748b'} />
-            <Text style={[styles.toggleText, groupingMode === 'SEPARATED' && styles.toggleTextActive]}>
+            <Ionicons
+              name="git-branch-outline"
+              size={13}
+              color={groupingMode === 'SEPARATED' ? '#ffffff' : '#64748b'}
+            />
+            <Text
+              style={[styles.toggleText, groupingMode === 'SEPARATED' && styles.toggleTextActive]}
+            >
               By Sex
             </Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Full Sheet Document Horizontal Scroll (920px Canvas) */}
+      {/* Full Sheet Document Horizontal Scroll (960px Canvas) */}
       <ScrollView horizontal showsHorizontalScrollIndicator={true}>
         <View style={styles.officialDocumentCanvas}>
-          {/* DMOS Header with 0.76" Seals and Zero Collisions */}
-          <View style={styles.headerContainer}>
-            <View style={styles.logoBox}>
-              {leftLogoUrl ? (
-                <Image source={{ uri: leftLogoUrl }} style={styles.logoImage} contentFit="contain" />
-              ) : null}
-            </View>
+          {/* ========================================================
+              1. DYNAMIC DEPED DMOS HEADER (FROM DATABASE)
+             ======================================================== */}
+          <DepEdReportHeader
+            leftLogoUrl={leftLogoUrl}
+            rightLogoUrl={rightLogoUrl}
+            region={data.region}
+            division={data.division}
+            formTitle="School Form 1 (SF 1) School Register"
+            formSubtitle="(This replaces Form 1, Master List & STS Form 2)"
+          />
 
-            <View style={styles.headerCenterContent}>
-              <Text style={styles.republicText}>Republic of the Philippines</Text>
-              <Text style={styles.depedText}>Department of Education</Text>
-              {data.region ? <Text style={styles.subOfficeText}>{data.region.toUpperCase()}</Text> : null}
-              {data.division ? <Text style={styles.subOfficeText}>{data.division.toUpperCase()}</Text> : null}
-
-              <Text style={styles.formTitle}>School Form 1 (SF 1) School Register</Text>
-              <Text style={styles.formSub}>(This replaces Form 1, Master List &amp; STS Form 2)</Text>
-            </View>
-
-            <View style={styles.logoBox}>
-              {rightLogoUrl ? (
-                <Image source={{ uri: rightLogoUrl }} style={styles.logoImage} contentFit="contain" />
-              ) : null}
-            </View>
-          </View>
-
-          {/* Metadata Grid (Clean 4-Column Row) */}
+          {/* ========================================================
+              2. METADATA GRID (FROM DATABASE)
+             ======================================================== */}
           <View style={styles.metaGrid}>
             <View style={styles.metaRow}>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>School ID: </Text>{data.school_id || '—'}</Text>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>Region: </Text>{data.region || '—'}</Text>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>Division: </Text>{data.division || '—'}</Text>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>District: </Text>{data.district || '—'}</Text>
+              <Text style={styles.metaCell}>
+                <Text style={styles.metaKey}>School ID: </Text>
+                {data.school_id || '—'}
+              </Text>
+              <Text style={styles.metaCell}>
+                <Text style={styles.metaKey}>Region: </Text>
+                {data.region || '—'}
+              </Text>
+              <Text style={styles.metaCell}>
+                <Text style={styles.metaKey}>Division: </Text>
+                {data.division || '—'}
+              </Text>
+              <Text style={styles.metaCell}>
+                <Text style={styles.metaKey}>District: </Text>
+                {data.district || '—'}
+              </Text>
             </View>
             <View style={styles.metaRow}>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>School Name: </Text>{data.school_name || '—'}</Text>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>School Year: </Text>{data.academic_year || '—'}</Text>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>Grade: </Text>{data.grade_level || '—'}</Text>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>Section: </Text>{data.section_name || '—'}</Text>
+              <Text style={styles.metaCell}>
+                <Text style={styles.metaKey}>School Name: </Text>
+                {data.school_name || '—'}
+              </Text>
+              <Text style={styles.metaCell}>
+                <Text style={styles.metaKey}>School Year: </Text>
+                {data.academic_year || '—'}
+              </Text>
+              <Text style={styles.metaCell}>
+                <Text style={styles.metaKey}>Grade Level: </Text>
+                {data.grade_level || '—'}
+              </Text>
+              <Text style={styles.metaCell}>
+                <Text style={styles.metaKey}>Section: </Text>
+                {data.section_name || '—'}
+              </Text>
             </View>
           </View>
 
-          {/* SF1 Official Table */}
+          {/* ========================================================
+              3. SF1 OFFICIAL TABLE
+             ======================================================== */}
           <View style={styles.table}>
             <View style={styles.thRow}>
               <Text style={[styles.th, { width: 32 }]}>#</Text>
               <Text style={[styles.th, { width: 95 }]}>LRN</Text>
-              <Text style={[styles.th, { width: 170 }]}>LEARNER'S NAME{'\n'}(Last, First, Middle)</Text>
+              <Text style={[styles.th, { width: 170 }]}>
+                LEARNER'S NAME{'\n'}(Last, First, Middle)
+              </Text>
               <Text style={[styles.th, { width: 38 }]}>SEX</Text>
               <Text style={[styles.th, { width: 75 }]}>BIRTH DATE</Text>
               <Text style={[styles.th, { width: 36 }]}>AGE</Text>
@@ -175,30 +234,48 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
               <Text style={[styles.th, { width: 80 }]}>REMARKS</Text>
             </View>
 
-            {isRosterEmpty ? (
+            {isListEmpty ? (
               <View style={{ padding: 24, alignItems: 'center' }}>
-                <Text style={{ fontSize: 10, color: '#64748b' }}>
+                <Text style={{ fontSize: 11, color: '#64748b' }}>
                   {data.notice || `No students enrolled in Section ${data.section_name}.`}
                 </Text>
               </View>
             ) : groupingMode === 'COMBINED' ? (
-              activeRosterList.map((learner: Learner, idx: number) => {
-                const { gName } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+              activeStudentList.map((learner: Learner, idx: number) => {
+                const { gName } = parseGuardian(
+                  learner.guardian_name,
+                  learner.guardian_relationship
+                );
                 return (
                   <View key={String(learner.id || idx)} style={styles.tdRow}>
                     <Text style={[styles.td, { width: 32 }]}>{idx + 1}</Text>
                     <Text style={[styles.td, { width: 95, fontWeight: '700' }]}>{learner.lrn}</Text>
-                    <Text style={[styles.td, { width: 170, textAlign: 'left', paddingLeft: 4, fontWeight: '700' }]}>{learner.name}</Text>
+                    <Text
+                      style={[
+                        styles.td,
+                        { width: 170, textAlign: 'left', paddingLeft: 4, fontWeight: '700' },
+                      ]}
+                    >
+                      {learner.name}
+                    </Text>
                     <Text style={[styles.td, { width: 38 }]}>{learner.sex}</Text>
                     <Text style={[styles.td, { width: 75 }]}>{learner.birthdate}</Text>
                     <Text style={[styles.td, { width: 36 }]}>{learner.age}</Text>
                     <Text style={[styles.td, { width: 85 }]}>{learner.mother_tongue}</Text>
                     <Text style={[styles.td, { width: 75 }]}>{learner.ethnic_group || 'N/A'}</Text>
                     <Text style={[styles.td, { width: 75 }]}>{learner.religion || 'N/A'}</Text>
-                    <Text style={[styles.td, { width: 140, textAlign: 'left', paddingLeft: 4 }]}>{learner.barangay || learner.house_street || ''}</Text>
-                    <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>{learner.father_name || 'N/A'}</Text>
-                    <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>{learner.mother_maiden_name || 'N/A'}</Text>
-                    <Text style={[styles.td, { width: 110, textAlign: 'left', paddingLeft: 4 }]}>{gName || 'N/A'}</Text>
+                    <Text style={[styles.td, { width: 140, textAlign: 'left', paddingLeft: 4 }]}>
+                      {learner.barangay || learner.house_street || ''}
+                    </Text>
+                    <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>
+                      {learner.father_name || 'N/A'}
+                    </Text>
+                    <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>
+                      {learner.mother_maiden_name || 'N/A'}
+                    </Text>
+                    <Text style={[styles.td, { width: 110, textAlign: 'left', paddingLeft: 4 }]}>
+                      {gName || 'N/A'}
+                    </Text>
                     <Text style={[styles.td, { width: 90 }]}>{learner.parent_contact || 'N/A'}</Text>
                     <Text style={[styles.td, { width: 80 }]}>{learner.remarks || ''}</Text>
                   </View>
@@ -210,22 +287,40 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
                   <Text style={styles.genderHeaderText}>MALE ({maleLearners.length})</Text>
                 </View>
                 {maleLearners.map((learner: Learner, idx: number) => {
-                  const { gName } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+                  const { gName } = parseGuardian(
+                    learner.guardian_name,
+                    learner.guardian_relationship
+                  );
                   return (
                     <View key={String(learner.id || idx)} style={styles.tdRow}>
                       <Text style={[styles.td, { width: 32 }]}>{idx + 1}</Text>
                       <Text style={[styles.td, { width: 95, fontWeight: '700' }]}>{learner.lrn}</Text>
-                      <Text style={[styles.td, { width: 170, textAlign: 'left', paddingLeft: 4, fontWeight: '700' }]}>{learner.name}</Text>
+                      <Text
+                        style={[
+                          styles.td,
+                          { width: 170, textAlign: 'left', paddingLeft: 4, fontWeight: '700' },
+                        ]}
+                      >
+                        {learner.name}
+                      </Text>
                       <Text style={[styles.td, { width: 38 }]}>M</Text>
                       <Text style={[styles.td, { width: 75 }]}>{learner.birthdate}</Text>
                       <Text style={[styles.td, { width: 36 }]}>{learner.age}</Text>
                       <Text style={[styles.td, { width: 85 }]}>{learner.mother_tongue}</Text>
                       <Text style={[styles.td, { width: 75 }]}>{learner.ethnic_group || 'N/A'}</Text>
                       <Text style={[styles.td, { width: 75 }]}>{learner.religion || 'N/A'}</Text>
-                      <Text style={[styles.td, { width: 140, textAlign: 'left', paddingLeft: 4 }]}>{learner.barangay || ''}</Text>
-                      <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>{learner.father_name || 'N/A'}</Text>
-                      <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>{learner.mother_maiden_name || 'N/A'}</Text>
-                      <Text style={[styles.td, { width: 110, textAlign: 'left', paddingLeft: 4 }]}>{gName || 'N/A'}</Text>
+                      <Text style={[styles.td, { width: 140, textAlign: 'left', paddingLeft: 4 }]}>
+                        {learner.barangay || ''}
+                      </Text>
+                      <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>
+                        {learner.father_name || 'N/A'}
+                      </Text>
+                      <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>
+                        {learner.mother_maiden_name || 'N/A'}
+                      </Text>
+                      <Text style={[styles.td, { width: 110, textAlign: 'left', paddingLeft: 4 }]}>
+                        {gName || 'N/A'}
+                      </Text>
                       <Text style={[styles.td, { width: 90 }]}>{learner.parent_contact || 'N/A'}</Text>
                       <Text style={[styles.td, { width: 80 }]}>{learner.remarks || ''}</Text>
                     </View>
@@ -233,25 +328,45 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
                 })}
 
                 <View style={[styles.genderHeader, { backgroundColor: '#fdf2f8' }]}>
-                  <Text style={[styles.genderHeaderText, { color: '#db2777' }]}>FEMALE ({femaleLearners.length})</Text>
+                  <Text style={[styles.genderHeaderText, { color: '#db2777' }]}>
+                    FEMALE ({femaleLearners.length})
+                  </Text>
                 </View>
                 {femaleLearners.map((learner: Learner, idx: number) => {
-                  const { gName } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+                  const { gName } = parseGuardian(
+                    learner.guardian_name,
+                    learner.guardian_relationship
+                  );
                   return (
                     <View key={String(learner.id || idx)} style={styles.tdRow}>
                       <Text style={[styles.td, { width: 32 }]}>{idx + 1}</Text>
                       <Text style={[styles.td, { width: 95, fontWeight: '700' }]}>{learner.lrn}</Text>
-                      <Text style={[styles.td, { width: 170, textAlign: 'left', paddingLeft: 4, fontWeight: '700' }]}>{learner.name}</Text>
+                      <Text
+                        style={[
+                          styles.td,
+                          { width: 170, textAlign: 'left', paddingLeft: 4, fontWeight: '700' },
+                        ]}
+                      >
+                        {learner.name}
+                      </Text>
                       <Text style={[styles.td, { width: 38 }]}>F</Text>
                       <Text style={[styles.td, { width: 75 }]}>{learner.birthdate}</Text>
                       <Text style={[styles.td, { width: 36 }]}>{learner.age}</Text>
                       <Text style={[styles.td, { width: 85 }]}>{learner.mother_tongue}</Text>
                       <Text style={[styles.td, { width: 75 }]}>{learner.ethnic_group || 'N/A'}</Text>
                       <Text style={[styles.td, { width: 75 }]}>{learner.religion || 'N/A'}</Text>
-                      <Text style={[styles.td, { width: 140, textAlign: 'left', paddingLeft: 4 }]}>{learner.barangay || ''}</Text>
-                      <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>{learner.father_name || 'N/A'}</Text>
-                      <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>{learner.mother_maiden_name || 'N/A'}</Text>
-                      <Text style={[styles.td, { width: 110, textAlign: 'left', paddingLeft: 4 }]}>{gName || 'N/A'}</Text>
+                      <Text style={[styles.td, { width: 140, textAlign: 'left', paddingLeft: 4 }]}>
+                        {learner.barangay || ''}
+                      </Text>
+                      <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>
+                        {learner.father_name || 'N/A'}
+                      </Text>
+                      <Text style={[styles.td, { width: 120, textAlign: 'left', paddingLeft: 4 }]}>
+                        {learner.mother_maiden_name || 'N/A'}
+                      </Text>
+                      <Text style={[styles.td, { width: 110, textAlign: 'left', paddingLeft: 4 }]}>
+                        {gName || 'N/A'}
+                      </Text>
                       <Text style={[styles.td, { width: 90 }]}>{learner.parent_contact || 'N/A'}</Text>
                       <Text style={[styles.td, { width: 80 }]}>{learner.remarks || ''}</Text>
                     </View>
@@ -261,43 +376,88 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
             )}
           </View>
 
-          {/* Summary Box & Signatures */}
+          {/* ========================================================
+              4. OFFICIAL DEPED INDICATORS & REMARKS GUIDE BOX
+             ======================================================== */}
+          <View style={styles.remarksGuideContainer}>
+            <Text style={styles.remarksGuideTitle}>
+              List and Code of Indicators under REMARKS column:
+            </Text>
+            <View style={styles.remarksGrid}>
+              <View style={styles.remarksCol}>
+                <Text style={styles.remarksItem}>
+                  <Text style={styles.codeBold}>Transferred Out (T/O): </Text>Name of Public (P) / Private (PR) School &amp; Effectivity Date
+                </Text>
+                <Text style={styles.remarksItem}>
+                  <Text style={styles.codeBold}>Transferred In (T/I): </Text>Name of Public (P) / Private (PR) School &amp; Effectivity Date
+                </Text>
+                <Text style={styles.remarksItem}>
+                  <Text style={styles.codeBold}>CCT Recipient: </Text>CCT C/H ID Number &amp; Effectivity Date
+                </Text>
+                <Text style={styles.remarksItem}>
+                  <Text style={styles.codeBold}>Balik-Aral (B/A): </Text>Name of school last attended &amp; Year
+                </Text>
+              </View>
+              <View style={styles.remarksCol}>
+                <Text style={styles.remarksItem}>
+                  <Text style={styles.codeBold}>Dropped Out (DRP): </Text>Reason and Effectivity Date
+                </Text>
+                <Text style={styles.remarksItem}>
+                  <Text style={styles.codeBold}>Late Enrollment (LE): </Text>Reason for enrollment beyond 1st Friday of June
+                </Text>
+                <Text style={styles.remarksItem}>
+                  <Text style={styles.codeBold}>Learner With Disability (LWD): </Text>Specify condition
+                </Text>
+                <Text style={styles.remarksItem}>
+                  <Text style={styles.codeBold}>Accelerated (ACL): </Text>Specify Level &amp; Effectivity Date
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* ========================================================
+              5. SUMMARY BOX & DYNAMIC SIGNATURES
+             ======================================================== */}
           <View style={styles.summaryBox}>
             <View style={styles.summaryInfoCol}>
               <Text style={styles.summaryTitle}>Registered Learners Summary</Text>
-              <Text style={styles.summaryText}>Male: <Text style={{ fontWeight: '800' }}>{maleCount}</Text></Text>
-              <Text style={styles.summaryText}>Female: <Text style={{ fontWeight: '800' }}>{femaleCount}</Text></Text>
-              <Text style={styles.summaryText}>Total Enrolled: <Text style={{ fontWeight: '800' }}>{totalCount}</Text></Text>
+              <Text style={styles.summaryText}>
+                Male: <Text style={{ fontWeight: '800' }}>{maleCount}</Text>
+              </Text>
+              <Text style={styles.summaryText}>
+                Female: <Text style={{ fontWeight: '800' }}>{femaleCount}</Text>
+              </Text>
+              <Text style={styles.summaryText}>
+                Total Enrolled: <Text style={{ fontWeight: '800' }}>{totalCount}</Text>
+              </Text>
             </View>
 
             <View style={styles.signCol}>
+              {/* Prepared by: Class Adviser (Dynamic current user) */}
               <View style={styles.signBlock}>
-                <Text style={styles.signName}>{data.adviser_name || 'Class Adviser'}</Text>
+                <Text style={styles.signName}>{resolvedAdviserName}</Text>
                 <View style={styles.signLine} />
                 <Text style={styles.signCaption}>Prepared by (Class Adviser)</Text>
               </View>
+
+              {/* Certified Correct: School Head */}
               <View style={styles.signBlock}>
-                <Text style={styles.signName}>{data.school_head || 'School Head'}</Text>
+                <Text style={styles.signName}>{resolvedSchoolHead}</Text>
                 <View style={styles.signLine} />
                 <Text style={styles.signCaption}>Certified Correct (School Head)</Text>
               </View>
             </View>
           </View>
 
-          {/* Official DMOS Footer */}
-          <View style={styles.dmosFooterStyle}>
-            <View style={styles.logoBox}>
-              {leftLogoUrl ? (
-                <Image source={{ uri: leftLogoUrl }} style={styles.logoImage} contentFit="contain" />
-              ) : null}
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.dmosFooterDetailsStyle}>
-                <Text style={{ fontWeight: 'bold' }}>Address: </Text>Lapasan, Cagayan de Oro City, Northern Mindanao, 9000{'\n'}
-                <Text style={{ fontWeight: 'bold' }}>Contact No.: </Text>(088) 856-1234 &bull; <Text style={{ fontWeight: 'bold' }}>Email: </Text>lapasan.nhs@deped.gov.ph
-              </Text>
-            </View>
-          </View>
+          {/* ========================================================
+              6. DYNAMIC DEPED DMOS FOOTER (FROM DATABASE)
+             ======================================================== */}
+          <DepEdReportFooter
+            sealUrl={leftLogoUrl || rightLogoUrl}
+            address={data.school_address}
+            contactNumber={data.school_contact}
+            email={data.school_email}
+          />
         </View>
       </ScrollView>
     </View>
@@ -342,56 +502,9 @@ const styles = StyleSheet.create({
   toggleTextActive: { color: '#ffffff' },
 
   officialDocumentCanvas: {
-    width: 920,
+    width: 960,
     backgroundColor: '#ffffff',
     paddingRight: 6,
-  },
-  headerContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-    width: '100%',
-  },
-  logoBox: { width: 73, height: 73, alignItems: 'center', justifyContent: 'center' },
-  logoImage: { width: 73, height: 73 },
-  headerCenterContent: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: 12,
-  },
-  republicText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#000000',
-    fontFamily: Platform.OS === 'ios' ? 'American Typewriter' : 'serif',
-  },
-  depedText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000000',
-    fontFamily: Platform.OS === 'ios' ? 'American Typewriter' : 'serif',
-    marginTop: 1,
-  },
-  subOfficeText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#000000',
-    fontFamily: Platform.OS === 'ios' ? 'Tahoma' : 'sans-serif',
-    marginTop: 2,
-  },
-  formTitle: {
-    fontSize: 12.5,
-    fontWeight: '900',
-    color: '#000000',
-    marginTop: 4,
-    textTransform: 'uppercase',
-  },
-  formSub: {
-    fontSize: 8,
-    fontStyle: 'italic',
-    color: '#475569',
-    marginBottom: 6,
   },
 
   metaGrid: {
@@ -407,7 +520,12 @@ const styles = StyleSheet.create({
   metaKey: { fontWeight: '700' },
 
   table: { borderWidth: 1, borderColor: '#0f172a', width: '100%' },
-  thRow: { flexDirection: 'row', backgroundColor: '#e2e8f0', borderBottomWidth: 1, borderColor: '#0f172a' },
+  thRow: {
+    flexDirection: 'row',
+    backgroundColor: '#e2e8f0',
+    borderBottomWidth: 1,
+    borderColor: '#0f172a',
+  },
   th: {
     fontSize: 7.5,
     fontWeight: '800',
@@ -417,10 +535,57 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderColor: '#0f172a',
   },
-  genderHeader: { backgroundColor: '#eff6ff', paddingVertical: 2, paddingLeft: 6, borderBottomWidth: 1, borderColor: '#0f172a' },
+  genderHeader: {
+    backgroundColor: '#eff6ff',
+    paddingVertical: 2,
+    paddingLeft: 6,
+    borderBottomWidth: 1,
+    borderColor: '#0f172a',
+  },
   genderHeaderText: { fontSize: 8.5, fontWeight: '800', color: '#0284c7' },
   tdRow: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#cbd5e1', minHeight: 20 },
-  td: { fontSize: 8, color: '#0f172a', textAlign: 'center', paddingVertical: 3, borderRightWidth: 1, borderColor: '#cbd5e1' },
+  td: {
+    fontSize: 8,
+    color: '#0f172a',
+    textAlign: 'center',
+    paddingVertical: 3,
+    borderRightWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+
+  remarksGuideContainer: {
+    borderWidth: 1,
+    borderColor: '#0f172a',
+    backgroundColor: '#ffffff',
+    padding: 6,
+    marginTop: 4,
+    width: '100%',
+  },
+  remarksGuideTitle: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: '#0f172a',
+    marginBottom: 2,
+    textTransform: 'uppercase',
+  },
+  remarksGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  remarksCol: {
+    flex: 1,
+  },
+  remarksItem: {
+    fontSize: 7.2,
+    color: '#1e293b',
+    lineHeight: 10,
+    marginVertical: 0.5,
+  },
+  codeBold: {
+    fontWeight: '800',
+    color: '#0f172a',
+  },
 
   summaryBox: {
     flexDirection: 'row',
@@ -440,25 +605,6 @@ const styles = StyleSheet.create({
   signName: { fontSize: 9.5, fontWeight: '800', color: '#0f172a' },
   signLine: { width: '100%', height: 1, backgroundColor: '#0f172a', marginTop: 2 },
   signCaption: { fontSize: 7.5, color: '#475569', marginTop: 1, textAlign: 'center' },
-
-  dmosFooterStyle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: 12,
-    width: '100%',
-    marginTop: 10,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#000000',
-  },
-  dmosFooterDetailsStyle: {
-    fontSize: 10,
-    color: '#000000',
-    fontFamily: Platform.OS === 'ios' ? 'Calibri' : 'sans-serif',
-    lineHeight: 14,
-    textAlign: 'left',
-  },
 });
 
 export default SF1ReportView;

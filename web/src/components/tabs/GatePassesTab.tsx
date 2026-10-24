@@ -186,7 +186,7 @@ export const GatePassesTab: React.FC = () => {
   // Granular capability flags
   const canIssuePass = !isGuard; // Guards never issue passes; teachers and leadership do
   const canIssueForFaculty = isLeadership; // Only leadership issues faculty passes; teachers issue student passes only
-  const canMarkUsed = isGuard || isAdmin || isPrincipal; // Checkpoint guards and school heads mark turnstile departures
+  const canMarkUsed = isGuard || isAdmin || isPrincipal; // Checkpoint guards and school heads mark gate scanner departures
   const canRevoke = !isGuard; // Only issuing authorities can cancel passes
 
   const [passes, setPasses] = useState<GatePass[]>([]);
@@ -492,7 +492,7 @@ export const GatePassesTab: React.FC = () => {
 
     showConfirm({
       title: 'Revoke Gate Clearance',
-      message: `Cancel Gate Pass "${passCode}" for ${bearer}? It will be invalidated at all campus turnstiles and security kiosks immediately.`,
+      message: `Cancel Gate Pass "${passCode}" for ${bearer}? It will be invalidated at all campus Gate Scanners and security kiosks immediately.`,
       confirmLabel: 'Revoke Pass',
       isDestructive: true,
       onConfirm: async () => {
@@ -752,7 +752,7 @@ export const GatePassesTab: React.FC = () => {
               align: 'right',
               render: (p) => (
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                  {/* Slip view & turnstile barcode is readable by all authorized viewers */}
+                  {/* Slip view & gate scanner barcode is readable by all authorized viewers */}
                   <button
                     type="button"
                     onClick={() => setSelectedPass(p)}
@@ -764,7 +764,7 @@ export const GatePassesTab: React.FC = () => {
 
                   {p.status === 'ACTIVE' && (
                     <>
-                      {/* Least Privilege: Only checkpost personnel (Guards/Admin) can record turnstile passage */}
+                      {/* Least Privilege: Only checkpost personnel (Guards/Admin) can record gate scanner passage */}
                       {canMarkUsed && (
                         <button
                           type="button"
@@ -1095,7 +1095,7 @@ export const GatePassesTab: React.FC = () => {
                 </div>
               </div>
 
-              {/* Turnstile / Kiosk Security QR */}
+              {/* Gate Scanner / Kiosk Security QR */}
               <div
                 style={{
                   margin: '8px auto',

@@ -6,9 +6,8 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  Platform,
 } from 'react-native';
-import { Image } from 'expo-image';
+import { DepEdReportHeader, DepEdReportFooter } from './DepEdReportHeaderFooter';
 
 export interface MetricTriplet {
   m: number;
@@ -93,32 +92,21 @@ export const SF4ReportView: React.FC<SF4ReportViewProps> = ({ data, gradeGroups 
     <View style={styles.sheetContainer}>
       <ScrollView horizontal showsHorizontalScrollIndicator={true}>
         <View style={styles.officialDocumentCanvas}>
-          {/* DMOS Header */}
-          <View style={styles.headerContainer}>
-            <View style={styles.logoBox}>
-              {leftLogoUrl ? (
-                <Image source={{ uri: leftLogoUrl }} style={styles.logoImage} contentFit="contain" />
-              ) : null}
-            </View>
+          {/* ========================================================
+              1. DYNAMIC DEPED DMOS HEADER (FROM DATABASE)
+             ======================================================== */}
+          <DepEdReportHeader
+            leftLogoUrl={leftLogoUrl}
+            rightLogoUrl={rightLogoUrl}
+            region={data.region}
+            division={data.division}
+            formTitle="School Form 4 (SF 4) Monthly Learner's Movement and Attendance"
+            formSubtitle="(Consolidated Learner Movement and Monthly Attendance Summary)"
+          />
 
-            <View style={styles.headerCenterContent}>
-              <Text style={styles.republicText}>Republic of the Philippines</Text>
-              <Text style={styles.depedText}>Department of Education</Text>
-              {data.region ? <Text style={styles.subOfficeText}>{data.region.toUpperCase()}</Text> : null}
-              {data.division ? <Text style={styles.subOfficeText}>{data.division.toUpperCase()}</Text> : null}
-
-              <Text style={styles.formTitle}>School Form 4 (SF 4) Monthly Learner's Movement and Attendance</Text>
-              <Text style={styles.formSub}>(Consolidated Learner Movement and Monthly Attendance Summary)</Text>
-            </View>
-
-            <View style={styles.logoBox}>
-              {rightLogoUrl ? (
-                <Image source={{ uri: rightLogoUrl }} style={styles.logoImage} contentFit="contain" />
-              ) : null}
-            </View>
-          </View>
-
-          {/* Metadata Grid */}
+          {/* ========================================================
+              2. METADATA GRID (FROM DATABASE)
+             ======================================================== */}
           <View style={styles.metaGrid}>
             <View style={styles.metaRow}>
               <Text style={styles.metaCell}><Text style={styles.metaKey}>School ID: </Text>{data.school_id || '—'}</Text>
@@ -128,12 +116,14 @@ export const SF4ReportView: React.FC<SF4ReportViewProps> = ({ data, gradeGroups 
             </View>
             <View style={styles.metaRow}>
               <Text style={styles.metaCell}><Text style={styles.metaKey}>School Name: </Text>{data.school_name || '—'}</Text>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>School Year: </Text>{data.school_year || '—'}</Text>
-              <Text style={styles.metaCell}><Text style={styles.metaKey}>Report Month: </Text>{data.month || '—'} {data.year}</Text>
+              <Text style={styles.metaCell}><Text style={styles.metaKey}>School Year: </Text>{data.school_year || data.academic_year || '—'}</Text>
+              <Text style={styles.metaCell}><Text style={styles.metaKey}>Report Month: </Text>{data.month || '—'} {data.year || ''}</Text>
             </View>
           </View>
 
-          {/* 39-Column SF4 Matrix Table */}
+          {/* ========================================================
+              3. 39-COLUMN SF4 MATRIX TABLE
+             ======================================================== */}
           <View style={styles.table}>
             <View style={styles.thRow1}>
               <Text style={[styles.th, { width: 95 }]}>NAME OF ADVISER</Text>
@@ -278,7 +268,9 @@ export const SF4ReportView: React.FC<SF4ReportViewProps> = ({ data, gradeGroups 
             )}
           </View>
 
-          {/* Guidelines & Signatures */}
+          {/* ========================================================
+              4. GUIDELINES & SIGNATURES
+             ======================================================== */}
           <View style={styles.summaryBox}>
             <View style={styles.summaryInfoCol}>
               <Text style={styles.summaryTitle}>GUIDELINES:</Text>
@@ -288,27 +280,22 @@ export const SF4ReportView: React.FC<SF4ReportViewProps> = ({ data, gradeGroups 
 
             <View style={styles.signCol}>
               <View style={styles.signBlock}>
-                <Text style={styles.signName}>{data.school_head || 'School Head Name'}</Text>
+                <Text style={styles.signName}>{data.school_head || 'School Head'}</Text>
                 <View style={styles.signLine} />
                 <Text style={styles.signCaption}>Prepared and Submitted by: (School Head)</Text>
               </View>
             </View>
           </View>
 
-          {/* Official DMOS Footer */}
-          <View style={styles.dmosFooterStyle}>
-            <View style={styles.logoBox}>
-              {leftLogoUrl ? (
-                <Image source={{ uri: leftLogoUrl }} style={styles.logoImage} contentFit="contain" />
-              ) : null}
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.dmosFooterDetailsStyle}>
-                <Text style={{ fontWeight: 'bold' }}>Address: </Text>Lapasan, Cagayan de Oro City, Northern Mindanao, 9000{'\n'}
-                <Text style={{ fontWeight: 'bold' }}>Contact No.: </Text>(088) 856-1234 &bull; <Text style={{ fontWeight: 'bold' }}>Email: </Text>lapasan.nhs@deped.gov.ph
-              </Text>
-            </View>
-          </View>
+          {/* ========================================================
+              5. DYNAMIC DEPED DMOS FOOTER (FROM DATABASE)
+             ======================================================== */}
+          <DepEdReportFooter
+            sealUrl={leftLogoUrl || rightLogoUrl}
+            address={data.school_address}
+            contactNumber={data.school_contact}
+            email={data.school_email}
+          />
         </View>
       </ScrollView>
     </View>
@@ -328,55 +315,6 @@ const styles = StyleSheet.create({
     width: 1100,
     backgroundColor: '#ffffff',
     paddingRight: 6,
-  },
-  headerContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-    width: '100%',
-  },
-  logoBox: { width: 73, height: 73, alignItems: 'center', justifyContent: 'center' },
-  logoImage: { width: 73, height: 73 },
-  headerCenterContent: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: 12,
-  },
-  republicText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#000000',
-    fontFamily: Platform.OS === 'ios' ? 'American Typewriter' : 'serif',
-  },
-  depedText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000000',
-    fontFamily: Platform.OS === 'ios' ? 'American Typewriter' : 'serif',
-    marginTop: 1,
-  },
-  subOfficeText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#000000',
-    fontFamily: Platform.OS === 'ios' ? 'Tahoma' : 'sans-serif',
-    marginTop: 2,
-  },
-  formTitle: {
-    fontSize: 12,
-    fontWeight: '900',
-    color: '#000000',
-    marginTop: 4,
-    textTransform: 'uppercase',
-    textAlign: 'center',
-  },
-  formSub: {
-    fontSize: 8,
-    fontStyle: 'italic',
-    color: '#475569',
-    marginBottom: 6,
-    textAlign: 'center',
   },
 
   metaGrid: {
@@ -432,25 +370,6 @@ const styles = StyleSheet.create({
   signName: { fontSize: 9.5, fontWeight: '800', color: '#0f172a' },
   signLine: { width: '100%', height: 1, backgroundColor: '#0f172a', marginTop: 2 },
   signCaption: { fontSize: 7.5, color: '#475569', marginTop: 1, textAlign: 'center' },
-
-  dmosFooterStyle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: 12,
-    width: '100%',
-    marginTop: 10,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#000000',
-  },
-  dmosFooterDetailsStyle: {
-    fontSize: 10,
-    color: '#000000',
-    fontFamily: Platform.OS === 'ios' ? 'Calibri' : 'sans-serif',
-    lineHeight: 14,
-    textAlign: 'left',
-  },
 });
 
 export default SF4ReportView;

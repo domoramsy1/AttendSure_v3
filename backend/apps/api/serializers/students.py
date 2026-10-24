@@ -1,7 +1,14 @@
+"""
+AttendSure - Student Serialization & Enrollment Management
+File: backend/apps/api/serializers/students.py
+"""
+
 import secrets
+from datetime import date
 from rest_framework import serializers
 from apps.academics.models import Student, Section, Enrollment, AcademicYear
 from .base import FlexibleImageField, safe_photo_url
+
 
 class StudentSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
@@ -21,15 +28,33 @@ class StudentSerializer(serializers.ModelSerializer):
             'photo', 'photo_url', 'current_section', 'section_id', 'is_active',
         ]
         extra_kwargs = {
+            'lrn': {'required': False},
+            'first_name': {'required': False},
+            'last_name': {'required': False},
+            'sex': {'required': False},
+            'birthdate': {'required': False},
             'qr_token': {'required': False, 'allow_blank': True, 'allow_null': True},
             'rfid_uid': {'required': False, 'allow_blank': True, 'allow_null': True},
             'middle_name': {'required': False, 'allow_blank': True},
             'suffix': {'required': False, 'allow_blank': True},
             'parent_contact': {'required': False, 'allow_blank': True},
+            'mother_tongue': {'required': False, 'allow_blank': True},
+            'ethnic_group': {'required': False, 'allow_blank': True},
+            'religion': {'required': False, 'allow_blank': True},
+            'house_street_sitio': {'required': False, 'allow_blank': True},
+            'barangay': {'required': False, 'allow_blank': True},
+            'municipality_city': {'required': False, 'allow_blank': True},
+            'province': {'required': False, 'allow_blank': True},
+            'father_name': {'required': False, 'allow_blank': True},
+            'mother_maiden_name': {'required': False, 'allow_blank': True},
+            'guardian_name': {'required': False, 'allow_blank': True},
+            'guardian_relationship': {'required': False, 'allow_blank': True},
         }
 
     def validate_lrn(self, value):
-        clean_lrn = value.strip()
+        if not value:
+            return value
+        clean_lrn = str(value).strip()
         if not clean_lrn.isdigit():
             raise serializers.ValidationError("LRN must contain numbers only.")
         return clean_lrn
@@ -47,7 +72,11 @@ class StudentSerializer(serializers.ModelSerializer):
         return f"{obj.last_name}, {obj.first_name}{mid}{suf}".strip(" ,")
 
     def get_current_section(self, obj):
-        enrollment = obj.enrollments.filter(academic_year__is_active=True).select_related('section', 'section__grade_level').first()
+        enrollment = (
+            obj.enrollments.filter(academic_year__is_active=True)
+            .select_related('section', 'section__grade_level')
+            .first()
+        )
         if not enrollment:
             enrollment = obj.enrollments.select_related('section', 'section__grade_level').first()
         if enrollment and enrollment.section:
@@ -64,11 +93,7 @@ class StudentSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         return safe_photo_url(getattr(obj, 'photo', None), request)
 
-    def create(self, validated_data):
-        if not validated_data.get('qr_token'):
-            validated_data['qr_token'] = secrets.token_urlsafe(32)
-        student = super().create(validated_data)
-        req_data = self.context.get('request').data if self.context.get('request') else {}
+    def _sync_section_enrollment(self, student, req_data):
         sec_id = req_data.get('section_id') or req_data.get('section')
         if sec_id and str(sec_id).isdigit():
             section = Section.objects.filter(id=int(sec_id)).first()
@@ -76,6 +101,24 @@ class StudentSerializer(serializers.ModelSerializer):
                 ay = section.academic_year or AcademicYear.objects.filter(is_active=True).first()
                 if ay:
                     Enrollment.objects.update_or_create(
-                        student=student, academic_year=ay, defaults={'section': section, 'status': 'ENROLLED'}
+                        student=student,
+                        academic_year=ay,
+                        defaults={'section': section, 'status': 'ENROLLED'}
                     )
+
+    def create(self, validated_data):
+        if not validated_data.get('qr_token'):
+            validated_data['qr_token'] = secrets.token_urlsafe(32)
+        if not validated_data.get('birthdate'):
+            validated_data['birthdate'] = date(2012, 1, 1)
+
+        student = super().create(validated_data)
+        req_data = self.context.get('request').data if self.context.get('request') else {}
+        self._sync_section_enrollment(student, req_data)
+        return student
+
+    def update(self, instance, validated_data):
+        student = super().update(instance, validated_data)
+        req_data = self.context.get('request').data if self.context.get('request') else {}
+        self._sync_section_enrollment(student, req_data)
         return student

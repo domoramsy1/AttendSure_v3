@@ -261,7 +261,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='geofencesetting',
             name='name',
-            field=models.CharField(default='Campus Perimeter', max_length=100),
+            field=models.CharField(default='Geofence', max_length=100),
         ),
         migrations.AlterField(
             model_name='gradelevel',
@@ -286,7 +286,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='iotkiosk',
             name='location',
-            field=models.CharField(default='Main Gate', help_text='Turnstile or gate position', max_length=100),
+            field=models.CharField(default='Main Gate', help_text='Gate Scanner or gate position', max_length=100),
         ),
         migrations.AlterField(
             model_name='iotkiosk',

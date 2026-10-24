@@ -5,7 +5,9 @@ File: backend/attendsure_core/settings.py
 """
 
 import os
+import json
 from pathlib import Path
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from django.core.exceptions import ImproperlyConfigured
 
@@ -18,25 +20,44 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Load environment file (.env) from backend root directory
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
-# Security: Refuse to boot in production if SECRET_KEY is missing
 SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False').strip().lower() in ('true', '1', 'yes')
 
 if not SECRET_KEY and not DEBUG:
     raise ImproperlyConfigured("CRITICAL: SECRET_KEY environment variable is missing in production!")
 
-# Fallback development key if running in debug mode
 if not SECRET_KEY:
     SECRET_KEY = 'django-insecure-attendsure-dev-key-never-use-in-production'
 
-# Ensure dedicated logs directory exists for audit trails
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 # ==============================================================================
-# 2. NETWORKING, REVERSE PROXY & HOST RESOLUTION (CYBERSECURITY APPLIED)
+# 2. DYNAMIC NETWORK & HOST RESOLUTION (PARSED FROM ROOT endpoints.json)
 # ==============================================================================
+
+ENDPOINTS_JSON_PATH = BASE_DIR.parent / 'endpoints.json'
+dynamic_tunnel_host = ''
+dynamic_tunnel_origin = ''
+centralized_lan_ips = []
+
+if ENDPOINTS_JSON_PATH.exists():
+    try:
+        with open(ENDPOINTS_JSON_PATH, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+            tunnel_url = cfg.get('active_tunnel_url', '').strip()
+            if tunnel_url:
+                parsed = urlparse(tunnel_url)
+                dynamic_tunnel_host = parsed.netloc
+                dynamic_tunnel_origin = f"{parsed.scheme or 'https'}://{parsed.netloc}"
+
+            for lan in cfg.get('lan_servers', []):
+                p_lan = urlparse(lan)
+                if p_lan.hostname:
+                    centralized_lan_ips.append(p_lan.hostname)
+    except Exception:
+        pass
 
 # Parse ALLOWED_HOSTS from .env
 env_hosts = os.getenv('ALLOWED_HOSTS', '')
@@ -57,6 +78,14 @@ REQUIRED_HOSTS = [
     '0.0.0.0',
 ]
 
+# Add hosts discovered from endpoints.json
+if dynamic_tunnel_host and dynamic_tunnel_host not in REQUIRED_HOSTS:
+    REQUIRED_HOSTS.append(dynamic_tunnel_host)
+
+for lan_ip in centralized_lan_ips:
+    if lan_ip not in REQUIRED_HOSTS:
+        REQUIRED_HOSTS.append(lan_ip)
+
 for host in REQUIRED_HOSTS:
     if host not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(host)
@@ -69,7 +98,7 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
 
-# CSRF Trusted Origins (Includes Cloudflare wildcards to stop 403 CSRF lockouts)
+# CSRF Trusted Origins
 CSRF_TRUSTED_ORIGINS = [
     'https://*.trycloudflare.com',
     'http://*.trycloudflare.com',
@@ -89,6 +118,9 @@ CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
 ]
+
+if dynamic_tunnel_origin and dynamic_tunnel_origin not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(dynamic_tunnel_origin)
 
 
 # ==============================================================================
@@ -159,7 +191,6 @@ WSGI_APPLICATION = 'attendsure_core.wsgi.application'
 # 5. DATABASE ARCHITECTURE (POSTGRESQL DEFAULT + FASTER FETCHING)
 # ==============================================================================
 
-# Explicitly check DB_ENGINE. Defaults directly to postgresql.
 db_engine_choice = os.getenv('DB_ENGINE', 'postgresql').strip().lower()
 
 if db_engine_choice == 'postgresql':
@@ -168,10 +199,10 @@ if db_engine_choice == 'postgresql':
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.getenv('DB_NAME', 'attendsure_v3_db'),
             'USER': os.getenv('DB_USER', 'attendsure_admin'),
-            'PASSWORD': os.getenv('DB_PASSWORD', '88888888'),
+            'PASSWORD': os.getenv('DB_PASSWORD'),
             'HOST': os.getenv('DB_HOST', '127.0.0.1'),
             'PORT': os.getenv('DB_PORT', '5432'),
-            # Keeps TCP connections open for 300 seconds to accelerate queries
+            # Keeps TCP connections warm for 300 seconds to accelerate queries
             'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', 300)),
             'OPTIONS': {
                 'connect_timeout': 5,
@@ -179,7 +210,6 @@ if db_engine_choice == 'postgresql':
         }
     }
 else:
-    # Fallback to local SQLite only when explicitly requested
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
@@ -189,13 +219,12 @@ else:
 
 
 # ==============================================================================
-# 6. IN-MEMORY CACHE (HIGH-SPEED RAM CACHING)
+# 6. IN-MEMORY CACHE
 # ==============================================================================
 
 REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
 
 if DEBUG:
-    # High-speed local RAM cache for development (no Redis server required)
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -252,8 +281,8 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '120/minute',       # Protects endpoints from brute-force attacks
-        'user': '1200/minute',      # High-throughput capacity for authenticated GPS pings
+        'anon': '120/minute',
+        'user': '1200/minute',
     },
 }
 
@@ -388,11 +417,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # 13. CYBERSECURITY HARDENING
 # ==============================================================================
 
-# Protect cookies from JavaScript injection (Cross-Site Scripting / XSS defense)
 SESSION_COOKIE_HTTPONLY = True
-CSRF_COOKIE_HTTPONLY = False  # Allows frontend Axios client to read CSRF token
-
-# Anti-clickjacking defense
+CSRF_COOKIE_HTTPONLY = False
 X_FRAME_OPTIONS = 'DENY'
 
 if not DEBUG:
@@ -402,4 +428,4 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
+    SECURE_HSTS_PRELOAD = Trues

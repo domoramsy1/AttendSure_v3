@@ -1,16 +1,22 @@
-export const ENDPOINTS = {
-  LOGIN: '/api/auth/login/',
-  CURRENT_USER: '/api/me/',
-  SCHOOL_PROFILE: '/api/settings/school/',
-  TELEMETRY_HEARTBEAT: '/api/telemetry/heartbeat/',
-  CAMPUS_GEOFENCE: '/api/geofence/',
-  
-  // Gate Turnstiles (Fixed Hardware Kiosks)
-  GATE_LOGS: '/api/gate/logs/',
-  GATE_SCAN: '/api/gate/scan/',
+// D:\AttendSure_V3\mobile\src\api\endpoints.ts
 
-  // Classroom Mobile Scans (Faculty Authenticated)
-  CLASSROOM_SCAN: '/api/classroom/scan/',
-  SMS_OUTBOX: '/api/sms-outbox/',
-  FACULTY_DTR: '/api/dtr/',
+export const ENDPOINTS = {
+  // Authentication & Session
+  LOGIN: 'auth/login/',
+  CURRENT_USER: 'me/',
+  SCHOOL_PROFILE: 'settings/school/',
+
+  // Telemetry & Presence
+  TELEMETRY_HEARTBEAT: 'telemetry/heartbeat/',
+  CAMPUS_GEOFENCE: 'geofence/',
+
+  // Campus Gate Scanners
+  GATE_LOGS: 'gate/logs/',
+  GATE_SCAN: 'gate/scan/',
+
+  // Classroom Mobile Scans
+  CLASS_LIST: 'classroom/class_list/',
+  CLASSROOM_BATCH_SCAN: 'classroom/batch-scan/',
+  SMS_OUTBOX: 'sms-outbox/',
+  EMPLOYEE_DTR: 'dtr/',
 };

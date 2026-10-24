@@ -1,3 +1,5 @@
+# backend/apps/api/views/auth.py
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -12,8 +14,14 @@ from .common import resolve_faculty_for_user, get_user_role, safe_photo_url, is_
 
 User = get_user_model()
 
+
 class AuthLoginRateThrottle(AnonRateThrottle):
     rate = '10/minute'
+
+
+class ValidationRateThrottle(AnonRateThrottle):
+    rate = '60/minute'
+
 
 def build_authenticated_user_payload(user, request=None):
     faculty = resolve_faculty_for_user(user)
@@ -25,7 +33,11 @@ def build_authenticated_user_payload(user, request=None):
     first_name = (getattr(faculty, 'first_name', '') or user.first_name or '').strip()
     middle_name = (getattr(faculty, 'middle_name', '') or '').strip()
     last_name = (getattr(faculty, 'last_name', '') or user.last_name or '').strip()
-    full_name = getattr(faculty, 'full_name', '') if faculty else " ".join(filter(None, [first_name, middle_name, last_name])).strip() or user.username
+    full_name = (
+        getattr(faculty, 'full_name', '')
+        if faculty
+        else " ".join(filter(None, [first_name, middle_name, last_name])).strip() or user.username
+    )
 
     photo_url = safe_photo_url(faculty.photo, request) if (faculty and faculty.photo) else None
     teaching_class_count = Schedule.objects.filter(faculty=faculty).count() if faculty else 0
@@ -58,6 +70,7 @@ def build_authenticated_user_payload(user, request=None):
         'is_superuser': user.is_superuser,
     }
 
+
 class DatabaseLoginView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [AuthLoginRateThrottle]
@@ -67,13 +80,19 @@ class DatabaseLoginView(APIView):
         password = str(request.data.get('password', '')).strip()
 
         if not username or not password:
-            return Response({'error': 'Username and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'Username and password are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         existing_user = User.objects.filter(username__iexact=username).first()
         profile = getattr(existing_user, 'profile', None) if existing_user else None
 
         if profile and hasattr(profile, 'is_locked') and profile.is_locked():
-            return Response({'error': 'Account locked due to excessive failed attempts. Try again in 15 minutes.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            return Response(
+                {'error': 'Account locked due to excessive failed attempts. Try again in 15 minutes.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
         user = authenticate(request=request, username=username, password=password)
         if user is None:
@@ -82,15 +101,23 @@ class DatabaseLoginView(APIView):
             return Response({'error': 'Invalid credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         if not user.is_active:
-            return Response({'error': 'Account is inactive. Contact school admin.'}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {'error': 'Account is inactive. Contact school admin.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         if profile and hasattr(profile, 'reset_failed_attempts'):
             profile.reset_failed_attempts()
 
         token, _ = Token.objects.get_or_create(user=user)
-        return Response({'token': token.key, 'user': build_authenticated_user_payload(user, request)}, status=status.HTTP_200_OK)
+        return Response(
+            {'token': token.key, 'user': build_authenticated_user_payload(user, request)},
+            status=status.HTTP_200_OK,
+        )
+
 
 LoginAPIView = DatabaseLoginView
+
 
 class CurrentUserView(APIView):
     permission_classes = [IsAuthenticated]
@@ -103,15 +130,21 @@ class CurrentUserView(APIView):
         data = request.data
         faculty = resolve_faculty_for_user(user)
 
-        if 'first_name' in data: user.first_name = str(data.get('first_name', '')).strip()
-        if 'last_name' in data: user.last_name = str(data.get('last_name', '')).strip()
-        if 'email' in data: user.email = str(data.get('email', '')).strip()
+        if 'first_name' in data:
+            user.first_name = str(data.get('first_name', '')).strip()
+        if 'last_name' in data:
+            user.last_name = str(data.get('last_name', '')).strip()
+        if 'email' in data:
+            user.email = str(data.get('email', '')).strip()
 
         new_password = data.get('password')
         if new_password:
             clean_pw = str(new_password).strip()
             if len(clean_pw) < 8:
-                return Response({'error': 'Password must be at least 8 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {'error': 'Password must be at least 8 characters long.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             try:
                 validate_password(clean_pw, user=user)
             except DjangoValidationError as exc:
@@ -124,40 +157,72 @@ class CurrentUserView(APIView):
             faculty.first_name = user.first_name
             faculty.last_name = user.last_name
             faculty.email = user.email
-            faculty.save()
+            faculty.save(update_fields=['first_name', 'last_name', 'email'])
 
         return Response(build_authenticated_user_payload(user, request), status=status.HTTP_200_OK)
 
     def patch(self, request):
         return self.put(request)
 
+
 CurrentUserProfileView = CurrentUserView
 
+
 class LiveFieldValidationAPIView(APIView):
-    permission_classes = [AllowAny]
+    """
+    Validates field uniqueness (username, email) in real time.
+    Supports both GET and POST requests to prevent 405 Method Not Allowed errors.
+    """
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ValidationRateThrottle]
 
-    def post(self, request):
-        field = request.data.get('field')
-        val = str(request.data.get('value', '')).strip()
-        exclude_id = request.data.get('exclude_id')
-
+    def _validate(self, field, val, exclude_id):
+        val = str(val or '').strip()
+        field = str(field or '').strip().lower()
         is_taken = False
-        if field == 'username':
+        message = ''
+
+        if field == 'username' and val:
             qs = User.objects.filter(username__iexact=val)
-            if exclude_id: qs = qs.exclude(id=exclude_id)
+            if exclude_id and str(exclude_id).isdigit():
+                qs = qs.exclude(id=int(exclude_id))
             is_taken = qs.exists()
+            if is_taken:
+                message = f"Username '{val}' is already taken."
         elif field == 'email' and val:
             qs = User.objects.filter(email__iexact=val)
-            if exclude_id: qs = qs.exclude(id=exclude_id)
+            if exclude_id and str(exclude_id).isdigit():
+                qs = qs.exclude(id=int(exclude_id))
             is_taken = qs.exists()
+            if is_taken:
+                message = f"Email '{val}' is already in use."
 
-        return Response({'valid': not is_taken, 'is_taken': is_taken}, status=status.HTTP_200_OK)
+        return {
+            'valid': not is_taken,
+            'is_taken': is_taken,
+            'message': message,
+        }
+
+    def get(self, request):
+        field = request.query_params.get('field')
+        val = request.query_params.get('value')
+        exclude_id = request.query_params.get('exclude_id')
+        result = self._validate(field, val, exclude_id)
+        return Response(result, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        field = request.data.get('field') or request.query_params.get('field')
+        val = request.data.get('value') or request.query_params.get('value')
+        exclude_id = request.data.get('exclude_id') or request.query_params.get('exclude_id')
+        result = self._validate(field, val, exclude_id)
+        return Response(result, status=status.HTTP_200_OK)
+
 
 class RegisterPushTokenAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        token = request.data.get('push_token')
+        token = str(request.data.get('push_token', '')).strip()
         if not token:
             return Response({'error': 'Push token required.'}, status=status.HTTP_400_BAD_REQUEST)
         return Response({'success': True}, status=status.HTTP_200_OK)

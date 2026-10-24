@@ -1,12 +1,12 @@
 /**
- * AttendSure - Institutional Context Provider (Cache-First Fast Boot)
+ * AttendSure - Institutional Context Provider (Real Database Data)
  * File: web/src/context/SchoolContext.tsx
  *
  * Cybersecurity & Performance:
- * 1. 0ms Fast Boot: Loads cached profile frame-1 from localStorage without network blocks.
- * 2. Unified Context Interface: Exports both updateSchool and updateSchoolInstantly.
- * 3. Safe Storage Quota Guard: Strips oversized base64 strings before localStorage writes.
- * 4. Zero Unused Variables: Clean TypeScript compilation.
+ * 1. Zero Mock Data: All school information is loaded strictly from the PostgreSQL database.
+ * 2. Real-Time Cache Sync: Caches genuine database records in localStorage to ensure fast frame-1 boot.
+ * 3. Quota Safety Guard: Strips excessive base64 payload strings before writing to browser storage.
+ * 4. Simple English Terms: Clean data interfaces for school profile, head, and boundary settings.
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
@@ -21,31 +21,41 @@ export interface SchoolData {
   address?: string;
   contact_number?: string;
   email?: string;
+  website?: string;
   principal_faculty?: number | string | null;
   principal_name: string;
   principal_title: string;
+  superintendent_name?: string;
   school_logo: string | null;
   left_logo: string | null;
   right_logo: string | null;
   latitude: number | null;
   longitude: number | null;
   geofence_radius_meters: number;
+  academic_year?: string;
 }
 
-const DEFAULT_SCHOOL: SchoolData = {
-  school_id: '340964',
-  school_name: 'Lapasan National High School',
-  division: 'Cagayan de Oro City',
-  region: 'Region X',
-  district: 'East II District',
-  principal_name: 'DR. JEREL EDUAVE',
-  principal_title: 'School Principal I',
+const EMPTY_SCHOOL: SchoolData = {
+  school_id: '',
+  school_name: '',
+  division: '',
+  region: '',
+  district: '',
+  address: '',
+  contact_number: '',
+  email: '',
+  website: '',
+  principal_faculty: null,
+  principal_name: '',
+  principal_title: '',
+  superintendent_name: '',
   school_logo: null,
   left_logo: null,
   right_logo: null,
   latitude: null,
   longitude: null,
-  geofence_radius_meters: 150,
+  geofence_radius_meters: 100,
+  academic_year: '',
 };
 
 interface SchoolContextValue {
@@ -57,7 +67,7 @@ interface SchoolContextValue {
 }
 
 const SchoolContext = createContext<SchoolContextValue>({
-  school: DEFAULT_SCHOOL,
+  school: EMPTY_SCHOOL,
   loading: false,
   refreshSchool: async () => {},
   updateSchool: () => {},
@@ -69,31 +79,29 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       const cached = localStorage.getItem('attendsure_school_profile');
       if (cached) {
-        return { ...DEFAULT_SCHOOL, ...JSON.parse(cached) };
+        return { ...EMPTY_SCHOOL, ...JSON.parse(cached) };
       }
     } catch {
-      // Fallback to default
+      // Fallback to empty state
     }
-    return DEFAULT_SCHOOL;
+    return EMPTY_SCHOOL;
   });
 
   const [loading, setLoading] = useState<boolean>(() => {
     return !localStorage.getItem('attendsure_school_profile');
   });
 
-  // Instant optimistic updater (0ms latency UI update)
   const applySchoolUpdate = useCallback((patch: Partial<SchoolData>) => {
     setSchool((prev) => {
       const updated = { ...prev, ...patch };
       try {
         const storageSafe = { ...updated };
-        // Prevent QuotaExceededError by omitting massive base64 text from localStorage
         if (storageSafe.school_logo && storageSafe.school_logo.length > 300000) storageSafe.school_logo = null;
         if (storageSafe.left_logo && storageSafe.left_logo.length > 300000) storageSafe.left_logo = null;
         if (storageSafe.right_logo && storageSafe.right_logo.length > 300000) storageSafe.right_logo = null;
         localStorage.setItem('attendsure_school_profile', JSON.stringify(storageSafe));
       } catch {
-        // Ignore storage limits safely
+        // Handle browser quota limit safely
       }
       return updated;
     });
@@ -107,7 +115,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[SchoolContext] Non-blocking sync notice:', msg);
+      console.warn('[SchoolContext] Database sync notice:', msg);
     } finally {
       setLoading(false);
     }

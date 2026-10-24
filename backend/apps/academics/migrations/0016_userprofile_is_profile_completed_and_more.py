@@ -21,7 +21,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='userprofile',
             name='is_teaching',
-            field=models.BooleanField(default=True, help_text="Enables teaching duties and the 'My Assigned Classes' tab for this user."),
+            field=models.BooleanField(default=True, help_text="Enables teaching duties and the 'Classes' tab for this user."),
         ),
         migrations.AlterField(
             model_name='academicyear',

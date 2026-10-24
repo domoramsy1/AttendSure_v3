@@ -1,11 +1,4 @@
-/**
- * AttendSure - DepEd School Form 2 (SF 2) Daily Attendance Report of Learners
- * File: frontend/src/components/tabs/SF2ReportTab.tsx
- *
- * Header Rule:
- * The official letterhead header ALWAYS renders strictly on Page 1.
- * Subsequent pages begin immediately with the attendance table.
- */
+// web/src/components/tabs/SF2ReportTab.tsx
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import apiClient from '../../api/client';
@@ -17,14 +10,15 @@ import { usePageSetup } from '../../hooks/usePageSetup';
 import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
 
-interface SchoolDay {
+export interface SchoolDay {
   dateNumber: number;
   dayOfWeek: 'M' | 'T' | 'W' | 'TH' | 'F';
   fullDate: string;
 }
 
-interface SF2Learner {
+export interface SF2Learner {
   id: number;
   lrn: string;
   name: string;
@@ -35,13 +29,13 @@ interface SF2Learner {
   remarks: string;
 }
 
-interface MetricCounts {
+export interface MetricCounts {
   m: number;
   f: number;
   total: number;
 }
 
-interface SF2Metrics {
+export interface SF2Metrics {
   enrolment_june: MetricCounts;
   late_enrolment: MetricCounts;
   registered_end: MetricCounts;
@@ -54,7 +48,7 @@ interface SF2Metrics {
   transferred_in: MetricCounts;
 }
 
-interface SF2ReportData {
+export interface SF2ReportData {
   school_id: string;
   school_name: string;
   region?: string;
@@ -67,6 +61,9 @@ interface SF2ReportData {
   year: number;
   adviser_name: string;
   school_head: string;
+  school_address?: string;
+  school_contact?: string;
+  school_email?: string;
   left_logo?: string | null;
   right_logo?: string | null;
   school_days: SchoolDay[];
@@ -237,7 +234,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
         setSelectedAcademicYear(res.data.academic_year);
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to retrieve attendance register from database.');
+      setError(err?.response?.data?.error || 'Failed to retrieve attendance register from database.');
     } finally {
       setLoading(false);
     }
@@ -296,7 +293,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     });
     const printedAt = `${dateFormatted} at ${timeFormatted}`;
 
-    const schoolIdStr = reportData?.school_id || school.school_id || '304033';
+    const schoolIdStr = reportData?.school_id || school.school_id || '';
     const dateStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
     const timeCode = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
     const trackingId = `DOC-SF2-${schoolIdStr}-${dateStamp}-${timeCode}`;
@@ -462,89 +459,10 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     }
   };
 
-  const isRosterEmpty =
+  const isListEmpty =
     !reportData ||
     reportData.has_enrolled_students === false ||
     ((!reportData.males || reportData.males.length === 0) && (!reportData.females || reportData.females.length === 0));
-
-  // DepEd Manual of Style Header
-  const renderHeader = () => {
-    const effectiveLeftLogo = reportData?.left_logo || school.left_logo;
-    const effectiveRightLogo = reportData?.right_logo || school.right_logo;
-    const effectiveSchoolName = reportData?.school_name || school.school_name;
-    const effectiveSchoolId = reportData?.school_id || school.school_id;
-    const effectiveDivision = reportData?.division || school.division;
-    const effectiveRegion = reportData?.region || school.region;
-
-    return (
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8, width: '100%', boxSizing: 'border-box' }}>
-        <div style={{ flexShrink: 0, width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {effectiveLeftLogo ? (
-            <img src={effectiveLeftLogo} alt="Left Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-          ) : null}
-        </div>
-
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ textAlign: 'center', marginBottom: 6 }}>
-            <div style={republicStyle}>Republic of the Philippines</div>
-            <div style={depedTitleStyle}>Department of Education</div>
-            {effectiveRegion && <div style={regionalOfficeStyle}>{effectiveRegion.toUpperCase()}</div>}
-            {effectiveDivision && <div style={officeStyle}>{effectiveDivision.toUpperCase()}</div>}
-            <div style={{ fontFamily: 'Tahoma, Arial, sans-serif', fontSize: '10.5pt', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: 4, color: '#000000' }}>
-              School Form 2 (SF 2) Daily Attendance Report of Learners
-            </div>
-            <div style={{ fontSize: '6.0pt', fontStyle: 'italic', color: '#000000', marginTop: 1 }}>
-              (Master List Daily Attendance Recording Profile)
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', width: '28%' }}>
-                <span style={{ fontWeight: 700, fontSize: '6.8pt', width: 60, color: '#000000' }}>School ID</span>
-                <div style={{ ...fieldBoxStyle, width: 95 }}>{effectiveSchoolId || '—'}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '32%' }}>
-                <span style={{ fontWeight: 700, fontSize: '6.8pt', width: 72, color: '#000000' }}>School Year</span>
-                <div style={{ ...fieldBoxStyle, width: 105 }}>{reportData?.academic_year || '—'}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '40%' }}>
-                <span style={{ fontWeight: 700, fontSize: '6.8pt', width: 125, color: '#000000' }}>Report for the Month of</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>
-                  {reportData?.month} {reportData?.year}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', width: '50%' }}>
-                <span style={{ fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold', width: 110, color: '#000000' }}>Name of School</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6, marginRight: 12, fontFamily: 'Tahoma, sans-serif', fontSize: '10pt', fontWeight: 'bold' }}>
-                  {effectiveSchoolName || '—'}
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-                <span style={{ fontWeight: 700, fontSize: '6.8pt', width: 68, color: '#000000' }}>Grade Level</span>
-                <div style={{ ...fieldBoxStyle, width: 65, marginRight: 10 }}>{reportData?.grade_level || '—'}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', width: '25%' }}>
-                <span style={{ fontWeight: 700, fontSize: '6.8pt', width: 48, color: '#000000' }}>Section</span>
-                <div style={{ ...fieldBoxStyle, flex: 1, textAlign: 'left', paddingLeft: 6 }}>
-                  {reportData?.section_name || '—'}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ flexShrink: 0, width: '0.76in', height: '0.76in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {effectiveRightLogo ? (
-            <img src={effectiveRightLogo} alt="Right Seal" style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }} />
-          ) : null}
-        </div>
-      </div>
-    );
-  };
 
   const renderTableHeader = () => (
     <thead>
@@ -648,25 +566,15 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
         </div>
       </div>
 
-      <div style={dmosFooterStyle}>
-        <div style={{ width: '0.76in', height: '0.76in', minWidth: '0.76in', minHeight: '0.76in', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {(school.school_logo || school.left_logo) ? (
-            <img
-              src={school.school_logo || school.left_logo || ''}
-              alt="School Seal"
-              style={{ width: '0.76in', height: '0.76in', objectFit: 'contain' }}
-            />
-          ) : null}
-        </div>
-
-        <div style={dmosFooterDetailsStyle}>
-          <div><strong>Address:</strong> {school.address || 'Lapasan, Cagayan de Oro City, Northern Mindanao, 9000'}</div>
-          <div>
-            <strong>Contact No.:</strong> {school.contact_number || '(088) 856-1234'} &bull; <strong>Email:</strong> {school.email || 'lapasan.nhs@deped.gov.ph'}
-          </div>
-        </div>
-      </div>
-    </div>
+        {/* Centralized Dynamic DepEd DMOS Footer Sourced From Database */}
+        <DepEdReportFooter
+          sealUrl={school.school_logo}
+          address={reportData?.school_address || school.address}
+          contactNumber={reportData?.school_contact || school.contact_number}
+          email={reportData?.school_email || school.email}
+          reportData={reportData}
+        />
+    </div> 
   );
 
   return (
@@ -807,13 +715,17 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                       backgroundColor: activePageConfig.pageColor || '#ffffff',
                     }}
                   >
-                    {/* Header on Page 1 */}
-                    {renderHeader()}
+                    <DepEdReportHeader
+                      formTitle="School Form 2 (SF 2) Daily Attendance Report of Learners"
+                      formSubtitle="(Master List Daily Attendance Recording Profile)"
+                      formType="SF2"
+                      reportData={reportData}
+                    />
 
                     <table style={mainTableStyle}>
                       {renderTableHeader()}
                       <tbody>
-                        {isRosterEmpty ? (
+                        {isListEmpty ? (
                           <tr>
                             <td colSpan={30} style={emptyNoticeCellStyle}>
                               Notice: There are no students enrolled in Section {reportData.section_name} for {reportData.month} {reportData.year}.
@@ -917,7 +829,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                   </div>
                 ) : (
                   <>
-                    {/* PAGE 1: MALE COHORT (Header on Page 1) */}
+                    {/* PAGE 1: MALE COHORT */}
                     <div
                       className="sf2-page-sheet"
                       style={{
@@ -931,11 +843,16 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                         backgroundColor: activePageConfig.pageColor || '#ffffff',
                       }}
                     >
-                      {renderHeader()}
+                      <DepEdReportHeader
+                        formTitle="School Form 2 (SF 2) Daily Attendance Report of Learners"
+                        formSubtitle="(Master List Daily Attendance Recording Profile)"
+                        formType="SF2"
+                        reportData={reportData}
+                      />
                       <table style={mainTableStyle}>
                         {renderTableHeader()}
                         <tbody>
-                          {isRosterEmpty ? (
+                          {isListEmpty ? (
                             <tr>
                               <td colSpan={30} style={emptyNoticeCellStyle}>
                                 Notice: There are no students enrolled in Section {reportData.section_name} for {reportData.month} {reportData.year}.
@@ -989,7 +906,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                       </div>
                     </div>
 
-                    {/* PAGE 2: FEMALE COHORT & SUMMARY (NO HEADER REPETITION) */}
+                    {/* PAGE 2: FEMALE COHORT & SUMMARY */}
                     <div
                       className="sf2-page-sheet"
                       style={{
@@ -1004,11 +921,10 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                         pageBreakBefore: 'always',
                       }}
                     >
-                      {/* Strictly NO header on Page 2 */}
                       <table style={mainTableStyle}>
                         {renderTableHeader()}
                         <tbody>
-                          {isRosterEmpty ? (
+                          {isListEmpty ? (
                             <tr>
                               <td colSpan={30} style={emptyNoticeCellStyle}>
                                 Notice: There are no students enrolled in Section {reportData.section_name} for {reportData.month} {reportData.year}.
@@ -1197,61 +1113,6 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
 export default SF2ReportTab;
 
-const republicStyle: React.CSSProperties = {
-  fontFamily: "'Old English Text MT', 'Old English Text MT Fallback', 'UnifrakturMaguntia', serif",
-  fontSize: '12pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.15,
-};
-
-const depedTitleStyle: React.CSSProperties = {
-  fontFamily: "'Old English Text MT', 'Old English Text MT Fallback', 'UnifrakturMaguntia', serif",
-  fontSize: '18pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.15,
-  marginTop: '1px',
-};
-
-const regionalOfficeStyle: React.CSSProperties = {
-  fontFamily: 'Tahoma, Arial, sans-serif',
-  fontSize: '10pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.2,
-  marginTop: '3px',
-};
-
-const officeStyle: React.CSSProperties = {
-  fontFamily: 'Tahoma, Arial, sans-serif',
-  fontSize: '10pt',
-  fontWeight: 'bold',
-  color: '#000000',
-  lineHeight: 1.2,
-  marginTop: '1px',
-};
-
-const dmosFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-  gap: '12px',
-  width: '100%',
-  marginTop: '10px',
-  paddingTop: '6px',
-  borderTop: '1px solid #000000',
-  boxSizing: 'border-box',
-};
-
-const dmosFooterDetailsStyle: React.CSSProperties = {
-  fontFamily: 'Calibri, "Segoe UI", Arial, sans-serif',
-  fontSize: '10pt',
-  color: '#000000',
-  lineHeight: 1.3,
-  textAlign: 'left',
-};
-
 const controlStripStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -1279,19 +1140,6 @@ const zoomBtnStyle: React.CSSProperties = {
   border: '1px solid #cbd5e1',
   backgroundColor: '#ffffff',
   cursor: 'pointer',
-};
-
-const fieldBoxStyle: React.CSSProperties = {
-  minHeight: 17,
-  lineHeight: '17px',
-  border: '1.2px solid #000000',
-  backgroundColor: '#ffffff',
-  textAlign: 'center',
-  fontWeight: 700,
-  fontSize: '7pt',
-  color: '#000000',
-  padding: '0 4px',
-  boxSizing: 'border-box',
 };
 
 const viewerScrollContainerStyle: React.CSSProperties = {

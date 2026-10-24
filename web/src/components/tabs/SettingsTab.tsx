@@ -2,12 +2,12 @@
  * AttendSure - School Profile & Administration Settings
  * File: web/src/components/tabs/SettingsTab.tsx
  *
- * Cybersecurity & Speed Optimizations:
- * 1. Pre-Upload Compression: Automatically shrinks image dimensions to max 360px (~30KB),
- *    preventing network bottlenecks over Cloudflare Tunnels.
- * 2. Payload Sanitization: Sends fresh logos only when modified, omitting unchanged remote URLs.
- * 3. Immediate Optimistic Response: Updates local context state instantly on frame 1.
- * 4. Zero Unused Variables: Cleans up TypeScript warnings.
+ * Cybersecurity & Performance:
+ * 1. Automatic Principal Sync: Fetches full credentials (photo, Employee ID, department, email) directly from database.
+ * 2. Pre-Upload Compression: Shrinks logo payloads to < 35KB, preventing network lag over tunnels.
+ * 3. Fluid Responsive Grid: Auto-fits input groups cleanly from phone (360px) to widescreen (1440px).
+ * 4. SVG Vector Standards: All visual indicators use Lucide icons with zero emojis.
+ * 5. Simple English Terms: Clean labels for "School profile", "Principal credentials", and "Campus boundaries".
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -25,6 +25,13 @@ import {
   ShieldCheck,
   User,
   Image as ImageIcon,
+  MapPin,
+  Phone,
+  Mail,
+  Globe,
+  Compass,
+  Calendar,
+  Award,
 } from 'lucide-react';
 
 interface FacultyOption {
@@ -35,12 +42,13 @@ interface FacultyOption {
   full_name: string;
   position: string;
   department: string;
+  contact_number?: string;
+  email?: string;
   photo_url?: string | null;
 }
 
-const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB raw limit
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
-// Sub-100ms in-browser canvas compressor (< 35KB payload output)
 const compressImageToDataUrl = (file: File, maxDim = 360, quality = 0.78): Promise<string> => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -88,18 +96,27 @@ export const SettingsTab: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Complete system-wide school profile & school head state
   const [formData, setFormData] = useState({
     school_id: '',
     school_name: '',
     region: '',
     division: '',
     district: '',
+    academic_year: '2026-2027',
     address: '',
     contact_number: '',
     email: '',
+    website: '',
     principal_faculty: '' as string | number,
     principal_name: '',
     principal_title: '',
+    principal_photo_url: null as string | null,
+    principal_employee_id: '',
+    principal_department: '',
+    principal_contact_number: '',
+    principal_email: '',
+    superintendent_name: '',
     school_logo: null as string | null,
     left_logo: null as string | null,
     right_logo: null as string | null,
@@ -115,17 +132,13 @@ export const SettingsTab: React.FC = () => {
   });
 
   useEffect(() => {
-    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
-  }, []);
-
-  useEffect(() => {
     let isMounted = true;
     const loadInitialData = async () => {
       setLoading(true);
       try {
         const [schoolRes, facultyRes] = await Promise.all([
           apiClient.get('/settings/school/', { timeout: 4000 }),
-          apiClient.get('/faculty/dropdown/', { timeout: 4000 }).catch(() => apiClient.get('/facultys/')),
+          apiClient.get('/faculty/dropdown/?include_all=true', { timeout: 4000 }).catch(() => apiClient.get('/facultys/')),
         ]);
 
         if (!isMounted) return;
@@ -136,18 +149,26 @@ export const SettingsTab: React.FC = () => {
           region: s.region || '',
           division: s.division || '',
           district: s.district || '',
-          address: s.address || '',
-          contact_number: s.contact_number || '',
+          academic_year: s.academic_year || s.school_year || '2026-2027',
+          address: s.address || s.street_address || '',
+          contact_number: s.contact_number || s.telephone || '',
           email: s.email || '',
+          website: s.website || '',
           principal_faculty: s.principal_faculty || '',
           principal_name: s.principal_name || '',
           principal_title: s.principal_title || 'Secondary School Principal IV',
+          principal_photo_url: s.principal_photo_url || null,
+          principal_employee_id: s.principal_employee_id || '',
+          principal_department: s.principal_department || '',
+          principal_contact_number: s.principal_contact_number || '',
+          principal_email: s.principal_email || '',
+          superintendent_name: s.superintendent_name || '',
           school_logo: s.school_logo || null,
           left_logo: s.left_logo || null,
           right_logo: s.right_logo || null,
-          latitude: s.latitude ?? 8.4858,
-          longitude: s.longitude ?? 124.6567,
-          geofence_radius_meters: s.geofence_radius_meters ?? 150,
+          latitude: s.latitude !== undefined && s.latitude !== null ? Number(s.latitude) : 8.4858,
+          longitude: s.longitude !== undefined && s.longitude !== null ? Number(s.longitude) : 124.6567,
+          geofence_radius_meters: s.geofence_radius_meters ? Number(s.geofence_radius_meters) : 150,
         });
 
         const fList = Array.isArray(facultyRes.data) ? facultyRes.data : facultyRes.data.results || [];
@@ -170,6 +191,13 @@ export const SettingsTab: React.FC = () => {
       setFormData((prev) => ({
         ...prev,
         principal_faculty: '',
+        principal_name: '',
+        principal_title: '',
+        principal_photo_url: null,
+        principal_employee_id: '',
+        principal_department: '',
+        principal_contact_number: '',
+        principal_email: '',
       }));
       return;
     }
@@ -181,8 +209,13 @@ export const SettingsTab: React.FC = () => {
       setFormData((prev) => ({
         ...prev,
         principal_faculty: fid,
-        principal_name: `${chosen.first_name} ${chosen.last_name}`.trim(),
+        principal_name: chosen.full_name || `${chosen.first_name} ${chosen.last_name}`.trim(),
         principal_title: chosen.position || 'Secondary School Principal IV',
+        principal_photo_url: chosen.photo_url || null,
+        principal_employee_id: chosen.employee_id || '',
+        principal_department: chosen.department || 'Administration',
+        principal_contact_number: chosen.contact_number || '',
+        principal_email: chosen.email || '',
       }));
     }
   };
@@ -190,6 +223,13 @@ export const SettingsTab: React.FC = () => {
   const selectedFacultyObj = facultyList.find(
     (f) => String(f.id) === String(formData.principal_faculty)
   );
+
+  // Fallback to direct database fields if chosen faculty is not in currently loaded dropdown
+  const activePrincipalPhoto = selectedFacultyObj?.photo_url || formData.principal_photo_url || null;
+  const activePrincipalEmpId = selectedFacultyObj?.employee_id || formData.principal_employee_id || '';
+  const activePrincipalDept = selectedFacultyObj?.department || formData.principal_department || 'Administration';
+  const activePrincipalContact = selectedFacultyObj?.contact_number || formData.principal_contact_number || '';
+  const activePrincipalEmail = selectedFacultyObj?.email || formData.principal_email || '';
 
   const handleLogoUpload = async (
     field: 'school_logo' | 'left_logo' | 'right_logo',
@@ -233,22 +273,24 @@ export const SettingsTab: React.FC = () => {
         ? Number(formData.principal_faculty)
         : null;
 
-    // Build optimized payload: only include logos if newly uploaded
     const payload: Record<string, unknown> = {
       school_id: formData.school_id.trim(),
       school_name: formData.school_name.trim(),
       region: formData.region.trim(),
       division: formData.division.trim(),
       district: formData.district.trim(),
+      academic_year: formData.academic_year.trim(),
       address: formData.address.trim(),
       contact_number: formData.contact_number.trim(),
       email: formData.email.trim(),
+      website: formData.website.trim(),
       principal_faculty: validFacultyId,
       principal_name: formData.principal_name.trim(),
       principal_title: formData.principal_title.trim(),
-      latitude: formData.latitude,
-      longitude: formData.longitude,
-      geofence_radius_meters: formData.geofence_radius_meters,
+      superintendent_name: formData.superintendent_name.trim(),
+      latitude: Number(formData.latitude),
+      longitude: Number(formData.longitude),
+      geofence_radius_meters: Number(formData.geofence_radius_meters),
     };
 
     if (freshLogos.school_logo && formData.school_logo) {
@@ -261,20 +303,24 @@ export const SettingsTab: React.FC = () => {
       payload.right_logo = formData.right_logo;
     }
 
-    // 1. INSTANT LOCAL UPDATE (0ms): Screen updates immediately on frame 1
     updateSchoolInstantly(formData);
     setSaveSuccess(true);
     showAlert({
       title: 'Settings Saved',
-      message: 'School configuration updated immediately.',
+      message: 'School profile updated successfully.',
       type: 'success',
       autoCloseDuration: 2500,
     });
     setTimeout(() => setSaveSuccess(false), 3000);
 
-    // 2. BACKGROUND PERSISTENCE: Allow up to 15s for Cloudflare Tunnel latency spikes
     try {
-      await apiClient.put('/settings/school/', payload, { timeout: 15000 });
+      const res = await apiClient.put('/settings/school/', payload, { timeout: 15000 });
+      if (res.data?.principal_photo_url) {
+        setFormData((prev) => ({
+          ...prev,
+          principal_photo_url: res.data.principal_photo_url,
+        }));
+      }
       setFreshLogos({ school_logo: false, left_logo: false, right_logo: false });
       refreshSchool().catch(() => {});
     } catch (err: unknown) {
@@ -287,7 +333,7 @@ export const SettingsTab: React.FC = () => {
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
-        <Loader2 className="animate-spin" size={32} color="#0284c7" />
+        <Loader2 className="animate-spin" size={30} color="#004b87" />
       </div>
     );
   }
@@ -298,46 +344,44 @@ export const SettingsTab: React.FC = () => {
       style={{
         width: '100%',
         height: '100%',
-        flex: '1 1 auto',
-        alignSelf: 'stretch',
         overflowY: 'auto',
         overflowX: 'hidden',
         boxSizing: 'border-box',
         backgroundColor: '#f8fafc',
+        padding: 'clamp(14px, 2.5vw, 24px)',
       }}
     >
       <div
         style={{
           maxWidth: '1080px',
           margin: '0 auto',
-          padding: '24px 24px 48px 24px',
-          boxSizing: 'border-box',
           display: 'flex',
           flexDirection: 'column',
-          gap: 20,
+          gap: 16,
         }}
       >
         <div>
-          <h1 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-            School Profile &amp; Administration
+          <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+            School Profile &amp; Settings
           </h1>
-          <p style={{ fontSize: '0.82rem', color: '#64748b', marginTop: 4, margin: '4px 0 0 0' }}>
-            Manage official school identity, principal credentials, and official DepEd report seals.
+          <p style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 4 }}>
+            Manage official school identity, DepEd report letterhead seals, and automatic School Head credentials.
           </p>
         </div>
 
-        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* Section 1: School Head Assignment */}
+        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Section 1: School Head / Principal Credentials */}
           <div style={cardStyle}>
             <div style={cardHeaderStyle}>
-              <UserCheck size={20} color="#0284c7" />
-              <h2 style={cardTitleStyle}>School Head / Principal Assignment</h2>
+              <UserCheck size={18} color="#004b87" />
+              <h2 style={cardTitleStyle}>School Head / Principal Information</h2>
+              <span style={autoBadgeStyle}>AUTOMATIC SYNC ACTIVE</span>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20, alignItems: 'start' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={responsiveGridTwoCol}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
-                  <label style={labelStyle}>Assign from Faculty &amp; Staff Directory</label>
+                  <label style={labelStyle}>Assign from Faculty / Staff Directory</label>
                   <select
                     value={formData.principal_faculty || ''}
                     onChange={(e) => handleFacultyChange(e.target.value)}
@@ -350,13 +394,13 @@ export const SettingsTab: React.FC = () => {
                       </option>
                     ))}
                   </select>
-                  <span style={{ fontSize: '0.74rem', color: '#64748b', marginTop: 4, display: 'block' }}>
-                    Pulls directly from active Faculty profiles. Updates name and title automatically.
+                  <span style={{ fontSize: '0.70rem', color: '#64748b', marginTop: 4, display: 'block' }}>
+                    Pulls all registered accounts. Assigning a user with role <strong>School Principal</strong> in the Users tab sets this automatically.
                   </span>
                 </div>
 
                 <div>
-                  <label style={labelStyle}>Official Signature Name (Printed on SF1, SF2, SF4)</label>
+                  <label style={labelStyle}>Official Signature Name (Printed on SF1, SF2, SF4, DTR) *</label>
                   <input
                     type="text"
                     required
@@ -368,7 +412,7 @@ export const SettingsTab: React.FC = () => {
                 </div>
 
                 <div>
-                  <label style={labelStyle}>Official DepEd Position / Title</label>
+                  <label style={labelStyle}>Official DepEd Position / Title *</label>
                   <input
                     type="text"
                     required
@@ -380,50 +424,82 @@ export const SettingsTab: React.FC = () => {
                 </div>
               </div>
 
-              {/* Profile Card Preview */}
+              {/* Profile Card Preview with Real Image */}
               <div style={previewBoxStyle}>
-                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#334155', marginBottom: 12 }}>
-                  Current School Head Credentials
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#334155' }}>
+                    Current School Head Credentials
+                  </span>
+                  <span style={activeStatusPill}>
+                    <ShieldCheck size={12} /> VERIFIED SCHOOL HEAD
+                  </span>
                 </div>
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <div style={avatarStyle}>
-                    {selectedFacultyObj?.photo_url ? (
+                    {activePrincipalPhoto ? (
                       <img
-                        src={selectedFacultyObj.photo_url}
+                        src={activePrincipalPhoto}
                         alt="Principal"
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
                       />
                     ) : (
                       <User size={28} color="#ffffff" />
                     )}
                   </div>
 
-                  <div>
-                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.92rem' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.94rem' }}>
                       {formData.principal_name || 'No Principal Assigned'}
                     </div>
-                    <div style={{ fontSize: '0.78rem', color: '#0284c7', fontWeight: 700, marginTop: 2 }}>
+                    <div style={{ fontSize: '0.76rem', color: '#004b87', fontWeight: 700, marginTop: 2 }}>
                       {formData.principal_title || 'Unassigned Title'}
                     </div>
-                    {selectedFacultyObj && (
-                      <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 4 }}>
-                        ID: {selectedFacultyObj.employee_id} &bull; {selectedFacultyObj.department}
-                      </div>
-                    )}
+                  </div>
+                </div>
+
+                {/* Extended Details Grid */}
+                <div style={previewMetaGrid}>
+                  <div>
+                    <span style={previewMetaLabel}>Employee ID:</span>
+                    <strong style={{ display: 'block', color: '#0f172a', fontFamily: 'monospace' }}>
+                      {activePrincipalEmpId || '—'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span style={previewMetaLabel}>Department:</span>
+                    <strong style={{ display: 'block', color: '#0f172a' }}>
+                      {activePrincipalDept}
+                    </strong>
+                  </div>
+                  <div>
+                    <span style={previewMetaLabel}>Contact No.:</span>
+                    <strong style={{ display: 'block', color: '#0f172a' }}>
+                      {activePrincipalContact || '—'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span style={previewMetaLabel}>Email:</span>
+                    <strong style={{ display: 'block', color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {activePrincipalEmail || '—'}
+                    </strong>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Section 2: School Identification */}
+          {/* Section 2: School Identification & Academic Calendar */}
           <div style={cardStyle}>
             <div style={cardHeaderStyle}>
-              <Building2 size={20} color="#0284c7" />
+              <Building2 size={18} color="#004b87" />
               <h2 style={cardTitleStyle}>School Identification &amp; Hierarchy</h2>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+            <div style={responsiveGridThreeCol}>
               <div>
                 <label style={labelStyle}>DepEd School ID *</label>
                 <input
@@ -431,9 +507,11 @@ export const SettingsTab: React.FC = () => {
                   required
                   value={formData.school_id}
                   onChange={(e) => setFormData({ ...formData, school_id: e.target.value })}
+                  placeholder="e.g. 304033"
                   style={inputStyle}
                 />
               </div>
+
               <div style={{ gridColumn: 'span 2' }}>
                 <label style={labelStyle}>Official School Name *</label>
                 <input
@@ -441,84 +519,223 @@ export const SettingsTab: React.FC = () => {
                   required
                   value={formData.school_name}
                   onChange={(e) => setFormData({ ...formData, school_name: e.target.value })}
+                  placeholder="e.g. City National High School"
                   style={inputStyle}
                 />
               </div>
+
               <div>
                 <label style={labelStyle}>Region</label>
                 <input
                   type="text"
                   value={formData.region}
                   onChange={(e) => setFormData({ ...formData, region: e.target.value })}
+                  placeholder="e.g. Region X"
                   style={inputStyle}
                 />
               </div>
+
               <div>
                 <label style={labelStyle}>Division</label>
                 <input
                   type="text"
                   value={formData.division}
                   onChange={(e) => setFormData({ ...formData, division: e.target.value })}
+                  placeholder="e.g. Division of City Schools"
                   style={inputStyle}
                 />
               </div>
+
               <div>
                 <label style={labelStyle}>District</label>
                 <input
                   type="text"
                   value={formData.district}
                   onChange={(e) => setFormData({ ...formData, district: e.target.value })}
+                  placeholder="e.g. Central District"
+                  style={inputStyle}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Active School Year (SY)</label>
+                <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <input
+                    type="text"
+                    value={formData.academic_year}
+                    onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })}
+                    placeholder="e.g. 2026-2027"
+                    style={inputStyle}
+                  />
+                  <Calendar size={14} color="#64748b" style={{ position: 'absolute', right: 10 }} />
+                </div>
+              </div>
+
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={labelStyle}>Schools Division Superintendent (SDS)</label>
+                <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <input
+                    type="text"
+                    value={formData.superintendent_name}
+                    onChange={(e) => setFormData({ ...formData, superintendent_name: e.target.value })}
+                    placeholder="e.g. Division Superintendent Name"
+                    style={inputStyle}
+                  />
+                  <Award size={14} color="#64748b" style={{ position: 'absolute', right: 10 }} />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: Official Contact & Footer Details */}
+          <div style={cardStyle}>
+            <div style={cardHeaderStyle}>
+              <MapPin size={18} color="#004b87" />
+              <h2 style={cardTitleStyle}>Official Contact &amp; Document Footer Details</h2>
+            </div>
+            <p style={{ fontSize: '0.74rem', color: '#64748b', margin: '0 0 12px 0' }}>
+              These values print dynamically on the official DepEd Manual of Style footer for SF1, SF2, SF4, and Form 48:
+            </p>
+
+            <div style={responsiveGridTwoCol}>
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={labelStyle}>Complete Campus Address *</label>
+                <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <input
+                    type="text"
+                    required
+                    value={formData.address}
+                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                    placeholder="e.g. School Street, Municipality, Province, Zip"
+                    style={inputStyle}
+                  />
+                  <MapPin size={14} color="#64748b" style={{ position: 'absolute', right: 10 }} />
+                </div>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Telephone / Contact Number *</label>
+                <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <input
+                    type="text"
+                    required
+                    value={formData.contact_number}
+                    onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
+                    placeholder="e.g. 0917-123-4567"
+                    style={inputStyle}
+                  />
+                  <Phone size={14} color="#64748b" style={{ position: 'absolute', right: 10 }} />
+                </div>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Official DepEd Email Address *</label>
+                <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <input
+                    type="email"
+                    required
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    placeholder="e.g. school@deped.gov.ph"
+                    style={inputStyle}
+                  />
+                  <Mail size={14} color="#64748b" style={{ position: 'absolute', right: 10 }} />
+                </div>
+              </div>
+
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={labelStyle}>Official Website / Division Portal</label>
+                <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <input
+                    type="text"
+                    value={formData.website}
+                    onChange={(e) => setFormData({ ...formData, website: e.target.value })}
+                    placeholder="e.g. https://school.deped.gov.ph"
+                    style={inputStyle}
+                  />
+                  <Globe size={14} color="#64748b" style={{ position: 'absolute', right: 10 }} />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 4: Campus GPS Geofence & Boundary Settings */}
+          <div style={cardStyle}>
+            <div style={cardHeaderStyle}>
+              <Compass size={18} color="#004b87" />
+              <h2 style={cardTitleStyle}>Campus GPS Geofence &amp; Boundary Coordinates</h2>
+            </div>
+            <p style={{ fontSize: '0.74rem', color: '#64748b', margin: '0 0 12px 0' }}>
+              Used by mobile devices for real-time presence verification, DTR loafing checks, and gate arrival validation:
+            </p>
+
+            <div style={responsiveGridThreeCol}>
+              <div>
+                <label style={labelStyle}>Campus Center Latitude (°N)</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={formData.latitude}
+                  onChange={(e) => setFormData({ ...formData, latitude: parseFloat(e.target.value) || 0 })}
+                  placeholder="8.4858"
+                  style={inputStyle}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Campus Center Longitude (°E)</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={formData.longitude}
+                  onChange={(e) => setFormData({ ...formData, longitude: parseFloat(e.target.value) || 0 })}
+                  placeholder="124.6567"
+                  style={inputStyle}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Allowed Radius (Meters)</label>
+                <input
+                  type="number"
+                  min="20"
+                  max="1000"
+                  value={formData.geofence_radius_meters}
+                  onChange={(e) => setFormData({ ...formData, geofence_radius_meters: parseInt(e.target.value, 10) || 150 })}
+                  placeholder="150"
                   style={inputStyle}
                 />
               </div>
             </div>
           </div>
 
-          {/* Section 3: School Profile Photo */}
+          {/* Section 5: School Emblem & Official Seals */}
           <div style={cardStyle}>
             <div style={cardHeaderStyle}>
-              <ImageIcon size={20} color="#0284c7" />
-              <h2 style={cardTitleStyle}>School Profile Photo &amp; Main Emblem</h2>
+              <ShieldCheck size={18} color="#004b87" />
+              <h2 style={cardTitleStyle}>School Emblem &amp; DepEd Report Letterhead Seals</h2>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-              <div
-                style={{
-                  width: 80,
-                  height: 80,
-                  borderRadius: '50%',
-                  border: '2px solid #e2e8f0',
-                  backgroundColor: '#f8fafc',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  overflow: 'hidden',
-                  flexShrink: 0,
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
-                }}
-              >
-                {formData.school_logo ? (
-                  <img
-                    src={formData.school_logo}
-                    alt="School Profile"
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
-                ) : (
-                  <Building2 size={32} color="#94a3b8" />
-                )}
-              </div>
-
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.88rem' }}>
-                  Main School Profile Photo (e.g., LNHS Official Emblem)
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 16 }}>
+              {/* Main School Logo */}
+              <div style={logoSlotStyle}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#334155' }}>
+                  1. Main School Profile Emblem
+                </span>
+                <div style={logoBoxStyle}>
+                  {formData.school_logo ? (
+                    <img
+                      src={formData.school_logo}
+                      alt="Main Emblem"
+                      style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>No emblem uploaded</span>
+                  )}
                 </div>
-                <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: 4, lineHeight: 1.4 }}>
-                  Displays in the sidebar header, portal navigation bar, and gate clearance passes.
-                </div>
-
-                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   <label style={uploadBtnStyle}>
-                    <Upload size={13} /> Upload School Photo
+                    <Upload size={12} /> Upload Photo
                     <input
                       type="file"
                       accept="image/png, image/jpeg, image/webp"
@@ -535,29 +752,16 @@ export const SettingsTab: React.FC = () => {
                       }}
                       style={removeBtnStyle}
                     >
-                      <Trash2 size={13} /> Remove
+                      <Trash2 size={12} /> Remove
                     </button>
                   )}
                 </div>
               </div>
-            </div>
-          </div>
 
-          {/* Section 4: Dual Report Letterhead Seals */}
-          <div style={cardStyle}>
-            <div style={cardHeaderStyle}>
-              <ShieldCheck size={20} color="#0284c7" />
-              <h2 style={cardTitleStyle}>Official Report Letterhead Seals (SF1, SF2, SF4, DTR)</h2>
-            </div>
-            <p style={{ fontSize: '0.76rem', color: '#64748b', margin: '0 0 14px 0' }}>
-              Printed at <strong>0.76 inches</strong> on official report headers according to the DepEd Manual of Style:
-            </p>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-              {/* Left Report Seal */}
+              {/* Left Seal */}
               <div style={logoSlotStyle}>
-                <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#334155' }}>
-                  1. Left Seal (e.g., DepEd Seal / Kagawaran Seal)
+                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#334155' }}>
+                  2. Left Seal (DepEd Official Seal)
                 </span>
                 <div style={logoBoxStyle}>
                   {formData.left_logo ? (
@@ -567,12 +771,12 @@ export const SettingsTab: React.FC = () => {
                       style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
                     />
                   ) : (
-                    <span style={{ fontSize: '0.74rem', color: '#94a3b8' }}>No seal uploaded</span>
+                    <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>No seal uploaded</span>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   <label style={uploadBtnStyle}>
-                    <Upload size={13} /> Upload Left Seal
+                    <Upload size={12} /> Upload Seal
                     <input
                       type="file"
                       accept="image/png, image/jpeg, image/webp"
@@ -589,16 +793,16 @@ export const SettingsTab: React.FC = () => {
                       }}
                       style={removeBtnStyle}
                     >
-                      <Trash2 size={13} /> Remove
+                      <Trash2 size={12} /> Remove
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Right Report Seal */}
+              {/* Right Seal */}
               <div style={logoSlotStyle}>
-                <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#334155' }}>
-                  2. Right Seal (e.g., Division Seal / DepEd Flame Logo)
+                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#334155' }}>
+                  3. Right Seal (Division / School Seal)
                 </span>
                 <div style={logoBoxStyle}>
                   {formData.right_logo ? (
@@ -608,12 +812,12 @@ export const SettingsTab: React.FC = () => {
                       style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
                     />
                   ) : (
-                    <span style={{ fontSize: '0.74rem', color: '#94a3b8' }}>No seal uploaded</span>
+                    <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>No seal uploaded</span>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   <label style={uploadBtnStyle}>
-                    <Upload size={13} /> Upload Right Seal
+                    <Upload size={12} /> Upload Seal
                     <input
                       type="file"
                       accept="image/png, image/jpeg, image/webp"
@@ -630,7 +834,7 @@ export const SettingsTab: React.FC = () => {
                       }}
                       style={removeBtnStyle}
                     >
-                      <Trash2 size={13} /> Remove
+                      <Trash2 size={12} /> Remove
                     </button>
                   )}
                 </div>
@@ -639,18 +843,20 @@ export const SettingsTab: React.FC = () => {
           </div>
 
           {/* Action Button Bar */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 6 }}>
             {saveSuccess && (
-              <span style={{ color: '#059669', fontSize: '0.85rem', fontWeight: 700 }}>
-                Settings saved immediately.
+              <span style={{ color: '#059669', fontSize: '0.80rem', fontWeight: 700 }}>
+                Configuration saved successfully.
               </span>
             )}
-            <Button variant="primary" size="md" type="submit" disabled={saving}>
-              {saving ? (
-                <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} />
-              ) : (
-                <Save size={16} style={{ marginRight: 6 }} />
-              )}
+            <Button
+              variant="primary"
+              size="md"
+              type="submit"
+              disabled={saving}
+              style={{ backgroundColor: '#004b87', borderColor: '#004b87', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              {saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}
               Save School Configuration
             </Button>
           </div>
@@ -660,39 +866,57 @@ export const SettingsTab: React.FC = () => {
   );
 };
 
-export default SettingsTab;
-
-// ============================================================================
-// STYLES
-// ============================================================================
-
+// Styles
 const cardStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',
-  borderRadius: 10,
-  padding: '20px 24px',
+  borderRadius: 12,
+  padding: '16px 20px',
   border: '1px solid #e2e8f0',
-  boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
 };
 
 const cardHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 10,
-  marginBottom: 16,
-  paddingBottom: 10,
+  gap: 8,
+  marginBottom: 12,
+  paddingBottom: 8,
   borderBottom: '1px solid #f1f5f9',
 };
 
 const cardTitleStyle: React.CSSProperties = {
-  fontSize: '1rem',
+  fontSize: '0.94rem',
   fontWeight: 800,
   color: '#0f172a',
   margin: 0,
 };
 
+const autoBadgeStyle: React.CSSProperties = {
+  fontSize: '0.66rem',
+  fontWeight: 800,
+  backgroundColor: '#ecfdf5',
+  color: '#047857',
+  border: '1px solid #a7f3d0',
+  padding: '2px 8px',
+  borderRadius: 12,
+  marginLeft: 'auto',
+};
+
+const activeStatusPill: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '3px 8px',
+  borderRadius: 10,
+  backgroundColor: '#eff6ff',
+  color: '#004b87',
+  fontSize: '0.66rem',
+  fontWeight: 800,
+  border: '1px solid #bfdbfe',
+};
+
 const labelStyle: React.CSSProperties = {
   display: 'block',
-  fontSize: '0.78rem',
+  fontSize: '0.74rem',
   fontWeight: 700,
   color: '#334155',
   marginBottom: 4,
@@ -703,31 +927,61 @@ const inputStyle: React.CSSProperties = {
   padding: '8px 12px',
   borderRadius: 6,
   border: '1px solid #cbd5e1',
-  fontSize: '0.84rem',
+  fontSize: '0.82rem',
   color: '#0f172a',
   outline: 'none',
   boxSizing: 'border-box',
 };
 
+const responsiveGridTwoCol: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))',
+  gap: 16,
+  alignItems: 'start',
+};
+
+const responsiveGridThreeCol: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))',
+  gap: 12,
+};
+
 const previewBoxStyle: React.CSSProperties = {
   backgroundColor: '#f8fafc',
   border: '1px solid #e2e8f0',
-  borderRadius: 8,
-  padding: '16px',
+  borderRadius: 10,
+  padding: '14px',
 };
 
 const avatarStyle: React.CSSProperties = {
-  width: 54,
-  height: 54,
+  width: 56,
+  height: 56,
   borderRadius: '50%',
-  backgroundColor: '#0284c7',
+  backgroundColor: '#004b87',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   overflow: 'hidden',
   flexShrink: 0,
   border: '2px solid #ffffff',
-  boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+  boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
+};
+
+const previewMetaGrid: React.CSSProperties = {
+  marginTop: 12,
+  paddingTop: 10,
+  borderTop: '1px solid #e2e8f0',
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))',
+  gap: 8,
+  fontSize: '0.72rem',
+};
+
+const previewMetaLabel: React.CSSProperties = {
+  display: 'block',
+  color: '#64748b',
+  fontWeight: 700,
+  marginBottom: 1,
 };
 
 const logoSlotStyle: React.CSSProperties = {
@@ -738,41 +992,43 @@ const logoSlotStyle: React.CSSProperties = {
 
 const logoBoxStyle: React.CSSProperties = {
   width: '100%',
-  height: 100,
+  height: 90,
   backgroundColor: '#f8fafc',
   border: '1px dashed #cbd5e1',
-  borderRadius: '8px',
+  borderRadius: 8,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  padding: 8,
+  padding: 6,
   boxSizing: 'border-box',
 };
 
 const uploadBtnStyle: React.CSSProperties = {
-  padding: '6px 12px',
+  padding: '5px 10px',
   backgroundColor: '#f1f5f9',
   border: '1px solid #cbd5e1',
   borderRadius: 6,
-  fontSize: '0.76rem',
+  fontSize: '0.72rem',
   fontWeight: 700,
-  color: '#0284c7',
+  color: '#004b87',
   cursor: 'pointer',
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 5,
 };
 
 const removeBtnStyle: React.CSSProperties = {
-  padding: '6px 12px',
+  padding: '5px 10px',
   backgroundColor: '#fef2f2',
   border: '1px solid #fecaca',
   borderRadius: 6,
-  fontSize: '0.76rem',
+  fontSize: '0.72rem',
   fontWeight: 700,
   color: '#dc2626',
   cursor: 'pointer',
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 5,
 };
+
+export default SettingsTab;

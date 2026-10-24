@@ -2,6 +2,7 @@
 
 import { Platform } from 'react-native';
 import * as Location from 'expo-location';
+import * as Battery from 'expo-battery';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
 import { enqueueOfflineHeartbeat, QueuedTelemetryPayload } from './offlineQueue';
@@ -18,8 +19,7 @@ export interface HeartbeatResponse {
 }
 
 /**
- * Retrieves the persistent hardware UUID for this phone so Django's
- * TelemetryHeartbeatAPIView can lock the account to one physical device.
+ * Retrieves or initializes the hardware device lock UUID.
  */
 export const getHardwareDeviceUuid = async (fallbackId?: string): Promise<string> => {
   try {
@@ -41,11 +41,12 @@ export const getHardwareDeviceUuid = async (fallbackId?: string): Promise<string
 };
 
 /**
- * Reads GPS coordinates on both Android/iOS (via expo-location) and Web (via browser Geolocation).
+ * Reads GPS coordinates across Native and Web platforms.
  */
 const getCurrentCoordinates = async (): Promise<{
   latitude: number;
   longitude: number;
+  accuracy: number | null;
   mocked: boolean;
 }> => {
   if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -55,11 +56,12 @@ const getCurrentCoordinates = async (): Promise<{
           resolve({
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy || null,
             mocked: false,
           });
         },
         (err) => {
-          reject(new Error(err.message || 'Browser location permission denied.'));
+          reject(new Error(err.message || 'Location permission denied.'));
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
@@ -72,29 +74,43 @@ const getCurrentCoordinates = async (): Promise<{
   }
 
   const location = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.High,
+    accuracy: Location.Accuracy.Balanced,
   });
 
   return {
     latitude: location.coords.latitude,
     longitude: location.coords.longitude,
+    accuracy: location.coords.accuracy || null,
     mocked: Boolean(location.mocked),
   };
 };
 
 /**
- * Captures real GPS coordinates and sends a live heartbeat to `/api/telemetry/heartbeat/`.
- * Automatically queues the ping in offline storage if the server cannot be reached.
+ * Reads battery percentage from device hardware.
+ */
+const getBatteryPercentage = async (): Promise<number> => {
+  try {
+    const level = await Battery.getBatteryLevelAsync();
+    if (level >= 0) return Math.round(level * 100);
+  } catch {}
+  return 100;
+};
+
+/**
+ * Captures real GPS and posts to `/api/telemetry/heartbeat/`.
  */
 export const sendLiveHeartbeat = async (facultyIdentifier?: string): Promise<HeartbeatResponse> => {
   const coords = await getCurrentCoordinates();
   const hardwareUuid = await getHardwareDeviceUuid(facultyIdentifier);
+  const batteryLevel = await getBatteryPercentage();
 
   const payload: QueuedTelemetryPayload = {
     client_device_id: hardwareUuid,
+    device_id: hardwareUuid,
     latitude: coords.latitude,
     longitude: coords.longitude,
-    battery_level: 100,
+    accuracy_meters: coords.accuracy,
+    battery_level: batteryLevel,
     is_mock_location: coords.mocked,
   };
 
@@ -107,17 +123,16 @@ export const sendLiveHeartbeat = async (facultyIdentifier?: string): Promise<Hea
   } catch (err: any) {
     const httpStatus = err?.response?.status;
 
-    // If the server actively rejected the request (400/403 Device Mismatch or Mock GPS), throw the exact server message
-    if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+    // Reject on hardware mismatch (403) or mock GPS (403)
+    if (httpStatus === 403) {
       const backendError =
+        err?.response?.data?.message ||
         err?.response?.data?.error ||
-        err?.response?.data?.security_alert ||
-        err?.response?.data?.detail ||
-        'Telemetry rejected by server.';
+        'Account locked to another device or mock GPS detected.';
       throw new Error(backendError);
     }
 
-    // If the network timed out or server is unreachable, save to offline queue
+    // Queue offline on connection failure
     await enqueueOfflineHeartbeat(payload);
     return {
       isQueuedOffline: true,

@@ -1,54 +1,15 @@
-import hmac
-from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
-from apps.academics.models import IoTKiosk, FacultyProfile, Student, FacultyGateLog, StudentGateLog, DailyAttendanceSummary
-from .common import get_user_role, is_regular_teacher, resolve_faculty_for_user, get_teacher_student_ids, format_full_student_name
-from apps.api.serializers import GateScanSerializer
+from apps.academics.models import StudentGateLog, FacultyGateLog
+from .common import (
+    get_user_role,
+    is_regular_teacher,
+    resolve_faculty_for_user,
+    get_teacher_student_ids,
+    format_full_student_name,
+)
 
-class GateScanAPIView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        serializer = GateScanSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        data = serializer.validated_data
-        raw_id = data['raw_identifier']
-        kiosk = IoTKiosk.objects.filter(kiosk_code=data['kiosk_code'], is_active=True).first()
-        if not kiosk:
-            return Response({'error': 'Kiosk invalid.'}, status=status.HTTP_403_FORBIDDEN)
-
-        is_valid = kiosk.verify_secret(data['secret_key']) if hasattr(kiosk, 'verify_secret') else hmac.compare_digest(kiosk.secret_hash, data['secret_key'])
-        if not is_valid:
-            return Response({'error': 'Terminal auth failed.'}, status=status.HTTP_403_FORBIDDEN)
-
-        now = timezone.now()
-        faculty = FacultyProfile.objects.filter(rfid_uid__iexact=raw_id, is_active=True).first()
-        if faculty:
-            rec = FacultyGateLog.objects.filter(faculty=faculty, scan_time__date=now.date()).order_by('-scan_time').first()
-            dir_val = 'OUT' if rec and rec.direction == 'IN' else 'IN'
-            FacultyGateLog.objects.create(faculty=faculty, kiosk=kiosk, scan_time=now, direction=dir_val, raw_identifier=raw_id)
-            kiosk.last_ping = now
-            kiosk.save(update_fields=['last_ping'])
-            return Response({'success': True, 'person_type': 'STAFF', 'name': faculty.full_name, 'direction': dir_val}, status=status.HTTP_201_CREATED)
-
-        student = Student.objects.filter(rfid_uid__iexact=raw_id, is_active=True).first()
-        if student:
-            rec = StudentGateLog.objects.filter(student=student, scan_time__date=now.date()).order_by('-scan_time').first()
-            dir_val = 'OUT' if rec and rec.direction == 'IN' else 'IN'
-            StudentGateLog.objects.create(student=student, kiosk=kiosk, scan_time=now, direction=dir_val, raw_identifier=raw_id)
-            if dir_val == 'IN':
-                enr = student.enrollments.filter(academic_year__is_active=True).first()
-                if enr:
-                    DailyAttendanceSummary.objects.update_or_create(student=student, attendance_date=now.date(), defaults={'section': enr.section, 'status': 'PRESENT', 'remarks': 'GATE_TAP'})
-            kiosk.last_ping = now
-            kiosk.save(update_fields=['last_ping'])
-            return Response({'success': True, 'person_type': 'STUDENT', 'name': format_full_student_name(student), 'direction': dir_val}, status=status.HTTP_201_CREATED)
-
-        return Response({'error': 'Badge not registered.'}, status=status.HTTP_404_NOT_FOUND)
 
 class GateLogsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -64,9 +25,38 @@ class GateLogsAPIView(APIView):
         else:
             stu_qs = stu_qs[:100]
 
-        logs = [{
-            'log_id': f"GL-STU-{l.id}", 'person_type': 'STUDENT', 'identifier': l.student.lrn,
-            'name': format_full_student_name(l.student), 'direction': l.direction,
-            'scan_time': l.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'), 'raw_time': l.scan_time.isoformat()
-        } for l in stu_qs]
-        return Response(logs, status=status.HTTP_200_OK)
+        logs = [
+            {
+                'log_id': f"GL-STU-{l.id}",
+                'person_type': 'STUDENT',
+                'identifier': l.student.lrn,
+                'name': format_full_student_name(l.student),
+                'direction': l.direction,
+                'scan_method': l.scan_method,
+                'kiosk': l.kiosk.terminal_name if l.kiosk else 'Main Gate',
+                'scan_time': l.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
+                'raw_time': l.scan_time.isoformat(),
+            }
+            for l in stu_qs
+        ]
+
+        if not is_teacher:
+            fac_qs = FacultyGateLog.objects.select_related('faculty', 'kiosk').order_by('-scan_time')[:50]
+            for f_log in fac_qs:
+                logs.append({
+                    'log_id': f"GL-FAC-{f_log.id}",
+                    'person_type': 'FACULTY',
+                    'identifier': f_log.faculty.employee_id,
+                    'name': f_log.faculty.full_name,
+                    'direction': f_log.direction,
+                    'scan_method': f_log.scan_method,
+                    'kiosk': f_log.kiosk.terminal_name if f_log.kiosk else 'Main Gate',
+                    'scan_time': f_log.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
+                    'raw_time': f_log.scan_time.isoformat(),
+                })
+            logs.sort(key=lambda x: x['raw_time'], reverse=True)
+
+        return Response(logs[:100], status=status.HTTP_200_OK)
+
+
+__all__ = ['GateLogsAPIView']

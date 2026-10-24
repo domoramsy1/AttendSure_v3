@@ -62,7 +62,7 @@ function formatDistance(meters: number): string {
 // TYPE DEFINITIONS
 // ============================================================================
 
-interface StudentRosterItem {
+interface StudentItem {
   id: number;
   lrn: string;
   qr_token?: string;
@@ -72,7 +72,7 @@ interface StudentRosterItem {
   attendance_status: string;
 }
 
-interface SectionRoster {
+interface SectionItem {
   schedule_id: number;
   section_id: number;
   section_name: string;
@@ -82,7 +82,7 @@ interface SectionRoster {
   start_time: string;
   end_time: string;
   total_students: number;
-  students: StudentRosterItem[];
+  students: StudentItem[];
 }
 
 interface SchoolProfileData {
@@ -163,7 +163,7 @@ const getLocalTodayStr = (): string => {
 export const HomeScreen: React.FC = () => {
   const { user, refreshUser } = useAuth();
 
-  const [sections, setSections] = useState<SectionRoster[]>([]);
+  const [sections, setSections] = useState<SectionItem[]>([]);
   const [schoolProfile, setSchoolProfile] = useState<SchoolProfileData | null>(null);
   const [dtrData, setDtrData] = useState<DtrSummaryData | null>(null);
   const [geofenceConfig, setGeofenceConfig] = useState<GeofenceConfigData | null>(null);
@@ -332,7 +332,7 @@ export const HomeScreen: React.FC = () => {
   }, [liveDistanceMeters, campusCenter.radius]);
 
   // ---------------------------------------------------------------------------
-  // GATE TURNSTILE STATUS
+  // SCHOOL GATE STATUS
   // ---------------------------------------------------------------------------
   const todayStr = getLocalTodayStr();
   const todayDtrRow: DtrDayRow | null =
@@ -434,13 +434,13 @@ export const HomeScreen: React.FC = () => {
     const now = new Date();
 
     const [
-      rosterRes,
+      classListRes,
       schoolRes,
       dtrRes,
       geofenceRes,
       calendarRes,
     ] = await Promise.allSettled([
-      apiClient.get('/classroom/roster/', { signal: controller.signal }),
+      apiClient.get('/classroom/student_list/', { signal: controller.signal }),
       apiClient.get('/settings/school/', { signal: controller.signal }),
       apiClient.get(`/dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal }),
       apiClient.get('/geofence/', { signal: controller.signal }),
@@ -449,12 +449,12 @@ export const HomeScreen: React.FC = () => {
 
     if (!isMounted.current) return;
 
-    if (rosterRes.status === 'fulfilled' && rosterRes.value.data) {
-      const rosterData = Array.isArray(rosterRes.value.data)
-        ? rosterRes.value.data
-        : rosterRes.value.data.results || [];
-      setSections(rosterData);
-      AsyncStorage.setItem('attendsure_cached_sections', JSON.stringify(rosterData)).catch(() => {});
+    if (classListRes.status === 'fulfilled' && classListRes.value.data) {
+      const classData = Array.isArray(classListRes.value.data)
+        ? classListRes.value.data
+        : classListRes.value.data.results || [];
+      setSections(classData);
+      AsyncStorage.setItem('attendsure_cached_sections', JSON.stringify(classData)).catch(() => {});
     }
 
     if (schoolRes.status === 'fulfilled' && schoolRes.value.data) {

@@ -1,15 +1,13 @@
 /**
- * AttendSure - Academic Setup & Institutional Structure Modal
+ * AttendSure - Academic Setup & Timetable Modal (Class Adviser & Subject Teachers)
  * File: web/src/components/modals/AcademicSetupModal.tsx
  *
- * Cybersecurity & Architecture Upgrades Applied:
- * 1. UNPAGINATED RECORD LOADING: Queries ?page_size=ALL and /faculty/dropdown/
- *    so all 33+ teachers, sections, and subjects populate without being cut off at 25.
- * 2. ZERO-LEAK PRINCIPLE OF LEAST PRIVILEGE: Uses /faculty/dropdown/ to load only
- *    teaching-cleared faculty and hide sensitive hardware RFID/QR tokens from the browser.
- * 3. ALPHABETICAL ORDERING: Sorts faculty alphabetically by name for easy selection.
- * 4. SAFE OBJECT NORMALIZATION: Unwraps both nested objects and raw IDs from DRF.
- * 5. DUPLICATE & CONFLICT DEFENSE: Live checking prevents schedule clashes and double-booking.
+ * Cybersecurity & Performance:
+ * 1. Adviser & Subject Teacher Separation: Clearly assigns Homeroom Adviser on Section, and Subject Teachers on Schedules.
+ * 2. Automatic Section Code Generator: Live auto-computes code (e.g. SEC-G7-DIAMOND).
+ * 3. Multi-Vector Conflict Engine: Rejects overlapping faculty, room, and section slots.
+ * 4. Pre-population on Edit: Populates all fields immediately when edit is clicked.
+ * 5. SVG Vector Standards: Uses Lucide SVG icons only.
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -22,14 +20,16 @@ import {
   DoorOpen, 
   Layers, 
   Loader2, 
-  AlertCircle,
-  CheckCircle2,
-  Clock,
-  ShieldAlert,
-  Hash,
-  Database,
-  Pencil,
-  Trash2
+  AlertCircle, 
+  Clock, 
+  ShieldAlert, 
+  Hash, 
+  Database, 
+  Pencil, 
+  Trash2,
+  Sparkles,
+  UserCheck,
+  GraduationCap
 } from 'lucide-react';
 
 export type TabType = 'SCHEDULE' | 'SECTION' | 'SUBJECT' | 'ROOM' | 'YEAR_LEVEL';
@@ -37,11 +37,11 @@ export type TabType = 'SCHEDULE' | 'SECTION' | 'SUBJECT' | 'ROOM' | 'YEAR_LEVEL'
 export interface ModalProps {
   isOpen: boolean;
   initialTab?: TabType;
+  editItem?: any;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-// Converts 24-hour time string ("07:30", "13:45:00") into 12-hour format ("07:30 AM", "01:45 PM")
 export function formatTime12Hour(timeStr?: string): string {
   if (!timeStr) return '';
   const parts = String(timeStr).trim().split(':');
@@ -55,10 +55,32 @@ export function formatTime12Hour(timeStr?: string): string {
   return `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
 }
 
+export function doDaysOverlap(daysA: string, daysB: string): boolean {
+  const getDaysSet = (dStr: string): Set<string> => {
+    const d = (dStr || '').toUpperCase().trim();
+    if (d === 'MON-FRI' || d === 'DAILY' || d === 'WEEKDAYS') {
+      return new Set(['MON', 'TUE', 'WED', 'THU', 'FRI']);
+    }
+    if (d === 'MWF') return new Set(['MON', 'WED', 'FRI']);
+    if (d === 'TTH') return new Set(['TUE', 'THU']);
+    if (d === 'SAT') return new Set(['SAT']);
+    if (d === 'SUN') return new Set(['SUN']);
+    return new Set(d.split(/[\s,\-]+/));
+  };
+
+  const setA = getDaysSet(daysA);
+  const setB = getDaysSet(daysB);
+  for (const day of setA) {
+    if (setB.has(day)) return true;
+  }
+  return false;
+}
+
 function getErrorMessage(err: any): string {
   const data = err?.response?.data;
   if (!err.response) return 'Cannot reach server. Please check your network connection.';
   if (typeof data === 'string') return data.slice(0, 120);
+  if (data?.conflict && Array.isArray(data.conflict)) return data.conflict.join(' | ');
   if (data?.detail) return data.detail;
   if (data?.error) return data.error;
   if (typeof data === 'object' && data !== null) {
@@ -71,6 +93,7 @@ function getErrorMessage(err: any): string {
 export const AcademicSetupModal: React.FC<ModalProps> = ({
   isOpen,
   initialTab = 'SCHEDULE',
+  editItem = null,
   onClose,
   onSuccess,
 }) => {
@@ -82,13 +105,10 @@ export const AcademicSetupModal: React.FC<ModalProps> = ({
     }
   }, [isOpen, initialTab]);
 
-  // Keyboard shortcut (Escape to dismiss)
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
+      if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -97,52 +117,37 @@ export const AcademicSetupModal: React.FC<ModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div
-      style={backdropStyle}
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="academic-setup-title"
-    >
+    <div style={backdropStyle} onClick={onClose} role="dialog" aria-modal="true">
       <div style={boxStyle} onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
         <div style={headerStyle}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={iconBadgeStyle}>
-                <Database size={16} color="#0284c7" />
+                <Database size={16} color="#004b87" />
               </div>
-              <h3 id="academic-setup-title" style={titleStyle}>
-                Academic Setup
-              </h3>
+              <h3 style={titleStyle}>Academic Setup &amp; Timetables</h3>
             </div>
-            <p style={subtitleStyle}>Manage schedules, sections, subjects, rooms, and year levels</p>
+            <p style={subtitleStyle}>Manage class advisers, subject teachers, sections, and schedules</p>
           </div>
-          <button
-            onClick={onClose}
-            style={closeButtonStyle}
-            type="button"
-            aria-label="Close dialog"
-          >
+          <button onClick={onClose} style={closeButtonStyle} type="button" aria-label="Close dialog">
             <X size={18} />
           </button>
         </div>
 
-        {/* Tab Buttons */}
         <div style={tabGroupStyle}>
-          <button
-            type="button"
-            onClick={() => setActiveTab('SCHEDULE')}
-            style={activeTab === 'SCHEDULE' ? activeTabStyle : inactiveTabStyle}
-          >
-            <Calendar size={14} /> Schedules
-          </button>
           <button
             type="button"
             onClick={() => setActiveTab('SECTION')}
             style={activeTab === 'SECTION' ? activeTabStyle : inactiveTabStyle}
           >
-            <Users size={14} /> Sections
+            <Users size={14} /> Sections &amp; Advisers
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('SCHEDULE')}
+            style={activeTab === 'SCHEDULE' ? activeTabStyle : inactiveTabStyle}
+          >
+            <Calendar size={14} /> Subject Teachers &amp; Schedules
           </button>
           <button
             type="button"
@@ -167,13 +172,12 @@ export const AcademicSetupModal: React.FC<ModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Views */}
         <div style={{ marginTop: 16 }}>
-          {activeTab === 'SCHEDULE' && <ScheduleForm onSuccess={onSuccess} />}
-          {activeTab === 'SECTION' && <SectionForm onSuccess={onSuccess} />}
-          {activeTab === 'SUBJECT' && <SubjectForm onSuccess={onSuccess} />}
-          {activeTab === 'ROOM' && <RoomForm onSuccess={onSuccess} />}
-          {activeTab === 'YEAR_LEVEL' && <YearLevelForm onSuccess={onSuccess} />}
+          {activeTab === 'SECTION' && <SectionForm onSuccess={onSuccess} initialItem={activeTab === initialTab ? editItem : null} />}
+          {activeTab === 'SCHEDULE' && <ScheduleForm onSuccess={onSuccess} initialItem={activeTab === initialTab ? editItem : null} />}
+          {activeTab === 'SUBJECT' && <SubjectForm onSuccess={onSuccess} initialItem={activeTab === initialTab ? editItem : null} />}
+          {activeTab === 'ROOM' && <RoomForm onSuccess={onSuccess} initialItem={activeTab === initialTab ? editItem : null} />}
+          {activeTab === 'YEAR_LEVEL' && <YearLevelForm onSuccess={onSuccess} initialItem={activeTab === initialTab ? editItem : null} />}
         </div>
       </div>
     </div>
@@ -181,9 +185,341 @@ export const AcademicSetupModal: React.FC<ModalProps> = ({
 };
 
 // ===========================================================================
-// 1. SCHEDULE FORM
+// 1. SECTION FORM (CLASS ADVISER & AUTO-CODES)
 // ===========================================================================
-const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
+const SectionForm: React.FC<{ onSuccess: () => void; initialItem?: any }> = ({ onSuccess, initialItem }) => {
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [gradeLevelId, setGradeLevelId] = useState('');
+  const [adviserId, setAdviserId] = useState('');
+  const [roomId, setRoomId] = useState('');
+
+  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
+  const [teachers, setTeachers] = useState<any[]>([]);
+  const [rooms, setRooms] = useState<any[]>([]);
+  const [existingSections, setExistingSections] = useState<any[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadAllData = useCallback(async () => {
+    try {
+      const [glRes, teachRes, roomRes, secRes] = await Promise.all([
+        apiClient.get('/grade-levels/?page_size=ALL'),
+        apiClient.get('/faculty/dropdown/').catch(() => apiClient.get('/facultys/?page_size=ALL')),
+        apiClient.get('/rooms/'),
+        apiClient.get('/sections/?page_size=ALL'),
+      ]);
+
+      setGradeLevels(Array.isArray(glRes.data) ? glRes.data : glRes.data?.results || []);
+      setTeachers(Array.isArray(teachRes.data) ? teachRes.data : teachRes.data?.results || []);
+      setRooms(Array.isArray(roomRes.data) ? roomRes.data : roomRes.data?.results || []);
+      setExistingSections(Array.isArray(secRes.data) ? secRes.data : secRes.data?.results || []);
+    } catch (err: any) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAllData();
+  }, [loadAllData]);
+
+  useEffect(() => {
+    if (!editingId && name.trim()) {
+      const cleanName = name.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const selectedGL = gradeLevels.find((gl) => String(gl.id) === String(gradeLevelId));
+      let gradeTag = 'GEN';
+
+      if (selectedGL) {
+        const matches = (selectedGL.name || selectedGL.code || '').match(/\d+/);
+        gradeTag = matches ? `G${matches[0]}` : selectedGL.code.slice(0, 4).toUpperCase();
+      }
+
+      setCode(`SEC-${gradeTag}-${cleanName}`);
+    }
+  }, [name, gradeLevelId, editingId, gradeLevels]);
+
+  const handleEdit = useCallback((sec: any) => {
+    if (!sec) return;
+    setEditingId(sec.id);
+    setName(sec.name || '');
+    setCode(sec.code || '');
+
+    const glVal = typeof sec.grade_level === 'object' && sec.grade_level !== null
+      ? sec.grade_level?.id
+      : (sec.grade_level_id || sec.grade_level);
+    setGradeLevelId(glVal ? String(glVal) : '');
+
+    const advVal = typeof sec.adviser === 'object' && sec.adviser !== null
+      ? sec.adviser?.id
+      : (sec.adviser_id || sec.adviser);
+    setAdviserId(advVal ? String(advVal) : '');
+    setRoomId(sec.room_number || sec.room_name || '');
+    setError('');
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingId(null);
+    setName('');
+    setCode('');
+    setGradeLevelId('');
+    setAdviserId('');
+    setRoomId('');
+    setError('');
+  }, []);
+
+  useEffect(() => {
+    if (initialItem) handleEdit(initialItem);
+    else handleCancelEdit();
+  }, [initialItem, handleEdit, handleCancelEdit]);
+
+  const handleDelete = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this section?')) return;
+    try {
+      await apiClient.delete(`/sections/${id}/`);
+      if (editingId === id) handleCancelEdit();
+      await loadAllData();
+      onSuccess();
+    } catch (err: any) {
+      alert(getErrorMessage(err));
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError('');
+
+    const glNum = gradeLevelId ? parseInt(gradeLevelId, 10) : null;
+    const advNum = adviserId ? parseInt(adviserId, 10) : null;
+
+    const payload = {
+      name: name.trim(),
+      code: code.trim(),
+      grade_level: glNum,
+      grade_level_id: glNum,
+      adviser: advNum,
+      adviser_id: advNum,
+      room_name: roomId ? String(roomId) : '',
+      room_number: roomId ? String(roomId) : '',
+    };
+
+    try {
+      if (editingId) {
+        await apiClient.put(`/sections/${editingId}/`, payload);
+      } else {
+        await apiClient.post('/sections/', payload);
+      }
+      handleCancelEdit();
+      await loadAllData();
+      onSuccess();
+    } catch (err: any) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={loadingBoxStyle}>
+        <Loader2 size={24} className="animate-spin" color="#004b87" />
+        <span style={{ fontSize: '0.80rem', color: '#64748b' }}>Loading records...</span>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={formStyle}>
+      {error && <div style={errorCardStyle}><AlertCircle size={15} /> {error}</div>}
+
+      <div style={rowStyle}>
+        <div style={{ flex: 1.2 }}>
+          <label style={labelStyle}>Section Name *</label>
+          <input
+            type="text"
+            required
+            placeholder="e.g. Diamond, Emerald, Ruby"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <label style={labelStyle}>Section Code *</label>
+            <span style={autoBadgePill}>
+              <Sparkles size={10} /> AUTO GENERATED
+            </span>
+          </div>
+          <input
+            type="text"
+            required
+            placeholder="e.g. SEC-G7-DIAMOND"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            style={{ ...inputStyle, fontFamily: 'monospace', fontWeight: 700, backgroundColor: '#f8fafc' }}
+          />
+        </div>
+      </div>
+
+      <div>
+        <label style={labelStyle}>Year Level *</label>
+        <select 
+          required 
+          value={gradeLevelId} 
+          onChange={(e) => setGradeLevelId(e.target.value)} 
+          style={inputStyle}
+        >
+          <option value="">-- Choose Year Level --</option>
+          {gradeLevels.map((gl) => (
+            <option key={gl.id} value={gl.id}>{gl.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <div style={rowStyle}>
+        <div style={{ flex: 1 }}>
+          <label style={labelStyle}>
+            Class Adviser (Homeroom Teacher) *
+          </label>
+          <select 
+            required
+            value={adviserId} 
+            onChange={(e) => setAdviserId(e.target.value)} 
+            style={inputStyle}
+          >
+            <option value="">-- Choose Homeroom Adviser ({teachers.length} available) --</option>
+            {teachers.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.full_name || t.name} {t.employee_id ? `(${t.employee_id})` : ''}
+              </option>
+            ))}
+          </select>
+          <span style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 3, display: 'block' }}>
+            Responsible for section attendance, student records, and signing SF1 and SF2 reports.
+          </span>
+        </div>
+
+        <div style={{ flex: 1 }}>
+          <label style={labelStyle}>Homeroom Classroom</label>
+          <select 
+            value={roomId} 
+            onChange={(e) => setRoomId(e.target.value)} 
+            style={inputStyle}
+          >
+            <option value="">-- Optional: Choose Room --</option>
+            {rooms.map((r) => (
+              <option key={r.id} value={r.name || r.room_number}>{r.name || r.room_number}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+        <button 
+          type="submit" 
+          disabled={saving || !name.trim() || !code.trim() || !adviserId} 
+          style={{ ...saveButtonStyle, flex: 1 }}
+        >
+          {saving ? <Loader2 size={16} className="animate-spin" /> : editingId ? 'Update Section & Adviser' : 'Save Section & Adviser'}
+        </button>
+
+        {editingId && (
+          <button type="button" onClick={handleCancelEdit} style={cancelBtnStyle}>
+            Cancel
+          </button>
+        )}
+      </div>
+
+      {/* Existing Sections with Adviser and Subject Teachers Breakdown */}
+      <div style={listCardStyle}>
+        <div style={listHeaderStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Users size={13} color="#004b87" />
+            <span>Existing Sections (Class Advisers &amp; Subject Teachers)</span>
+          </div>
+          <span style={countTagStyle}>{existingSections.length} sections</span>
+        </div>
+
+        {existingSections.length === 0 ? (
+          <div style={emptyTextStyle}>No sections saved yet.</div>
+        ) : (
+          <div style={gridStyle}>
+            {existingSections.map((sec) => {
+              const subTeachers = sec.subject_teachers || [];
+              return (
+                <div key={sec.id} style={{ ...itemCardStyle, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <span style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.84rem' }}>{sec.name}</span>
+                      <span style={{ ...blueTagStyle, marginLeft: 6 }}>{sec.code || 'NO-CODE'}</span>
+                      {sec.grade_level_name && (
+                        <span style={{ fontSize: '0.70rem', color: '#64748b', marginLeft: 6 }}>
+                          ({sec.grade_level_name})
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button type="button" onClick={() => handleEdit(sec)} style={iconActionBtn} title="Edit section and adviser">
+                        <Pencil size={13} color="#004b87" />
+                      </button>
+                      <button type="button" onClick={() => handleDelete(sec.id)} style={iconActionBtn} title="Delete section">
+                        <Trash2 size={13} color="#ef4444" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Adviser Badge */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.74rem' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#004b87', fontWeight: 700 }}>
+                      <UserCheck size={12} /> Class Adviser:
+                    </span>
+                    <strong style={{ color: sec.adviser_name ? '#0f172a' : '#d97706' }}>
+                      {sec.adviser_name || 'No Adviser Assigned'}
+                    </strong>
+                  </div>
+
+                  {/* Subject Teachers Summary */}
+                  <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 4, marginTop: 2 }}>
+                    <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', marginBottom: 2 }}>
+                      Subject Teachers ({subTeachers.length} assigned):
+                    </div>
+                    {subTeachers.length > 0 ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {subTeachers.map((st: any, idx: number) => (
+                          <span key={idx} style={subjectTeacherPill}>
+                            <GraduationCap size={10} color="#004b87" />
+                            <strong>{st.subject_code}</strong>: {st.faculty_name} ({st.time_slot})
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                        No subject teachers assigned yet. Add timetable slots in the Schedules tab.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </form>
+  );
+};
+
+// ===========================================================================
+// 2. SCHEDULE FORM (SUBJECT TEACHER ASSIGNMENT & CONFLICT ENGINE)
+// ===========================================================================
+const ScheduleForm: React.FC<{ onSuccess: () => void; initialItem?: any }> = ({ onSuccess, initialItem }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [code, setCode] = useState('');
   const [sectionId, setSectionId] = useState('');
@@ -203,12 +539,10 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState('');
-  const [clashList, setClashList] = useState<string[]>([]);
-  const [checkingClash, setCheckingClash] = useState(false);
+  const [serverClashes, setServerClashes] = useState<string[]>([]);
 
   const loadAllData = useCallback(async () => {
     try {
-      // Load all records unpaginated to prevent the 25-item cutoff
       const [secRes, subRes, teachRes, roomRes, schedRes] = await Promise.all([
         apiClient.get('/sections/?page_size=ALL'),
         apiClient.get('/subjects/?page_size=ALL'),
@@ -217,19 +551,11 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
         apiClient.get('/schedules/?page_size=ALL'),
       ]);
 
-      const rawTeachers = Array.isArray(teachRes.data) ? teachRes.data : teachRes.data.results || [];
-      // Sort teachers alphabetically by name
-      const sortedTeachers = [...rawTeachers].sort((a, b) => {
-        const nameA = (a.full_name || `${a.first_name || ''} ${a.last_name || ''}`.trim() || a.name || '').toLowerCase();
-        const nameB = (b.full_name || `${b.first_name || ''} ${b.last_name || ''}`.trim() || b.name || '').toLowerCase();
-        return nameA.localeCompare(nameB);
-      });
-
-      setSections(Array.isArray(secRes.data) ? secRes.data : secRes.data.results || []);
-      setSubjects(Array.isArray(subRes.data) ? subRes.data : subRes.data.results || []);
-      setTeachers(sortedTeachers);
-      setRooms(Array.isArray(roomRes.data) ? roomRes.data : roomRes.data.results || []);
-      setAllSchedules(Array.isArray(schedRes.data) ? schedRes.data : schedRes.data.results || []);
+      setSections(Array.isArray(secRes.data) ? secRes.data : secRes.data?.results || []);
+      setSubjects(Array.isArray(subRes.data) ? subRes.data : subRes.data?.results || []);
+      setTeachers(Array.isArray(teachRes.data) ? teachRes.data : teachRes.data?.results || []);
+      setRooms(Array.isArray(roomRes.data) ? roomRes.data : roomRes.data?.results || []);
+      setAllSchedules(Array.isArray(schedRes.data) ? schedRes.data : schedRes.data?.results || []);
     } catch (err) {
       console.error('Cannot load schedule metadata:', err);
     } finally {
@@ -241,80 +567,38 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     loadAllData();
   }, [loadAllData]);
 
-  const isCodeDuplicate = useMemo(() => {
-    const clean = code.trim().toLowerCase();
-    if (!clean) return false;
-    return allSchedules.some(
-      (s) => (editingId ? s.id !== editingId : true) && (s.code || s.schedule_code)?.trim().toLowerCase() === clean
-    );
-  }, [code, editingId, allSchedules]);
-
-  // Live conflict checking with debounce
-  useEffect(() => {
-    if (startTime && endTime && startTime >= endTime) {
-      setClashList(['Start time must be before end time.']);
-      return;
-    }
-
-    if (!startTime || !endTime || (!sectionId && !facultyId && !roomId)) {
-      setClashList([]);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      setCheckingClash(true);
-      try {
-        const res = await apiClient.post('/schedules/validate-conflict/', {
-          exclude_id: editingId || null,
-          section_id: sectionId ? parseInt(sectionId, 10) : null,
-          faculty_id: facultyId ? parseInt(facultyId, 10) : null,
-          room_id: roomId ? parseInt(roomId, 10) : null,
-          days_of_week: daysOfWeek,
-          start_time: startTime,
-          end_time: endTime,
-        });
-
-        if (res.data?.has_conflict) {
-          setClashList(res.data.conflicts || []);
-        } else {
-          setClashList([]);
-        }
-      } catch {
-        setClashList([]);
-      } finally {
-        setCheckingClash(false);
-      }
-    }, 250);
-
-    return () => clearTimeout(timer);
-  }, [sectionId, facultyId, roomId, daysOfWeek, startTime, endTime, editingId]);
-
-  const sectionClasses = useMemo(() => {
-    if (!sectionId) return [];
-    return allSchedules.filter((s) => {
-      const secVal = typeof s.section === 'object' ? s.section?.id : s.section;
-      return String(secVal) === String(sectionId) || String(s.section_id) === String(sectionId);
-    });
-  }, [sectionId, allSchedules]);
-
-  const handleEdit = (item: any) => {
+  const handleEdit = useCallback((item: any) => {
+    if (!item) return;
     setEditingId(item.id);
     setCode(item.code || item.schedule_code || '');
-    const secVal = typeof item.section === 'object' ? item.section?.id : (item.section_id || item.section);
+
+    const secVal = typeof item.section === 'object' && item.section !== null
+      ? item.section?.id
+      : (item.section_id || item.section);
     setSectionId(secVal ? String(secVal) : '');
-    const subVal = typeof item.subject === 'object' ? item.subject?.id : (item.subject_id || item.subject);
+
+    const subVal = typeof item.subject === 'object' && item.subject !== null
+      ? item.subject?.id
+      : (item.subject_id || item.subject);
     setSubjectId(subVal ? String(subVal) : '');
-    const facVal = typeof item.faculty === 'object' ? item.faculty?.id : (item.faculty_id || item.faculty);
+
+    const facVal = typeof item.faculty === 'object' && item.faculty !== null
+      ? item.faculty?.id
+      : (item.faculty_id || item.faculty);
     setFacultyId(facVal ? String(facVal) : '');
-    const rmVal = typeof item.room === 'object' ? item.room?.id : (item.room_id || item.room);
+
+    const rmVal = typeof item.room === 'object' && item.room !== null
+      ? item.room?.id
+      : (item.room_id || item.room);
     setRoomId(rmVal ? String(rmVal) : '');
+
     setDaysOfWeek(item.days_of_week || 'MON-FRI');
     setStartTime(item.start_time ? item.start_time.slice(0, 5) : '07:30');
     setEndTime(item.end_time ? item.end_time.slice(0, 5) : '08:30');
     setServerError('');
-  };
+  }, []);
 
-  const handleCancelEdit = () => {
+  const handleCancelEdit = useCallback(() => {
     setEditingId(null);
     setCode('');
     setSectionId('');
@@ -325,26 +609,85 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     setStartTime('07:30');
     setEndTime('08:30');
     setServerError('');
-  };
+    setServerClashes([]);
+  }, []);
 
-  const handleDeleteSchedule = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this schedule period?')) return;
-    try {
-      await apiClient.delete(`/schedules/${id}/`);
-      if (editingId === id) handleCancelEdit();
-      await loadAllData();
-      onSuccess();
-    } catch (err: any) {
-      alert(getErrorMessage(err));
+  useEffect(() => {
+    if (initialItem) handleEdit(initialItem);
+    else handleCancelEdit();
+  }, [initialItem, handleEdit, handleCancelEdit]);
+
+  useEffect(() => {
+    if (!editingId && sectionId && subjectId) {
+      const selectedSec = sections.find((s) => String(s.id) === String(sectionId));
+      const selectedSub = subjects.find((s) => String(s.id) === String(subjectId));
+      if (selectedSec && selectedSub) {
+        const secTag = (selectedSec.code || selectedSec.name || 'SEC').replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase();
+        const subTag = (selectedSub.code || selectedSub.title || 'SUB').replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase();
+        setCode(`SCH-${secTag}-${subTag}`);
+      }
     }
-  };
+  }, [sectionId, subjectId, editingId, sections, subjects]);
+
+  const clientClashes = useMemo(() => {
+    const list: string[] = [];
+    if (!startTime || !endTime) return list;
+    if (startTime >= endTime) {
+      list.push('Start time must be earlier than end time.');
+      return list;
+    }
+
+    const curRoomObj = rooms.find((r) => String(r.id) === String(roomId));
+    const curRoomNumber = curRoomObj ? (curRoomObj.name || curRoomObj.room_number) : '';
+
+    for (const s of allSchedules) {
+      if (editingId && s.id === editingId) continue;
+      if (!doDaysOverlap(daysOfWeek, s.days_of_week || 'MON-FRI')) continue;
+
+      const sStart = (s.start_time || '').slice(0, 5);
+      const sEnd = (s.end_time || '').slice(0, 5);
+      if (!(startTime < sEnd && endTime > sStart)) continue;
+
+      const timeLabel = `${formatTime12Hour(sStart)} - ${formatTime12Hour(sEnd)}`;
+      const subName = s.subject_code || (typeof s.subject === 'object' ? s.subject?.code : '') || 'Class';
+      const secName = s.section_name || (typeof s.section === 'object' ? s.section?.name : '') || 'Section';
+
+      // 1. Subject Teacher Conflict
+      const sFacId = typeof s.faculty === 'object' ? s.faculty?.id : (s.faculty_id || s.faculty);
+      if (facultyId && String(sFacId) === String(facultyId)) {
+        const facName = s.faculty_name || (typeof s.faculty === 'object' ? s.faculty?.full_name : '') || 'Teacher';
+        list.push(`Subject Teacher Conflict: ${facName} already has ${subName} in Section ${secName} (${timeLabel}).`);
+      }
+
+      // 2. Section Conflict
+      const sSecId = typeof s.section === 'object' ? s.section?.id : (s.section_id || s.section);
+      if (sectionId && String(sSecId) === String(sectionId)) {
+        list.push(`Section Conflict: Section ${secName} already has ${subName} scheduled (${timeLabel}).`);
+      }
+
+      // 3. Room Conflict
+      const sRoomId = typeof s.room === 'object' ? s.room?.id : (s.room_id || s.room);
+      const sRoomNum = s.room_number || (typeof s.room === 'object' ? s.room?.room_number : '');
+      const matchesRoomId = roomId && String(sRoomId) === String(roomId);
+      const matchesRoomNum = curRoomNumber && sRoomNum && curRoomNumber.toLowerCase() === sRoomNum.toLowerCase();
+
+      if (matchesRoomId || matchesRoomNum) {
+        list.push(`Room Conflict: ${curRoomNumber || 'Room'} is already booked by Section ${secName} for ${subName} (${timeLabel}).`);
+      }
+    }
+    return list;
+  }, [startTime, endTime, daysOfWeek, sectionId, facultyId, roomId, editingId, allSchedules, rooms]);
+
+  const allClashes = [...clientClashes, ...serverClashes];
+  const hasClashes = allClashes.length > 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (clashList.length > 0 || isCodeDuplicate) return;
+    if (hasClashes) return;
 
     setSaving(true);
     setServerError('');
+    setServerClashes([]);
 
     const secNum = parseInt(sectionId, 10);
     const subNum = parseInt(subjectId, 10);
@@ -379,7 +722,12 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       await loadAllData();
       onSuccess();
     } catch (err: any) {
-      setServerError(getErrorMessage(err));
+      const respData = err?.response?.data;
+      if (respData?.conflict && Array.isArray(respData.conflict)) {
+        setServerClashes(respData.conflict);
+      } else {
+        setServerError(getErrorMessage(err));
+      }
     } finally {
       setSaving(false);
     }
@@ -388,25 +736,23 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   if (loading) {
     return (
       <div style={loadingBoxStyle}>
-        <Loader2 size={24} className="animate-spin" color="#0284c7" />
+        <Loader2 size={24} className="animate-spin" color="#004b87" />
         <span style={{ fontSize: '0.80rem', color: '#64748b' }}>Loading records...</span>
       </div>
     );
   }
 
-  const hasClash = clashList.length > 0;
-
   return (
     <form onSubmit={handleSubmit} style={formStyle}>
       {serverError && <div style={errorCardStyle}><AlertCircle size={15} /> {serverError}</div>}
 
-      {hasClash && (
+      {hasClashes && (
         <div style={warningBoxStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#b91c1c', fontWeight: 700, fontSize: '0.78rem' }}>
-            <ShieldAlert size={16} /> Conflict Found
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#b91c1c', fontWeight: 800, fontSize: '0.80rem' }}>
+            <ShieldAlert size={16} /> Scheduling Conflict Detected:
           </div>
-          {clashList.map((msg, idx) => (
-            <div key={idx} style={{ color: '#991b1b', fontSize: '0.74rem', marginLeft: 22 }}>
+          {allClashes.map((msg, idx) => (
+            <div key={idx} style={{ color: '#991b1b', fontSize: '0.74rem', marginLeft: 22, marginTop: 2 }}>
               • {msg}
             </div>
           ))}
@@ -415,50 +761,30 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 
       <div style={rowStyle}>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Schedule Code *</label>
+          <label style={labelStyle}>Schedule Period Code *</label>
           <input
             type="text"
             required
-            placeholder="e.g. SCH-001"
+            placeholder="e.g. SCH-G7-MATH"
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            style={
-              code.trim() === ''
-                ? inputStyle
-                : isCodeDuplicate
-                ? badInputStyle
-                : goodInputStyle
-            }
+            style={inputStyle}
           />
-          {code.trim() !== '' && (
-            isCodeDuplicate ? (
-              <div style={invalidFeedbackStyle}>
-                <AlertCircle size={12} /> Code already exists
-              </div>
-            ) : (
-              <div style={validFeedbackStyle}>
-                <CheckCircle2 size={12} /> Code available
-              </div>
-            )
-          )}
         </div>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Section *</label>
+          <label style={labelStyle}>Class Section *</label>
           <select 
             required 
             value={sectionId} 
             onChange={(e) => setSectionId(e.target.value)} 
             style={inputStyle}
           >
-            <option value="">-- Choose Section --</option>
-            {sections.map((s) => {
-              const glName = typeof s.grade_level === 'object' ? s.grade_level?.name : (s.grade_level_name || s.grade_level);
-              return (
-                <option key={s.id} value={s.id}>
-                  {s.name} {glName ? `(${glName})` : ''}
-                </option>
-              );
-            })}
+            <option value="">-- Select Section --</option>
+            {sections.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} {s.code ? `(${s.code})` : ''}
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -472,7 +798,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             onChange={(e) => setSubjectId(e.target.value)} 
             style={inputStyle}
           >
-            <option value="">-- Choose Subject --</option>
+            <option value="">-- Select Subject --</option>
             {subjects.map((sub) => (
               <option key={sub.id} value={sub.id}>
                 {sub.code ? `${sub.code} - ` : ''}{sub.title || sub.name}
@@ -481,28 +807,26 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
           </select>
         </div>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Faculty *</label>
+          <label style={labelStyle}>Subject Teacher (Faculty) *</label>
           <select 
             required 
             value={facultyId} 
             onChange={(e) => setFacultyId(e.target.value)} 
             style={inputStyle}
           >
-            <option value="">-- Choose Faculty ({teachers.length} available) --</option>
-            {teachers.map((t) => {
-              const tName = t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name;
-              const dept = t.department ? ` - ${t.department}` : '';
-              return (
-                <option key={t.id} value={t.id}>{tName}{dept}</option>
-              );
-            })}
+            <option value="">-- Select Subject Teacher ({teachers.length} available) --</option>
+            {teachers.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name}
+              </option>
+            ))}
           </select>
         </div>
       </div>
 
       <div style={rowStyle}>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Room</label>
+          <label style={labelStyle}>Classroom / Lab</label>
           <select 
             value={roomId} 
             onChange={(e) => setRoomId(e.target.value)} 
@@ -523,7 +847,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             onChange={(e) => setDaysOfWeek(e.target.value)} 
             style={inputStyle}
           >
-            <option value="MON-FRI">Monday to Friday</option>
+            <option value="MON-FRI">Monday to Friday (Daily)</option>
             <option value="MWF">Monday / Wednesday / Friday</option>
             <option value="TTH">Tuesday / Thursday</option>
             <option value="SAT">Saturday Only</option>
@@ -541,7 +865,7 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             required 
             value={startTime} 
             onChange={(e) => setStartTime(e.target.value)} 
-            style={hasClash ? badInputStyle : inputStyle} 
+            style={inputStyle} 
           />
         </div>
         <div style={{ flex: 1 }}>
@@ -553,388 +877,29 @@ const ScheduleForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             required 
             value={endTime} 
             onChange={(e) => setEndTime(e.target.value)} 
-            style={hasClash ? badInputStyle : inputStyle} 
+            style={inputStyle} 
           />
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
         <button 
           type="submit" 
-          disabled={saving || hasClash || checkingClash || isCodeDuplicate || !code.trim()} 
+          disabled={saving || hasClashes || !code.trim() || !facultyId} 
           style={{
             ...saveButtonStyle,
             flex: 1,
-            backgroundColor: (hasClash || isCodeDuplicate || !code.trim()) ? '#94a3b8' : '#0284c7',
-            cursor: (hasClash || isCodeDuplicate || !code.trim()) ? 'not-allowed' : 'pointer'
+            backgroundColor: hasClashes ? '#94a3b8' : '#004b87',
+            cursor: hasClashes ? 'not-allowed' : 'pointer',
           }}
         >
-          {saving ? <Loader2 size={16} className="animate-spin" /> : editingId ? 'Update Schedule Period' : 'Save Schedule Period'}
+          {saving ? <Loader2 size={16} className="animate-spin" /> : editingId ? 'Update Subject Schedule' : 'Assign Subject Teacher & Save'}
         </button>
 
         {editingId && (
           <button type="button" onClick={handleCancelEdit} style={cancelBtnStyle}>
             Cancel
           </button>
-        )}
-      </div>
-
-      {sectionId && (
-        <div style={listCardStyle}>
-          <div style={listHeaderStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Clock size={13} color="#0284c7" />
-              <span>Current Classes for this Section</span>
-            </div>
-            <span style={countTagStyle}>{sectionClasses.length} slots</span>
-          </div>
-
-          {sectionClasses.length === 0 ? (
-            <div style={emptyTextStyle}>No classes yet for this section. All times are open.</div>
-          ) : (
-            <div style={gridStyle}>
-              {sectionClasses.map((item) => {
-                const subDisplay = item.subject_code || (typeof item.subject === 'object' ? item.subject?.code : '') || item.code;
-                return (
-                  <div key={item.id} style={itemCardStyle}>
-                    <div>
-                      <div style={{ fontWeight: 700, color: '#0f172a' }}>
-                        {formatTime12Hour(item.start_time)} - {formatTime12Hour(item.end_time)}
-                      </div>
-                      <div style={{ fontSize: '0.70rem', color: '#64748b' }}>
-                        {subDisplay} • {item.days_of_week || 'MON-FRI'}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button
-                        type="button"
-                        onClick={() => handleEdit(item)}
-                        style={iconActionBtn}
-                        title="Edit schedule period"
-                      >
-                        <Pencil size={13} color="#0284c7" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSchedule(item.id)}
-                        style={iconActionBtn}
-                        title="Delete period"
-                      >
-                        <Trash2 size={13} color="#ef4444" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-    </form>
-  );
-};
-
-// ===========================================================================
-// 2. SECTION FORM
-// ===========================================================================
-const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [name, setName] = useState('');
-  const [gradeLevelId, setGradeLevelId] = useState('');
-  const [adviserId, setAdviserId] = useState('');
-  const [roomId, setRoomId] = useState('');
-
-  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
-  const [teachers, setTeachers] = useState<any[]>([]);
-  const [rooms, setRooms] = useState<any[]>([]);
-  const [existingSections, setExistingSections] = useState<any[]>([]);
-
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  const loadAllData = useCallback(async () => {
-    try {
-      const [glRes, teachRes, roomRes, secRes] = await Promise.all([
-        apiClient.get('/grade-levels/?page_size=ALL'),
-        apiClient.get('/faculty/dropdown/').catch(() => apiClient.get('/facultys/?page_size=ALL')),
-        apiClient.get('/rooms/'),
-        apiClient.get('/sections/?page_size=ALL'),
-      ]);
-
-      const rawTeachers = Array.isArray(teachRes.data) ? teachRes.data : teachRes.data.results || [];
-      const sortedTeachers = [...rawTeachers].sort((a, b) => {
-        const nameA = (a.full_name || `${a.first_name || ''} ${a.last_name || ''}`.trim() || a.name || '').toLowerCase();
-        const nameB = (b.full_name || `${b.first_name || ''} ${b.last_name || ''}`.trim() || b.name || '').toLowerCase();
-        return nameA.localeCompare(nameB);
-      });
-
-      setGradeLevels(Array.isArray(glRes.data) ? glRes.data : glRes.data.results || []);
-      setTeachers(sortedTeachers);
-      setRooms(Array.isArray(roomRes.data) ? roomRes.data : roomRes.data.results || []);
-      setExistingSections(Array.isArray(secRes.data) ? secRes.data : secRes.data.results || []);
-    } catch (err: any) {
-      setError(getErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadAllData();
-  }, [loadAllData]);
-
-  const isNameDuplicate = useMemo(() => {
-    const clean = name.trim().toLowerCase();
-    if (!clean) return false;
-    return existingSections.some((s) => {
-      if (editingId && s.id === editingId) return false;
-      const sameName = s.name?.trim().toLowerCase() === clean;
-      const sLevel = typeof s.grade_level === 'object' ? s.grade_level?.id : (s.grade_level_id || s.grade_level);
-      const sameLevel = gradeLevelId ? String(sLevel) === String(gradeLevelId) : true;
-      return sameName && sameLevel;
-    });
-  }, [name, gradeLevelId, editingId, existingSections]);
-
-  const adviserBusyError = useMemo(() => {
-    if (!adviserId) return '';
-    const busy = existingSections.find((s) => {
-      if (editingId && s.id === editingId) return false;
-      const sAdvId = typeof s.adviser === 'object' ? s.adviser?.id : (s.adviser_id || s.adviser);
-      return String(sAdvId) === String(adviserId);
-    });
-    if (busy) {
-      const teacherObj = teachers.find((t) => String(t.id) === String(adviserId));
-      const tName = teacherObj ? (teacherObj.full_name || `${teacherObj.first_name || ''} ${teacherObj.last_name || ''}`.trim() || teacherObj.name) : 'Selected Faculty';
-      return `Faculty conflict: ${tName} is already adviser for "${busy.name}".`;
-    }
-    return '';
-  }, [adviserId, editingId, existingSections, teachers]);
-
-  const handleEdit = (sec: any) => {
-    setEditingId(sec.id);
-    setName(sec.name || '');
-    const glVal = typeof sec.grade_level === 'object' ? sec.grade_level?.id : (sec.grade_level_id || sec.grade_level);
-    setGradeLevelId(glVal ? String(glVal) : '');
-    const advVal = typeof sec.adviser === 'object' ? sec.adviser?.id : (sec.adviser_id || sec.adviser);
-    setAdviserId(advVal ? String(advVal) : '');
-    setRoomId(sec.room_number || sec.room_name || '');
-    setError('');
-  };
-
-  const handleCancelEdit = () => {
-    setEditingId(null);
-    setName('');
-    setGradeLevelId('');
-    setAdviserId('');
-    setRoomId('');
-    setError('');
-  };
-
-  const handleDelete = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this section?')) return;
-    try {
-      await apiClient.delete(`/sections/${id}/`);
-      if (editingId === id) handleCancelEdit();
-      await loadAllData();
-      onSuccess();
-    } catch (err: any) {
-      alert(getErrorMessage(err));
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isNameDuplicate || adviserBusyError) return;
-
-    setSaving(true);
-    setError('');
-
-    const glNum = gradeLevelId ? parseInt(gradeLevelId, 10) : null;
-    const advNum = adviserId ? parseInt(adviserId, 10) : null;
-
-    const payload = {
-      name: name.trim(),
-      grade_level: glNum,
-      grade_level_id: glNum,
-      adviser: advNum,
-      adviser_id: advNum,
-      room_name: roomId ? String(roomId) : '',
-      room_number: roomId ? String(roomId) : '',
-    };
-
-    try {
-      if (editingId) {
-        await apiClient.put(`/sections/${editingId}/`, payload);
-      } else {
-        await apiClient.post('/sections/', payload);
-      }
-      handleCancelEdit();
-      await loadAllData();
-      onSuccess();
-    } catch (err: any) {
-      setError(getErrorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div style={loadingBoxStyle}>
-        <Loader2 size={24} className="animate-spin" color="#0284c7" />
-        <span style={{ fontSize: '0.80rem', color: '#64748b' }}>Loading records...</span>
-      </div>
-    );
-  }
-
-  return (
-    <form onSubmit={handleSubmit} style={formStyle}>
-      {error && <div style={errorCardStyle}><AlertCircle size={15} /> {error}</div>}
-
-      {adviserBusyError && (
-        <div style={warningBoxStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#b91c1c', fontWeight: 700, fontSize: '0.78rem' }}>
-            <ShieldAlert size={16} /> Adviser Conflict
-          </div>
-          <div style={{ color: '#991b1b', fontSize: '0.74rem', marginLeft: 22 }}>
-            • {adviserBusyError}
-          </div>
-        </div>
-      )}
-
-      <div>
-        <label style={labelStyle}>Section Name *</label>
-        <input
-          type="text"
-          required
-          placeholder="e.g. Diamond, Emerald, Ruby, Sapphire"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          style={
-            name.trim() === ''
-              ? inputStyle
-              : isNameDuplicate
-              ? badInputStyle
-              : goodInputStyle
-          }
-        />
-        {name.trim() !== '' && (
-          isNameDuplicate ? (
-            <div style={invalidFeedbackStyle}>
-              <AlertCircle size={12} /> Section name already exists in this level
-            </div>
-          ) : (
-            <div style={validFeedbackStyle}>
-              <CheckCircle2 size={12} /> Section name available
-            </div>
-          )
-        )}
-      </div>
-
-      <div>
-        <label style={labelStyle}>Year Level *</label>
-        <select 
-          required 
-          value={gradeLevelId} 
-          onChange={(e) => setGradeLevelId(e.target.value)} 
-          style={inputStyle}
-        >
-          <option value="">-- Choose Year Level --</option>
-          {gradeLevels.map((gl) => (
-            <option key={gl.id} value={gl.id}>{gl.name}</option>
-          ))}
-        </select>
-      </div>
-
-      <div style={rowStyle}>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Class Adviser</label>
-          <select 
-            value={adviserId} 
-            onChange={(e) => setAdviserId(e.target.value)} 
-            style={adviserBusyError ? badInputStyle : inputStyle}
-          >
-            <option value="">-- Optional: Choose Faculty ({teachers.length} available) --</option>
-            {teachers.map((t) => {
-              const tName = t.full_name || `${t.first_name || ''} ${t.last_name || ''}`.trim() || t.name;
-              return (
-                <option key={t.id} value={t.id}>{tName}</option>
-              );
-            })}
-          </select>
-        </div>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Homeroom</label>
-          <select 
-            value={roomId} 
-            onChange={(e) => setRoomId(e.target.value)} 
-            style={inputStyle}
-          >
-            <option value="">-- Optional: Choose Room --</option>
-            {rooms.map((r) => (
-              <option key={r.id} value={r.name || r.room_number}>{r.name || r.room_number}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button 
-          type="submit" 
-          disabled={saving || isNameDuplicate || !!adviserBusyError || !name.trim()} 
-          style={{
-            ...saveButtonStyle,
-            flex: 1,
-            backgroundColor: (isNameDuplicate || !!adviserBusyError || !name.trim()) ? '#94a3b8' : '#0284c7',
-            cursor: (isNameDuplicate || !!adviserBusyError || !name.trim()) ? 'not-allowed' : 'pointer'
-          }}
-        >
-          {saving ? <Loader2 size={16} className="animate-spin" /> : editingId ? 'Update Section' : 'Create Section'}
-        </button>
-
-        {editingId && (
-          <button type="button" onClick={handleCancelEdit} style={cancelBtnStyle}>
-            Cancel
-          </button>
-        )}
-      </div>
-
-      <div style={listCardStyle}>
-        <div style={listHeaderStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Users size={13} color="#0284c7" />
-            <span>Existing Sections</span>
-          </div>
-          <span style={countTagStyle}>{existingSections.length} sections</span>
-        </div>
-
-        {existingSections.length === 0 ? (
-          <div style={emptyTextStyle}>No sections saved yet.</div>
-        ) : (
-          <div style={gridStyle}>
-            {existingSections.map((sec) => {
-              const glDisplayName = typeof sec.grade_level === 'object' ? sec.grade_level?.name : (sec.grade_level_name || sec.grade_level);
-              return (
-                <div key={sec.id} style={itemCardStyle}>
-                  <div>
-                    <span style={{ fontWeight: 700, color: '#0f172a' }}>{sec.name}</span>
-                    {glDisplayName && (
-                      <span style={{ ...blueTagStyle, marginLeft: 6 }}>{String(glDisplayName)}</span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <button type="button" onClick={() => handleEdit(sec)} style={iconActionBtn} title="Edit section">
-                      <Pencil size={13} color="#0284c7" />
-                    </button>
-                    <button type="button" onClick={() => handleDelete(sec.id)} style={iconActionBtn} title="Delete section">
-                      <Trash2 size={13} color="#ef4444" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         )}
       </div>
     </form>
@@ -944,7 +909,7 @@ const SectionForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 // ===========================================================================
 // 3. SUBJECT FORM
 // ===========================================================================
-const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
+const SubjectForm: React.FC<{ onSuccess: () => void; initialItem?: any }> = ({ onSuccess, initialItem }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [code, setCode] = useState('');
   const [title, setTitle] = useState('');
@@ -959,7 +924,7 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const loadSubjects = useCallback(async () => {
     try {
       const res = await apiClient.get('/subjects/?page_size=ALL');
-      setExistingSubjects(Array.isArray(res.data) ? res.data : res.data.results || []);
+      setExistingSubjects(Array.isArray(res.data) ? res.data : res.data?.results || []);
     } catch (err) {
       console.error('Cannot load subjects:', err);
     } finally {
@@ -971,31 +936,29 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     loadSubjects();
   }, [loadSubjects]);
 
-  const isCodeDuplicate = useMemo(() => {
-    const clean = code.trim().toLowerCase();
-    if (!clean) return false;
-    return existingSubjects.some(
-      (s) => (editingId ? s.id !== editingId : true) && s.code?.trim().toLowerCase() === clean
-    );
-  }, [code, editingId, existingSubjects]);
-
-  const handleEdit = (sub: any) => {
+  const handleEdit = useCallback((sub: any) => {
+    if (!sub) return;
     setEditingId(sub.id);
     setCode(sub.code || '');
     setTitle(sub.title || sub.name || '');
     setUnits(String(sub.units || '1'));
     setSubjectType(sub.subject_type || sub.tier || 'Core');
     setError('');
-  };
+  }, []);
 
-  const handleCancelEdit = () => {
+  const handleCancelEdit = useCallback(() => {
     setEditingId(null);
     setCode('');
     setTitle('');
     setUnits('1');
     setSubjectType('Core');
     setError('');
-  };
+  }, []);
+
+  useEffect(() => {
+    if (initialItem) handleEdit(initialItem);
+    else handleCancelEdit();
+  }, [initialItem, handleEdit, handleCancelEdit]);
 
   const handleDelete = async (id: number) => {
     if (!window.confirm('Are you sure you want to delete this subject?')) return;
@@ -1011,8 +974,6 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isCodeDuplicate) return;
-
     setSaving(true);
     setError('');
 
@@ -1044,7 +1005,7 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   if (loading) {
     return (
       <div style={loadingBoxStyle}>
-        <Loader2 size={24} className="animate-spin" color="#0284c7" />
+        <Loader2 size={24} className="animate-spin" color="#004b87" />
         <span style={{ fontSize: '0.80rem', color: '#64748b' }}>Loading records...</span>
       </div>
     );
@@ -1063,25 +1024,8 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
             placeholder="e.g. MATH-7"
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            style={
-              code.trim() === ''
-                ? inputStyle
-                : isCodeDuplicate
-                ? badInputStyle
-                : goodInputStyle
-            }
+            style={inputStyle}
           />
-          {code.trim() !== '' && (
-            isCodeDuplicate ? (
-              <div style={invalidFeedbackStyle}>
-                <AlertCircle size={12} /> Subject code already exists
-              </div>
-            ) : (
-              <div style={validFeedbackStyle}>
-                <CheckCircle2 size={12} /> Code available
-              </div>
-            )
-          )}
         </div>
         <div style={{ flex: 2 }}>
           <label style={labelStyle}>Subject Title *</label>
@@ -1127,13 +1071,8 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       <div style={{ display: 'flex', gap: 8 }}>
         <button 
           type="submit" 
-          disabled={saving || isCodeDuplicate || !code.trim() || !title.trim()} 
-          style={{
-            ...saveButtonStyle,
-            flex: 1,
-            backgroundColor: (isCodeDuplicate || !code.trim() || !title.trim()) ? '#94a3b8' : '#0284c7',
-            cursor: (isCodeDuplicate || !code.trim() || !title.trim()) ? 'not-allowed' : 'pointer'
-          }}
+          disabled={saving || !code.trim() || !title.trim()} 
+          style={{ ...saveButtonStyle, flex: 1 }}
         >
           {saving ? <Loader2 size={16} className="animate-spin" /> : editingId ? 'Update Subject' : 'Save Subject'}
         </button>
@@ -1148,7 +1087,7 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       <div style={listCardStyle}>
         <div style={listHeaderStyle}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <BookOpen size={13} color="#0284c7" />
+            <BookOpen size={13} color="#004b87" />
             <span>Existing Subjects</span>
           </div>
           <span style={countTagStyle}>{existingSubjects.length} subjects</span>
@@ -1166,7 +1105,7 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>
                   <button type="button" onClick={() => handleEdit(sub)} style={iconActionBtn} title="Edit subject">
-                    <Pencil size={13} color="#0284c7" />
+                    <Pencil size={13} color="#004b87" />
                   </button>
                   <button type="button" onClick={() => handleDelete(sub.id)} style={iconActionBtn} title="Delete subject">
                     <Trash2 size={13} color="#ef4444" />
@@ -1184,7 +1123,7 @@ const SubjectForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 // ===========================================================================
 // 4. ROOM FORM
 // ===========================================================================
-const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
+const RoomForm: React.FC<{ onSuccess: () => void; initialItem?: any }> = ({ onSuccess, initialItem }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState('');
   const [building, setBuilding] = useState('');
@@ -1199,7 +1138,7 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const loadRooms = useCallback(async () => {
     try {
       const res = await apiClient.get('/rooms/');
-      setExistingRooms(Array.isArray(res.data) ? res.data : res.data.results || []);
+      setExistingRooms(Array.isArray(res.data) ? res.data : res.data?.results || []);
     } catch (err) {
       console.error('Cannot load rooms:', err);
     } finally {
@@ -1211,31 +1150,29 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     loadRooms();
   }, [loadRooms]);
 
-  const isRoomDuplicate = useMemo(() => {
-    const clean = name.trim().toLowerCase();
-    if (!clean) return false;
-    return existingRooms.some(
-      (r) => (editingId ? r.id !== editingId : true) && r.name?.trim().toLowerCase() === clean
-    );
-  }, [name, editingId, existingRooms]);
-
-  const handleEdit = (r: any) => {
+  const handleEdit = useCallback((r: any) => {
+    if (!r) return;
     setEditingId(r.id);
-    setName(r.name || '');
+    setName(r.name || r.room_number || '');
     setBuilding(r.building || '');
     setCapacity(String(r.capacity || '45'));
     setRoomType(r.room_type || 'LECTURE');
     setError('');
-  };
+  }, []);
 
-  const handleCancelEdit = () => {
+  const handleCancelEdit = useCallback(() => {
     setEditingId(null);
     setName('');
     setBuilding('');
     setCapacity('45');
     setRoomType('LECTURE');
     setError('');
-  };
+  }, []);
+
+  useEffect(() => {
+    if (initialItem) handleEdit(initialItem);
+    else handleCancelEdit();
+  }, [initialItem, handleEdit, handleCancelEdit]);
 
   const handleDelete = async (id: number) => {
     if (!window.confirm('Are you sure you want to delete this room?')) return;
@@ -1251,8 +1188,6 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isRoomDuplicate) return;
-
     setSaving(true);
     setError('');
 
@@ -1282,7 +1217,7 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   if (loading) {
     return (
       <div style={loadingBoxStyle}>
-        <Loader2 size={24} className="animate-spin" color="#0284c7" />
+        <Loader2 size={24} className="animate-spin" color="#004b87" />
         <span style={{ fontSize: '0.80rem', color: '#64748b' }}>Loading records...</span>
       </div>
     );
@@ -1300,25 +1235,8 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
           placeholder="e.g. Rm 101, Rm 102"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          style={
-            name.trim() === ''
-              ? inputStyle
-              : isRoomDuplicate
-              ? badInputStyle
-              : goodInputStyle
-          }
+          style={inputStyle}
         />
-        {name.trim() !== '' && (
-          isRoomDuplicate ? (
-            <div style={invalidFeedbackStyle}>
-              <AlertCircle size={12} /> Room &quot;{name.trim()}&quot; is already saved
-            </div>
-          ) : (
-            <div style={validFeedbackStyle}>
-              <CheckCircle2 size={12} /> Room name available
-            </div>
-          )
-        )}
       </div>
 
       <div>
@@ -1362,13 +1280,8 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       <div style={{ display: 'flex', gap: 8 }}>
         <button 
           type="submit" 
-          disabled={saving || isRoomDuplicate || !name.trim()} 
-          style={{
-            ...saveButtonStyle,
-            flex: 1,
-            backgroundColor: (isRoomDuplicate || !name.trim()) ? '#94a3b8' : '#0284c7',
-            cursor: (isRoomDuplicate || !name.trim()) ? 'not-allowed' : 'pointer'
-          }}
+          disabled={saving || !name.trim()} 
+          style={{ ...saveButtonStyle, flex: 1 }}
         >
           {saving ? <Loader2 size={16} className="animate-spin" /> : editingId ? 'Update Room' : 'Save Room'}
         </button>
@@ -1383,7 +1296,7 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       <div style={listCardStyle}>
         <div style={listHeaderStyle}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <DoorOpen size={13} color="#0284c7" />
+            <DoorOpen size={13} color="#004b87" />
             <span>Existing Rooms</span>
           </div>
           <span style={countTagStyle}>{existingRooms.length} rooms</span>
@@ -1403,7 +1316,7 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>
                   <button type="button" onClick={() => handleEdit(r)} style={iconActionBtn} title="Edit room">
-                    <Pencil size={13} color="#0284c7" />
+                    <Pencil size={13} color="#004b87" />
                   </button>
                   <button type="button" onClick={() => handleDelete(r.id)} style={iconActionBtn} title="Delete room">
                     <Trash2 size={13} color="#ef4444" />
@@ -1421,7 +1334,7 @@ const RoomForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 // ===========================================================================
 // 5. YEAR LEVEL FORM
 // ===========================================================================
-const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
+const YearLevelForm: React.FC<{ onSuccess: () => void; initialItem?: any }> = ({ onSuccess, initialItem }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState('');
   const [levelNumber, setLevelNumber] = useState('7');
@@ -1435,7 +1348,7 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   const loadLevels = useCallback(async () => {
     try {
       const res = await apiClient.get('/grade-levels/?page_size=ALL');
-      setExistingLevels(Array.isArray(res.data) ? res.data : res.data.results || []);
+      setExistingLevels(Array.isArray(res.data) ? res.data : res.data?.results || []);
     } catch (err) {
       console.error('Cannot load year levels:', err);
     } finally {
@@ -1457,29 +1370,27 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
     }
   };
 
-  const isLevelDuplicate = useMemo(() => {
-    const clean = name.trim().toLowerCase();
-    if (!clean) return false;
-    return existingLevels.some(
-      (l) => (editingId ? l.id !== editingId : true) && l.name?.trim().toLowerCase() === clean
-    );
-  }, [name, editingId, existingLevels]);
-
-  const handleEdit = (lvl: any) => {
+  const handleEdit = useCallback((lvl: any) => {
+    if (!lvl) return;
     setEditingId(lvl.id);
     setName(lvl.name || '');
-    setLevelNumber(String(lvl.level_number || lvl.level_order || '7'));
+    setLevelNumber(String(lvl.level_number || lvl.level_order || lvl.order || '7'));
     setStage(lvl.stage || 'JHS');
     setError('');
-  };
+  }, []);
 
-  const handleCancelEdit = () => {
+  const handleCancelEdit = useCallback(() => {
     setEditingId(null);
     setName('');
     setLevelNumber('7');
     setStage('JHS');
     setError('');
-  };
+  }, []);
+
+  useEffect(() => {
+    if (initialItem) handleEdit(initialItem);
+    else handleCancelEdit();
+  }, [initialItem, handleEdit, handleCancelEdit]);
 
   const handleDelete = async (id: number) => {
     if (!window.confirm('Are you sure you want to delete this year level?')) return;
@@ -1495,8 +1406,6 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isLevelDuplicate) return;
-
     setSaving(true);
     setError('');
 
@@ -1528,7 +1437,7 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   if (loading) {
     return (
       <div style={loadingBoxStyle}>
-        <Loader2 size={24} className="animate-spin" color="#0284c7" />
+        <Loader2 size={24} className="animate-spin" color="#004b87" />
         <span style={{ fontSize: '0.80rem', color: '#64748b' }}>Loading records...</span>
       </div>
     );
@@ -1546,25 +1455,8 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
           placeholder="e.g. Grade 7, Grade 8"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          style={
-            name.trim() === ''
-              ? inputStyle
-              : isLevelDuplicate
-              ? badInputStyle
-              : goodInputStyle
-          }
+          style={inputStyle}
         />
-        {name.trim() !== '' && (
-          isLevelDuplicate ? (
-            <div style={invalidFeedbackStyle}>
-              <AlertCircle size={12} /> Year level &quot;{name.trim()}&quot; already exists
-            </div>
-          ) : (
-            <div style={validFeedbackStyle}>
-              <CheckCircle2 size={12} /> Name available
-            </div>
-          )
-        )}
       </div>
 
       <div style={rowStyle}>
@@ -1600,13 +1492,8 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       <div style={{ display: 'flex', gap: 8 }}>
         <button 
           type="submit" 
-          disabled={saving || isLevelDuplicate || !name.trim()} 
-          style={{
-            ...saveButtonStyle,
-            flex: 1,
-            backgroundColor: (isLevelDuplicate || !name.trim()) ? '#94a3b8' : '#0284c7',
-            cursor: (isLevelDuplicate || !name.trim()) ? 'not-allowed' : 'pointer'
-          }}
+          disabled={saving || !name.trim()} 
+          style={{ ...saveButtonStyle, flex: 1 }}
         >
           {saving ? <Loader2 size={16} className="animate-spin" /> : editingId ? 'Update Year Level' : 'Save Year Level'}
         </button>
@@ -1621,7 +1508,7 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
       <div style={listCardStyle}>
         <div style={listHeaderStyle}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Layers size={13} color="#0284c7" />
+            <Layers size={13} color="#004b87" />
             <span>Existing Year Levels</span>
           </div>
           <span style={countTagStyle}>{existingLevels.length} levels</span>
@@ -1639,7 +1526,7 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>
                   <button type="button" onClick={() => handleEdit(lvl)} style={iconActionBtn} title="Edit year level">
-                    <Pencil size={13} color="#0284c7" />
+                    <Pencil size={13} color="#004b87" />
                   </button>
                   <button type="button" onClick={() => handleDelete(lvl.id)} style={iconActionBtn} title="Delete year level">
                     <Trash2 size={13} color="#ef4444" />
@@ -1656,9 +1543,7 @@ const YearLevelForm: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
 
 export default AcademicSetupModal;
 
-// ===========================================================================
-// STYLES
-// ===========================================================================
+// Styles
 const backdropStyle: React.CSSProperties = {
   position: 'fixed',
   top: 0,
@@ -1677,7 +1562,7 @@ const boxStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',
   borderRadius: 14,
   width: '95vw',
-  maxWidth: 640,
+  maxWidth: 680,
   maxHeight: '92vh',
   overflowY: 'auto',
   padding: '24px 26px',
@@ -1753,7 +1638,7 @@ const baseTabStyle: React.CSSProperties = {
 const activeTabStyle: React.CSSProperties = {
   ...baseTabStyle,
   backgroundColor: '#ffffff',
-  color: '#0284c7',
+  color: '#004b87',
   boxShadow: '0 1px 3px rgba(0, 0, 0, 0.08)',
 };
 
@@ -1793,47 +1678,12 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
   backgroundColor: '#ffffff',
   color: '#0f172a',
-  transition: 'border-color 0.15s ease, background-color 0.15s ease',
-};
-
-const badInputStyle: React.CSSProperties = {
-  ...inputStyle,
-  border: '1.5px solid #ef4444',
-  backgroundColor: '#fff1f2',
-  color: '#991b1b',
-};
-
-const goodInputStyle: React.CSSProperties = {
-  ...inputStyle,
-  border: '1.5px solid #16a34a',
-  backgroundColor: '#f0fdf4',
-  color: '#166534',
-};
-
-const validFeedbackStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 4,
-  marginTop: 4,
-  fontSize: '0.70rem',
-  fontWeight: 700,
-  color: '#16a34a',
-};
-
-const invalidFeedbackStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 4,
-  marginTop: 4,
-  fontSize: '0.70rem',
-  fontWeight: 700,
-  color: '#ef4444',
 };
 
 const saveButtonStyle: React.CSSProperties = {
   marginTop: 4,
   padding: '11px 16px',
-  backgroundColor: '#0284c7',
+  backgroundColor: '#004b87',
   color: '#ffffff',
   border: 'none',
   borderRadius: 6,
@@ -1921,31 +1771,52 @@ const countTagStyle: React.CSSProperties = {
 const gridStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-  maxHeight: 180,
+  gap: 8,
+  maxHeight: 240,
   overflowY: 'auto',
 };
 
 const itemCardStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
   backgroundColor: '#ffffff',
   border: '1px solid #e2e8f0',
-  borderRadius: 6,
-  padding: '6px 10px',
-  fontSize: '0.74rem',
+  borderRadius: 8,
+  padding: '10px 12px',
 };
 
 const blueTagStyle: React.CSSProperties = {
   backgroundColor: '#f0f9ff',
-  color: '#0284c7',
+  color: '#004b87',
   border: '1px solid #bae6fd',
   borderRadius: 4,
   padding: '1px 5px',
   fontSize: '0.66rem',
   fontWeight: 700,
+};
+
+const autoBadgePill: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '1px 7px',
+  borderRadius: 10,
+  fontSize: '0.64rem',
+  fontWeight: 800,
+  backgroundColor: '#ecfdf5',
+  color: '#047857',
+  border: '1px solid #a7f3d0',
+};
+
+const subjectTeacherPill: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 6px',
+  borderRadius: 4,
+  backgroundColor: '#f1f5f9',
+  border: '1px solid #e2e8f0',
+  fontSize: '0.68rem',
+  color: '#334155',
 };
 
 const iconActionBtn: React.CSSProperties = {

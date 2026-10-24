@@ -22,7 +22,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
 
-  const userRole = (user?.role || 'FACULTY').toUpperCase();
+  const userRole = (user?.role || 'EMPLOYEE').toUpperCase();
   const isAdmin = userRole === 'ADMIN' || Boolean(user?.is_superuser);
   const isDeptHead = userRole === 'DEPT_HEAD' || isAdmin;
 
@@ -30,9 +30,9 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
     user?.full_name ||
     `${user?.first_name || ''} ${user?.last_name || ''}`.trim() ||
     user?.username ||
-    'User';
+    'Employee';
 
-  const employeeId = user?.faculty_id || user?.employee_id || user?.username || 'ID Pending';
+  const employeeId = user?.employee_id || user?.faculty_id || user?.username || 'ID Pending';
 
   return (
     <ScrollView
@@ -43,7 +43,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* User Profile Card */}
+      {/* Employee Profile Card */}
       <View style={styles.userCard}>
         <View style={styles.userRow}>
           {user?.photo ? (
@@ -56,13 +56,13 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={styles.userName}>{displayName}</Text>
             <Text style={styles.userMeta}>
-              {userRole} &bull; ID: {employeeId}
+              {userRole} &bull; Employee ID: {employeeId}
             </Text>
           </View>
         </View>
       </View>
 
-      {/* Section 1: Academics */}
+      {/* Section 1: Academics & Classroom */}
       <Text style={styles.sectionHeader}>ACADEMICS</Text>
       <View style={styles.menuGroup}>
         <TouchableOpacity
@@ -74,38 +74,23 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
             <Ionicons name="person-outline" size={18} color="#0284c7" />
           </View>
           <View style={styles.itemBody}>
-            <Text style={styles.itemTitle}>Settings</Text>
-            <Text style={styles.itemSub}>Profile and credentials</Text>
+            <Text style={styles.itemTitle}>Profile Settings</Text>
+            <Text style={styles.itemSub}>Profile details and security</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.menuItem}
-          onPress={() => onSelectScreen('dtr')}
-          activeOpacity={0.7}
-        >
-          <View style={[styles.iconWrap, { backgroundColor: '#fef3c7' }]}>
-            <Ionicons name="time-outline" size={18} color="#d97706" />
-          </View>
-          <View style={styles.itemBody}>
-            <Text style={styles.itemTitle}>DTR</Text>
-            <Text style={styles.itemSub}>Daily time records and undertime</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() => onSelectScreen('roster')}
+          onPress={() => onSelectScreen('class_list')}
           activeOpacity={0.7}
         >
           <View style={[styles.iconWrap, { backgroundColor: '#ede9fe' }]}>
             <Ionicons name="people-outline" size={18} color="#7c3aed" />
           </View>
           <View style={styles.itemBody}>
-            <Text style={styles.itemTitle}>Class Roster</Text>
-            <Text style={styles.itemSub}>Students and guardians</Text>
+            <Text style={styles.itemTitle}>Class List</Text>
+            <Text style={styles.itemSub}>Active learners and emergency contacts</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
         </TouchableOpacity>
@@ -120,13 +105,13 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
           </View>
           <View style={styles.itemBody}>
             <Text style={styles.itemTitle}>SMS Logs</Text>
-            <Text style={styles.itemSub}>Parent notifications</Text>
+            <Text style={styles.itemSub}>Outbox queue and parent notifications</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
         </TouchableOpacity>
       </View>
 
-      {/* Section 2: Department Head */}
+      {/* Section 2: Department Head Oversight */}
       {isDeptHead && (
         <>
           <Text style={styles.sectionHeader}>DEPARTMENT</Text>
@@ -140,8 +125,8 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
                 <Ionicons name="stats-chart-outline" size={18} color="#ea580c" />
               </View>
               <View style={styles.itemBody}>
-                <Text style={styles.itemTitle}>Faculty Attendance</Text>
-                <Text style={styles.itemSub}>Live presence within campus</Text>
+                <Text style={styles.itemTitle}>Employee Attendance</Text>
+                <Text style={styles.itemSub}>Campus perimeter duty presence</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
             </TouchableOpacity>
@@ -149,10 +134,10 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
         </>
       )}
 
-      {/* Section 3: Admin */}
+      {/* Section 3: Administration */}
       {isAdmin && (
         <>
-          <Text style={styles.sectionHeader}>ADMINISTRATION</Text>
+          <Text style={styles.sectionHeader}>CAMPUS HARDWARE &amp; SECURITY</Text>
           <View style={styles.menuGroup}>
             <TouchableOpacity
               style={styles.menuItem}
@@ -163,8 +148,8 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
                 <Ionicons name="shield-outline" size={18} color="#dc2626" />
               </View>
               <View style={styles.itemBody}>
-                <Text style={styles.itemTitle}>Gate Feed</Text>
-                <Text style={styles.itemSub}>Live turnstile scans</Text>
+                <Text style={styles.itemTitle}>Gate Scanner Feed</Text>
+                <Text style={styles.itemSub}>Live RFID &amp; QR taps at Gate Kiosks</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
             </TouchableOpacity>
@@ -179,7 +164,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
               </View>
               <View style={styles.itemBody}>
                 <Text style={styles.itemTitle}>Device Approvals</Text>
-                <Text style={styles.itemSub}>Authorized phones</Text>
+                <Text style={styles.itemSub}>Manage authorized mobile phones</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
             </TouchableOpacity>
@@ -193,8 +178,8 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
                 <Ionicons name="hardware-chip-outline" size={18} color="#475569" />
               </View>
               <View style={styles.itemBody}>
-                <Text style={styles.itemTitle}>Kiosk Health</Text>
-                <Text style={styles.itemSub}>Status and latency</Text>
+                <Text style={styles.itemTitle}>Gate Kiosk Health</Text>
+                <Text style={styles.itemSub}>Scanner ping latency and queue health</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
             </TouchableOpacity>
@@ -202,10 +187,10 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
         </>
       )}
 
-      {/* Log Out */}
+      {/* Log Out Button */}
       <TouchableOpacity style={styles.logoutBtn} onPress={logout} activeOpacity={0.8}>
         <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-        <Text style={styles.logoutText}>Log Out</Text>
+        <Text style={styles.logoutText}>Sign Out</Text>
       </TouchableOpacity>
     </ScrollView>
   );

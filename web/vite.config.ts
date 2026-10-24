@@ -1,29 +1,42 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   server: {
-    host: '0.0.0.0',
-    port: 80,
+    port: 80, // Binds to default HTTP port so no :5173 is required
+    host: true, // Listens on 0.0.0.0
+    strictPort: true,
     allowedHosts: [
       'lapasan.attendsure.com.ph',
+      '.attendsure.com.ph',
+      '.trycloudflare.com',
       'localhost',
+      '127.0.0.1',
     ],
-  },
-  build: {
-    target: 'es2015',
-    chunkSizeWarningLimit: 1000,
-    rollupOptions: {
-      output: {
-        manualChunks(id: string) {
-          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
-            return 'vendor-react';
-          }
-          if (id.includes('node_modules/lucide-react')) {
-            return 'vendor-icons';
-          }
-        },
+    fs: {
+      allow: ['..'],
+    },
+    // Forwards API and media calls seamlessly to Django on port 8000
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/media': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
       },
     },
   },

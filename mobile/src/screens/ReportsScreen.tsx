@@ -17,6 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { COLORS } from '../constants/theme';
 
 // Standalone Report Components
@@ -82,11 +83,48 @@ const triggerBrowserPrint = (htmlContent: string) => {
 };
 
 export const ReportsScreen: React.FC = () => {
+  const { user } = useAuth();
   const now = new Date();
   const isMounted = useRef<boolean>(true);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const [selectedTab, setSelectedTab] = useState<ReportType>('SF1');
+  // 1. Role-Based Permissions
+  const currentUser = user as Record<string, any> | null;
+  const userRole = String(
+    currentUser?.role || currentUser?.system_role || 'EMPLOYEE'
+  ).trim().toUpperCase();
+
+  const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR'].includes(userRole) || Boolean(currentUser?.is_superuser);
+  const isTeacher = ['TEACHER', 'FACULTY'].includes(userRole);
+  const isStaffOnly = ['STAFF', 'GUARD', 'SECURITY'].includes(userRole);
+
+  // Available tabs calculated strictly according to user permissions
+  const availableTabs = useMemo(() => {
+    const tabs: Array<{ key: ReportType; label: string; icon: keyof typeof Ionicons.glyphMap }> = [];
+
+    // All employees can view their own DTR (Form 48)
+    tabs.push({ key: 'DTR', label: 'DTR', icon: 'time-outline' });
+
+    // Classroom Registers (SF1 & SF2) are restricted to Teachers and Administrators
+    if (isAdmin || isTeacher) {
+      tabs.push({ key: 'SF1', label: 'SF1', icon: 'people-outline' });
+      tabs.push({ key: 'SF2', label: 'SF2', icon: 'calendar-outline' });
+    }
+
+    // Consolidated Movement (SF4) is strictly for School Heads and Administrators
+    if (isAdmin) {
+      tabs.push({ key: 'SF4', label: 'SF4', icon: 'stats-chart-outline' });
+    }
+
+    return tabs;
+  }, [isAdmin, isTeacher]);
+
+  // Set default tab to the first allowed tab (e.g. SF1 for teachers, DTR for general staff)
+  const [selectedTab, setSelectedTab] = useState<ReportType>(() => {
+    if (isAdmin || isTeacher) return 'SF1';
+    return 'DTR';
+  });
+
   const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(now.getFullYear());
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -108,6 +146,14 @@ export const ReportsScreen: React.FC = () => {
 
   const monthScrollRef = useRef<ScrollView>(null);
 
+  // Security guard: If user role changes, enforce valid tab selection
+  useEffect(() => {
+    const isCurrentTabAllowed = availableTabs.some((t) => t.key === selectedTab);
+    if (!isCurrentTabAllowed && availableTabs.length > 0) {
+      setSelectedTab(availableTabs[0].key);
+    }
+  }, [availableTabs, selectedTab]);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       if (monthScrollRef.current && selectedMonth > 3) {
@@ -118,16 +164,18 @@ export const ReportsScreen: React.FC = () => {
   }, [selectedMonth, selectedTab]);
 
   const loadSections = useCallback(async () => {
+    if (isStaffOnly) return; // General staff don't have teaching sections
+
     try {
-      const [rosterRes, secRes] = await Promise.allSettled([
-        apiClient.get('/classroom/roster/'),
-        apiClient.get('/sections/'),
+      const [classListRes, secRes] = await Promise.allSettled([
+        apiClient.get('classroom/class_list/'),
+        apiClient.get('sections/'),
       ]);
 
       const map = new Map<number, AssignedSection>();
 
-      if (rosterRes.status === 'fulfilled' && Array.isArray(rosterRes.value.data)) {
-        rosterRes.value.data.forEach((item: any) => {
+      if (classListRes.status === 'fulfilled' && Array.isArray(classListRes.value.data)) {
+        classListRes.value.data.forEach((item: any) => {
           if (item.section_id && !map.has(item.section_id)) {
             map.set(item.section_id, {
               section_id: item.section_id,
@@ -160,7 +208,7 @@ export const ReportsScreen: React.FC = () => {
     } catch {
       setSections([]);
     }
-  }, [selectedSectionId]);
+  }, [selectedSectionId, isStaffOnly]);
 
   const loadReportData = useCallback(async () => {
     if (abortControllerRef.current) {
@@ -174,24 +222,24 @@ export const ReportsScreen: React.FC = () => {
 
     try {
       if (selectedTab === 'DTR') {
-        const res = await apiClient.get('/dtr/', {
+        const res = await apiClient.get('dtr/', {
           params: { month: selectedMonth, year: selectedYear },
           signal: controller.signal,
         });
         if (isMounted.current) setDtrData(res.data || null);
-      } else if (selectedTab === 'SF1' && selectedSectionId) {
-        const res = await apiClient.get(`/reports/sf1/${selectedSectionId}/`, {
+      } else if (selectedTab === 'SF1' && selectedSectionId && (isAdmin || isTeacher)) {
+        const res = await apiClient.get(`reports/sf1/${selectedSectionId}/`, {
           signal: controller.signal,
         });
         if (isMounted.current) setSf1Data(res.data || null);
-      } else if (selectedTab === 'SF2' && selectedSectionId) {
-        const res = await apiClient.get(`/reports/sf2/${selectedSectionId}/`, {
+      } else if (selectedTab === 'SF2' && selectedSectionId && (isAdmin || isTeacher)) {
+        const res = await apiClient.get(`reports/sf2/${selectedSectionId}/`, {
           params: { month: monthName, year: selectedYear },
           signal: controller.signal,
         });
         if (isMounted.current) setSf2Data(res.data || null);
-      } else if (selectedTab === 'SF4') {
-        const res = await apiClient.get('/reports/sf4/', {
+      } else if (selectedTab === 'SF4' && isAdmin) {
+        const res = await apiClient.get('reports/sf4/', {
           params: { month: monthName, year: selectedYear },
           signal: controller.signal,
         });
@@ -205,7 +253,7 @@ export const ReportsScreen: React.FC = () => {
         setRefreshing(false);
       }
     }
-  }, [selectedTab, selectedMonth, selectedYear, selectedSectionId]);
+  }, [selectedTab, selectedMonth, selectedYear, selectedSectionId, isAdmin, isTeacher]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -229,7 +277,7 @@ export const ReportsScreen: React.FC = () => {
     if (!dtrData) return;
     setSubmittingDtr(true);
     try {
-      await apiClient.post('/dtr/', {
+      await apiClient.post('dtr/', {
         action: 'SUBMIT_DTR',
         month: selectedMonth,
         year: selectedYear,
@@ -243,7 +291,6 @@ export const ReportsScreen: React.FC = () => {
     }
   };
 
-  // Helper to fetch official HTML payload from backend
   const fetchReportExportPayload = async () => {
     const monthName = FULL_MONTHS[selectedMonth - 1] || 'October';
     const payload = {
@@ -254,20 +301,17 @@ export const ReportsScreen: React.FC = () => {
     };
 
     try {
-      // 1. Primary: POST to avoid 405 error
-      const res = await apiClient.post('/reports/export/', payload);
+      const res = await apiClient.post('reports/export/', payload);
       return res.data;
     } catch (postErr: any) {
       if (postErr?.response?.status === 405) {
-        // 2. Fallback: GET with query params
-        const res = await apiClient.get('/reports/export/', { params: payload });
+        const res = await apiClient.get('reports/export/', { params: payload });
         return res.data;
       }
       throw postErr;
     }
   };
 
-  // 1. Direct Print Action
   const handlePrint = async () => {
     if ((selectedTab === 'SF1' || selectedTab === 'SF2') && !selectedSectionId) {
       showAlert('Required', 'Please select a class section.');
@@ -282,7 +326,6 @@ export const ReportsScreen: React.FC = () => {
       if (Platform.OS === 'web' && html) {
         triggerBrowserPrint(html);
       } else {
-        // Native mobile print
         try {
           const Print = require('expo-print');
           await Print.printAsync({ html });
@@ -300,7 +343,6 @@ export const ReportsScreen: React.FC = () => {
     }
   };
 
-  // 2. Download PDF Action
   const handleDownloadPDF = async () => {
     if ((selectedTab === 'SF1' || selectedTab === 'SF2') && !selectedSectionId) {
       showAlert('Required', 'Please select a class section.');
@@ -316,7 +358,6 @@ export const ReportsScreen: React.FC = () => {
       if (Platform.OS === 'web' && html) {
         triggerBrowserPrint(html);
       } else {
-        // Native mobile PDF file creation & share/save dialog
         try {
           const Print = require('expo-print');
           const Sharing = require('expo-sharing');
@@ -336,7 +377,6 @@ export const ReportsScreen: React.FC = () => {
     }
   };
 
-  // Filtered lists
   const filteredSf1 = useMemo(() => {
     const raw = sf1Data?.learners || sf1Data?.students || [];
     if (!searchQuery.trim()) return raw;
@@ -420,16 +460,9 @@ export const ReportsScreen: React.FC = () => {
         </View>
       </View>
 
-      {/* 4-Way Tab Switch */}
+      {/* Role-Filtered Tab Switcher */}
       <View style={styles.tabRow}>
-        {(
-          [
-            { key: 'DTR', label: 'Form 48', icon: 'time-outline' },
-            { key: 'SF1', label: 'SF1', icon: 'people-outline' },
-            { key: 'SF2', label: 'SF2', icon: 'calendar-outline' },
-            { key: 'SF4', label: 'SF4', icon: 'stats-chart-outline' },
-          ] as const
-        ).map((tab) => {
+        {availableTabs.map((tab) => {
           const active = selectedTab === tab.key;
           return (
             <TouchableOpacity
@@ -456,7 +489,7 @@ export const ReportsScreen: React.FC = () => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
         }
       >
-        {/* Month Selector for Form 48, SF2, SF4 */}
+        {/* Month Selector for DTR, SF2, SF4 */}
         {selectedTab !== 'SF1' && (
           <ScrollView
             ref={monthScrollRef}
@@ -535,7 +568,7 @@ export const ReportsScreen: React.FC = () => {
           </View>
         )}
 
-        {/* Report Views */}
+        {/* Dynamic Report Content */}
         {loading ? (
           <View style={styles.card}>
             <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 24 }} />

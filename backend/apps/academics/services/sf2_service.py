@@ -1,17 +1,14 @@
-# D:\AttendSure_V3\backend\apps\academics\services\sf2_service.py
+# backend/apps/academics/services/sf2_service.py
 
 import calendar
-from datetime import date, datetime
-from django.db.models import Q
+from datetime import date
 from apps.academics.models import (
-    Section,
-    Student,
-    Enrollment,
     DailyAttendanceSummary,
+    Enrollment,
+    Section,
     StudentGateLog,
-    SchoolProfile,
-    AcademicYear,
 )
+from apps.api.views.common import get_school_metadata
 
 MONTH_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -23,52 +20,15 @@ def make_metric(m=0, f=0):
     return {"m": m, "f": f, "total": m + f}
 
 
-def resolve_logo_url(logo_field):
-    if not logo_field:
-        return None
-    val = str(logo_field).strip()
-    if not val or val.lower() in ('none', 'null', 'undefined'):
-        return None
-    if val.startswith('http') or val.startswith('data:image'):
-        return val
-    if hasattr(logo_field, 'url'):
-        try:
-            return logo_field.url
-        except Exception:
-            return None
-    return val
-
-
-def get_school_metadata():
-    school = SchoolProfile.objects.first()
-    if not school:
-        return {
-            "school_id": "",
-            "school_name": "",
-            "division": "",
-            "district": "",
-            "school_head": "",
-            "left_logo": None,
-            "right_logo": None,
-        }
-
-    return {
-        "school_id": str(school.school_id or '').strip(),
-        "school_name": str(school.school_name or '').strip(),
-        "division": str(school.division or '').strip(),
-        "district": str(school.district or '').strip(),
-        "school_head": str(school.principal_name or '').strip().upper(),
-        "left_logo": resolve_logo_url(school.left_logo),
-        "right_logo": resolve_logo_url(school.right_logo),
-    }
-
-
 def generate_sf2_data(section_id, month_name='October', year=2026):
     """
-    Consolidates daily attendance and DepEd compliance metrics for a section
-    using Enrollment, DailyAttendanceSummary, and StudentGateLog records.
+    Consolidates daily attendance records and official DepEd compliance metrics.
     """
-    section = Section.objects.select_related('grade_level', 'academic_year', 'adviser').filter(id=section_id).first()
+    section = (
+        Section.objects.select_related('grade_level', 'academic_year', 'adviser')
+        .filter(id=section_id)
+        .first()
+    )
     if not section:
         raise ValueError(f"Section with ID {section_id} does not exist.")
 
@@ -79,7 +39,7 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
     month_start = date(year, month_num, 1)
     month_end = date(year, month_num, num_days)
 
-    # 1. School Days (Monday-Friday in target month)
+    # 1. School Days (Monday-Friday)
     day_abbrs = {0: 'M', 1: 'T', 2: 'W', 3: 'TH', 4: 'F'}
     school_days = []
     for d in range(1, num_days + 1):
@@ -91,15 +51,16 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
                 "fullDate": dt.strftime('%Y-%m-%d')
             })
 
-    # 2. Query Learners through Enrollment (Resolved relationship)
-    enrollments_qs = Enrollment.objects.filter(
-        section=section
-    ).select_related('student').order_by('student__last_name', 'student__first_name')
-
+    # 2. Fast Query via Enrollment with select_related
+    enrollments_qs = (
+        Enrollment.objects.filter(section=section)
+        .select_related('student')
+        .order_by('student__last_name', 'student__first_name')
+    )
     enrollments = list(enrollments_qs)
     students = [e.student for e in enrollments if getattr(e, 'student', None)]
 
-    # 3. Pull Daily Attendance and Gate Scan Records
+    # 3. Pull Attendance Summaries
     daily_summaries = DailyAttendanceSummary.objects.filter(
         section=section,
         attendance_date__gte=month_start,
@@ -110,10 +71,9 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
         s_id = ds.student_id
         if s_id not in records_by_student:
             records_by_student[s_id] = {}
-        status_val = str(ds.status or 'PRESENT').lower().strip()
-        records_by_student[s_id][ds.attendance_date.day] = status_val
+        records_by_student[s_id][ds.attendance_date.day] = str(ds.status or 'PRESENT').lower().strip()
 
-    # Cross-reference entrance gate scans
+    # Cross-reference gate taps
     if students:
         gate_logs = StudentGateLog.objects.filter(
             student__in=students,
@@ -203,7 +163,7 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
             if is_m: tin_m += 1
             else: tin_f += 1
 
-    # 6. Average Daily Attendance
+    # 6. Compute Average Daily Attendance
     num_school_days = len(school_days) or 1
     male_present_count = sum(
         1 for m in males_list for status in m["attendance"].values()
@@ -240,14 +200,10 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
         "transferred_in": make_metric(tin_m, tin_f),
     }
 
-    adviser_name = ""
-    if section.adviser:
-        adviser_name = f"{section.adviser.first_name} {section.adviser.last_name}".strip()
-
-    school_meta = get_school_metadata()
+    adviser_name = section.adviser.full_name if section.adviser else ""
 
     return {
-        **school_meta,
+        **get_school_metadata(),
         "academic_year": str(section.academic_year.code if section.academic_year else ''),
         "grade_level": str(section.grade_level.name if section.grade_level else ''),
         "section_name": section.name,

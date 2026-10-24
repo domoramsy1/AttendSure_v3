@@ -123,7 +123,7 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
         >
           <ShieldCheck size={20} color="#0284c7" />
           <span style={{ fontSize: '0.80rem', color: '#1e3a8a', lineHeight: 1.3 }}>
-            Your account was created by the School Administrator. Please complete your personal details to activate your DTR and class roster access.
+            Your account was created by the School Administrator. Please complete your personal details to activate your DTR and class student_list access.
           </span>
         </div>
 

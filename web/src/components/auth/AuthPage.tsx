@@ -349,7 +349,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                 </div>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>DepEd Legal Canvas Reports</div>
-                  <div style={{ fontSize: '0.78rem', color: '#bae6fd' }}>Official print engines for SF1, SF2, SF4, and CSC Form 48.</div>
+                  <div style={{ fontSize: '0.78rem', color: '#bae6fd' }}>Official print engines for SF1, SF2, SF4, and CSC DTR.</div>
                 </div>
               </div>
 
