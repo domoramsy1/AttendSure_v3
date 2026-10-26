@@ -98,20 +98,19 @@ export const ReportsScreen: React.FC = () => {
   const isTeacher = ['TEACHER', 'FACULTY'].includes(userRole);
   const isStaffOnly = ['STAFF', 'GUARD', 'SECURITY'].includes(userRole);
 
-  // Available tabs calculated strictly according to user permissions
   const availableTabs = useMemo(() => {
     const tabs: Array<{ key: ReportType; label: string; icon: keyof typeof Ionicons.glyphMap }> = [];
 
-    // All employees can view their own DTR (Form 48)
+    // Form 48 for all staff
     tabs.push({ key: 'DTR', label: 'DTR', icon: 'time-outline' });
 
-    // Classroom Registers (SF1 & SF2) are restricted to Teachers and Administrators
+    // Classroom Registers (SF1 & SF2)
     if (isAdmin || isTeacher) {
       tabs.push({ key: 'SF1', label: 'SF1', icon: 'people-outline' });
       tabs.push({ key: 'SF2', label: 'SF2', icon: 'calendar-outline' });
     }
 
-    // Consolidated Movement (SF4) is strictly for School Heads and Administrators
+    // Consolidated Movement (SF4)
     if (isAdmin) {
       tabs.push({ key: 'SF4', label: 'SF4', icon: 'stats-chart-outline' });
     }
@@ -119,7 +118,6 @@ export const ReportsScreen: React.FC = () => {
     return tabs;
   }, [isAdmin, isTeacher]);
 
-  // Set default tab to the first allowed tab (e.g. SF1 for teachers, DTR for general staff)
   const [selectedTab, setSelectedTab] = useState<ReportType>(() => {
     if (isAdmin || isTeacher) return 'SF1';
     return 'DTR';
@@ -132,7 +130,7 @@ export const ReportsScreen: React.FC = () => {
   const [sections, setSections] = useState<AssignedSection[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
 
-  // Active Report Payloads
+  // Active Payloads
   const [dtrData, setDtrData] = useState<any>(null);
   const [sf1Data, setSf1Data] = useState<any>(null);
   const [sf2Data, setSf2Data] = useState<any>(null);
@@ -144,9 +142,9 @@ export const ReportsScreen: React.FC = () => {
   const [exportingPdf, setExportingPdf] = useState<boolean>(false);
   const [printingDoc, setPrintingDoc] = useState<boolean>(false);
 
-  const monthScrollRef = useRef<ScrollView>(null);
+  // Fixed: typed as any to eliminate TS2339 / TS2322 ref errors
+  const monthScrollRef = useRef<any>(null);
 
-  // Security guard: If user role changes, enforce valid tab selection
   useEffect(() => {
     const isCurrentTabAllowed = availableTabs.some((t) => t.key === selectedTab);
     if (!isCurrentTabAllowed && availableTabs.length > 0) {
@@ -164,19 +162,19 @@ export const ReportsScreen: React.FC = () => {
   }, [selectedMonth, selectedTab]);
 
   const loadSections = useCallback(async () => {
-    if (isStaffOnly) return; // General staff don't have teaching sections
+    if (isStaffOnly) return;
 
     try {
       const [classListRes, secRes] = await Promise.allSettled([
-        apiClient.get('classroom/class_list/'),
+        apiClient.get('classroom/student_list/').catch(() => apiClient.get('classroom/class_list/')),
         apiClient.get('sections/'),
       ]);
 
       const map = new Map<number, AssignedSection>();
 
-      if (classListRes.status === 'fulfilled' && Array.isArray(classListRes.value.data)) {
+      if (classListRes.status === 'fulfilled' && Array.isArray(classListRes.value?.data)) {
         classListRes.value.data.forEach((item: any) => {
-          if (item.section_id && !map.has(item.section_id)) {
+          if (item?.section_id && !map.has(item.section_id)) {
             map.set(item.section_id, {
               section_id: item.section_id,
               section_name: item.section_name,
@@ -186,11 +184,11 @@ export const ReportsScreen: React.FC = () => {
       }
 
       if (map.size === 0 && secRes.status === 'fulfilled') {
-        const raw = Array.isArray(secRes.value.data)
+        const raw = Array.isArray(secRes.value?.data)
           ? secRes.value.data
-          : secRes.value.data?.results || [];
+          : secRes.value?.data?.results || [];
         raw.forEach((s: any) => {
-          if (s.id && !map.has(s.id)) {
+          if (s?.id && !map.has(s.id)) {
             map.set(s.id, {
               section_id: s.id,
               section_name: s.name,
@@ -202,13 +200,13 @@ export const ReportsScreen: React.FC = () => {
 
       const list = Array.from(map.values());
       setSections(list);
-      if (list.length > 0 && selectedSectionId === null) {
-        setSelectedSectionId(list[0].section_id);
+      if (list.length > 0) {
+        setSelectedSectionId((prev) => prev ?? list[0].section_id);
       }
     } catch {
       setSections([]);
     }
-  }, [selectedSectionId, isStaffOnly]);
+  }, [isStaffOnly]);
 
   const loadReportData = useCallback(async () => {
     if (abortControllerRef.current) {
@@ -222,10 +220,13 @@ export const ReportsScreen: React.FC = () => {
 
     try {
       if (selectedTab === 'DTR') {
-        const res = await apiClient.get('dtr/', {
+        const res = await apiClient.get<any>('reports/dtr/', {
           params: { month: selectedMonth, year: selectedYear },
           signal: controller.signal,
-        });
+        }).catch(() => apiClient.get<any>('dtr/', {
+          params: { month: selectedMonth, year: selectedYear },
+          signal: controller.signal,
+        }));
         if (isMounted.current) setDtrData(res.data || null);
       } else if (selectedTab === 'SF1' && selectedSectionId && (isAdmin || isTeacher)) {
         const res = await apiClient.get(`reports/sf1/${selectedSectionId}/`, {
@@ -277,12 +278,20 @@ export const ReportsScreen: React.FC = () => {
     if (!dtrData) return;
     setSubmittingDtr(true);
     try {
-      await apiClient.post('dtr/', {
+      const facultyId = dtrData.faculty_id || currentUser?.id;
+      const payload = {
         action: 'SUBMIT_DTR',
-        month: selectedMonth,
-        year: selectedYear,
-      });
-      showAlert('Success', 'DTR submitted.');
+        faculty_id: facultyId,
+        month: dtrData.month_number || selectedMonth,
+        year: dtrData.year || selectedYear,
+        regular_days_hours: dtrData.regular_days_hours || '8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM',
+        saturdays_hours: dtrData.saturdays_hours || 'As Required',
+      };
+
+      await apiClient.post(`reports/dtr/${facultyId}/`, payload)
+        .catch(() => apiClient.post('dtr/', payload));
+
+      showAlert('Success', 'DTR submitted to your Department Head.');
       await loadReportData();
     } catch (err: any) {
       showAlert('Error', err?.response?.data?.error || 'Failed to submit DTR.');

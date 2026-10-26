@@ -80,6 +80,8 @@ export const SF4ReportView: React.FC<SF4ReportViewProps> = ({ data, gradeGroups 
   const leftLogoUrl = data.left_logo || null;
   const rightLogoUrl = data.right_logo || null;
 
+  const safeGroups = Array.isArray(gradeGroups) ? gradeGroups : [];
+
   const renderMetricCells = (triplet?: MetricTriplet) => (
     <>
       <Text style={styles.tdCenter}>{triplet ? triplet.m : 0}</Text>
@@ -158,7 +160,7 @@ export const SF4ReportView: React.FC<SF4ReportViewProps> = ({ data, gradeGroups 
               <Text style={styles.categoryText}>ELEMENTARY/SECONDARY:</Text>
             </View>
 
-            {gradeGroups.map((group) => {
+            {safeGroups.map((group) => {
               const { grade: groupGrade, section: groupSection } = parseGradeLevelAndSection(group.grade_level);
               return (
                 <React.Fragment key={`group-${group.grade_level}`}>
@@ -290,11 +292,12 @@ export const SF4ReportView: React.FC<SF4ReportViewProps> = ({ data, gradeGroups 
           {/* ========================================================
               5. DYNAMIC DEPED DMOS FOOTER (FROM DATABASE)
              ======================================================== */}
+
           <DepEdReportFooter
-            sealUrl={leftLogoUrl || rightLogoUrl}
-            address={data.school_address}
-            contactNumber={data.school_contact}
-            email={data.school_email}
+            schoolLogoUrl={data.school_logo || data.right_logo || null}
+            address={data.school_address || data.address}
+            contactNumber={data.school_contact || data.contact_number}
+            email={data.school_email || data.email}
           />
         </View>
       </ScrollView>

@@ -12,9 +12,9 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -26,10 +26,12 @@ import { registerPushTokenWithBackend } from '../services/pushService';
 import { startPassivePresenceTracking } from '../services/backgroundLocation';
 import { getOrCreateDeviceUuid } from '../services/deviceService';
 
-const fallbackLogo = require('../../assets/attendsure-logo.svg');
+// Direct SVG vector assets
+const attendsureLogoSvg = require('../../assets/attendsure-logo.svg');
+const techblazerSvg = require('../../assets/techblazer.svg');
 const CACHED_SCHOOL_PROFILE_KEY = 'attendsure_cached_school_profile';
 
-// Cybersecurity: Max failed attempts before temporary lockout
+// Cybersecurity: Brute-Force lockout configuration
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 30000;
 
@@ -53,7 +55,9 @@ const showAlert = (title: string, message: string) => {
 export const LoginScreen: React.FC = () => {
   const { login } = useAuth();
   const isMounted = useRef<boolean>(true);
-  const passwordInputRef = useRef<TextInput>(null);
+  
+  // Concrete reference typed to prevent TS2339 & TS2322 in generated definitions
+  const passwordInputRef = useRef<any>(null);
 
   // Form State
   const [username, setUsername] = useState<string>('');
@@ -61,7 +65,7 @@ export const LoginScreen: React.FC = () => {
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
-  // System & Network State
+  // Live System & Network State
   const [schoolInfo, setSchoolInfo] = useState<PublicSchoolProfile | null>(null);
   const [serverBase, setServerBase] = useState<string>('');
   const [serverOnline, setServerOnline] = useState<'ONLINE' | 'OFFLINE' | 'CONNECTING'>('CONNECTING');
@@ -71,11 +75,11 @@ export const LoginScreen: React.FC = () => {
     `${Platform.OS.toUpperCase()} (${Platform.Version || 'OS'})`
   );
 
-  // Cybersecurity: Brute-Force Throttling
+  // Brute-force attempt counters
   const failedAttemptsRef = useRef<number>(0);
   const lockoutUntilRef = useRef<number>(0);
 
-  // Helper: Safely resolve relative media URLs to full server endpoints
+  // Helper: Sanitize relative media paths to valid server URLs
   const resolvePhotoUrl = useCallback((path: string | null | undefined, base: string) => {
     if (!path) return null;
     if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) {
@@ -86,27 +90,37 @@ export const LoginScreen: React.FC = () => {
     return `${cleanBase}${cleanPath}`;
   }, []);
 
-  // 1. Fast Concurrent Boot: Loads cache, server URL, and hardware UUID in parallel
+  // 1. Parallel Data Initialization (AsyncStorage + Live Backend Health)
   const initializeLoginData = useCallback(async () => {
+    if (isMounted.current) {
+      setServerOnline('CONNECTING');
+    }
+
     try {
       const [cachedProfile, uuid, activeBase] = await Promise.all([
         AsyncStorage.getItem(CACHED_SCHOOL_PROFILE_KEY),
-        getOrCreateDeviceUuid(),
-        getServerBaseUrl(),
+        getOrCreateDeviceUuid().catch(() => ''),
+        getServerBaseUrl().catch(() => ''),
       ]);
 
       if (isMounted.current) {
-        if (cachedProfile) setSchoolInfo(JSON.parse(cachedProfile));
+        if (cachedProfile) {
+          try {
+            setSchoolInfo(JSON.parse(cachedProfile));
+          } catch {
+            // Ignore malformed cache
+          }
+        }
         if (uuid) setDeviceUuid(uuid);
         if (activeBase) setServerBase(activeBase);
       }
     } catch {
-      // Continue to live network check
+      // Continue to live check
     }
 
-    // Fast 4-second live school profile verification
+    // 3-second live server check
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
+    const timer = setTimeout(() => controller.abort(), 3000);
 
     try {
       const res = await apiClient.get('/settings/school/', {
@@ -136,55 +150,44 @@ export const LoginScreen: React.FC = () => {
     };
   }, [initializeLoginData]);
 
-  // 2. Hardened Authentication Handler with Brute-Force Throttling
+  // 2. Authentication with Input Sanitization & Anti-Brute-Force Guard
   const handleLogin = async () => {
-    // Check brute-force lockout
     const now = Date.now();
     if (now < lockoutUntilRef.current) {
       const remainingSec = Math.ceil((lockoutUntilRef.current - now) / 1000);
-      showAlert('Account Locked', `Too many failed attempts. Please wait ${remainingSec}s.`);
+      showAlert('Account Locked', `Too many failed attempts. Please wait ${remainingSec} seconds.`);
       return;
     }
 
-    // Sanitize control characters to prevent injection
+    // Strip CRLF control characters to prevent header injection
     const cleanUsername = username.replace(/[\r\n\t]/g, '').trim();
     const cleanPassword = password.replace(/[\r\n]/g, '').trim();
 
     if (!cleanUsername || !cleanPassword) {
-      showAlert('Required', 'Please enter your username and password.');
+      showAlert('Required', 'Please enter your Employee ID or Username and Password.');
       return;
     }
 
     if (cleanUsername.length > 150 || cleanPassword.length > 128) {
-      showAlert('Invalid Input', 'Credentials exceed maximum permitted length.');
+      showAlert('Invalid Input', 'Credentials exceed the maximum permitted length.');
       return;
     }
 
     setSubmitting(true);
     try {
-      // Authenticate directly with PostgreSQL
       await login(cleanUsername, cleanPassword);
-
-      // Reset failure counter on successful login
       failedAttemptsRef.current = 0;
 
-      // Start background services quietly without blocking navigation
+      // Start passive background services quietly
       startPassivePresenceTracking().catch(() => {});
       registerPushTokenWithBackend().catch(() => {});
     } catch (err: any) {
-      // Increment failure count
       failedAttemptsRef.current += 1;
       if (failedAttemptsRef.current >= MAX_FAILED_ATTEMPTS) {
         lockoutUntilRef.current = Date.now() + LOCKOUT_DURATION_MS;
       }
 
-      // Cybersecurity: Sanitize backend error to prevent database or stack trace exposure
-      const rawError = String(
-        err?.response?.data?.error ||
-        err?.response?.data?.detail ||
-        ''
-      );
-
+      const rawError = String(err?.response?.data?.error || err?.response?.data?.detail || '');
       const isInternalLeak =
         rawError.includes('Traceback') ||
         rawError.includes('django') ||
@@ -195,7 +198,7 @@ export const LoginScreen: React.FC = () => {
         ? 'Authentication error. Please contact your school administrator.'
         : rawError ||
           (err?.code === 'ECONNABORTED' || err?.message?.includes('Network Error')
-            ? 'Cannot reach server. Please check your internet connection.'
+            ? 'Cannot reach school server. Please verify your Wi-Fi or network connection.'
             : 'Invalid username or password.');
 
       showAlert('Login Failed', safeMessage);
@@ -206,14 +209,14 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
-  // Resolve logo source with automatic fallback to local vector asset
   const rawLogoPath = schoolInfo?.school_logo || schoolInfo?.left_logo;
   const resolvedLogoUri = resolvePhotoUrl(rawLogoPath, serverBase);
-  const logoSource = (resolvedLogoUri && !logoFailed) ? { uri: resolvedLogoUri } : fallbackLogo;
+  const logoSource = (resolvedLogoUri && !logoFailed) ? { uri: resolvedLogoUri } : attendsureLogoSvg;
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
+      {/* Correct Expo StatusBar usage: avoids TS2769 */}
+      <StatusBar style="dark" />
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -224,9 +227,11 @@ export const LoginScreen: React.FC = () => {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Top Status Badge */}
+          {/* Top Status Badge (Tappable to reconnect) */}
           <View style={styles.topUtilityBar}>
-            <View
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={initializeLoginData}
               style={[
                 styles.connectionPill,
                 serverOnline === 'ONLINE'
@@ -262,44 +267,50 @@ export const LoginScreen: React.FC = () => {
                   },
                 ]}
               >
-                {serverOnline}
+                {serverOnline === 'ONLINE'
+                  ? 'SERVER ONLINE'
+                  : serverOnline === 'OFFLINE'
+                  ? 'OFFLINE • TAP TO RETRY'
+                  : 'CONNECTING...'}
               </Text>
-            </View>
+            </TouchableOpacity>
           </View>
 
-          {/* School Header */}
+          {/* School Header with Circular SVG Logo */}
           <View style={styles.brandSection}>
-            <Image
-              source={logoSource}
-              style={styles.logoImage}
-              contentFit="contain"
-              onError={() => setLogoFailed(true)}
-            />
+            <View style={styles.circleLogoContainer}>
+              <Image
+                source={logoSource}
+                style={styles.logoImage}
+                contentFit="contain"
+                onError={() => setLogoFailed(true)}
+              />
+            </View>
             <Text style={styles.schoolNameText}>
-              {schoolInfo?.school_name || 'AttendSure'}
+              {schoolInfo?.school_name || 'Lapasan National High School'}
             </Text>
             <Text style={styles.schoolSubText}>
               {[
-                schoolInfo?.school_id ? `ID: ${schoolInfo.school_id}` : '',
-                schoolInfo?.division || 'Campus Portal',
+                schoolInfo?.school_id ? `School ID: ${schoolInfo.school_id}` : 'School ID: 55555',
+                schoolInfo?.division || 'Cagayan de Oro City',
               ]
                 .filter(Boolean)
                 .join(' • ')}
             </Text>
           </View>
 
-          {/* Login Card */}
+          {/* Form Card */}
           <View style={styles.loginCard}>
             <Text style={styles.cardHeaderTitle}>SIGN IN</Text>
 
-            {/* Username Field */}
+            {/* Username Input */}
             <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Username</Text>
+              <Text style={styles.fieldLabel}>Employee ID / Username</Text>
               <View style={styles.inputBox}>
                 <Ionicons name="person-outline" size={18} color="#64748b" style={{ marginRight: 10 }} />
                 <TextInput
                   style={styles.textInput}
-                  placeholder="Username or ID"
+                  placeholder="e.g., FACULTY or Employee ID"
                   placeholderTextColor="#94a3b8"
                   value={username}
                   onChangeText={setUsername}
@@ -313,7 +324,7 @@ export const LoginScreen: React.FC = () => {
               </View>
             </View>
 
-            {/* Password Field */}
+            {/* Password Input */}
             <View style={styles.fieldGroup}>
               <Text style={styles.fieldLabel}>Password</Text>
               <View style={styles.inputBox}>
@@ -326,7 +337,7 @@ export const LoginScreen: React.FC = () => {
                 <TextInput
                   ref={passwordInputRef}
                   style={styles.textInput}
-                  placeholder="Password"
+                  placeholder="Enter your password"
                   placeholderTextColor="#94a3b8"
                   value={password}
                   onChangeText={setPassword}
@@ -336,7 +347,10 @@ export const LoginScreen: React.FC = () => {
                   returnKeyType="go"
                   onSubmitEditing={handleLogin}
                 />
-                <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)}>
+                <TouchableOpacity
+                  onPress={() => setShowPassword((prev) => !prev)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
                   <Ionicons
                     name={showPassword ? 'eye-off-outline' : 'eye-outline'}
                     size={18}
@@ -346,7 +360,7 @@ export const LoginScreen: React.FC = () => {
               </View>
             </View>
 
-            {/* Login Action */}
+            {/* Submit Button */}
             <TouchableOpacity
               style={[styles.loginBtn, submitting && { opacity: 0.65 }]}
               onPress={handleLogin}
@@ -358,25 +372,35 @@ export const LoginScreen: React.FC = () => {
               ) : (
                 <>
                   <Ionicons name="log-in-outline" size={18} color="#ffffff" />
-                  <Text style={styles.loginBtnText}>Login</Text>
+                  <Text style={styles.loginBtnText}>Sign In</Text>
                 </>
               )}
             </TouchableOpacity>
           </View>
 
-          {/* Hardware ID Footer */}
+          {/* Security & TechBlazer Footer Card */}
           <View style={styles.hardwareCard}>
             <View style={styles.hardwareHeader}>
-              <Ionicons name="hardware-chip-outline" size={14} color="#004b87" />
-              <Text style={styles.hardwareTitle}>DEVICE ID</Text>
+              <Ionicons name="shield-checkmark-outline" size={14} color="#004b87" />
+              <Text style={styles.hardwareTitle}>DEVICE LOCK & TELEMETRY</Text>
             </View>
             <View style={styles.hardwareRow}>
               <Text style={styles.hardwareKey}>Platform:</Text>
               <Text style={styles.hardwareVal}>{devicePlatform}</Text>
             </View>
             <View style={styles.hardwareRow}>
-              <Text style={styles.hardwareKey}>UUID:</Text>
-              <Text style={styles.hardwareVal} numberOfLines={1}>{deviceUuid || 'Ready'}</Text>
+              <Text style={styles.hardwareKey}>Hardware UUID:</Text>
+              <Text style={styles.hardwareVal} numberOfLines={1}>{deviceUuid || 'Bound'}</Text>
+            </View>
+
+            <View style={styles.brandingDivider} />
+            <View style={styles.techblazerBranding}>
+              <Text style={styles.techblazerText}>System by</Text>
+              <Image
+                source={techblazerSvg}
+                style={styles.techblazerLogoSmall}
+                contentFit="contain"
+              />
             </View>
           </View>
         </ScrollView>
@@ -403,18 +427,36 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
     borderWidth: 1,
-    gap: 5,
+    gap: 6,
   },
   pillOnline: { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' },
   pillOffline: { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
   pillChecking: { backgroundColor: '#fffbeb', borderColor: '#fde68a' },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   connectionPillText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.4 },
+
   brandSection: { alignItems: 'center', marginBottom: 20 },
-  logoImage: { width: 64, height: 64, borderRadius: 14, marginBottom: 10 },
+  circleLogoContainer: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    shadowColor: '#004b87',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 4,
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  logoImage: { width: 70, height: 70 },
   schoolNameText: {
     fontSize: 18,
     fontWeight: '900',
@@ -423,6 +465,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.3,
   },
   schoolSubText: { fontSize: 11, color: '#64748b', textAlign: 'center', marginTop: 3 },
+
   loginCard: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
@@ -430,6 +473,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
     marginBottom: 14,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
   cardHeaderTitle: {
     fontSize: 11,
@@ -462,6 +510,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   loginBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '800' },
+
   hardwareCard: {
     backgroundColor: '#f1f5f9',
     borderRadius: 12,
@@ -474,6 +523,10 @@ const styles = StyleSheet.create({
   hardwareRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 },
   hardwareKey: { fontSize: 10, fontWeight: '600', color: '#64748b' },
   hardwareVal: { fontSize: 10, fontWeight: '800', color: '#334155' },
+  brandingDivider: { height: 1, backgroundColor: '#e2e8f0', marginVertical: 8 },
+  techblazerBranding: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  techblazerText: { fontSize: 9.5, color: '#94a3b8', fontWeight: '600' },
+  techblazerLogoSmall: { width: 70, height: 14 },
 });
 
 export default LoginScreen;

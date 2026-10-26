@@ -1,0 +1,194 @@
+[
+  {
+    "id": 1,
+    "name": "Main Wing",
+    "room_number": "Main Wing",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 2,
+    "name": "Rm-295",
+    "room_number": "Rm-295",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 3,
+    "name": "Rm-109",
+    "room_number": "Rm-109",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 4,
+    "name": "Rm 101",
+    "room_number": "Rm 101",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 5,
+    "name": "Rm-135",
+    "room_number": "Rm-135",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 6,
+    "name": "Rm 102",
+    "room_number": "Rm 102",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 7,
+    "name": "Rm-171",
+    "room_number": "Rm-171",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 8,
+    "name": "Main Wing",
+    "room_number": "Main Wing",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 9,
+    "name": "Rm-254",
+    "room_number": "Rm-254",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 10,
+    "name": "Rm-233",
+    "room_number": "Rm-233",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 11,
+    "name": "Main Wing",
+    "room_number": "Main Wing",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 12,
+    "name": "Rm-219",
+    "room_number": "Rm-219",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 13,
+    "name": "Rm-275",
+    "room_number": "Rm-275",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 14,
+    "name": "Rm-180",
+    "room_number": "Rm-180",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 15,
+    "name": "Main Wing",
+    "room_number": "Main Wing",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 16,
+    "name": "Main Wing",
+    "room_number": "Main Wing",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 17,
+    "name": "Rm-194",
+    "room_number": "Rm-194",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 18,
+    "name": "Rm-278",
+    "room_number": "Rm-278",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 19,
+    "name": "Rm 103",
+    "room_number": "Rm 103",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 20,
+    "name": "Main Wing",
+    "room_number": "Main Wing",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 21,
+    "name": "Rm-293",
+    "room_number": "Rm-293",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 22,
+    "name": "Rm-178",
+    "room_number": "Rm-178",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 23,
+    "name": "Rm-133",
+    "room_number": "Rm-133",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  },
+  {
+    "id": 24,
+    "name": "Main Wing",
+    "room_number": "Main Wing",
+    "building": "Main Building",
+    "capacity": 45,
+    "room_type": "LECTURE"
+  }
+]

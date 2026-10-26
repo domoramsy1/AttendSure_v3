@@ -2,18 +2,10 @@
  * AttendSure - DepEd Manual of Style (DMOS) Header & Footer
  * File: web/src/components/reports/DepEdReportHeaderFooter.tsx
  *
- * DMOS SPECIFICATIONS:
- * HEADER:
- * – Left Seal: DepEd Seal – 0.76 Inch (73px)
- * – Right Seal: Division / School Seal – 0.76 Inch (73px)
- * – Republic of the Philippines: Old English Text MT (12pt, bold)
- * – Department of Education: Old English Text MT (18pt, bold)
- * – Name of Regional Office: Tahoma (10pt, bold)
- * – Name of Office / Division: Tahoma (10pt, bold)
- *
- * FOOTER:
- * – Division Seal / School Seal – 0.76 Inch (73px)
- * – Office Details (Address, Contact, Email): Calibri (Body), 10pt
+ * EXACT LOGO PLACEMENT RULES:
+ * - Header Top Left: Kagawaran ng Edukasyon Seal (left_logo)
+ * - Header Top Right: Department of Education Logo (right_logo)
+ * - Footer Bottom Left: Official School Logo / Emblem (school_logo)
  */
 
 import React from 'react';
@@ -41,7 +33,7 @@ export interface DepEdReportHeaderProps {
   } | null;
 }
 
-// Cybersecurity: Validate that image sources use safe protocols
+// Cybersecurity: Validate that image sources use safe protocols to prevent XSS / script injection
 const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
@@ -64,16 +56,14 @@ export const DepEdReportHeader: React.FC<DepEdReportHeaderProps> = ({
 }) => {
   const { school } = useSchool();
 
-  // Left Seal: DepEd / Kagawaran Seal
-  const effectiveLeftLogo =
+  // 1. Top Left Seal: Kagawaran ng Edukasyon Seal (left_logo)
+  const effectiveTopLeftLogo =
     (isSafeImageUrl(reportData?.left_logo) && reportData?.left_logo) ||
     (isSafeImageUrl(school.left_logo) && school.left_logo) ||
     null;
 
-  // Right Seal: School Circular Crest (Prioritizes School Emblem from database)
-  const effectiveRightLogo =
-    (isSafeImageUrl(school.school_logo) && school.school_logo) ||
-    (isSafeImageUrl(reportData?.school_logo) && reportData?.school_logo) ||
+  // 2. Top Right Seal: Department of Education Seal (right_logo)
+  const effectiveTopRightLogo =
     (isSafeImageUrl(reportData?.right_logo) && reportData?.right_logo) ||
     (isSafeImageUrl(school.right_logo) && school.right_logo) ||
     null;
@@ -87,27 +77,32 @@ export const DepEdReportHeader: React.FC<DepEdReportHeaderProps> = ({
 
   return (
     <div style={headerContainerStyle}>
-      {/* DepEd Seal – 0.76 Inch */}
+      {/* Top Left: Kagawaran ng Edukasyon Seal (0.76 Inch) */}
       <div style={sealBoxStyle}>
-        {effectiveLeftLogo ? (
-          <img src={effectiveLeftLogo} alt="DepEd Seal" style={sealImgStyle} />
+        {effectiveTopLeftLogo ? (
+          <img
+            src={effectiveTopLeftLogo}
+            alt="Kagawaran ng Edukasyon Seal"
+            style={sealImgStyle}
+            loading="eager"
+          />
         ) : null}
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ textAlign: 'center', marginBottom: 4 }}>
-          {/* Republic of the Philippines – Old English Text MT (12 point size, bold) */}
+          {/* Republic of the Philippines – Old English Text MT (12pt, bold) */}
           <div style={republicStyle}>Republic of the Philippines</div>
 
-          {/* Department of Education – Old English Text MT (18 point size, bold) */}
+          {/* Department of Education – Old English Text MT (18pt, bold) */}
           <div style={depedTitleStyle}>Department of Education</div>
 
-          {/* Name of Regional Office – Tahoma (10 point size, bold) */}
+          {/* Name of Regional Office – Tahoma (10pt, bold) */}
           {effectiveRegion ? (
             <div style={regionalOfficeStyle}>{effectiveRegion.toUpperCase()}</div>
           ) : null}
 
-          {/* Name of Office – Tahoma (10 point size, bold) */}
+          {/* Name of Office / Division – Tahoma (10pt, bold) */}
           {effectiveDivision ? (
             <div style={officeStyle}>{effectiveDivision.toUpperCase()}</div>
           ) : null}
@@ -241,10 +236,15 @@ export const DepEdReportHeader: React.FC<DepEdReportHeaderProps> = ({
         )}
       </div>
 
-      {/* Division Seal / School Seal – 0.76 Inch */}
+      {/* Top Right: Department of Education Logo (0.76 Inch) */}
       <div style={sealBoxStyle}>
-        {effectiveRightLogo ? (
-          <img src={effectiveRightLogo} alt="School Seal" style={sealImgStyle} />
+        {effectiveTopRightLogo ? (
+          <img
+            src={effectiveTopRightLogo}
+            alt="DepEd Logo"
+            style={sealImgStyle}
+            loading="eager"
+          />
         ) : null}
       </div>
     </div>
@@ -271,13 +271,11 @@ export const DepEdReportFooter: React.FC<DepEdReportFooterProps> = ({
 }) => {
   const { school } = useSchool();
 
-  // Division Seal / School Seal – 0.76 Inch (Strictly pulls School Emblem)
-  const effectiveSeal =
+  // 3. Footer Bottom Left: Official School Logo / Emblem (school_logo)
+  const effectiveSchoolLogo =
     (isSafeImageUrl(sealUrl) && sealUrl) ||
-    (isSafeImageUrl(school.school_logo) && school.school_logo) ||
     (isSafeImageUrl(reportData?.school_logo) && reportData?.school_logo) ||
-    (isSafeImageUrl(school.right_logo) && school.right_logo) ||
-    (isSafeImageUrl(reportData?.right_logo) && reportData?.right_logo) ||
+    (isSafeImageUrl(school.school_logo) && school.school_logo) ||
     null;
 
   const effectiveAddress = address || school.address || '';
@@ -286,10 +284,15 @@ export const DepEdReportFooter: React.FC<DepEdReportFooterProps> = ({
 
   return (
     <div style={dmosFooterStyle}>
-      {/* Division Seal / School Seal – 0.76 Inch */}
+      {/* Footer Bottom Left: School Logo (0.76 Inch) */}
       <div style={sealBoxStyle}>
-        {effectiveSeal ? (
-          <img src={effectiveSeal} alt="School Seal" style={sealImgStyle} />
+        {effectiveSchoolLogo ? (
+          <img
+            src={effectiveSchoolLogo}
+            alt="School Logo"
+            style={sealImgStyle}
+            loading="lazy"
+          />
         ) : null}
       </div>
 

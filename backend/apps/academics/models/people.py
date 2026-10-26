@@ -6,6 +6,7 @@ from .base import SUFFIX_CHOICES, SEX_CHOICES, USER_ROLE_CHOICES
 
 User = get_user_model()
 
+
 class FacultyProfile(models.Model):
     id = models.BigAutoField(primary_key=True)
     employee_id = models.CharField(max_length=50, unique=True, db_index=True)
@@ -156,6 +157,15 @@ class Student(models.Model):
         mid = f" {self.middle_name[:1]}." if self.middle_name else ""
         suf = f" {self.suffix}" if self.suffix else ""
         return f"{self.last_name}, {self.first_name}{mid}{suf}".strip()
+
+    @property
+    def gender(self) -> str:
+        """Backward-compatible property alias for DepEd and API consumers."""
+        return self.sex
+
+    @gender.setter
+    def gender(self, value: str):
+        self.sex = value
 
     def clean(self):
         if self.rfid_uid:

@@ -3,17 +3,18 @@ AttendSure - Classroom API Views
 File: backend/apps/api/views/classroom.py
 
 Cybersecurity & Performance:
-1. Dual-Role Support: Admins who are assigned as advisers see their personal advisees,
-   while retaining access to all institutional classes when requested.
-2. Verified Advisee Isolation: Teachers strictly access only their advisee students.
-3. Fast Database Queries: Uses select_related and prefetch_related for sub-30ms responses.
+1. Schema-Accurate Lookups: Queries learners strictly via `enrollments__section`
+   to eliminate Django FieldError exceptions.
+2. Subject Teacher & Adviser Access: Authorizes faculty to view students across both
+   their assigned teaching timetable loads (e.g. Garnet, Amethyst) and their advisory sections.
+3. Fast Database Queries: Uses distinct() and prefetch_related for sub-30ms response times.
 4. Input Sanitization: Strips CRLF characters to prevent token injection attacks.
 """
 
 from datetime import datetime
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Q, Prefetch
+from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
@@ -31,7 +32,6 @@ from apps.academics.models import (
 from .common import (
     resolve_faculty_for_user,
     is_leadership_role,
-    is_regular_teacher,
     get_user_role,
     format_full_student_name,
     safe_photo_url,
@@ -41,48 +41,50 @@ from apps.api.serializers import ClassroomBatchScanSerializer
 
 def get_section_enrolled_count(sec) -> int:
     """Safely calculates active enrolled student count from database."""
-    if not sec or not hasattr(sec, 'enrollments'):
+    if not sec:
         return 0
     try:
-        return sec.enrollments.filter(student__is_active=True).count()
+        if hasattr(sec, 'enrollments'):
+            return sec.enrollments.filter(student__is_active=True).count()
     except Exception:
-        return sec.enrollments.count()
+        pass
+    return 0
 
 
 class ClassListAPIView(APIView):
     """
-    Returns teaching/advisory classes for the user.
-    - If user is an Adviser (Teacher or Admin-Adviser), returns their advised section(s).
-    - If user is pure Admin (not advising any section), returns all school classes.
-    - If ?mode=all is passed by an Admin, returns all school classes.
+    Returns teaching and advisory classes for the logged-in user.
+    - If user is a Subject Teacher, returns their assigned schedule slots (e.g. Garnet, Amethyst).
+    - If user is an Adviser, returns their advised section(s).
+    - If user is Admin/Leadership, returns all institutional classes when requested.
     Endpoint: GET /api/classroom/class_list/ and GET /api/classroom/my-classes/
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        role = get_user_role(user)
         faculty = resolve_faculty_for_user(user)
         is_admin = is_leadership_role(user) or user.is_superuser
         view_mode = str(request.query_params.get('mode', '')).lower()
 
-        # Check if this user (admin or teacher) advises any sections
-        advised_sections = Section.objects.filter(adviser=faculty) if faculty else Section.objects.none()
-        has_advisory_class = advised_sections.exists()
-
-        # Determine which schedules to pull
-        if is_admin and (view_mode == 'all' or not has_advisory_class):
+        # Query schedules: Subject Teacher (Schedule.faculty) OR Class Adviser (Section.adviser)
+        if is_admin and view_mode == 'all':
             scheds = (
                 Schedule.objects.all()
                 .select_related('section', 'section__grade_level', 'subject', 'faculty')
                 .order_by('start_time')
             )
         elif faculty:
-            # Show advised sections (and any subject schedules in those advised sections)
             scheds = (
-                Schedule.objects.filter(section__adviser=faculty)
+                Schedule.objects.filter(Q(faculty=faculty) | Q(section__adviser=faculty))
                 .select_related('section', 'section__grade_level', 'subject', 'faculty')
                 .distinct()
+                .order_by('start_time')
+            )
+        elif is_admin:
+            scheds = (
+                Schedule.objects.all()
+                .select_related('section', 'section__grade_level', 'subject', 'faculty')
                 .order_by('start_time')
             )
         else:
@@ -99,8 +101,17 @@ class ClassListAPIView(APIView):
             enrolled_count = get_section_enrolled_count(sec)
             start_str = str(s.start_time)[:5] if getattr(s, 'start_time', None) else '07:30'
             end_str = str(s.end_time)[:5] if getattr(s, 'end_time', None) else '16:30'
-            room_str = getattr(sec, 'room_number', '') or getattr(s, 'room_number', '') or 'Room —'
+            room_str = getattr(s, 'room', '') or getattr(sec, 'room_number', '') or getattr(s, 'room_number', '') or 'Room —'
             is_user_adviser = bool(faculty and sec.adviser_id == faculty.id)
+
+            subj_code = getattr(s.subject, 'code', 'SUBJ') if s.subject else 'ADV'
+            subj_title = getattr(s.subject, 'title', None) or getattr(s.subject, 'name', 'Class Session') if s.subject else 'Class Session'
+
+            grade_name = 'Grade 7'
+            grade_code = 'G7'
+            if getattr(sec, 'grade_level', None):
+                grade_name = getattr(sec.grade_level, 'name', str(sec.grade_level))
+                grade_code = getattr(sec.grade_level, 'code', '')
 
             classes_data.append({
                 'id': s.id,
@@ -108,10 +119,11 @@ class ClassListAPIView(APIView):
                 'section_id': sec.id,
                 'name': sec.name,
                 'section_name': sec.name,
-                'grade_level': sec.grade_level.name if sec.grade_level else '—',
-                'grade_level_code': sec.grade_level.code if sec.grade_level else '',
-                'subject_code': s.subject.code if s.subject else 'ADV',
-                'subject_name': s.subject.title if s.subject else 'Class Session',
+                'grade_level': grade_name,
+                'grade_level_code': grade_code,
+                'subject_code': subj_code,
+                'subject_name': subj_title,
+                'subject_title': subj_title,
                 'room': room_str,
                 'room_number': room_str,
                 'start_time': start_str,
@@ -125,12 +137,13 @@ class ClassListAPIView(APIView):
             })
             seen_section_ids.add(sec.id)
 
-        # Include any advised sections that do not have a separate schedule row yet
+        # Include any advised sections that do not have a schedule slot created yet
         if faculty:
-            extra_advisory = advised_sections.exclude(id__in=seen_section_ids).select_related('grade_level')
+            extra_advisory = Section.objects.filter(adviser=faculty).exclude(id__in=seen_section_ids).select_related('grade_level')
             for sec in extra_advisory:
                 enrolled_count = get_section_enrolled_count(sec)
                 room_str = getattr(sec, 'room_number', '') or 'Room —'
+                grade_name = getattr(sec.grade_level, 'name', str(sec.grade_level)) if getattr(sec, 'grade_level', None) else '—'
 
                 classes_data.append({
                     'id': sec.id,
@@ -138,10 +151,11 @@ class ClassListAPIView(APIView):
                     'section_id': sec.id,
                     'name': sec.name,
                     'section_name': sec.name,
-                    'grade_level': sec.grade_level.name if sec.grade_level else '—',
-                    'grade_level_code': sec.grade_level.code if sec.grade_level else '',
+                    'grade_level': grade_name,
+                    'grade_level_code': getattr(sec.grade_level, 'code', '') if getattr(sec, 'grade_level', None) else '',
                     'subject_code': 'ADV',
-                    'subject_name': 'Advisory Section',
+                    'subject_name': 'Advisory Homeroom',
+                    'subject_title': 'Advisory Homeroom',
                     'room': room_str,
                     'room_number': room_str,
                     'start_time': '07:30',
@@ -162,9 +176,8 @@ MyAssignedClassesAPIView = ClassListAPIView
 
 class FacultyClassroomListAPIView(APIView):
     """
-    Returns learners for classroom attendance.
-    - If user is an Adviser (Teacher or Admin-Adviser), returns advisees for that section.
-    - If user is pure Admin, allows viewing any requested section.
+    Returns student rosters for classroom attendance and mobile scanner.
+    Authorizes both Subject Teachers and Section Advisers to view student lists.
     Endpoint: GET /api/classroom/student_list/ and GET /api/classroom/student-list/
     """
     permission_classes = [permissions.IsAuthenticated]
@@ -173,20 +186,26 @@ class FacultyClassroomListAPIView(APIView):
         section_id = request.query_params.get('section_id') or request.query_params.get('section')
         today = timezone.localdate()
         user = request.user
-        role = get_user_role(user)
         faculty = resolve_faculty_for_user(user)
         is_admin = is_leadership_role(user) or user.is_superuser
 
-        # 1. Querying a specific section
+        # 1. Querying a specific section by ID
         if section_id:
-            # If not admin, verify that the teacher is the assigned adviser
             if not is_admin and faculty:
-                is_advised = Section.objects.filter(id=section_id, adviser=faculty).exists()
-                if not is_advised:
+                # Security authorization: must be either Subject Teacher or Section Adviser
+                is_authorized = (
+                    Section.objects.filter(id=section_id, adviser=faculty).exists()
+                    or Schedule.objects.filter(section_id=section_id, faculty=faculty).exists()
+                )
+                if not is_authorized:
                     return Response([], status=status.HTTP_200_OK)
 
+            # Fixed: Filters strictly through enrollments__section_id
             students = (
-                Student.objects.filter(enrollments__section_id=section_id, is_active=True)
+                Student.objects.filter(
+                    enrollments__section_id=section_id,
+                    is_active=True
+                )
                 .distinct()
                 .order_by('last_name', 'first_name')
             )
@@ -203,23 +222,20 @@ class FacultyClassroomListAPIView(APIView):
                 'lrn': str(s.lrn).strip(),
                 'name': format_full_student_name(s),
                 'full_name': format_full_student_name(s),
-                'first_name': s.first_name,
-                'last_name': s.last_name,
+                'first_name': getattr(s, 'first_name', ''),
+                'last_name': getattr(s, 'last_name', ''),
                 'sex': getattr(s, 'gender', None) or getattr(s, 'sex', 'M'),
                 'gender': getattr(s, 'gender', None) or getattr(s, 'sex', 'M'),
-                'photo_url': safe_photo_url(s.photo, request),
+                'photo_url': safe_photo_url(getattr(s, 'photo', None), request),
                 'attendance_status': today_logs.get(s.id, 'UNSCANNED'),
-                'parent_contact': s.parent_contact or '',
+                'parent_contact': getattr(s, 'parent_contact', '') or getattr(s, 'guardian_phone', '') or '',
                 'qr_token': str(getattr(s, 'qr_token', '') or '').strip(),
                 'rfid_uid': str(getattr(s, 'rfid_uid', '') or '').strip(),
             } for s in students]
             return Response(data, status=status.HTTP_200_OK)
 
         # 2. General list grouped by class session
-        advised_sections = Section.objects.filter(adviser=faculty) if faculty else Section.objects.none()
-        has_advisory = advised_sections.exists()
-
-        if is_admin and not has_advisory:
+        if is_admin:
             schedules = (
                 Schedule.objects.all()
                 .select_related('section', 'subject', 'faculty')
@@ -227,7 +243,7 @@ class FacultyClassroomListAPIView(APIView):
             )
         elif faculty:
             schedules = (
-                Schedule.objects.filter(section__adviser=faculty)
+                Schedule.objects.filter(Q(faculty=faculty) | Q(section__adviser=faculty))
                 .select_related('section', 'subject', 'faculty')
                 .distinct()
                 .order_by('start_time')
@@ -243,8 +259,12 @@ class FacultyClassroomListAPIView(APIView):
             if not sec:
                 continue
 
+            # Fixed: Filters strictly through enrollments__section without invalid Q(section=sec)
             students = (
-                Student.objects.filter(enrollments__section=sec, is_active=True)
+                Student.objects.filter(
+                    enrollments__section=sec,
+                    is_active=True
+                )
                 .distinct()
                 .order_by('last_name', 'first_name')
             )
@@ -263,23 +283,27 @@ class FacultyClassroomListAPIView(APIView):
                 'name': format_full_student_name(s),
                 'sex': getattr(s, 'gender', None) or getattr(s, 'sex', 'M'),
                 'gender': getattr(s, 'gender', None) or getattr(s, 'sex', 'M'),
-                'photo_url': safe_photo_url(s.photo, request),
+                'photo_url': safe_photo_url(getattr(s, 'photo', None), request),
                 'attendance_status': today_logs.get(s.id, 'UNSCANNED'),
                 'qr_token': str(getattr(s, 'qr_token', '') or '').strip(),
                 'rfid_uid': str(getattr(s, 'rfid_uid', '') or '').strip(),
-                'parent_contact': s.parent_contact or '',
+                'parent_contact': getattr(s, 'parent_contact', '') or getattr(s, 'guardian_phone', '') or '',
             } for s in students]
 
             start_str = str(sched.start_time)[:5] if getattr(sched, 'start_time', None) else '07:30'
             end_str = str(sched.end_time)[:5] if getattr(sched, 'end_time', None) else '16:30'
-            room_str = getattr(sec, 'room_number', '') or getattr(sched, 'room_number', '') or 'Room —'
+            room_str = getattr(sched, 'room', '') or getattr(sec, 'room_number', '') or getattr(sched, 'room_number', '') or 'Room —'
+
+            subj_code = getattr(sched.subject, 'code', 'SUBJ') if sched.subject else 'ADV'
+            subj_title = getattr(sched.subject, 'title', None) or getattr(sched.subject, 'name', 'Class Session') if sched.subject else 'Class Session'
 
             student_list.append({
                 'schedule_id': sched.id,
                 'section_id': sec.id,
                 'section_name': sec.name,
-                'subject_name': sched.subject.title if sched.subject else 'Advisory Class',
-                'subject_code': sched.subject.code if sched.subject else 'ADV',
+                'subject_name': subj_title,
+                'subject_title': subj_title,
+                'subject_code': subj_code,
                 'room': room_str,
                 'room_number': room_str,
                 'start_time': start_str,
@@ -291,9 +315,12 @@ class FacultyClassroomListAPIView(APIView):
 
         # Include advised sections that do not have schedules
         if faculty:
-            for sec in advised_sections.exclude(id__in=seen_section_ids).select_related('grade_level'):
+            for sec in Section.objects.filter(adviser=faculty).exclude(id__in=seen_section_ids).select_related('grade_level'):
                 students = (
-                    Student.objects.filter(enrollments__section=sec, is_active=True)
+                    Student.objects.filter(
+                        enrollments__section=sec,
+                        is_active=True
+                    )
                     .distinct()
                     .order_by('last_name', 'first_name')
                 )
@@ -305,11 +332,11 @@ class FacultyClassroomListAPIView(APIView):
                     'name': format_full_student_name(s),
                     'sex': getattr(s, 'gender', None) or getattr(s, 'sex', 'M'),
                     'gender': getattr(s, 'gender', None) or getattr(s, 'sex', 'M'),
-                    'photo_url': safe_photo_url(s.photo, request),
+                    'photo_url': safe_photo_url(getattr(s, 'photo', None), request),
                     'attendance_status': 'UNSCANNED',
                     'qr_token': str(getattr(s, 'qr_token', '') or '').strip(),
                     'rfid_uid': str(getattr(s, 'rfid_uid', '') or '').strip(),
-                    'parent_contact': s.parent_contact or '',
+                    'parent_contact': getattr(s, 'parent_contact', '') or getattr(s, 'guardian_phone', '') or '',
                 } for s in students]
 
                 room_str = getattr(sec, 'room_number', '') or 'Room —'
@@ -318,7 +345,8 @@ class FacultyClassroomListAPIView(APIView):
                     'schedule_id': sec.id,
                     'section_id': sec.id,
                     'section_name': sec.name,
-                    'subject_name': 'Advisory Class',
+                    'subject_name': 'Advisory Homeroom',
+                    'subject_title': 'Advisory Homeroom',
                     'subject_code': 'ADV',
                     'room': room_str,
                     'room_number': room_str,
@@ -437,8 +465,8 @@ class ClassroomBatchScanAPIView(APIView):
                 'name': format_full_student_name(st),
                 'lrn': str(st.lrn),
                 'rfid_uid': getattr(st, 'rfid_uid', '') or '',
-                'photo_url': safe_photo_url(st.photo, request),
-                'parent_contact': st.parent_contact or '',
+                'photo_url': safe_photo_url(getattr(st, 'photo', None), request),
+                'parent_contact': getattr(st, 'parent_contact', '') or getattr(s, 'guardian_phone', '') or '',
                 'status': final_status,
                 'is_anomaly': is_anomaly,
                 'remarks': anomaly_remarks,

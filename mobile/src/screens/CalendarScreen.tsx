@@ -83,11 +83,11 @@ export const CalendarScreen: React.FC = () => {
         }
       }
     } catch {
-      // Continue to live network fetch
+      // Live network fetch fallback
     }
   }, []);
 
-  // 2. Fast Data Fetching with AbortController
+  // 2. Stable Data Fetching Callback
   const fetchCalendarData = useCallback(async () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -103,7 +103,7 @@ export const CalendarScreen: React.FC = () => {
 
       if (!isMounted.current) return;
 
-      let nextWeekendRest = weekendRestEnabled;
+      let nextWeekendRest = true;
       let nextExceptions: CalendarException[] = [];
 
       if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
@@ -118,7 +118,6 @@ export const CalendarScreen: React.FC = () => {
 
       setExceptions(nextExceptions);
 
-      // Persist clean cache
       await AsyncStorage.setItem(
         CACHED_CALENDAR_KEY,
         JSON.stringify({
@@ -126,15 +125,15 @@ export const CalendarScreen: React.FC = () => {
           exceptions: nextExceptions,
         })
       );
-    } catch (err: any) {
-      // Ignore normal request cancellations
+    } catch {
+      // Ignore cancellations
     } finally {
       if (isMounted.current) {
         setLoading(false);
         setRefreshing(false);
       }
     }
-  }, [weekendRestEnabled]);
+  }, []);
 
   useEffect(() => {
     isMounted.current = true;
@@ -155,7 +154,7 @@ export const CalendarScreen: React.FC = () => {
     fetchCalendarData();
   }, [fetchCalendarData]);
 
-  // 3. Weekend Rest Toggle with Rollback Protection
+  // 3. Weekend Rest Toggle
   const handleToggleWeekendRest = async (value: boolean) => {
     if (!isAdmin) return;
     const previousValue = weekendRestEnabled;

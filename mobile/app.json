@@ -1,48 +1,37 @@
 {
   "expo": {
     "name": "AttendSure",
-    "slug": "attendsure-mobile",
-    "version": "3.0.9",
+    "slug": "attendsure",
+    "version": "3.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "icon": "./assets/icon.png",
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "ph.gov.deped.attendsure"
+      "supportsTablet": false,
+      "bundleIdentifier": "com.attendsure.mobile"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "ph.gov.deped.attendsure",
+      "package": "com.attendsure.mobile",
       "permissions": [
-        "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
-        "CAMERA",
-        "VIBRATE"
+        "ACCESS_FINE_LOCATION",
+        "CAMERA"
       ]
-    },
-    "web": {
-      "favicon": "./assets/favicon.png",
-      "bundler": "metro"
     },
     "plugins": [
       [
-        "expo-location",
+        "expo-splash-screen",
         {
-          "locationWhenInUsePermission": "AttendSure requires location access to verify presence inside campus boundaries for Civil Service DTR."
+          "backgroundColor": "#ffffff",
+          "image": "./assets/splash.png",
+          "imageWidth": 120,
+          "resizeMode": "contain"
         }
-      ],
-      "expo-splash-screen"
+      ]
     ]
   }
 }

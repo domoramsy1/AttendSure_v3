@@ -202,7 +202,7 @@ export const MainTabNavigator: React.FC = () => {
           </View>
         )}
 
-        {activeTab === 'class_list' && (
+        {/* {activeTab === 'class_list' && (
           <View style={styles.placeholderContainer}>
             {renderSubHeader('Class List')}
             <View style={styles.placeholderBody}>
@@ -213,7 +213,7 @@ export const MainTabNavigator: React.FC = () => {
               </Text>
             </View>
           </View>
-        )}
+        )} */}
 
         {activeTab === 'dept_monitor' && (
           <View style={styles.placeholderContainer}>

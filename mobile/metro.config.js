@@ -5,6 +5,14 @@ const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
 
+// 1. Enable static SVG asset resolution for expo-image
+const { assetExts, sourceExts } = config.resolver;
+if (!assetExts.includes('svg')) {
+  config.resolver.assetExts = [...assetExts, 'svg'];
+}
+config.resolver.sourceExts = sourceExts.filter((ext) => ext !== 'svg');
+
+// 2. Custom module resolution shims
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   // 1. Safe web resolution for expo-splash-screen
   if (platform === 'web' && moduleName === 'expo-splash-screen') {

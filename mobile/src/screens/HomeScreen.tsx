@@ -9,12 +9,12 @@ import {
   ScrollView,
   RefreshControl,
   ActivityIndicator,
-  StatusBar,
   Platform,
   Vibration,
   Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as Location from 'expo-location';
@@ -27,10 +27,6 @@ import { getUnsyncedCount } from '../services/offlineQueue';
 import { COLORS } from '../constants/theme';
 
 const fallbackLogo = require('../../assets/attendsure-logo.svg');
-
-// ============================================================================
-// HAVERSINE DISTANCE HELPER
-// ============================================================================
 
 function calculateDistanceMeters(
   lat1: number,
@@ -57,10 +53,6 @@ function formatDistance(meters: number): string {
   }
   return `${Math.round(meters)} m`;
 }
-
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
 
 interface StudentItem {
   id: number;
@@ -156,10 +148,6 @@ const getLocalTodayStr = (): string => {
   return `${y}-${m}-${d}`;
 };
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-
 export const HomeScreen: React.FC = () => {
   const { user, refreshUser } = useAuth();
 
@@ -177,11 +165,9 @@ export const HomeScreen: React.FC = () => {
   const [serverBase, setServerBase] = useState<string>('');
   const [logoFailed, setLogoFailed] = useState<boolean>(false);
 
-  // Live Automatic GPS Telemetry
   const [liveCoords, setLiveCoords] = useState<LiveGpsCoords | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Perimeter Alert State
   const [showBreachAlarm, setShowBreachAlarm] = useState<boolean>(false);
   const [alarmAcknowledged, setAlarmAcknowledged] = useState<boolean>(false);
   const lastBreachAlertTime = useRef<number>(0);
@@ -195,7 +181,7 @@ export const HomeScreen: React.FC = () => {
     `${currentUser?.first_name || ''} ${currentUser?.last_name || ''}`.trim() ||
     currentUser?.faculty_name ||
     currentUser?.username ||
-    'Faculty';
+    'Faculty User';
 
   const employeeId =
     currentUser?.employee_id ||
@@ -210,7 +196,7 @@ export const HomeScreen: React.FC = () => {
     schoolProfile?.school_name ||
     currentUser?.school_name ||
     geofenceConfig?.name ||
-    'AttendSure Campus';
+    'Lapasan National High School';
 
   const schoolSubHeader = [
     schoolProfile?.school_id ? `ID: ${schoolProfile.school_id}` : '',
@@ -219,7 +205,6 @@ export const HomeScreen: React.FC = () => {
     .filter(Boolean)
     .join(' • ');
 
-  // Safe Media URL Resolution
   const resolvePhotoUrl = useCallback((path: string | null | undefined, base: string) => {
     if (!path) return null;
     if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) {
@@ -230,9 +215,6 @@ export const HomeScreen: React.FC = () => {
     return `${cleanBase}${cleanPath}`;
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // LIVE GPS SUBSCRIPTION (Foreground Updates)
-  // ---------------------------------------------------------------------------
   useEffect(() => {
     let watcherSubscription: Location.LocationSubscription | null = null;
     let isSubscribed = true;
@@ -253,7 +235,6 @@ export const HomeScreen: React.FC = () => {
 
         if (isSubscribed) setGpsError(null);
 
-        // Quick Initial Fix
         const initial = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
@@ -268,7 +249,6 @@ export const HomeScreen: React.FC = () => {
           });
         }
 
-        // Continuous watcher
         watcherSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,
@@ -304,9 +284,6 @@ export const HomeScreen: React.FC = () => {
     };
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // HAVERSINE DISTANCE COMPUTATION
-  // ---------------------------------------------------------------------------
   const campusCenter = useMemo(() => {
     const lat = geofenceConfig?.latitude ?? schoolProfile?.latitude ?? 8.4858;
     const lng = geofenceConfig?.longitude ?? schoolProfile?.longitude ?? 124.6567;
@@ -331,9 +308,6 @@ export const HomeScreen: React.FC = () => {
     return liveDistanceMeters <= campusCenter.radius;
   }, [liveDistanceMeters, campusCenter.radius]);
 
-  // ---------------------------------------------------------------------------
-  // SCHOOL GATE STATUS
-  // ---------------------------------------------------------------------------
   const todayStr = getLocalTodayStr();
   const todayDtrRow: DtrDayRow | null =
     dtrData?.rows?.find((r) => r.date_str === todayStr) || null;
@@ -364,16 +338,11 @@ export const HomeScreen: React.FC = () => {
       : '#dcfce7'
     : '#f1f5f9';
 
-  // ---------------------------------------------------------------------------
-  // CYBERSECURITY: PERIMETER ALARM WITH GPS ACCURACY FILTER
-  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (isInsideCampusPerimeter === false && isOfficiallyOnCampus) {
-      // Accuracy Guard: Only alert if the user is truly outside beyond the accuracy margin
       const accuracyMargin = liveCoords?.accuracy || 0;
       const trueExcess = (liveDistanceMeters || 0) - campusCenter.radius;
 
-      // If accuracy error is larger than excess distance, ignore false alarm
       if (trueExcess <= accuracyMargin) {
         return;
       }
@@ -397,9 +366,6 @@ export const HomeScreen: React.FC = () => {
     Vibration.cancel();
   };
 
-  // ---------------------------------------------------------------------------
-  // FAST CACHE-FIRST INITIALIZATION
-  // ---------------------------------------------------------------------------
   const loadCachedData = useCallback(async () => {
     try {
       const [cachedSchool, cachedSections, cachedDtr, cachedGeo, activeBase] = await Promise.all([
@@ -420,9 +386,22 @@ export const HomeScreen: React.FC = () => {
     }
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // REMOTE DATA FETCHING WITH ABORT CONTROLLER
-  // ---------------------------------------------------------------------------
+  // Normalization logic: maps Garnet & Amethyst fields accurately from backend timetable
+  const normalizeClasses = (rawList: any[]): SectionItem[] => {
+    return rawList.map((item: any, idx: number) => ({
+      schedule_id: item.schedule_id || item.id || idx + 1,
+      section_id: item.section_id || item.section?.id || item.id || 0,
+      section_name: item.section_name || item.section?.name || item.name || 'Class Section',
+      subject_name: item.subject_name || item.subject?.name || item.subject_title || 'Subject',
+      subject_code: item.subject_code || item.subject?.code || 'SUBJ',
+      room: item.room || item.room_number || item.room?.name || 'Rm-293',
+      start_time: typeof item.start_time === 'string' ? item.start_time : '07:00',
+      end_time: typeof item.end_time === 'string' ? item.end_time : '09:00',
+      total_students: Array.isArray(item.students) ? item.students.length : Number(item.total_students) || 0,
+      students: Array.isArray(item.students) ? item.students : [],
+    }));
+  };
+
   const loadAllDynamicData = useCallback(async () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -433,6 +412,7 @@ export const HomeScreen: React.FC = () => {
     const todayDate = getLocalTodayStr();
     const now = new Date();
 
+    // Query classroom/class_list/ first (the verified working endpoint from ReportsScreen)
     const [
       classListRes,
       schoolRes,
@@ -440,39 +420,45 @@ export const HomeScreen: React.FC = () => {
       geofenceRes,
       calendarRes,
     ] = await Promise.allSettled([
-      apiClient.get('/classroom/student_list/', { signal: controller.signal }),
-      apiClient.get('/settings/school/', { signal: controller.signal }),
-      apiClient.get(`/dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal }),
-      apiClient.get('/geofence/', { signal: controller.signal }),
-      apiClient.get('/calendar/exceptions/', { signal: controller.signal }),
+      apiClient.get('classroom/class_list/', { signal: controller.signal })
+        .catch(() => apiClient.get('classroom/student_list/', { signal: controller.signal }))
+        .catch(() => apiClient.get('sections/', { signal: controller.signal })),
+      apiClient.get('settings/school/', { signal: controller.signal }),
+      apiClient.get(`dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal }),
+      apiClient.get('geofence/', { signal: controller.signal }),
+      apiClient.get('calendar/exceptions/', { signal: controller.signal }),
     ]);
 
     if (!isMounted.current) return;
 
-    if (classListRes.status === 'fulfilled' && classListRes.value.data) {
-      const classData = Array.isArray(classListRes.value.data)
-        ? classListRes.value.data
-        : classListRes.value.data.results || [];
-      setSections(classData);
-      AsyncStorage.setItem('attendsure_cached_sections', JSON.stringify(classData)).catch(() => {});
+    if (classListRes.status === 'fulfilled' && classListRes.value?.data) {
+      const rawPayload = classListRes.value.data;
+      const rawList = Array.isArray(rawPayload)
+        ? rawPayload
+        : Array.isArray(rawPayload?.results)
+        ? rawPayload.results
+        : [];
+      const normalized = normalizeClasses(rawList);
+      setSections(normalized);
+      AsyncStorage.setItem('attendsure_cached_sections', JSON.stringify(normalized)).catch(() => {});
     }
 
-    if (schoolRes.status === 'fulfilled' && schoolRes.value.data) {
+    if (schoolRes.status === 'fulfilled' && schoolRes.value?.data) {
       setSchoolProfile(schoolRes.value.data);
       AsyncStorage.setItem('attendsure_cached_school', JSON.stringify(schoolRes.value.data)).catch(() => {});
     }
 
-    if (dtrRes.status === 'fulfilled' && dtrRes.value.data) {
+    if (dtrRes.status === 'fulfilled' && dtrRes.value?.data) {
       setDtrData(dtrRes.value.data);
       AsyncStorage.setItem('attendsure_cached_dtr', JSON.stringify(dtrRes.value.data)).catch(() => {});
     }
 
-    if (geofenceRes.status === 'fulfilled' && geofenceRes.value.data) {
+    if (geofenceRes.status === 'fulfilled' && geofenceRes.value?.data) {
       setGeofenceConfig(geofenceRes.value.data);
       AsyncStorage.setItem('attendsure_cached_geofence', JSON.stringify(geofenceRes.value.data)).catch(() => {});
     }
 
-    if (calendarRes.status === 'fulfilled' && calendarRes.value.data) {
+    if (calendarRes.status === 'fulfilled' && calendarRes.value?.data) {
       const calPayload = calendarRes.value.data;
       const list: CalendarOverrideItem[] = Array.isArray(calPayload)
         ? calPayload
@@ -523,10 +509,8 @@ export const HomeScreen: React.FC = () => {
     };
   }, [loadCachedData, loadAllDynamicData, checkOfflineStorage, refreshUser]);
 
-  // ---------------------------------------------------------------------------
-  // ATTENDANCE STATS AGGREGATION
-  // ---------------------------------------------------------------------------
-  const totalClasses = sections.length;
+  const safeSections = Array.isArray(sections) ? sections : [];
+  const totalClasses = safeSections.length;
 
   let totalStudentsEnrolled = 0;
   let totalPresent = 0;
@@ -541,13 +525,13 @@ export const HomeScreen: React.FC = () => {
   let totalMalePresent = 0;
   let totalFemalePresent = 0;
 
-  sections.forEach((sec) => {
-    const students = sec.students || [];
+  safeSections.forEach((sec) => {
+    const students = Array.isArray(sec?.students) ? sec.students : [];
     totalStudentsEnrolled += students.length;
 
     students.forEach((st) => {
-      const status = String(st.attendance_status || 'UNSCANNED').toUpperCase();
-      const gender = String(st.gender || '').trim().toUpperCase();
+      const status = String(st?.attendance_status || 'UNSCANNED').toUpperCase();
+      const gender = String(st?.gender || '').trim().toUpperCase();
       const isMale = gender.startsWith('M');
       const isFemale = gender.startsWith('F');
 
@@ -583,14 +567,13 @@ export const HomeScreen: React.FC = () => {
 
   const isWeekendToday = [0, 6].includes(new Date().getDay());
 
-  // Resolved Logo
   const rawLogoPath = schoolProfile?.school_logo || schoolProfile?.left_logo;
   const resolvedLogoUri = resolvePhotoUrl(rawLogoPath, serverBase);
   const logoSource = (resolvedLogoUri && !logoFailed) ? { uri: resolvedLogoUri } : fallbackLogo;
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <StatusBar style="dark" />
 
       {/* Emergency Perimeter Alert Modal */}
       <Modal
@@ -983,23 +966,7 @@ export const HomeScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* Gate Anomalies Warning */}
-        {totalAnomalies > 0 && (
-          <View style={styles.anomalyBanner}>
-            <Ionicons name="warning" size={16} color="#9333ea" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.anomalyBannerTitle}>
-                Gate Discrepancy ({totalAnomalies})
-              </Text>
-              <Text style={styles.anomalyBannerSub}>
-                {totalCutting > 0 ? `${totalCutting} Left early • ` : ''}
-                {totalUnverified > 0 ? `${totalUnverified} Entered unverified` : ''}
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* 6. Scheduled Classes */}
+        {/* 6. Scheduled Classes (Garnet & Amethyst rendered here) */}
         <View style={styles.sectionHeadingRow}>
           <Text style={styles.sectionHeadingTitle}>Class Sessions</Text>
           <Text style={styles.classCountText}>{sections.length} Scheduled</Text>
@@ -1019,8 +986,8 @@ export const HomeScreen: React.FC = () => {
             </Text>
           </View>
         ) : (
-          sections.map((sec) => {
-            const students = sec.students || [];
+          safeSections.map((sec) => {
+            const students = Array.isArray(sec?.students) ? sec.students : [];
             const classPresent = students.filter((s) => s.attendance_status === 'PRESENT').length;
             const classLate = students.filter((s) =>
               ['LATE', 'TARDY'].includes(String(s.attendance_status).toUpperCase())

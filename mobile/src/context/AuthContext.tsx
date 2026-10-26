@@ -139,7 +139,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     restoreSession();
   }, [refreshUser]);
 
-  const login = async (username: string, password: string): Promise<void> => {
+const login = async (username: string, password: string): Promise<void> => {
     const cleanUsername = username.trim();
     const cleanPassword = password.trim();
 
@@ -165,7 +165,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setToken(receivedToken);
     setUser(receivedUser);
 
-    await refreshUser();
+    // Refresh profile in background without blocking successful login
+    refreshUser().catch(() => {});
   };
 
   const logout = async (): Promise<void> => {

@@ -2,10 +2,10 @@
  * AttendSure - Official Reports Navigation & Export Action Bar
  * File: web/src/components/reports/ReportNavBar.tsx
  *
- * Cybersecurity & Performance:
- * 1. RBAC Restriction: Hides SF4 form tabs for non-admin/non-principal accounts.
- * 2. Strict Terminology: Uses FACULTY strictly without legacy teacher aliases.
- * 3. Fluid Responsive Grid: Responsive flex-wrapped controls with Escape-key dismissible export menu.
+ * Cybersecurity & Stability:
+ * 1. Safe String Normalizer: Converts object, numeric, or undefined grade levels into strings before sorting.
+ * 2. Unbreakable Sorting: Fixes "a.localeCompare is not a function" by coercing sort inputs to strings.
+ * 3. RBAC Restriction: Hides SF4 form tabs for non-admin/non-principal accounts.
  */
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
@@ -37,7 +37,7 @@ export interface ReportTabItem {
 export interface SectionOption {
   id: number | string;
   name: string;
-  grade_level?: string;
+  grade_level?: any;
   academic_year?: string;
   adviser_name?: string;
   display_label?: string;
@@ -116,6 +116,17 @@ const getCurrentMonthName = (): string => {
   }
 };
 
+const extractGradeLevelName = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'number') return `Grade ${val}`;
+  if (typeof val === 'object') {
+    const name = val.name || val.level || val.grade_name || val.grade || val.id;
+    return name !== undefined && name !== null ? String(name).trim() : '';
+  }
+  return String(val).trim();
+};
+
 export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   reports = DEFAULT_REPORTS,
   activeReportId,
@@ -163,7 +174,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   const userRole = (localStorage.getItem('attendsure_role') || '').toUpperCase();
   const isAdminOrPrincipal = userRole === 'ADMIN' || userRole === 'PRINCIPAL';
 
-  // Filter out SF4 for non-admin/non-principal users
   const filteredReports = useMemo(() => {
     return reports.filter((rep) => {
       if (rep.id === 'sf4' && !isAdminOrPrincipal) return false;
@@ -199,16 +209,30 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
       return sections;
     }
     return sections.filter((sec) => {
-      const g = (sec.grade_level || '').toLowerCase().trim();
+      const g = extractGradeLevelName(sec.grade_level).toLowerCase();
       const target = selectedGradeLevel.toLowerCase().trim();
       return g === target || g.includes(target);
     });
   }, [sections, selectedGradeLevel]);
 
+  // Safe string array comparison prevents "a.localeCompare is not a function"
   const availableGradeLevels = useMemo(() => {
-    if (gradeLevels.length > 0) return gradeLevels;
-    const extracted = Array.from(new Set(sections.map((s) => s.grade_level).filter(Boolean))) as string[];
-    return extracted.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    if (gradeLevels && gradeLevels.length > 0) {
+      return gradeLevels
+        .map(extractGradeLevelName)
+        .filter(Boolean)
+        .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
+    }
+    const extracted = Array.from(
+      new Set(
+        sections
+          .map((s) => extractGradeLevelName(s?.grade_level))
+          .filter(Boolean)
+      )
+    );
+    return extracted.sort((a, b) =>
+      String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
+    );
   }, [gradeLevels, sections]);
 
   const handleExportAction = (action?: () => void | Promise<void>) => {
@@ -290,11 +314,14 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 {filteredSections.length === 0 ? (
                   <option value="" disabled>No sections available</option>
                 ) : (
-                  filteredSections.map((sec) => (
-                    <option key={sec.id} value={String(sec.id)}>
-                      {sec.display_label || `${sec.grade_level ? `${sec.grade_level} - ` : ''}${sec.name}${sec.adviser_name ? ` (${sec.adviser_name})` : ''}`}
-                    </option>
-                  ))
+                  filteredSections.map((sec) => {
+                    const gradeStr = extractGradeLevelName(sec.grade_level);
+                    return (
+                      <option key={sec.id} value={String(sec.id)}>
+                        {sec.display_label || `${gradeStr ? `${gradeStr} - ` : ''}${sec.name}${sec.adviser_name ? ` (${sec.adviser_name})` : ''}`}
+                      </option>
+                    );
+                  })
                 )}
               </select>
             </div>

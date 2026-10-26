@@ -6,19 +6,17 @@
 import axios, { type InternalAxiosRequestConfig, AxiosError } from 'axios';
 import rootEndpoints from '../../../endpoints.json';
 
-// Determine the backend base URL directly without probing dead IP addresses
 const resolveBaseUrl = (): string => {
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location;
 
-    // 1. If accessing via local domain or localhost on dev port 5173, backend is on port 8000
+    // Local development on Vite port 5173
     if (port === '5173' || hostname === 'localhost' || hostname === '127.0.0.1') {
       return `${protocol}//${hostname}:8000`;
     }
 
-    // 2. If accessing via Cloudflare tunnel or school domain directly
+    // Cloudflare Tunnel or Custom Domain
     if (hostname.includes('trycloudflare.com') || hostname.includes('attendsure.com.ph')) {
-      // If no custom port, use same origin
       if (!port || port === '80' || port === '443') {
         return `${protocol}//${hostname}`;
       }
@@ -26,9 +24,9 @@ const resolveBaseUrl = (): string => {
     }
   }
 
-  // 3. Fallback to active tunnel URL if available
+  // Fallback to active Cloudflare tunnel
   if (rootEndpoints.active_tunnel_url) {
-    return rootEndpoints.active_tunnel_url.trim().replace(/\/+$/, '');
+    return rootEndpoints.active_tunnel_url.trim().replace(/\/+$/, '').replace(/\/api$/i, '');
   }
 
   return 'http://127.0.0.1:8000';
@@ -41,7 +39,6 @@ const apiClient = axios.create({
   },
 });
 
-// Request Interceptor: Attach dynamic base URL and authentication tokens safely
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     config.baseURL = resolveBaseUrl();
@@ -56,7 +53,7 @@ apiClient.interceptors.request.use(
       config.url = `/api/${cleaned}`;
     }
 
-    // Attach token with CRLF injection prevention
+    // Attach token with CRLF injection guard
     const rawToken =
       localStorage.getItem('attendsure_token') ||
       localStorage.getItem('auth_token') ||
@@ -72,7 +69,6 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response Interceptor: Wipe stale tokens on 401 Unauthorized
 apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {

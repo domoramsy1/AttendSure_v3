@@ -1,5 +1,5 @@
 import math
-from django.db import models
+from django.db import models, transaction
 from django.contrib.auth.hashers import make_password, check_password
 
 
@@ -19,10 +19,13 @@ class AcademicYear(models.Model):
         return self.code
 
     def save(self, *args, **kwargs):
-        if self.is_active:
-            AcademicYear.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
-        super().save(*args, **kwargs)
-
+        with transaction.atomic():
+            if self.is_active:
+                qs = AcademicYear.objects.filter(is_active=True)
+                if self.pk:
+                    qs = qs.exclude(pk=self.pk)
+                qs.update(is_active=False)
+            super().save(*args, **kwargs)
 
 
 class SchoolProfile(models.Model):
@@ -91,7 +94,7 @@ class SchoolProfile(models.Model):
         except (TypeError, ValueError):
             return float('inf')
 
-        r = 6371000  # Earth's radius in meters
+        r = 6371000.0  # Earth's radius in meters
         phi1 = math.radians(c_lat)
         phi2 = math.radians(u_lat)
         delta_phi = math.radians(u_lat - c_lat)
@@ -104,6 +107,7 @@ class SchoolProfile(models.Model):
 
     def __str__(self):
         return f"{self.school_name} ({self.school_id})"
+
 
 class ClassSchedule(models.Model):
     id = models.BigAutoField(primary_key=True)

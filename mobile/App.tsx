@@ -1,59 +1,44 @@
 // D:\AttendSure_V3\mobile\App.tsx
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
-import * as SplashScreen from 'expo-splash-screen';
+import * as NativeSplashScreen from 'expo-splash-screen';
+
 import { AuthProvider } from './src/context/AuthContext';
 import AppNavigator from './src/navigation/AppNavigator';
+import { SplashScreen } from './src/components/SplashScreen';
+import { resolveFastestServer } from './src/services/configService';
 
-// Only invoke native splash screen control on mobile devices (Android / iOS)
+// Hold native splash screen so the app doesn't flash white before JS runs
 if (Platform.OS !== 'web') {
-  try {
-    SplashScreen.preventAutoHideAsync().catch(() => {});
-  } catch {
-    // Suppress native module initialization errors
-  }
+  NativeSplashScreen.preventAutoHideAsync().catch(() => {});
 }
 
 export default function App() {
-  const [appIsReady, setAppIsReady] = useState(false);
+  const [showSplash, setShowSplash] = useState<boolean>(true);
 
   useEffect(() => {
-    async function prepare() {
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 350));
-      } catch (e) {
-        console.warn('App preparation warning:', e);
-      } finally {
-        setAppIsReady(true);
-      }
-    }
-    prepare();
+    // Faster Data Fetching: Pre-warm backend connection while radar animation plays
+    resolveFastestServer().catch(() => {});
   }, []);
 
-  const onLayoutRootView = useCallback(async () => {
-    if (appIsReady && Platform.OS !== 'web') {
-      try {
-        await SplashScreen.hideAsync();
-      } catch {
-        // Safe fallback if splash screen was already hidden or unavailable
-      }
-    }
-  }, [appIsReady]);
-
-  if (!appIsReady) {
-    return null;
-  }
+  const handleSplashFinish = () => {
+    setShowSplash(false);
+  };
 
   return (
     <SafeAreaProvider>
-      <View style={styles.container} onLayout={onLayoutRootView}>
+      <View style={styles.container}>
         <AuthProvider>
-          <NavigationContainer>
-            <AppNavigator />
-          </NavigationContainer>
+          {showSplash ? (
+            <SplashScreen onFinish={handleSplashFinish} />
+          ) : (
+            <NavigationContainer>
+              <AppNavigator />
+            </NavigationContainer>
+          )}
         </AuthProvider>
       </View>
     </SafeAreaProvider>

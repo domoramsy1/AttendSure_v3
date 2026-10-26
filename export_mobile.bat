@@ -8,8 +8,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$out = '%OUTPUT_FILE%';" ^
     "$dirs = @('node_modules', '.expo', '.git', 'android', 'ios', 'dist', 'build', '.vscode', 'coverage');" ^
     "$exts = @('*.ts', '*.tsx', '*.js', '*.jsx', '*.json', '*.env*', '*.config.*');" ^
+    "$skipFiles = @('package-lock.json', 'yarn.lock', 'pnpm-lock.yaml');" ^
     "if (Test-Path $out) { Remove-Item $out -Force };" ^
-    "$files = Get-ChildItem -Path $source -Recurse -File -Include $exts | Where-Object { $p = $_.FullName; $skip = $false; foreach ($d in $dirs) { if ($p -match '[\\/]' + [regex]::Escape($d) + '[\\/]') { $skip = $true; break } }; -not $skip };" ^
+    "$files = Get-ChildItem -Path $source -Recurse -File -Include $exts | Where-Object {" ^
+    "    if ($skipFiles -contains $_.Name) { return $false };" ^
+    "    $p = $_.FullName;" ^
+    "    foreach ($d in $dirs) { if ($p -match '[\\/]' + [regex]::Escape($d) + '[\\/]') { return $false } };" ^
+    "    return $true;" ^
+    "};" ^
     "$count = 0;" ^
     "foreach ($f in $files) {" ^
     "    $header = [Environment]::NewLine + ('=' * 80) + [Environment]::NewLine + 'FILE: ' + $f.FullName.Replace($source, 'mobile') + [Environment]::NewLine + ('=' * 80) + [Environment]::NewLine;" ^

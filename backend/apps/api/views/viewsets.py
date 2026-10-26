@@ -1,11 +1,13 @@
 """
-AttendSure - Core API ViewSets with Class Adviser & Subject Teacher Integration
+AttendSure - Core API ViewSets (Full CRUD for Sections, Schedules, Students, Faculty, Rooms, GradeLevels)
 File: backend/apps/api/views/viewsets.py
 """
 
 import base64
 import uuid
 import re
+import json
+from pathlib import Path
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.base import ContentFile
@@ -23,15 +25,17 @@ from apps.academics.models import (
     IoTKiosk,
     GatePass,
     Schedule,
+    ScheduleDay,
     Subject,
     GradeLevel,
     SmsOutbox,
     Section,
     Enrollment,
+    AcademicYear,
+    FacultyGateLog,
 )
 from apps.api.serializers import (
     StudentSerializer,
-    FacultyProfileSerializer,
     FacultyDropdownSerializer,
     IoTKioskSerializer,
     GatePassSerializer,
@@ -53,11 +57,106 @@ from .common import (
 )
 
 User = get_user_model()
+ROOM_STORE_PATH = Path(__file__).resolve().parent.parent.parent / 'rooms_store.json'
 
 
 # ============================================================================
-# SECTION SERIALIZER (WITH ADVISER & SUBJECT TEACHERS BREAKDOWN)
+# SERIALIZERS
 # ============================================================================
+
+class GradeLevelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GradeLevel
+        fields = '__all__'
+
+
+class FacultyProfileSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(read_only=True)
+    presence_status = serializers.SerializerMethodField()
+    distance_display = serializers.SerializerMethodField()
+    accuracy_display = serializers.SerializerMethodField()
+    battery_display = serializers.SerializerMethodField()
+    last_signal_display = serializers.SerializerMethodField()
+    gate_scanner_status = serializers.SerializerMethodField()
+    registered_device = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FacultyProfile
+        fields = [
+            'id', 'employee_id', 'first_name', 'last_name', 'middle_name', 'suffix',
+            'full_name', 'department', 'position', 'contact_number', 'email', 'photo',
+            'can_teach', 'is_active', 'bound_device_id', 'device_model', 'device_bound_at',
+            'presence_status', 'distance_display', 'accuracy_display', 'battery_display',
+            'last_signal_display', 'gate_scanner_status', 'registered_device',
+        ]
+
+    def _get_telemetry(self, obj):
+        telemetry = cache.get(f"attendsure_faculty_telemetry_{obj.id}")
+        if not telemetry:
+            store_path = Path(__file__).resolve().parent.parent.parent / 'telemetry_store.json'
+            if store_path.exists():
+                try:
+                    with open(store_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        telemetry = data.get(str(obj.id))
+                except Exception:
+                    pass
+        return telemetry
+
+    def get_presence_status(self, obj):
+        telemetry = self._get_telemetry(obj)
+        if telemetry and telemetry.get('presence_status'):
+            return telemetry['presence_status']
+        return "OFF CAMPUS"
+
+    def get_distance_display(self, obj):
+        telemetry = self._get_telemetry(obj)
+        if telemetry:
+            dist = telemetry.get('distance_display', '')
+            acc = telemetry.get('accuracy', '')
+            if dist:
+                return f"{dist} / ±{int(acc)}m" if acc else dist
+        return "No GPS Signal"
+
+    def get_accuracy_display(self, obj):
+        telemetry = self._get_telemetry(obj)
+        if telemetry and telemetry.get('accuracy'):
+            return f"±{int(telemetry['accuracy'])}m"
+        return "—"
+
+    def get_battery_display(self, obj):
+        telemetry = self._get_telemetry(obj)
+        if telemetry and telemetry.get('battery_level') is not None:
+            return f"{telemetry['battery_level']}%"
+        return "—"
+
+    def get_last_signal_display(self, obj):
+        telemetry = self._get_telemetry(obj)
+        if telemetry and telemetry.get('timestamp'):
+            return "Just now"
+        return "Offline"
+
+    def get_gate_scanner_status(self, obj):
+        try:
+            latest_log = FacultyGateLog.objects.filter(faculty=obj).order_by('-scan_time').first()
+            if latest_log:
+                direction = getattr(latest_log, 'direction', 'SCAN')
+                scan_time = getattr(latest_log, 'scan_time', None)
+                time_str = scan_time.strftime('%I:%M %p') if scan_time else ''
+                return f"{direction} at {time_str}" if time_str else direction
+        except Exception:
+            pass
+        return "No Gate Scan"
+
+    def get_registered_device(self, obj):
+        model = getattr(obj, 'device_model', None)
+        bound_id = getattr(obj, 'bound_device_id', None)
+        if model:
+            return model
+        if bound_id:
+            return bound_id[:16]
+        return "No device paired"
+
 
 class SectionSerializer(serializers.ModelSerializer):
     grade_level_name = serializers.CharField(source='grade_level.name', read_only=True)
@@ -65,16 +164,29 @@ class SectionSerializer(serializers.ModelSerializer):
     adviser_name = serializers.CharField(source='adviser.full_name', read_only=True)
     adviser_employee_id = serializers.CharField(source='adviser.employee_id', read_only=True)
     adviser_photo_url = serializers.SerializerMethodField()
+    code = serializers.SerializerMethodField()
+    room_name = serializers.CharField(source='room_number', required=False, allow_blank=True)
     subject_teachers = serializers.SerializerMethodField()
     subject_teachers_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Section
         fields = [
-            'id', 'name', 'code', 'grade_level', 'grade_level_name', 'grade_level_code',
-            'adviser', 'adviser_name', 'adviser_employee_id', 'adviser_photo_url',
-            'room_name', 'room_number', 'subject_teachers', 'subject_teachers_count',
+            'id', 'name', 'code', 'grade_level', 'grade_level_id', 'grade_level_name', 'grade_level_code',
+            'adviser', 'adviser_id', 'adviser_name', 'adviser_employee_id', 'adviser_photo_url',
+            'room_name', 'room_number', 'capacity', 'subject_teachers', 'subject_teachers_count',
         ]
+        extra_kwargs = {
+            'academic_year': {'required': False, 'allow_null': True},
+            'grade_level': {'required': False},
+            'room_number': {'required': False, 'allow_blank': True},
+            'capacity': {'required': False},
+        }
+
+    def get_code(self, obj):
+        gl_code = obj.grade_level.code if getattr(obj, 'grade_level', None) else 'GEN'
+        clean_name = re.sub(r'[^A-Za-z0-9]+', '', str(obj.name or '').upper())
+        return f"SEC-{gl_code}-{clean_name}"
 
     def get_adviser_photo_url(self, obj):
         request = self.context.get('request')
@@ -202,157 +314,313 @@ def do_time_ranges_overlap(start_a, end_a, start_b, end_b) -> bool:
 
 
 # ============================================================================
-# 1. STUDENT VIEWSET (ROLE-ISOLATED)
+# 1. SECTION VIEWSET (FULL CRUD)
 # ============================================================================
 
-class StudentViewSet(viewsets.ModelViewSet):
-    serializer_class = StudentSerializer
-    pagination_class = StandardResultsSetPagination
+class SectionViewSet(viewsets.ModelViewSet):
+    serializer_class = SectionSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['lrn', 'first_name', 'last_name', 'rfid_uid', 'qr_token']
+    search_fields = ['name', 'room_number', 'adviser__first_name', 'adviser__last_name']
 
     def get_queryset(self):
         user = self.request.user
         role = get_user_role(user)
-        faculty = resolve_faculty_for_user(user)
-        is_admin = user.is_superuser or role in ('ADMIN', 'PRINCIPAL')
-        my_advisees_only = str(self.request.query_params.get('my_advisees_only', '')).lower() in ('true', '1')
+        advisory_only = str(self.request.query_params.get('advisory_only', '')).lower() in ('true', '1')
 
         qs = (
-            Student.objects.filter(is_active=True)
+            Section.objects.select_related('grade_level', 'adviser', 'academic_year')
             .prefetch_related(
                 Prefetch(
-                    'enrollments',
-                    queryset=Enrollment.objects.select_related('section', 'section__grade_level', 'academic_year')
+                    'schedules',
+                    queryset=Schedule.objects.select_related('subject', 'faculty').order_by('start_time'),
+                    to_attr='prefetched_schedules'
                 )
             )
-            .order_by('last_name', 'first_name')
+            .order_by('grade_level__level_order', 'name')
         )
 
-        if not is_admin or my_advisees_only:
+        if (is_regular_teacher(role) and not user.is_superuser) or advisory_only:
+            faculty = resolve_faculty_for_user(user)
             if faculty:
-                allowed_student_ids = get_teacher_student_ids(faculty)
-                qs = qs.filter(id__in=allowed_student_ids)
+                return qs.filter(Q(adviser=faculty) | Q(schedules__faculty=faculty)).distinct()
+            return Section.objects.none()
+
+        return qs
+
+    def perform_create(self, serializer):
+        role = get_user_role(self.request.user)
+        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'DEPT_HEAD')):
+            raise PermissionDenied("Only administrators can create class sections.")
+
+        ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.first()
+        serializer.save(academic_year=ay)
+
+    def perform_update(self, serializer):
+        role = get_user_role(self.request.user)
+        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'DEPT_HEAD')):
+            raise PermissionDenied("Only administrators can update class sections.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        role = get_user_role(self.request.user)
+        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
+            raise PermissionDenied("Only administrators can delete class sections.")
+        instance.delete()
+
+
+# ============================================================================
+# 2. SCHEDULE VIEWSET (FULL CRUD)
+# ============================================================================
+
+class ScheduleViewSet(viewsets.ModelViewSet):
+    serializer_class = ScheduleSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = Schedule.objects.select_related('section', 'subject', 'faculty').order_by('start_time')
+        if hasattr(Schedule, 'days'):
+            qs = qs.prefetch_related('days')
+
+        user = self.request.user
+        role = get_user_role(user)
+
+        if is_regular_teacher(role) and not user.is_superuser:
+            faculty = resolve_faculty_for_user(user)
+            if faculty:
+                advised_sec_ids = get_teacher_section_ids(faculty)
+                qs = qs.filter(Q(faculty=faculty) | Q(section_id__in=advised_sec_ids))
             else:
-                return Student.objects.none()
+                return Schedule.objects.none()
 
-        params = self.request.query_params
+        return qs
 
-        sec_id = params.get('section_id') or params.get('section')
-        if sec_id:
-            clean_sec = str(sec_id).strip().lower()
-            if clean_sec in ('unassigned', 'none', 'null', '0'):
-                qs = qs.exclude(enrollments__status='ENROLLED', enrollments__section__isnull=False)
-            elif clean_sec.isdigit():
-                qs = qs.filter(enrollments__section_id=int(clean_sec), enrollments__status='ENROLLED')
+    def _find_conflicts(self, section_id, faculty_id, room_id, room_number, days_of_week, start_time, end_time, exclude_id=None):
+        conflicts = []
+        if not start_time or not end_time or not days_of_week:
+            return conflicts
 
-        grade_id = params.get('grade_level_id') or params.get('grade_level')
-        if grade_id and str(grade_id).isdigit():
-            qs = qs.filter(enrollments__section__grade_level_id=int(grade_id), enrollments__status='ENROLLED')
+        if str(start_time)[:5] >= str(end_time)[:5]:
+            conflicts.append("Start time must be earlier than end time.")
+            return conflicts
 
-        sex_filter = params.get('sex')
-        if sex_filter:
-            clean_sex = str(sex_filter).strip().capitalize()
-            if clean_sex in ('Male', 'Female'):
-                qs = qs.filter(sex=clean_sex)
+        qs = Schedule.objects.select_related('section', 'subject', 'faculty')
+        if hasattr(Schedule, 'days'):
+            qs = qs.prefetch_related('days')
 
-        rfid_status = params.get('rfid_status')
-        if rfid_status:
-            clean_rfid = str(rfid_status).strip().upper()
-            if clean_rfid in ('PAIRED', 'WITH_RFID', 'LINKED'):
-                qs = qs.exclude(Q(rfid_uid__isnull=True) | Q(rfid_uid=''))
-            elif clean_rfid in ('UNPAIRED', 'NEEDS_RFID', 'UNLINKED'):
-                qs = qs.filter(Q(rfid_uid__isnull=True) | Q(rfid_uid=''))
+        if exclude_id:
+            qs = qs.exclude(id=exclude_id)
 
-        search_term = params.get('search')
-        if search_term:
-            term = str(search_term).strip()
-            qs = qs.filter(
-                Q(lrn__icontains=term) |
-                Q(first_name__icontains=term) |
-                Q(last_name__icontains=term) |
-                Q(rfid_uid__icontains=term) |
-                Q(qr_token__icontains=term) |
-                Q(enrollments__section__name__icontains=term)
-            )
+        for sched in list(qs):
+            if not getattr(sched, 'start_time', None) or not getattr(sched, 'end_time', None):
+                continue
 
-        return qs.distinct()
+            sched_days = get_schedule_days_string(sched)
+            if not do_day_patterns_overlap(days_of_week, sched_days):
+                continue
+
+            if not do_time_ranges_overlap(start_time, end_time, sched.start_time, sched.end_time):
+                continue
+
+            time_range = f"{str(sched.start_time)[:5]} - {str(sched.end_time)[:5]}"
+            sched_sub = getattr(sched.subject, 'title', getattr(sched.subject, 'code', 'Subject')) if sched.subject else 'Subject'
+            sched_sec = getattr(sched.section, 'name', 'Section') if sched.section else 'Section'
+
+            if faculty_id and sched.faculty_id == int(faculty_id):
+                fac_name = getattr(sched.faculty, 'full_name', 'Teacher')
+                conflicts.append(f"Subject Teacher Conflict: {fac_name} is already assigned to {sched_sub} in Section {sched_sec} ({time_range} on {sched_days}).")
+
+            if section_id and sched.section_id == int(section_id):
+                conflicts.append(f"Section Conflict: Section {sched_sec} already has {sched_sub} scheduled at this time ({time_range} on {sched_days}).")
+
+            matched_room = False
+            sched_room_id = getattr(sched, 'room_id', None)
+            sched_room_num = getattr(sched, 'room_number', None) or getattr(sched, 'room_name', None)
+
+            if room_id and sched_room_id and sched_room_id == int(room_id):
+                matched_room = True
+            elif room_number and sched_room_num and str(sched_room_num).strip().lower() == str(room_number).strip().lower():
+                matched_room = True
+
+            if matched_room:
+                r_name = sched_room_num or (f"Room #{sched_room_id}" if sched_room_id else "Room")
+                conflicts.append(f"Room Conflict: {r_name} is already occupied by Section {sched_sec} for {sched_sub} ({time_range} on {sched_days}).")
+
+        return conflicts
+
+    def _sync_days(self, schedule_instance, days_pattern):
+        days_set = get_days_set(days_pattern)
+        code_to_num = {'MON': 1, 'TUE': 2, 'WED': 3, 'THU': 4, 'FRI': 5, 'SAT': 6, 'SUN': 7}
+        target_nums = {code_to_num[c] for c in days_set if c in code_to_num}
+
+        ScheduleDay.objects.filter(schedule=schedule_instance).delete()
+        new_days = [ScheduleDay(schedule=schedule_instance, day_of_week=n) for n in target_nums]
+        if new_days:
+            ScheduleDay.objects.bulk_create(new_days)
+
+    @action(detail=False, methods=['post'], url_path='validate-conflict')
+    def validate_conflict(self, request):
+        data = request.data
+        conflicts = self._find_conflicts(
+            section_id=data.get('section_id'),
+            faculty_id=data.get('faculty_id'),
+            room_id=data.get('room_id'),
+            room_number=data.get('room_number'),
+            days_of_week=data.get('days_of_week', 'MON-FRI'),
+            start_time=data.get('start_time'),
+            end_time=data.get('end_time'),
+            exclude_id=data.get('exclude_id'),
+        )
+        return Response({'has_conflict': len(conflicts) > 0, 'conflicts': conflicts}, status=status.HTTP_200_OK)
 
     def update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return super().update(request, *args, **kwargs)
 
-    def destroy(self, request, *args, **kwargs):
-        user = request.user
-        role = get_user_role(user)
-        if not (user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
-            raise PermissionDenied("Only administrators and principals can delete student records.")
-        return super().destroy(request, *args, **kwargs)
+    def perform_create(self, serializer):
+        role = get_user_role(self.request.user)
+        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'DEPT_HEAD')):
+            raise PermissionDenied("Only authorized academic administrators can create class schedules.")
 
-    @action(detail=False, methods=['get'], pagination_class=None)
-    def dropdown(self, request):
-        qs = self.get_queryset().only(
-            'id', 'lrn', 'first_name', 'middle_name', 'last_name', 'suffix', 'parent_contact'
+        data = self.request.data
+        conflicts = self._find_conflicts(
+            section_id=data.get('section_id') or data.get('section'),
+            faculty_id=data.get('faculty_id') or data.get('faculty'),
+            room_id=data.get('room_id') or data.get('room'),
+            room_number=data.get('room_number'),
+            days_of_week=data.get('days_of_week', 'MON-FRI'),
+            start_time=data.get('start_time'),
+            end_time=data.get('end_time'),
         )
-        data = [
-            {
-                'id': s.id,
-                'lrn': s.lrn,
-                'name': format_full_student_name(s),
-                'full_name': format_full_student_name(s),
-                'label': f"{s.lrn} - {format_full_student_name(s)}",
-                'parent_contact': s.parent_contact or '',
-            }
-            for s in qs
-        ]
-        return Response(data, status=status.HTTP_200_OK)
+        if conflicts:
+            raise ValidationError({'conflict': conflicts})
+        instance = serializer.save()
+        self._sync_days(instance, data.get('days_of_week', 'MON-FRI'))
 
-    @action(detail=True, methods=['post', 'patch', 'put'], url_path='upload-photo')
-    def upload_photo(self, request, pk=None):
-        student = self.get_object()
-        photo_file = request.FILES.get('photo')
-        base64_data = request.data.get('photo_base64') or request.data.get('photo')
+    def perform_update(self, serializer):
+        role = get_user_role(self.request.user)
+        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'DEPT_HEAD')):
+            raise PermissionDenied("Only authorized academic administrators can update class schedules.")
 
-        if not photo_file and not (isinstance(base64_data, str) and base64_data.startswith('data:image')):
-            return Response({'error': 'No image file or base64 data provided.'}, status=status.HTTP_400_BAD_REQUEST)
+        data = self.request.data
+        instance = serializer.instance
+        conflicts = self._find_conflicts(
+            section_id=data.get('section_id') or data.get('section') or getattr(instance, 'section_id', None),
+            faculty_id=data.get('faculty_id') or data.get('faculty') or getattr(instance, 'faculty_id', None),
+            room_id=data.get('room_id') or data.get('room') or getattr(instance, 'room_id', None),
+            room_number=data.get('room_number') or getattr(instance, 'room_number', ''),
+            days_of_week=data.get('days_of_week') or get_schedule_days_string(instance),
+            start_time=data.get('start_time') or getattr(instance, 'start_time', None),
+            end_time=data.get('end_time') or getattr(instance, 'end_time', None),
+            exclude_id=instance.id,
+        )
+        if conflicts:
+            raise ValidationError({'conflict': conflicts})
+        instance = serializer.save()
+        if 'days_of_week' in data:
+            self._sync_days(instance, data.get('days_of_week'))
 
-        try:
-            if photo_file:
-                if photo_file.size > 5 * 1024 * 1024:
-                    return Response({'error': 'Image exceeds 5 MB.'}, status=status.HTTP_400_BAD_REQUEST)
-                ext = photo_file.name.split('.')[-1].lower() if '.' in photo_file.name else 'jpg'
-                if ext not in ['jpg', 'jpeg', 'png', 'webp']:
-                    return Response({'error': 'Only JPG, PNG, and WEBP allowed.'}, status=status.HTTP_400_BAD_REQUEST)
-                safe_filename = f"student_{student.lrn}_{uuid.uuid4().hex[:8]}.{ext}"
-                student.photo.save(safe_filename, photo_file, save=False)
-
-            elif isinstance(base64_data, str) and base64_data.startswith('data:image'):
-                header, img_str = base64_data.split(';base64,', 1)
-                ext = 'jpg' if 'jpeg' in header else header.split('/')[-1].split(';')[0].lower()
-                if ext not in ['jpg', 'jpeg', 'png', 'webp']:
-                    ext = 'jpg'
-                decoded_bytes = base64.b64decode(img_str, validate=True)
-                if len(decoded_bytes) > 5 * 1024 * 1024:
-                    return Response({'error': 'Image exceeds 5 MB.'}, status=status.HTTP_400_BAD_REQUEST)
-                safe_filename = f"student_{student.lrn}_{uuid.uuid4().hex[:8]}.{ext}"
-                student.photo.save(safe_filename, ContentFile(decoded_bytes), save=False)
-
-            student.photo_updated_at = timezone.now()
-            student.save(update_fields=['photo', 'photo_updated_at'])
-
-            return Response({
-                'success': True,
-                'message': 'Student photo updated successfully.',
-                'photo_url': safe_photo_url(student.photo, request),
-            }, status=status.HTTP_200_OK)
-
-        except Exception as exc:
-            return Response({'error': f'Failed to process image: {str(exc)}'}, status=status.HTTP_400_BAD_REQUEST)
+    def perform_destroy(self, instance):
+        role = get_user_role(self.request.user)
+        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'DEPT_HEAD')):
+            raise PermissionDenied("Only authorized academic administrators can delete class schedules.")
+        instance.delete()
 
 
 # ============================================================================
-# 2. FACULTY VIEWSET
+# 3. STUDENT VIEWSET (FULL CRUD)
+# ============================================================================
+
+class StudentViewSet(viewsets.ModelViewSet):
+    """
+    CRUD ViewSet for students with section prefetching and permission checks.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = StudentSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Student.objects.none()
+
+        # 1. Administrators and Principals have full campus visibility
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+            return (
+                Student.objects.filter(is_active=True)
+                .prefetch_related('enrollments__section')
+                .order_by('last_name', 'first_name')
+            )
+
+        role = getattr(user, 'role', None) or getattr(user, 'system_role', None)
+        if role and str(role).strip().upper() in ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR']:
+            return (
+                Student.objects.filter(is_active=True)
+                .prefetch_related('enrollments__section')
+                .order_by('last_name', 'first_name')
+            )
+
+        # 2. Resolve FacultyProfile using the 'account' field (never 'user')
+        from apps.academics.models import FacultyProfile, Schedule, Section
+        from .common import resolve_faculty_for_user
+
+        faculty = resolve_faculty_for_user(user)
+        if not faculty or not isinstance(faculty, FacultyProfile):
+            faculty = (
+                FacultyProfile.objects.filter(account=user, is_active=True).first()
+                or FacultyProfile.objects.filter(employee_id__iexact=user.username, is_active=True).first()
+                or FacultyProfile.objects.filter(first_name__icontains=getattr(user, 'first_name', ''), is_active=True).first()
+            )
+
+        # 3. Filter students accessible to this faculty member (both teaching loads and advised homerooms)
+        if faculty and isinstance(faculty, FacultyProfile):
+            teaching_section_ids = Schedule.objects.filter(faculty=faculty).values_list('section_id', flat=True)
+            advising_section_ids = Section.objects.filter(adviser=faculty).values_list('id', flat=True)
+            accessible_section_ids = set(teaching_section_ids) | set(advising_section_ids)
+
+            if accessible_section_ids:
+                return (
+                    Student.objects.filter(
+                        enrollments__section_id__in=accessible_section_ids,
+                        is_active=True
+                    )
+                    .distinct()
+                    .prefetch_related('enrollments__section')
+                    .order_by('last_name', 'first_name')
+                )
+
+        # Fallback for authenticated staff
+        return (
+            Student.objects.filter(is_active=True)
+            .prefetch_related('enrollments__section')
+            .order_by('last_name', 'first_name')
+        )
+
+    @action(detail=False, methods=['get'], url_path='dropdown')
+    def dropdown(self, request):
+        students = self.get_queryset()
+        data = []
+        for s in students:
+            full_name = getattr(s, 'full_name', None) or f"{s.last_name}, {s.first_name}".strip()
+            enr = s.enrollments.filter(status='ENROLLED').select_related('section').first()
+            sec_id = enr.section_id if enr and enr.section else None
+            sec_name = enr.section.name if enr and enr.section else ''
+            grade_level = str(getattr(enr.section, 'grade_level', '') or '') if enr and enr.section else ''
+
+            data.append({
+                'id': s.id,
+                'full_name': full_name,
+                'lrn': str(s.lrn).strip(),
+                'guardian_name': getattr(s, 'guardian_name', '') or 'Parent/Guardian',
+                'guardian_phone': getattr(s, 'parent_contact', '') or getattr(s, 'guardian_phone', '') or '',
+                'grade_level': grade_level,
+                'section': sec_id,
+                'section_name': sec_name,
+            })
+        return Response(data, status=status.HTTP_200_OK)
+
+
+# ============================================================================
+# 4. FACULTY VIEWSET (FULL CRUD)
 # ============================================================================
 
 class FacultyViewSet(viewsets.ModelViewSet):
@@ -426,286 +694,134 @@ class FacultyViewSet(viewsets.ModelViewSet):
 
 
 # ============================================================================
-# 3. SCHEDULE VIEWSET (SUBJECT TEACHERS & ZERO CONFLICT ENGINE)
+# 5. GRADE LEVEL VIEWSET (FULL CRUD)
 # ============================================================================
 
-class ScheduleViewSet(viewsets.ModelViewSet):
-    serializer_class = ScheduleSerializer
+class GradeLevelViewSet(viewsets.ModelViewSet):
+    queryset = GradeLevel.objects.all().order_by('level_order')
+    serializer_class = GradeLevelSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_queryset(self):
-        qs = Schedule.objects.select_related('section', 'subject', 'faculty').order_by('start_time')
-        if hasattr(Schedule, 'days'):
-            qs = qs.prefetch_related('days')
+    def check_permissions(self, request):
+        super().check_permissions(request)
+        if request.method not in permissions.SAFE_METHODS:
+            role = get_user_role(request.user)
+            if not (request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
+                raise PermissionDenied("Only administrators can modify grade levels.")
 
-        user = self.request.user
-        role = get_user_role(user)
 
-        if is_regular_teacher(role) and not user.is_superuser:
-            faculty = resolve_faculty_for_user(user)
-            if faculty:
-                advised_sec_ids = get_teacher_section_ids(faculty)
-                qs = qs.filter(Q(faculty=faculty) | Q(section_id__in=advised_sec_ids))
-            else:
-                return Schedule.objects.none()
+# ============================================================================
+# 6. ROOM VIEWSET (FULL CRUD)
+# ============================================================================
 
-        return qs
+def load_rooms_store():
+    rooms = []
+    if ROOM_STORE_PATH.exists():
+        try:
+            with open(ROOM_STORE_PATH, 'r', encoding='utf-8') as f:
+                rooms = json.load(f)
+        except Exception:
+            pass
+    if not rooms:
+        db_rooms = Section.objects.exclude(room_number='').values_list('room_number', flat=True).distinct()
+        names = list(db_rooms) or [f"Room {i}" for i in range(101, 108)]
+        for idx, r in enumerate(names):
+            rooms.append({
+                'id': idx + 1,
+                'name': r,
+                'room_number': r,
+                'building': 'Main Building',
+                'capacity': 45,
+                'room_type': 'LECTURE'
+            })
+        save_rooms_store(rooms)
+    return rooms
 
-    def _find_conflicts(self, section_id, faculty_id, room_id, room_number, days_of_week, start_time, end_time, exclude_id=None):
-        conflicts = []
-        if not start_time or not end_time or not days_of_week:
-            return conflicts
 
-        if str(start_time)[:5] >= str(end_time)[:5]:
-            conflicts.append("Start time must be earlier than end time.")
-            return conflicts
+def save_rooms_store(rooms):
+    try:
+        with open(ROOM_STORE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(rooms, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] Failed to write room store: {e}")
 
-        qs = Schedule.objects.select_related('section', 'subject', 'faculty')
-        if hasattr(Schedule, 'days'):
-            qs = qs.prefetch_related('days')
 
-        if exclude_id:
-            qs = qs.exclude(id=exclude_id)
+class RoomViewSet(viewsets.ViewSet):
+    permission_classes = [permissions.IsAuthenticated]
 
-        existing_schedules = list(qs)
+    def list(self, request):
+        return Response(load_rooms_store(), status=status.HTTP_200_OK)
 
-        for sched in existing_schedules:
-            if not getattr(sched, 'start_time', None) or not getattr(sched, 'end_time', None):
-                continue
+    def retrieve(self, request, pk=None):
+        rooms = load_rooms_store()
+        item = next((r for r in rooms if str(r['id']) == str(pk)), None)
+        if not item:
+            return Response({'error': 'Room not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(item, status=status.HTTP_200_OK)
 
-            sched_days = get_schedule_days_string(sched)
-            if not do_day_patterns_overlap(days_of_week, sched_days):
-                continue
+    def create(self, request):
+        role = get_user_role(request.user)
+        if not (request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
+            raise PermissionDenied("Only administrators can create rooms.")
 
-            if not do_time_ranges_overlap(start_time, end_time, sched.start_time, sched.end_time):
-                continue
-
-            time_range = f"{str(sched.start_time)[:5]} - {str(sched.end_time)[:5]}"
-            sched_sub = (
-                getattr(sched.subject, 'title', None) or 
-                getattr(sched.subject, 'code', None) or 
-                'Subject'
-            ) if sched.subject else 'Subject'
-            sched_sec = getattr(sched.section, 'name', 'Section') if sched.section else 'Section'
-
-            # 1. Subject Teacher Conflict
-            if faculty_id and sched.faculty_id == int(faculty_id):
-                fac_name = getattr(sched.faculty, 'full_name', None) or (
-                    f"{sched.faculty.first_name} {sched.faculty.last_name}" if sched.faculty else "Teacher"
-                )
-                conflicts.append(
-                    f"Subject Teacher Conflict: {fac_name} is already assigned to {sched_sub} in Section {sched_sec} ({time_range} on {sched_days})."
-                )
-
-            # 2. Section Conflict
-            if section_id and sched.section_id == int(section_id):
-                conflicts.append(
-                    f"Section Conflict: Section {sched_sec} already has {sched_sub} scheduled at this time ({time_range} on {sched_days})."
-                )
-
-            # 3. Room Conflict
-            matched_room = False
-            sched_room_id = getattr(sched, 'room_id', None)
-            sched_room_num = getattr(sched, 'room_number', None) or getattr(sched, 'room_name', None)
-
-            if room_id and sched_room_id and sched_room_id == int(room_id):
-                matched_room = True
-            elif room_number and sched_room_num and str(sched_room_num).strip().lower() == str(room_number).strip().lower():
-                matched_room = True
-
-            if matched_room:
-                r_name = sched_room_num or (f"Room #{sched_room_id}" if sched_room_id else "Room")
-                conflicts.append(
-                    f"Room Conflict: {r_name} is already occupied by Section {sched_sec} for {sched_sub} ({time_range} on {sched_days})."
-                )
-
-        return conflicts
-
-    @action(detail=False, methods=['post'], url_path='validate-conflict')
-    def validate_conflict(self, request):
         data = request.data
-        conflicts = self._find_conflicts(
-            section_id=data.get('section_id'),
-            faculty_id=data.get('faculty_id'),
-            room_id=data.get('room_id'),
-            room_number=data.get('room_number'),
-            days_of_week=data.get('days_of_week', 'MON-FRI'),
-            start_time=data.get('start_time'),
-            end_time=data.get('end_time'),
-            exclude_id=data.get('exclude_id'),
-        )
-        return Response({'has_conflict': len(conflicts) > 0, 'conflicts': conflicts}, status=status.HTTP_200_OK)
+        name = str(data.get('name') or data.get('room_number') or '').strip()
+        if not name:
+            return Response({'error': 'Room name or number is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    def update(self, request, *args, **kwargs):
-        kwargs['partial'] = True
-        return super().update(request, *args, **kwargs)
+        rooms = load_rooms_store()
+        new_id = max([r.get('id', 0) for r in rooms] + [0]) + 1
+        new_room = {
+            'id': new_id,
+            'name': name,
+            'room_number': name,
+            'building': str(data.get('building') or 'Main Building').strip(),
+            'capacity': int(data.get('capacity', 45)),
+            'room_type': str(data.get('room_type', 'LECTURE')).strip(),
+        }
+        rooms.append(new_room)
+        save_rooms_store(rooms)
+        return Response(new_room, status=status.HTTP_201_CREATED)
 
-    def perform_create(self, serializer):
-        role = get_user_role(self.request.user)
-        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'DEPT_HEAD')):
-            raise PermissionDenied("Only authorized academic administrators can schedule class periods.")
+    def update(self, request, pk=None):
+        role = get_user_role(request.user)
+        if not (request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
+            raise PermissionDenied("Only administrators can update rooms.")
 
-        data = self.request.data
-        conflicts = self._find_conflicts(
-            section_id=data.get('section_id') or data.get('section'),
-            faculty_id=data.get('faculty_id') or data.get('faculty'),
-            room_id=data.get('room_id') or data.get('room'),
-            room_number=data.get('room_number'),
-            days_of_week=data.get('days_of_week', 'MON-FRI'),
-            start_time=data.get('start_time'),
-            end_time=data.get('end_time'),
-        )
-        if conflicts:
-            raise ValidationError({'conflict': conflicts})
-        serializer.save()
+        rooms = load_rooms_store()
+        item = next((r for r in rooms if str(r['id']) == str(pk)), None)
+        if not item:
+            return Response({'error': 'Room not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    def perform_update(self, serializer):
-        role = get_user_role(self.request.user)
-        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'DEPT_HEAD')):
-            raise PermissionDenied("Only authorized academic administrators can update class schedules.")
+        data = request.data
+        item['name'] = str(data.get('name') or item['name']).strip()
+        item['room_number'] = str(data.get('room_number') or item['name']).strip()
+        if 'building' in data:
+            item['building'] = str(data.get('building')).strip()
+        if 'capacity' in data:
+            item['capacity'] = int(data.get('capacity', 45))
+        if 'room_type' in data:
+            item['room_type'] = str(data.get('room_type')).strip()
 
-        data = self.request.data
-        instance = serializer.instance
-        conflicts = self._find_conflicts(
-            section_id=data.get('section_id') or data.get('section') or getattr(instance, 'section_id', None),
-            faculty_id=data.get('faculty_id') or data.get('faculty') or getattr(instance, 'faculty_id', None),
-            room_id=data.get('room_id') or data.get('room') or getattr(instance, 'room_id', None),
-            room_number=data.get('room_number') or getattr(instance, 'room_number', ''),
-            days_of_week=data.get('days_of_week') or get_schedule_days_string(instance),
-            start_time=data.get('start_time') or getattr(instance, 'start_time', None),
-            end_time=data.get('end_time') or getattr(instance, 'end_time', None),
-            exclude_id=instance.id,
-        )
-        if conflicts:
-            raise ValidationError({'conflict': conflicts})
-        serializer.save()
+        save_rooms_store(rooms)
+        return Response(item, status=status.HTTP_200_OK)
 
-    def perform_destroy(self, instance):
-        role = get_user_role(self.request.user)
-        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'DEPT_HEAD')):
-            raise PermissionDenied("Only authorized academic administrators can delete class schedules.")
-        instance.delete()
+    def partial_update(self, request, pk=None):
+        return self.update(request, pk)
+
+    def destroy(self, request, pk=None):
+        role = get_user_role(request.user)
+        if not (request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
+            raise PermissionDenied("Only administrators can delete rooms.")
+
+        rooms = load_rooms_store()
+        filtered = [r for r in rooms if str(r['id']) != str(pk)]
+        save_rooms_store(filtered)
+        return Response({'success': True}, status=status.HTTP_204_NO_CONTENT)
 
 
 # ============================================================================
-# 4. SECTION VIEWSET (CLASS ADVISER & AUTO-CODES)
-# ============================================================================
-
-class SectionViewSet(viewsets.ModelViewSet):
-    serializer_class = SectionSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['name', 'code', 'room_number', 'adviser__first_name', 'adviser__last_name']
-
-    def get_queryset(self):
-        user = self.request.user
-        role = get_user_role(user)
-
-        qs = (
-            Section.objects.select_related('grade_level', 'adviser')
-            .prefetch_related(
-                Prefetch(
-                    'schedules',
-                    queryset=Schedule.objects.select_related('subject', 'faculty').order_by('start_time'),
-                    to_attr='prefetched_schedules'
-                )
-            )
-            .order_by('grade_level__level_order', 'name')
-        )
-
-        if is_regular_teacher(role) and not user.is_superuser:
-            faculty = resolve_faculty_for_user(user)
-            if faculty:
-                return qs.filter(Q(adviser=faculty) | Q(schedules__faculty=faculty)).distinct()
-            return Section.objects.none()
-
-        return qs
-
-    def _generate_section_code(self, name: str, grade_level_id: int = None) -> str:
-        clean_name = re.sub(r'[^A-Za-z0-9]+', '', str(name or '').upper())
-        grade_tag = "GEN"
-
-        if grade_level_id:
-            gl = GradeLevel.objects.filter(id=grade_level_id).first()
-            if gl:
-                nums = re.findall(r'\d+', gl.name or gl.code or '')
-                grade_tag = f"G{nums[0]}" if nums else str(getattr(gl, 'code', 'GL'))[:4].upper()
-
-        base_code = f"SEC-{grade_tag}-{clean_name}"
-        unique_code = base_code
-        counter = 1
-
-        if hasattr(Section, 'code'):
-            while Section.objects.filter(code__iexact=unique_code).exists():
-                unique_code = f"{base_code}-{counter:02d}"
-                counter += 1
-
-        return unique_code
-
-    def perform_create(self, serializer):
-        role = get_user_role(self.request.user)
-        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
-            raise PermissionDenied("Only administrators can create sections.")
-
-        if hasattr(Section, 'code'):
-            name = self.request.data.get('name', '')
-            grade_level_id = self.request.data.get('grade_level_id') or self.request.data.get('grade_level')
-            provided_code = self.request.data.get('code')
-
-            if not provided_code or not str(provided_code).strip():
-                auto_code = self._generate_section_code(name, grade_level_id)
-                serializer.save(code=auto_code)
-                return
-
-        serializer.save()
-
-    def perform_update(self, serializer):
-        role = get_user_role(self.request.user)
-        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
-            raise PermissionDenied("Only administrators can update sections.")
-        serializer.save()
-
-    def perform_destroy(self, instance):
-        role = get_user_role(self.request.user)
-        if not (self.request.user.is_superuser or role in ('ADMIN', 'PRINCIPAL')):
-            raise PermissionDenied("Only administrators can delete sections.")
-        instance.delete()
-
-
-# ============================================================================
-# 5. GATE PASS VIEWSET (ROLE-ISOLATED)
-# ============================================================================
-
-class GatePassViewSet(viewsets.ModelViewSet):
-    serializer_class = GatePassSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        user = self.request.user
-        role = get_user_role(user)
-        is_admin = user.is_superuser or role in ('ADMIN', 'PRINCIPAL')
-
-        qs = GatePass.objects.select_related('faculty', 'student', 'issued_by').order_by('-valid_from')
-        if is_admin:
-            return qs
-
-        if role == 'GUARD':
-            return qs.filter(status='ACTIVE')
-
-        faculty = resolve_faculty_for_user(user)
-        if faculty:
-            advised_student_ids = get_teacher_student_ids(faculty)
-            return qs.filter(
-                Q(faculty=faculty) |
-                Q(student_id__in=advised_student_ids) |
-                Q(issued_by=user)
-            ).distinct()
-
-        return GatePass.objects.none()
-
-
-# ============================================================================
-# 6. SUBJECT & ROOM VIEWSETS
+# 7. SUBJECT, USER, SCANNER, GATE PASS & SMS VIEWSETS
 # ============================================================================
 
 class SubjectViewSet(viewsets.ModelViewSet):
@@ -721,43 +837,17 @@ class SubjectViewSet(viewsets.ModelViewSet):
                 raise PermissionDenied("Only administrators can manage academic subjects.")
 
 
-class RoomViewSet(viewsets.ViewSet):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def list(self, request):
-        rooms = (
-            Section.objects.exclude(room_number='')
-            .values_list('room_number', flat=True)
-            .distinct()
-            .order_by('room_number')
-        )
-        room_list = list(rooms) or [f"Room {i}" for i in range(101, 110)]
-        return Response(
-            [{'id': idx + 1, 'room_number': r, 'name': r} for idx, r in enumerate(room_list)],
-            status=status.HTTP_200_OK,
-        )
-
-
-class GradeLevelViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = GradeLevel.objects.all().order_by('level_order')
-    permission_classes = [permissions.IsAuthenticated]
-
-    def list(self, request, *args, **kwargs):
-        levels = self.get_queryset()
-        return Response(
-            [{'id': g.id, 'code': g.code, 'name': g.name, 'stage': g.stage, 'level_order': g.level_order} for g in levels],
-            status=status.HTTP_200_OK,
-        )
-
-
-# ============================================================================
-# 7. USER MANAGEMENT & SCANNER VIEWSETS (ADMIN-ONLY)
-# ============================================================================
-
 class UserManagementViewSet(viewsets.ModelViewSet):
     queryset = User.objects.select_related('profile', 'profile__faculty').order_by('username')
     serializer_class = UserManagementSerializer
     permission_classes = [IsSystemAdmin]
+
+    def perform_create(self, serializer):
+        user = serializer.save()
+        password = self.request.data.get('password')
+        if password:
+            user.set_password(str(password).strip())
+            user.save(update_fields=['password'])
 
     def update(self, request, *args, **kwargs):
         kwargs['partial'] = True
@@ -766,15 +856,10 @@ class UserManagementViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if instance.id == request.user.id or instance.username.lower() == request.user.username.lower():
-            return Response(
-                {'error': 'You cannot delete your own active administrator account.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+            return Response({'error': 'You cannot delete your own active administrator account.'}, status=status.HTTP_400_BAD_REQUEST)
         profile = getattr(instance, 'profile', None)
         if profile and profile.faculty:
             profile.faculty.delete()
-
         return super().destroy(request, *args, **kwargs)
 
 
@@ -784,9 +869,97 @@ class ScannerViewSet(viewsets.ModelViewSet):
     permission_classes = [IsSystemAdmin]
 
 
-# ============================================================================
-# 8. SMS OUTBOX VIEWSET (DATA-ISOLATED)
-# ============================================================================
+class GatePassViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing and auditing student and faculty gate passes.
+    Cybersecurity & Type Safety:
+    - Inspects model metadata to dynamically link UserProfile or FacultyProfile.
+    - Uses exact ID queries to eliminate ORM ValueError crashes.
+    - Applies strict RBAC: teachers only see their own passes and advisees.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = GatePassSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return GatePass.objects.none()
+
+        from .common import get_user_role, resolve_faculty_for_user, get_teacher_student_ids
+        from apps.academics.models import GatePass, FacultyProfile, UserProfile
+
+        role = get_user_role(user)
+        # Administrators, Principals, and Security Guards have full visibility
+        if getattr(user, 'is_superuser', False) or role in ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'GUARD', 'SECURITY']:
+            return (
+                GatePass.objects.all()
+                .select_related('faculty', 'student')
+                .order_by('-created_at')
+            )
+
+        # 1. Resolve UserProfile and FacultyProfile for the current user
+        user_profile = getattr(user, 'profile', None)
+        if not user_profile:
+            try:
+                user_profile = UserProfile.objects.filter(user=user).first()
+            except Exception:
+                user_profile = None
+
+        faculty = resolve_faculty_for_user(user)
+
+        # 2. Inspect GatePass foreign key targets to pass the correct ID
+        gatepass_fields = {f.name: f for f in GatePass._meta.get_fields()}
+
+        filter_query = Q()
+
+        # Handle 'faculty' field
+        if 'faculty' in gatepass_fields:
+            target_model = gatepass_fields['faculty'].related_model
+            if target_model == UserProfile and user_profile:
+                filter_query |= Q(faculty_id=user_profile.id)
+            elif target_model == FacultyProfile and faculty:
+                filter_query |= Q(faculty_id=faculty.id)
+            elif target_model == type(user):
+                filter_query |= Q(faculty_id=user.id)
+            else:
+                # Fallback: check across related IDs
+                if user_profile:
+                    filter_query |= Q(faculty_id=user_profile.id)
+                if faculty:
+                    filter_query |= Q(faculty_id=faculty.id)
+
+        # Handle 'issued_by' field
+        if 'issued_by' in gatepass_fields:
+            issued_target = gatepass_fields['issued_by'].related_model
+            if issued_target == type(user):
+                filter_query |= Q(issued_by_id=user.id)
+            elif issued_target == UserProfile and user_profile:
+                filter_query |= Q(issued_by_id=user_profile.id)
+            elif issued_target == FacultyProfile and faculty:
+                filter_query |= Q(issued_by_id=faculty.id)
+
+        # Handle 'created_by' field if present
+        if 'created_by' in gatepass_fields:
+            created_target = gatepass_fields['created_by'].related_model
+            if created_target == type(user):
+                filter_query |= Q(created_by_id=user.id)
+
+        # 3. Add student passes for advisees / taught students
+        if faculty:
+            advised_student_ids = get_teacher_student_ids(faculty)
+            if advised_student_ids:
+                filter_query |= Q(student_id__in=advised_student_ids)
+
+        if not filter_query:
+            return GatePass.objects.none()
+
+        return (
+            GatePass.objects.filter(filter_query)
+            .select_related('faculty', 'student')
+            .distinct()
+            .order_by('-created_at')
+        )
+
 
 class SmsOutboxViewSet(viewsets.ModelViewSet):
     serializer_class = SmsOutboxSerializer
@@ -795,20 +968,12 @@ class SmsOutboxViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         role = get_user_role(user)
-        is_admin = user.is_superuser or role in ('ADMIN', 'PRINCIPAL')
-
-        if is_admin:
+        if user.is_superuser or role in ('ADMIN', 'PRINCIPAL'):
             return SmsOutbox.objects.all().order_by('-created_at')
-
         faculty = resolve_faculty_for_user(user)
         if faculty:
-            student_contacts = (
-                Student.objects.filter(id__in=get_teacher_student_ids(faculty))
-                .exclude(parent_contact='')
-                .values_list('parent_contact', flat=True)
-            )
+            student_contacts = Student.objects.filter(id__in=get_teacher_student_ids(faculty)).exclude(parent_contact='').values_list('parent_contact', flat=True)
             return SmsOutbox.objects.filter(recipient_number__in=student_contacts).order_by('-created_at')
-
         return SmsOutbox.objects.none()
 
     def get_permissions(self):

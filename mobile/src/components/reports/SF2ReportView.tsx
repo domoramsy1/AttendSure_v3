@@ -694,12 +694,11 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({ data }) => {
           </View>
 
           <DepEdReportFooter
-            sealUrl={leftLogoUrl || rightLogoUrl}
-            address={data.school_address}
-            contactNumber={data.school_contact}
-            email={data.school_email}
+            schoolLogoUrl={data.school_logo || data.right_logo || null}
+            address={data.school_address || data.address}
+            contactNumber={data.school_contact || data.contact_number}
+            email={data.school_email || data.email}
           />
-
           <View style={styles.pageMetaFooter}>
             <Text style={styles.pageMetaText}>School Form 2: Page 2 of 2</Text>
           </View>

@@ -10,7 +10,6 @@ from apps.academics.models import Section, AcademicYear, GradeLevel, FacultyProf
 from .common import (
     IsAcademicManagerPermission,
     get_user_role,
-    is_regular_teacher,
     resolve_faculty_for_user,
     format_deduped_section_label,
 )
@@ -38,8 +37,6 @@ class SectionListAPIView(APIView):
                 .order_by('grade_level__level_order', 'name')
             )
 
-        # Teachers only see their advisee sections.
-        # Admins see all sections by default, but can filter to their own advisory if requested.
         if (not is_admin or advisory_only) and faculty:
             sections = sections.filter(adviser=faculty)
 
@@ -72,7 +69,7 @@ class SectionListAPIView(APIView):
 
         ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.first()
         gl = GradeLevel.objects.filter(id=grade_id).first()
-        adv_id = data.get('adviser_id')
+        adv_id = data.get('adviser_id') or data.get('adviser')
         adv = FacultyProfile.objects.filter(id=adv_id).first() if adv_id else None
 
         sec = Section.objects.create(
@@ -81,6 +78,7 @@ class SectionListAPIView(APIView):
             academic_year=ay,
             adviser=adv,
             room_number=data.get('room_number', ''),
+            capacity=int(data.get('capacity', 45)),
         )
         return Response({'id': sec.id, 'name': sec.name}, status=status.HTTP_201_CREATED)
 
@@ -96,8 +94,45 @@ class SectionDetailAPIView(APIView):
             'id': sec.id,
             'name': sec.name,
             'grade_level': sec.grade_level.name if sec.grade_level else '',
+            'grade_level_id': sec.grade_level_id,
             'adviser_name': sec.adviser.full_name if sec.adviser else '',
+            'adviser_id': sec.adviser_id,
+            'room_number': sec.room_number,
+            'capacity': sec.capacity,
         }, status=status.HTTP_200_OK)
+
+    def put(self, request, pk):
+        sec = Section.objects.filter(pk=pk).first()
+        if not sec:
+            return Response({'error': 'Section not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data
+        if 'name' in data:
+            sec.name = str(data.get('name')).strip()
+        if 'room_number' in data:
+            sec.room_number = str(data.get('room_number')).strip()
+        if 'capacity' in data:
+            sec.capacity = int(data.get('capacity', 45))
+
+        grade_id = data.get('grade_level_id') or data.get('grade_level')
+        if grade_id:
+            sec.grade_level_id = int(grade_id)
+
+        adv_id = data.get('adviser_id') or data.get('adviser')
+        if adv_id:
+            sec.adviser_id = int(adv_id)
+
+        sec.save()
+        return Response({
+            'id': sec.id,
+            'name': sec.name,
+            'adviser_id': sec.adviser_id,
+            'grade_level_id': sec.grade_level_id,
+            'room_number': sec.room_number,
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request, pk):
+        return self.put(request, pk)
 
     def delete(self, request, pk):
         Section.objects.filter(pk=pk).delete()

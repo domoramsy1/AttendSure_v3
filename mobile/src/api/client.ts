@@ -1,4 +1,4 @@
-// AttendSure - Secure Network Client with Automatic Server Failover
+// AttendSure - Secure Mobile API Client with Automated Failover
 // File: mobile/src/api/client.ts
 
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
@@ -7,6 +7,7 @@ import {
   getServerBaseUrl,
   resolveFastestServer,
   invalidateServerCache,
+  cleanUrl,
 } from '../services/configService';
 
 export const AUTH_TOKEN_KEY = 'attendsure_auth_token';
@@ -22,9 +23,11 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
-    const activeBaseUrl = await getServerBaseUrl();
-    config.baseURL = activeBaseUrl;
+    // 1. Resolve and sanitize base URL (guarantees no trailing slashes or /api)
+    const rawBaseUrl = await getServerBaseUrl();
+    config.baseURL = cleanUrl(rawBaseUrl);
 
+    // 2. Prevent duplicate /api/ prefixes and path traversal
     let requestPath = config.url || '';
     if (!requestPath.startsWith('http://') && !requestPath.startsWith('https://')) {
       const sanitized = requestPath
@@ -34,6 +37,7 @@ apiClient.interceptors.request.use(
       config.url = `/api/${sanitized}`;
     }
 
+    // 3. Resolve stored authentication token
     let token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
     if (!token) {
       for (const legacyKey of LEGACY_TOKEN_KEYS) {
@@ -45,7 +49,8 @@ apiClient.interceptors.request.use(
       }
     }
 
-    if (token && config.headers) {
+    // 4. Attach token with CRLF injection protection
+    if (token && config.headers && !config.headers.Authorization) {
       const sanitizedToken = token.trim().replace(/[\r\n]/g, '');
       config.headers.Authorization = `Token ${sanitizedToken}`;
     }
@@ -62,6 +67,7 @@ apiClient.interceptors.response.use(
       _retryCount?: number;
     };
 
+    // Clear stored credentials on 401 Unauthorized
     if (error.response?.status === 401) {
       await AsyncStorage.multiRemove([
         AUTH_TOKEN_KEY,
@@ -73,6 +79,7 @@ apiClient.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    // Automated failover if network times out or drops
     const isNetworkError =
       !error.response ||
       error.code === 'ECONNABORTED' ||
@@ -88,7 +95,7 @@ apiClient.interceptors.response.use(
 
         try {
           const newBaseUrl = await resolveFastestServer();
-          originalRequest.baseURL = newBaseUrl;
+          originalRequest.baseURL = cleanUrl(newBaseUrl);
           return apiClient(originalRequest);
         } catch (discoveryError) {
           return Promise.reject(discoveryError);

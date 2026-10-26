@@ -3,10 +3,10 @@
  * File: web/src/components/tabs/SmsTab.tsx
  *
  * Cybersecurity & Stability Hardening:
- * 1. Role-Based Access Control (RBAC): Uses `isAdmin` to protect bulk deletions, queue flushes, and policy updates.
- * 2. Zero-Unused-Variables: Cleans up all TypeScript compiler warnings (TS6133).
+ * 1. Safe Grade Formatter: Resolves "s.grade_level.trim is not a function" by type-checking inputs.
+ * 2. Role-Based Access Control (RBAC): Uses `isAdmin` to protect deletions, queue flushes, and broadcasts.
  * 3. Sanitized Phone & Payload: Enforces standard Philippine mobile numbers (+63 / 09).
- * 4. Resilient Live Polling: Non-blocking background sync pauses while interacting with modals.
+ * 4. Composite Keys: Prevents collision warnings across recipient option lists.
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -49,10 +49,6 @@ import {
   Ban,
   ShieldAlert,
 } from 'lucide-react';
-
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
 
 export type SmsCategory =
   | 'GATE_TAP'
@@ -151,18 +147,23 @@ const SMS_TEMPLATES: Record<SmsCategory, { label: string; text: string }> = {
   },
 };
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
+const extractGradeLevelString = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'number') return `Grade ${val}`;
+  if (typeof val === 'object') {
+    const name = val.name || val.level || val.grade_name || val.grade || val.id;
+    return name !== undefined && name !== null ? String(name).trim() : '';
+  }
+  return String(val).trim();
+};
 
 export const SmsTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
 
-  // Role-Based Access Control (RBAC)
   const userRole = (localStorage.getItem('attendsure_role') || 'ADMIN').toUpperCase();
   const isAdmin = userRole === 'ADMIN' || userRole === 'PRINCIPAL' || userRole === 'SUPERUSER';
 
-  // --- Table Data States ---
   const [messages, setMessages] = useState<SmsRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -170,11 +171,9 @@ export const SmsTab: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
 
-  // --- Classroom Dispatch Policy Setting ---
   const [classroomSmsMode, setClassroomSmsMode] = useState<ClassroomSmsMode>('GATE_OUT_SUMMARY');
   const [savingPolicy, setSavingPolicy] = useState(false);
 
-  // --- Live Metrics State ---
   const [metrics, setMetrics] = useState<SmsMetrics>({
     total_today: 0,
     pending: 0,
@@ -184,29 +183,24 @@ export const SmsTab: React.FC = () => {
     modem_baudrate: 9600,
   });
 
-  // --- Pagination States ---
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
 
-  // --- Directories Cache ---
   const [students, setStudents] = useState<DynamicStudent[]>([]);
   const [facultyList, setFacultyList] = useState<DynamicFaculty[]>([]);
   const [sections, setSections] = useState<SectionOption[]>([]);
 
-  // --- Modals Visibility ---
   const [isComposeModalOpen, setIsComposeModalOpen] = useState(false);
   const [isBroadcastModalOpen, setIsBroadcastModalOpen] = useState(false);
   const [editingSms, setEditingSms] = useState<SmsRecord | null>(null);
   const [inspectedSms, setInspectedSms] = useState<SmsRecord | null>(null);
 
-  // --- Processing States ---
   const [submitting, setSubmitting] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // --- Individual Compose Form ---
   const [composeForm, setComposeForm] = useState({
     recipient_name: '',
     recipient_number: '',
@@ -216,7 +210,6 @@ export const SmsTab: React.FC = () => {
   });
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
 
-  // --- Broadcast Announcement Form ---
   const [broadcastForm, setBroadcastForm] = useState({
     audience: 'ALL_PARENTS' as AnnouncementAudience,
     message_body: '',
@@ -230,13 +223,16 @@ export const SmsTab: React.FC = () => {
   isInteracting.current =
     isComposeModalOpen || isBroadcastModalOpen || Boolean(editingSms) || Boolean(inspectedSms);
 
+  // Type-safe extraction prevents `.trim is not a function`
   const availableYearLevels = useMemo(() => {
     const list = new Set<string>();
     sections.forEach((s) => {
-      if (s.grade_level) list.add(s.grade_level.trim());
+      const gl = extractGradeLevelString(s?.grade_level);
+      if (gl) list.add(gl);
     });
     students.forEach((s) => {
-      if (s.grade_level) list.add(s.grade_level.trim());
+      const gl = extractGradeLevelString(s?.grade_level);
+      if (gl) list.add(gl);
     });
 
     if (list.size === 0) {
@@ -244,15 +240,11 @@ export const SmsTab: React.FC = () => {
     }
 
     return Array.from(list).sort((a, b) => {
-      const numA = parseInt(a.replace(/\D/g, ''), 10) || 0;
-      const numB = parseInt(b.replace(/\D/g, ''), 10) || 0;
+      const numA = parseInt(String(a).replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt(String(b).replace(/\D/g, ''), 10) || 0;
       return numA - numB;
     });
   }, [sections, students]);
-
-  // ============================================================================
-  // HELPERS & SANITIZATION
-  // ============================================================================
 
   const sanitizePhoneNumber = (phone: string): string => {
     let clean = phone.replace(/[^\d+]/g, '').trim();
@@ -355,10 +347,6 @@ export const SmsTab: React.FC = () => {
     }
   };
 
-  // ============================================================================
-  // DATA FETCHING & LIVE POLLING PIPELINE
-  // ============================================================================
-
   const fetchMetrics = useCallback(async () => {
     try {
       const res = await apiClient.get<SmsMetrics>('/sms-outbox/metrics/');
@@ -423,7 +411,7 @@ export const SmsTab: React.FC = () => {
             lrn: s.lrn,
             guardian_name: s.guardian_name || 'Parent/Guardian',
             guardian_phone: s.guardian_phone || s.emergency_contact || s.parent_contact || '',
-            grade_level: s.grade_level,
+            grade_level: extractGradeLevelString(s.grade_level),
             section_id: s.section,
             section_name: s.section_name,
           }))
@@ -449,7 +437,7 @@ export const SmsTab: React.FC = () => {
           raw.map((s: any) => ({
             id: s.id,
             name: s.name,
-            grade_level: s.grade_level,
+            grade_level: extractGradeLevelString(s.grade_level),
           }))
         );
       }
@@ -498,10 +486,6 @@ export const SmsTab: React.FC = () => {
     fetchMessages(1, newSize, search, statusFilter, categoryFilter, false);
   };
 
-  // ============================================================================
-  // DISPATCH POLICY SWITCHER (CLASSROOM ATTENDANCE)
-  // ============================================================================
-
   const handleSaveClassroomPolicy = async (newMode: ClassroomSmsMode) => {
     if (!isAdmin) {
       showAlert({
@@ -536,10 +520,6 @@ export const SmsTab: React.FC = () => {
       setSavingPolicy(false);
     }
   };
-
-  // ============================================================================
-  // BROADCAST ANNOUNCEMENT DISPATCHER (FULL CRUD - CREATE BULK)
-  // ============================================================================
 
   const handleOpenBroadcast = () => {
     if (!isAdmin) {
@@ -642,10 +622,6 @@ export const SmsTab: React.FC = () => {
       setSubmitting(false);
     }
   };
-
-  // ============================================================================
-  // INDIVIDUAL NOTIFICATION CRUD (CREATE, UPDATE, DELETE)
-  // ============================================================================
 
   const handleOpenCompose = () => {
     setSelectedStudentId('');
@@ -959,10 +935,6 @@ export const SmsTab: React.FC = () => {
     });
   };
 
-  // ============================================================================
-  // RENDER UI
-  // ============================================================================
-
   const startRecord = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
   const endRecord = Math.min(currentPage * pageSize, totalCount);
 
@@ -1134,7 +1106,6 @@ export const SmsTab: React.FC = () => {
             Refresh
           </Button>
 
-          {/* Delete Action 1: Delete Delivered (Admin Only) */}
           {isAdmin && messages.some((m) => m.status === 'SENT') && (
             <Button
               variant="secondary"
@@ -1150,7 +1121,6 @@ export const SmsTab: React.FC = () => {
             </Button>
           )}
 
-          {/* Delete Action 2: Clear In-Queue Messages (Admin Only) */}
           {isAdmin && metrics.pending > 0 && (
             <Button
               variant="secondary"
@@ -1180,7 +1150,6 @@ export const SmsTab: React.FC = () => {
             </Button>
           )}
 
-          {/* Create Action 1: Broadcast (Admin Only) */}
           {isAdmin && (
             <Button
               variant="secondary"
@@ -1194,7 +1163,6 @@ export const SmsTab: React.FC = () => {
             </Button>
           )}
 
-          {/* Create Action 2: Compose Single SMS */}
           <Button
             variant="primary"
             size="md"
@@ -1343,7 +1311,6 @@ export const SmsTab: React.FC = () => {
               align: 'right',
               render: (m) => (
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                  {/* Read (Available to All) */}
                   <button
                     type="button"
                     onClick={() => setInspectedSms(m)}
@@ -1353,7 +1320,6 @@ export const SmsTab: React.FC = () => {
                     <Eye size={13} color="#475569" />
                   </button>
 
-                  {/* Update (Admin Only) */}
                   {isAdmin && (
                     <button
                       type="button"
@@ -1365,7 +1331,6 @@ export const SmsTab: React.FC = () => {
                     </button>
                   )}
 
-                  {/* Retry Single */}
                   {m.status === 'FAILED' && (
                     <button
                       type="button"
@@ -1382,7 +1347,6 @@ export const SmsTab: React.FC = () => {
                     </button>
                   )}
 
-                  {/* Delete Single (Admin Only) */}
                   {isAdmin && (
                     <button
                       type="button"
@@ -1404,7 +1368,6 @@ export const SmsTab: React.FC = () => {
           ]}
         />
 
-        {/* Server Pagination Bar */}
         <div style={paginationContainer}>
           <div style={{ fontSize: '0.80rem', color: '#475569' }}>
             {totalCount > 0 ? (
@@ -1479,7 +1442,7 @@ export const SmsTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 5. MODAL: BROADCAST SCHOOL ANNOUNCEMENT (CREATE) */}
+      {/* 5. MODAL: BROADCAST SCHOOL ANNOUNCEMENT */}
       <Modal
         isOpen={isBroadcastModalOpen}
         onClose={() => setIsBroadcastModalOpen(false)}
@@ -1524,7 +1487,6 @@ export const SmsTab: React.FC = () => {
             </div>
           </div>
 
-          {/* Conditional Target Filter: BY_YEAR_LEVEL */}
           {broadcastForm.audience === 'BY_YEAR_LEVEL' && (
             <div>
               <label style={labelStyle}>Select Grade / Year Level *</label>
@@ -1538,7 +1500,7 @@ export const SmsTab: React.FC = () => {
               >
                 <option value="">-- Choose Grade / Year Level --</option>
                 {availableYearLevels.map((lvl) => (
-                  <option key={lvl} value={lvl}>
+                  <option key={`level-${lvl}`} value={lvl}>
                     {lvl}
                   </option>
                 ))}
@@ -1549,7 +1511,6 @@ export const SmsTab: React.FC = () => {
             </div>
           )}
 
-          {/* Conditional Target Filter: By Section */}
           {broadcastForm.audience === 'BY_SECTION' && (
             <div>
               <label style={labelStyle}>Select Class Section *</label>
@@ -1562,16 +1523,15 @@ export const SmsTab: React.FC = () => {
                 style={inputStyle}
               >
                 <option value="">-- Choose class section --</option>
-                {sections.map((sec) => (
-                  <option key={sec.id} value={sec.id}>
-                    {sec.grade_level} - {sec.name}
+                {sections.map((sec, idx) => (
+                  <option key={`sec-opt-${sec.id}-${idx}`} value={sec.id}>
+                    {sec.grade_level ? `${sec.grade_level} - ` : ''}{sec.name}
                   </option>
                 ))}
               </select>
             </div>
           )}
 
-          {/* Conditional Target Filter: Specific Parent */}
           {broadcastForm.audience === 'SPECIFIC_PARENT' && (
             <div>
               <label style={labelStyle}>Select Student to Notify Parent *</label>
@@ -1584,8 +1544,8 @@ export const SmsTab: React.FC = () => {
                 style={inputStyle}
               >
                 <option value="">-- Choose student from directory --</option>
-                {students.map((s) => (
-                  <option key={s.id} value={s.id}>
+                {students.map((s, idx) => (
+                  <option key={`stu-opt-${s.id}-${idx}`} value={s.id}>
                     {s.full_name} &bull; Guardian: {s.guardian_name} ({s.guardian_phone})
                   </option>
                 ))}
@@ -1593,7 +1553,6 @@ export const SmsTab: React.FC = () => {
             </div>
           )}
 
-          {/* Conditional Target Filter: Specific Faculty */}
           {broadcastForm.audience === 'SPECIFIC_FACULTY' && (
             <div>
               <label style={labelStyle}>Select Faculty / Staff Member *</label>
@@ -1606,8 +1565,8 @@ export const SmsTab: React.FC = () => {
                 style={inputStyle}
               >
                 <option value="">-- Choose faculty member --</option>
-                {facultyList.map((f) => (
-                  <option key={f.id} value={f.id}>
+                {facultyList.map((f, idx) => (
+                  <option key={`fac-opt-${f.id}-${idx}`} value={f.id}>
                     {f.full_name} ({f.employee_id}) &bull; {f.phone_number || 'No phone'}
                   </option>
                 ))}
@@ -1645,7 +1604,7 @@ export const SmsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 6. MODAL: COMPOSE INDIVIDUAL SMS (CREATE) */}
+      {/* 6. MODAL: COMPOSE INDIVIDUAL SMS */}
       <Modal
         isOpen={isComposeModalOpen}
         onClose={() => setIsComposeModalOpen(false)}
@@ -1705,8 +1664,8 @@ export const SmsTab: React.FC = () => {
                 style={inputStyle}
               >
                 <option value="">-- Choose student or type custom number below --</option>
-                {students.map((s) => (
-                  <option key={s.id} value={s.id}>
+                {students.map((s, idx) => (
+                  <option key={`stu-quick-${s.id}-${idx}`} value={s.id}>
                     {s.full_name} (LRN: {s.lrn}) &bull; {s.guardian_phone}
                   </option>
                 ))}
@@ -2003,10 +1962,7 @@ export const SmsTab: React.FC = () => {
 
 export default SmsTab;
 
-// ============================================================================
-// STYLES
-// ============================================================================
-
+// Styles
 const statsGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(4, 1fr)',

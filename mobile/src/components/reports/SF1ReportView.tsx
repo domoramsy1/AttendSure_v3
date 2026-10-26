@@ -49,7 +49,7 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
 
   // Dynamic Adviser Resolution:
   // If the active logged-in employee is an assigned Teacher/Faculty, prioritize their verified name
-  // to avoid showing placeholder/mock database seeds like "Christine Reyes".
+  // to avoid showing placeholder/mock database seeds.
   const currentUser = user as Record<string, any> | null;
   const activeUserFullName =
     currentUser?.full_name ||
@@ -72,14 +72,16 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
     activeUserFullName ||
     'Class Adviser';
 
-  const resolvedSchoolHead = (data.school_head || 'School Head').trim();
+  const resolvedSchoolHead = String(data.school_head || 'School Head').trim();
 
+  // 1. Memoized Combined Learner List (Null-safe sorting)
   const sortedCombinedLearners = useMemo(() => {
     if (data.has_enrolled_students === false) return [];
     const raw: Learner[] = data.students || data.learners || learners || [];
-    return [...raw].sort((a, b) => a.name.localeCompare(b.name));
+    return [...raw].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [data, learners]);
 
+  // 2. Memoized Gender Breakdown (Single declaration to resolve TS2451)
   const { maleLearners, femaleLearners } = useMemo(() => {
     if (data.has_enrolled_students === false) {
       return { maleLearners: [], femaleLearners: [] };
@@ -88,8 +90,8 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
     const m = raw.filter((l: Learner) => l.sex === 'M' || l.sex === 'Male');
     const f = raw.filter((l: Learner) => l.sex === 'F' || l.sex === 'Female');
     return {
-      maleLearners: [...m].sort((a, b) => a.name.localeCompare(b.name)),
-      femaleLearners: [...f].sort((a, b) => a.name.localeCompare(b.name)),
+      maleLearners: [...m].sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+      femaleLearners: [...f].sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     };
   }, [data, learners]);
 
@@ -101,14 +103,15 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
     groupingMode === 'COMBINED' ? sortedCombinedLearners : [...maleLearners, ...femaleLearners];
   const isListEmpty = activeStudentList.length === 0;
 
+  // Sanitized guardian parser to prevent text overflow & injection
   const parseGuardian = (name: string, rel: string) => {
     const commonRel = ['MOTHER', 'FATHER', 'AUNT', 'UNCLE', 'GRANDMOTHER', 'GRANDFATHER', 'GUARDIAN'];
-    const cleanName = (name || '').trim();
-    const cleanRel = (rel || '').trim();
+    const cleanName = (name || '').replace(/[\r\n\t]/g, ' ').trim();
+    const cleanRel = (rel || '').replace(/[\r\n\t]/g, ' ').trim();
     if (commonRel.includes(cleanName.toUpperCase()) && !commonRel.includes(cleanRel.toUpperCase())) {
       return { gName: cleanRel, gRel: cleanName };
     }
-    return { gName: cleanName, gRel: cleanRel === 'Mather' ? 'Mother' : cleanRel };
+    return { gName: cleanName, gRel: cleanRel.toLowerCase() === 'mather' ? 'Mother' : cleanRel };
   };
 
   const leftLogoUrl = data.left_logo || null;
@@ -237,7 +240,7 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
             {isListEmpty ? (
               <View style={{ padding: 24, alignItems: 'center' }}>
                 <Text style={{ fontSize: 11, color: '#64748b' }}>
-                  {data.notice || `No students enrolled in Section ${data.section_name}.`}
+                  {data.notice || `No students enrolled in Section ${data.section_name || 'this class'}.`}
                 </Text>
               </View>
             ) : groupingMode === 'COMBINED' ? (
@@ -453,10 +456,10 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
               6. DYNAMIC DEPED DMOS FOOTER (FROM DATABASE)
              ======================================================== */}
           <DepEdReportFooter
-            sealUrl={leftLogoUrl || rightLogoUrl}
-            address={data.school_address}
-            contactNumber={data.school_contact}
-            email={data.school_email}
+            schoolLogoUrl={data.school_logo || data.right_logo || null}
+            address={data.school_address || data.address}
+            contactNumber={data.school_contact || data.contact_number}
+            email={data.school_email || data.email}
           />
         </View>
       </ScrollView>

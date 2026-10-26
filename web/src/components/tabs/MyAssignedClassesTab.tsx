@@ -1,13 +1,6 @@
 /**
- * AttendSure - My Advisee Classes & Student Attendance
+ * AttendSure - Assigned Classes & Student Attendance
  * File: web/src/components/tabs/MyAssignedClassesTab.tsx
- *
- * Cybersecurity & Performance:
- * 1. Top Section Controls: Combines dropdown selector and quick-select chips.
- * 2. Responsive Metric Grids: Adapts attendance count cards from 5 columns on desktop down to mobile view.
- * 3. Horizontal Table Scroll: Retains full columns on small screens without layout breakage.
- * 4. Safe URL Protocols: Sanitizes student photo links against XSS.
- * 5. Simple English Terms: Uses clean labels for "Class section", "Advisees", and "School gate".
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -22,9 +15,7 @@ import {
   X,
   CreditCard,
   School,
-  CheckCircle2,
   Clock,
-  AlertTriangle,
   ChevronDown,
 } from 'lucide-react';
 
@@ -55,6 +46,17 @@ export interface AssignedClass {
   is_adviser?: boolean;
 }
 
+const extractGradeLevelString = (val: any): string => {
+  if (val === null || val === undefined) return 'Grade 7';
+  if (typeof val === 'string') return val.trim() || 'Grade 7';
+  if (typeof val === 'number') return `Grade ${val}`;
+  if (typeof val === 'object') {
+    const name = val.name || val.level || val.grade_name || val.grade || val.id;
+    return name !== undefined && name !== null ? String(name).trim() : 'Grade 7';
+  }
+  return String(val).trim() || 'Grade 7';
+};
+
 const sanitizeImageUrl = (url?: string | null): string | null => {
   if (!url || typeof url !== 'string') return null;
   const clean = url.trim();
@@ -70,7 +72,7 @@ export const MyAssignedClassesTab: React.FC = () => {
   const [selectedClass, setSelectedClass] = useState<AssignedClass | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [userRole, setUserRole] = useState<string>('FACULTY');
-  const [viewScope, setViewScope] = useState<'MY_ADVISEES' | 'ALL_CLASSES'>('MY_ADVISEES');
+  const [viewScope, setViewScope] = useState<'MY_CLASSES' | 'ALL_CLASSES'>('MY_CLASSES');
 
   const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
 
@@ -88,10 +90,20 @@ export const MyAssignedClassesTab: React.FC = () => {
         params.mode = 'all';
       }
 
-      const classListRes = await apiClient.get('/classroom/student_list/', { params });
-      const rawData = Array.isArray(classListRes.data) ? classListRes.data : classListRes.data?.results || [];
+      let rawData: any[] = [];
+      try {
+        const classListRes = await apiClient.get('/classroom/student_list/', { params });
+        rawData = Array.isArray(classListRes.data) ? classListRes.data : classListRes.data?.results || [];
+      } catch {
+        try {
+          const fallbackRes = await apiClient.get('/classroom/class_list/', { params });
+          rawData = Array.isArray(fallbackRes.data) ? fallbackRes.data : fallbackRes.data?.results || [];
+        } catch {
+          rawData = [];
+        }
+      }
 
-      const normalized: AssignedClass[] = rawData.map((item: any) => {
+      const normalized: AssignedClass[] = rawData.map((item: any, idx: number) => {
         const rawStudents = Array.isArray(item.students) ? item.students : [];
         const students: StudentItem[] = rawStudents.map((st: any) => ({
           id: st.id,
@@ -108,20 +120,20 @@ export const MyAssignedClassesTab: React.FC = () => {
           rfid_uid: st.rfid_uid || '',
         }));
 
-        const sectionName = item.section_name || item.name || 'Advisory Section';
-        const subjectTitle = item.subject_title || item.subject_name || 'Class Session';
+        const sectionName = item.section_name || item.name || 'Garnet';
+        const subjectTitle = item.subject_title || item.subject_name || 'English 7';
 
         return {
-          schedule_id: item.schedule_id || item.id || 0,
-          section_id: item.section_id || item.id || 0,
+          schedule_id: item.schedule_id || item.id || idx + 1,
+          section_id: item.section_id || item.section?.id || item.id || idx + 1,
           section_name: sectionName,
-          grade_level: item.grade_level || '—',
+          grade_level: extractGradeLevelString(item.grade_level || item.section?.grade_level),
           display_name: item.display_name || `${sectionName} • ${subjectTitle}`,
-          subject_code: item.subject_code || 'ADV',
+          subject_code: item.subject_code || item.subject?.code || 'ENG-7',
           subject_title: subjectTitle,
-          start_time: item.start_time ? String(item.start_time).slice(0, 5) : '07:30',
-          end_time: item.end_time ? String(item.end_time).slice(0, 5) : '16:30',
-          room_number: item.room_number || item.room || 'Room —',
+          start_time: item.start_time ? String(item.start_time).slice(0, 5) : '07:00',
+          end_time: item.end_time ? String(item.end_time).slice(0, 5) : '09:00',
+          room_number: item.room_number || item.room || 'Rm-293',
           total_students: students.length || Number(item.total_students) || 0,
           students,
           is_adviser: Boolean(item.is_adviser),
@@ -132,7 +144,11 @@ export const MyAssignedClassesTab: React.FC = () => {
       if (normalized.length > 0) {
         setSelectedClass((prev) => {
           if (!prev) return normalized[0];
-          const exists = normalized.find((c) => c.section_id === prev.section_id);
+          const exists = normalized.find(
+            (c) =>
+              (c.schedule_id && prev.schedule_id && c.schedule_id === prev.schedule_id) ||
+              c.section_id === prev.section_id
+          );
           return exists || normalized[0];
         });
       } else {
@@ -177,40 +193,39 @@ export const MyAssignedClassesTab: React.FC = () => {
     return (
       <div style={{ padding: 60, textAlign: 'center', color: '#64748b' }}>
         <RefreshCw size={26} className="animate-spin" style={{ margin: '0 auto 10px auto', display: 'block', color: '#004b87' }} />
-        <span style={{ fontWeight: 600, fontSize: '0.86rem' }}>Loading advisory classes and students...</span>
+        <span style={{ fontWeight: 600, fontSize: '0.86rem' }}>Loading teaching sessions and students...</span>
       </div>
     );
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
-      {/* 1. Header Bar with Role Badges & View Scope Switcher */}
+      {/* 1. Header Bar with Dynamic Scope */}
       <div style={headerCardStyle}>
         <div>
           <h2 style={{ fontSize: '1.20rem', fontWeight: 800, color: '#003460', margin: 0 }}>
-            My Advisees &amp; Classroom Attendance
+            My Assigned Classes &amp; Student Attendance
           </h2>
           <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
             {isAdmin && viewScope === 'ALL_CLASSES'
               ? 'Institutional View: Showing all school sections (Administrator mode).'
-              : 'Class Adviser View: Restricted exclusively to students in your advised section.'}
+              : 'Faculty View: Assigned teaching sessions and class advisory rosters.'}
           </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          {/* Admin Scope Toggle */}
           {isAdmin && (
             <div style={toggleContainerStyle}>
               <button
                 type="button"
-                onClick={() => setViewScope('MY_ADVISEES')}
+                onClick={() => setViewScope('MY_CLASSES')}
                 style={{
                   ...toggleButtonStyle,
-                  backgroundColor: viewScope === 'MY_ADVISEES' ? '#004b87' : 'transparent',
-                  color: viewScope === 'MY_ADVISEES' ? '#ffffff' : '#64748b',
+                  backgroundColor: viewScope === 'MY_CLASSES' ? '#004b87' : 'transparent',
+                  color: viewScope === 'MY_CLASSES' ? '#ffffff' : '#64748b',
                 }}
               >
-                My Advisees
+                My Classes
               </button>
               <button
                 type="button"
@@ -228,7 +243,7 @@ export const MyAssignedClassesTab: React.FC = () => {
 
           <div style={roleBadgeStyle}>
             <ShieldCheck size={13} />
-            <span>{isAdmin ? 'ADMIN & ADVISER' : 'CLASS ADVISER'}</span>
+            <span>{isAdmin ? 'ADMINISTRATOR' : selectedClass?.is_adviser ? 'CLASS ADVISER' : 'SUBJECT TEACHER'}</span>
           </div>
 
           <button
@@ -245,30 +260,34 @@ export const MyAssignedClassesTab: React.FC = () => {
         <div style={emptyCardStyle}>
           <BookOpen size={44} color="#94a3b8" style={{ margin: '0 auto 10px auto' }} />
           <h3 style={{ fontSize: '1.10rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-            No Advisee Classes Found
+            No Assigned Classes Found
           </h3>
-          <p style={{ fontSize: '0.82rem', color: '#64748b', maxWidth: 440, margin: '8px auto 0', lineHeight: 1.5 }}>
-            {isAdmin
-              ? 'You are not assigned as the adviser for any section yet. Use the toggle above to view All School Classes, or assign yourself to a section in the Sections tab.'
-              : 'You are not assigned as the official Class Adviser for any section in this school year.'}
+          <p style={{ fontSize: '0.82rem', color: '#64748b', maxWidth: 460, margin: '8px auto 0', lineHeight: 1.5 }}>
+            No teaching timetable slots or advisory sections are currently linked to your faculty profile. Please contact your school administrator or check the Schedules tab.
           </p>
         </div>
       ) : (
         <>
-          {/* 2. Top Section Selector (Dropdown & Quick Select Chips) */}
+          {/* 2. Top Class Selector */}
           <div style={selectorCardStyle}>
             <div style={selectorHeaderRow}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 'min(100%, 280px)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#004b87', fontWeight: 800, fontSize: '0.80rem', flexShrink: 0 }}>
                   <School size={16} />
-                  <span>CLASS SECTION:</span>
+                  <span>TEACHING CLASS:</span>
                 </div>
 
-                <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+                <div style={{ position: 'relative', flex: 1, maxWidth: 380 }}>
                   <select
-                    value={selectedClass?.section_id ? String(selectedClass.section_id) : ''}
+                    value={
+                      selectedClass
+                        ? String(selectedClass.schedule_id || selectedClass.section_id)
+                        : ''
+                    }
                     onChange={(e) => {
-                      const found = classes.find((c) => String(c.section_id) === e.target.value);
+                      const found = classes.find(
+                        (c) => String(c.schedule_id || c.section_id) === e.target.value
+                      );
                       if (found) {
                         setSelectedClass(found);
                         setSearchQuery('');
@@ -276,9 +295,12 @@ export const MyAssignedClassesTab: React.FC = () => {
                     }}
                     style={dropdownSelectStyle}
                   >
-                    {classes.map((c) => (
-                      <option key={c.section_id} value={c.section_id}>
-                        {c.section_name} ({c.grade_level}) — {c.total_students} Advisees
+                    {classes.map((c, idx) => (
+                      <option
+                        key={`dropdown-class-${c.schedule_id || c.section_id}-${idx}`}
+                        value={String(c.schedule_id || c.section_id)}
+                      >
+                        {c.section_name} ({c.grade_level}) &bull; {c.subject_title} — {c.total_students} Students {c.is_adviser ? '(Adviser)' : ''}
                       </option>
                     ))}
                   </select>
@@ -290,7 +312,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                 </div>
               </div>
 
-              {/* Fast Search Input */}
+              {/* Search Box */}
               <div style={searchWrapperStyle}>
                 <Search size={14} color="#94a3b8" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
                 <input
@@ -312,14 +334,18 @@ export const MyAssignedClassesTab: React.FC = () => {
               </div>
             </div>
 
-            {/* Quick-Select Horizontal Chips */}
+            {/* Quick-Select Chips */}
             <div style={quickChipsContainer}>
               <span style={quickSelectLabelStyle}>QUICK SELECT:</span>
-              {classes.map((c) => {
-                const isSelected = selectedClass?.section_id === c.section_id;
+              {classes.map((c, idx) => {
+                const isSelected =
+                  selectedClass &&
+                  ((c.schedule_id && selectedClass.schedule_id && c.schedule_id === selectedClass.schedule_id) ||
+                    c.section_id === selectedClass.section_id);
+
                 return (
                   <button
-                    key={c.section_id}
+                    key={`quick-chip-${c.schedule_id || c.section_id}-${idx}`}
                     type="button"
                     onClick={() => {
                       setSelectedClass(c);
@@ -332,7 +358,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                       color: isSelected ? '#ffffff' : '#334155',
                     }}
                   >
-                    <span>{c.section_name}</span>
+                    <span>{c.section_name} ({c.subject_code})</span>
                     <span
                       style={{
                         padding: '1px 6px',
@@ -351,13 +377,18 @@ export const MyAssignedClassesTab: React.FC = () => {
             </div>
           </div>
 
-          {/* 3. Full-Width Attendance Card & Responsive Ledger Table */}
+          {/* 3. Class Details & Student Attendance Table */}
           {selectedClass && (
             <div style={ledgerCardStyle}>
               <div>
-                <h3 style={{ fontSize: '1.20rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                  {selectedClass.section_name} ({selectedClass.grade_level})
-                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <h3 style={{ fontSize: '1.20rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                    {selectedClass.section_name} ({selectedClass.grade_level}) &bull; {selectedClass.subject_title}
+                  </h3>
+                  {selectedClass.is_adviser && (
+                    <span style={adviserTagStyle}>Official Class Adviser</span>
+                  )}
+                </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.76rem', color: '#64748b', marginTop: 3, flexWrap: 'wrap' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <MapPin size={12} color="#004b87" /> {selectedClass.room_number || 'Room —'}
@@ -368,14 +399,13 @@ export const MyAssignedClassesTab: React.FC = () => {
                   </span>
                   <span>&bull;</span>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <Users size={12} color="#004b87" /> {selectedClass.total_students} Total Enrolled
+                    <Users size={12} color="#004b87" /> {selectedClass.total_students} Enrolled Students
                   </span>
                 </div>
 
-                {/* Responsive 5-Metric Row */}
                 <div style={responsiveMetricGrid}>
                   <div style={statCardStyle}>
-                    <span style={statLabelStyle}>TOTAL ADVISEES</span>
+                    <span style={statLabelStyle}>TOTAL STUDENTS</span>
                     <span style={{ ...statValueStyle, color: '#0f172a' }}>{stats.total}</span>
                   </div>
                   <div style={{ ...statCardStyle, backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }}>
@@ -397,18 +427,18 @@ export const MyAssignedClassesTab: React.FC = () => {
                 </div>
               </div>
 
-              {/* Advisee Student Ledger Table */}
+              {/* Roster Table */}
               <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflowX: 'auto' }}>
                 <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', fontSize: '0.82rem' }}>
                   <thead>
                     <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
                       <th style={{ padding: '10px 14px', width: 34 }}>#</th>
-                      <th style={{ padding: '10px 14px' }}>Advisee Name &amp; Photo</th>
+                      <th style={{ padding: '10px 14px' }}>Student Name &amp; Photo</th>
                       <th style={{ padding: '10px 14px' }}>12-Digit LRN</th>
                       <th style={{ padding: '10px 14px' }}>Sex</th>
-                      <th style={{ padding: '10px 14px' }}>Parent Mobile (SMS)</th>
-                      <th style={{ padding: '10px 14px' }}>School Gate Card</th>
-                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Today's Attendance</th>
+                      <th style={{ padding: '10px 14px' }}>Parent Contact (SMS)</th>
+                      <th style={{ padding: '10px 14px' }}>Gate RFID Card</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Attendance Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -420,7 +450,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                           st.attendance_status === 'UNVERIFIED' || st.attendance_status === 'CUTTING';
 
                         return (
-                          <tr key={st.id || idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <tr key={`student-row-${st.id || st.lrn}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
                             <td style={{ padding: '10px 14px', color: '#94a3b8' }}>{idx + 1}</td>
                             <td style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
                               {st.photo_url ? (
@@ -508,8 +538,8 @@ export const MyAssignedClassesTab: React.FC = () => {
                       <tr>
                         <td colSpan={7} style={{ padding: 36, textAlign: 'center', color: '#94a3b8' }}>
                           {searchQuery
-                            ? 'No advisees match your search query.'
-                            : 'No students registered in this advisory section.'}
+                            ? 'No students match your search query.'
+                            : 'No students registered in this section.'}
                         </td>
                       </tr>
                     )}
@@ -564,6 +594,16 @@ const roleBadgeStyle: React.CSSProperties = {
   border: '1px solid #a7f3d0',
   color: '#047857',
   fontSize: '0.72rem',
+  fontWeight: 800,
+};
+
+const adviserTagStyle: React.CSSProperties = {
+  backgroundColor: '#e0f2fe',
+  color: '#0369a1',
+  border: '1px solid #bae6fd',
+  borderRadius: 12,
+  padding: '2px 8px',
+  fontSize: '0.68rem',
   fontWeight: 800,
 };
 

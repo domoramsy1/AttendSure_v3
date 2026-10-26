@@ -1,13 +1,4 @@
-/**
- * AttendSure Mobile - Faculty Profile & Gate Clearance Pass
- * File: mobile/src/screens/ProfileSettingsScreen.tsx
- *
- * Cybersecurity & Performance:
- * 1. Zero Mock Data: Loads live credentials directly from the authenticated backend.
- * 2. Type-Safe Session Extraction: Resolves TS2339 errors with safe session typing.
- * 3. Dynamic Anti-Tamper QR: Generates dynamic gate passes with 60s rotating timestamps.
- * 4. Hardware Lock Audit: Audits bound hardware device UUID to prevent buddy-punching.
- */
+// D:\AttendSure_V3\mobile\src\screens\ProfileSettingsScreen.tsx
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -39,11 +30,11 @@ interface LiveFacultyProfile {
   phone_number?: string;
   email?: string;
   photo_url?: string | null;
+  photo?: string | null;
   bound_device_id?: string | null;
   device_bound_at?: string | null;
 }
 
-// Type guard for session user fields
 interface ExtendedSessionUser {
   id?: number | string;
   username?: string;
@@ -65,15 +56,15 @@ export const ProfileSettingsScreen: React.FC = () => {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [qrTimestamp, setQrTimestamp] = useState<number>(Date.now());
 
-  // Fetch verified faculty profile from database
+  // Fixed endpoint: points to verified 'me/' route instead of non-existent 'faculty/me/'
   const fetchProfile = useCallback(async () => {
     try {
-      const res = await apiClient.get<LiveFacultyProfile>('/faculty/me/', { timeout: 8000 });
+      const res = await apiClient.get<LiveFacultyProfile>('me/', { timeout: 8000 });
       if (res.data) {
         setProfile(res.data);
       }
-    } catch (err: unknown) {
-      console.warn('[ProfileScreen] Using session user fallback due to network status.');
+    } catch {
+      // Safe fallback to existing session
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -84,7 +75,6 @@ export const ProfileSettingsScreen: React.FC = () => {
     fetchProfile();
   }, [fetchProfile]);
 
-  // Rotate QR code timestamp every 60 seconds to prevent static screenshot sharing
   useEffect(() => {
     const timer = setInterval(() => {
       setQrTimestamp(Date.now());
@@ -99,52 +89,19 @@ export const ProfileSettingsScreen: React.FC = () => {
   };
 
   const handleLogout = () => {
-    Alert.alert(
-      'Sign Out',
-      'Are you sure you want to log out of AttendSure on this device?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign Out',
-          style: 'destructive',
-          onPress: async () => {
-            await logout();
-          },
-        },
-      ]
-    );
+    Alert.alert('Sign Out', 'Sign out of AttendSure on this device?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign Out', style: 'destructive', onPress: async () => await logout() },
+    ]);
   };
 
-  // Safe property extraction from session user to eliminate TS2339 compiler errors
   const sessionUser = user as ExtendedSessionUser | null;
+  const displayName = profile?.full_name || sessionUser?.name || sessionUser?.username || 'Employee';
+  const displayId = profile?.employee_id || sessionUser?.employee_id || 'ID Pending';
+  const displayPosition = profile?.position || sessionUser?.role || 'Academic Staff';
+  const displayDept = profile?.department || 'Department Unassigned';
+  const boundDeviceId = profile?.bound_device_id || sessionUser?.device_id || sessionUser?.bound_device_id || null;
 
-  const displayName =
-    profile?.full_name ||
-    sessionUser?.name ||
-    sessionUser?.username ||
-    'Faculty Member';
-
-  const displayId =
-    profile?.employee_id ||
-    sessionUser?.employee_id ||
-    'ID Pending';
-
-  const displayPosition =
-    profile?.position ||
-    sessionUser?.role ||
-    'Academic Staff';
-
-  const displayDept =
-    profile?.department ||
-    'Department Unassigned';
-
-  const boundDeviceId =
-    profile?.bound_device_id ||
-    sessionUser?.device_id ||
-    sessionUser?.bound_device_id ||
-    null;
-
-  // Real-time clearance payload formatted for gate gate scanner scanners
   const gatePassPayload = JSON.stringify({
     app: 'ATTENDSURE_GATE_V3',
     emp_id: displayId,
@@ -155,13 +112,8 @@ export const ProfileSettingsScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Top App Bar */}
       <View style={styles.appBar}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={22} color="#0f172a" />
         </TouchableOpacity>
         <Text style={styles.appBarTitle}>Faculty Profile &amp; Pass</Text>
@@ -170,18 +122,15 @@ export const ProfileSettingsScreen: React.FC = () => {
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0284c7']} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#004b87']} />}
         showsVerticalScrollIndicator={false}
       >
-        {/* Profile Card */}
         <View style={styles.profileCard}>
           <View style={styles.avatarContainer}>
-            {profile?.photo_url ? (
-              <Image source={{ uri: profile.photo_url }} style={styles.avatarImage} contentFit="cover" />
+            {profile?.photo_url || profile?.photo ? (
+              <Image source={{ uri: profile.photo_url || profile.photo || '' }} style={styles.avatarImage} contentFit="cover" />
             ) : (
-              <View style={styles.avatarFallback}>
-                <Ionicons name="person" size={40} color="#0284c7" />
-              </View>
+              <Ionicons name="person" size={40} color="#004b87" />
             )}
           </View>
 
@@ -191,7 +140,7 @@ export const ProfileSettingsScreen: React.FC = () => {
 
           <View style={styles.badgeRow}>
             <View style={styles.idBadge}>
-              <Ionicons name="card-outline" size={13} color="#0284c7" />
+              <Ionicons name="card-outline" size={13} color="#004b87" />
               <Text style={styles.idBadgeText}>ID: {displayId}</Text>
             </View>
 
@@ -208,27 +157,20 @@ export const ProfileSettingsScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* Digital Clearance Gate Pass */}
         <View style={styles.qrCard}>
           <View style={styles.qrHeader}>
-            <Ionicons name="qr-code-outline" size={20} color="#0284c7" />
+            <Ionicons name="qr-code-outline" size={20} color="#004b87" />
             <Text style={styles.qrCardTitle}>Official Gate Clearance Pass</Text>
           </View>
           <Text style={styles.qrSubtitle}>
-            Present this dynamic QR code to campus gate scanners for contact-free entry and exit.
+            Present this dynamic QR code to campus gate kiosks for physical check-in and check-out.
           </Text>
 
           <View style={styles.qrWrapper}>
             {loading ? (
-              <ActivityIndicator size="large" color="#0284c7" />
+              <ActivityIndicator size="large" color="#004b87" />
             ) : (
-              <QRCode
-                value={gatePassPayload}
-                size={190}
-                color="#0f172a"
-                backgroundColor="#ffffff"
-                enableLinearGradient={false}
-              />
+              <QRCode value={gatePassPayload} size={180} color="#004b87" backgroundColor="#ffffff" />
             )}
           </View>
 
@@ -238,54 +180,19 @@ export const ProfileSettingsScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* Device Security & Pairing Info */}
-        <View style={styles.securityCard}>
-          <View style={styles.securityHeader}>
-            <Ionicons name="lock-closed-outline" size={18} color="#0284c7" />
-            <Text style={styles.securityTitle}>Anti-Buddy Punching Device Lock</Text>
-          </View>
-
-          <View style={styles.securityRow}>
-            <Text style={styles.securityLabel}>Bound Device Hardware ID:</Text>
-            <Text style={styles.securityValue}>
-              {boundDeviceId ? `${boundDeviceId.slice(0, 16)}...` : 'Not registered yet'}
-            </Text>
-          </View>
-
-          <View style={styles.securityRow}>
-            <Text style={styles.securityLabel}>Device Lock Status:</Text>
-            <Text style={[styles.securityValue, { color: boundDeviceId ? '#059669' : '#d97706' }]}>
-              {boundDeviceId ? 'Enforced (1 Phone = 1 Account)' : 'Awaiting Initial Tap'}
-            </Text>
-          </View>
-
-          <Text style={styles.securityNotice}>
-            To switch your registered phone, coordinate with the school administrator to clear your hardware lock in the
-            Geofence Security console.
-          </Text>
-        </View>
-
-        {/* Sign Out Button */}
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
           <Ionicons name="log-out-outline" size={18} color="#dc2626" />
           <Text style={styles.logoutText}>Sign Out of Device</Text>
         </TouchableOpacity>
-
-        <View style={{ height: 30 }} />
       </ScrollView>
     </SafeAreaView>
   );
 };
 
-export default ProfileSettingsScreen;
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-  },
+  container: { flex: 1, backgroundColor: '#f8fafc' },
   appBar: {
-    height: 56,
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -295,223 +202,100 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e2e8f0',
   },
   backButton: {
-    width: 40,
-    height: 40,
+    width: 36,
+    height: 36,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#f1f5f9',
   },
-  appBarTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  scrollContent: {
-    padding: 16,
-    gap: 16,
-  },
+  appBarTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  scrollContent: { padding: 16, gap: 14, paddingBottom: 60 },
   profileCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 20,
+    borderRadius: 14,
+    padding: 18,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
   avatarContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#e0f2fe',
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#e6f0fa',
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
-    borderWidth: 3,
-    borderColor: '#ffffff',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    marginBottom: 10,
+    borderWidth: 2,
+    borderColor: '#b8d6f0',
   },
-  avatarImage: {
-    width: '100%',
-    height: '100%',
-  },
-  avatarFallback: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileName: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0f172a',
-    textAlign: 'center',
-  },
-  profileRole: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0284c7',
-    marginTop: 2,
-  },
-  profileDept: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  badgeRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 14,
-  },
+  avatarImage: { width: '100%', height: '100%' },
+  profileName: { fontSize: 17, fontWeight: '800', color: '#0f172a', textAlign: 'center' },
+  profileRole: { fontSize: 12.5, fontWeight: '700', color: '#004b87', marginTop: 2 },
+  profileDept: { fontSize: 11.5, color: '#64748b', marginTop: 1 },
+  badgeRow: { flexDirection: 'row', gap: 6, marginTop: 12 },
   idBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
     backgroundColor: '#f0f9ff',
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#bae6fd',
   },
-  idBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#0284c7',
-    fontFamily: 'monospace',
-  },
+  idBadgeText: { fontSize: 10.5, fontWeight: '700', color: '#004b87' },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
     borderRadius: 6,
     borderWidth: 1,
   },
-  statusActive: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#a7f3d0',
-  },
-  statusPending: {
-    backgroundColor: '#fffbeb',
-    borderColor: '#fde68a',
-  },
-  statusBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
+  statusActive: { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' },
+  statusPending: { backgroundColor: '#fffbeb', borderColor: '#fde68a' },
+  statusBadgeText: { fontSize: 10.5, fontWeight: '700' },
   qrCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 20,
+    borderRadius: 14,
+    padding: 18,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  qrHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  qrCardTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  qrSubtitle: {
-    fontSize: 12,
-    color: '#64748b',
-    textAlign: 'center',
-    marginBottom: 16,
-    lineHeight: 17,
-  },
+  qrHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  qrCardTitle: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
+  qrSubtitle: { fontSize: 11, color: '#64748b', textAlign: 'center', marginBottom: 14, lineHeight: 16 },
   qrWrapper: {
-    padding: 16,
+    padding: 14,
     backgroundColor: '#ffffff',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#cbd5e1',
-    elevation: 1,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    minHeight: 222,
     alignItems: 'center',
     justifyContent: 'center',
+    minHeight: 200,
   },
-  qrFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 14,
-  },
-  qrFooterText: {
-    fontSize: 11,
-    color: '#64748b',
-  },
-  securityCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  securityHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  securityTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  securityRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  securityLabel: {
-    fontSize: 12,
-    color: '#64748b',
-    fontWeight: '600',
-  },
-  securityValue: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#0f172a',
-    fontFamily: 'monospace',
-  },
-  securityNotice: {
-    fontSize: 11,
-    color: '#94a3b8',
-    lineHeight: 15,
-    marginTop: 6,
-  },
+  qrFooter: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 12 },
+  qrFooterText: { fontSize: 10.5, color: '#64748b' },
   logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 13,
-    borderRadius: 8,
-    backgroundColor: '#fff1f2',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#fee2e2',
     borderWidth: 1,
-    borderColor: '#fecdd3',
+    borderColor: '#fca5a5',
+    marginTop: 4,
   },
-  logoutText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#dc2626',
-  },
+  logoutText: { fontSize: 13, fontWeight: '800', color: '#dc2626' },
 });
+
+export default ProfileSettingsScreen;

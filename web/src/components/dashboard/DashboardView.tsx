@@ -5,12 +5,12 @@
  * Cybersecurity & Performance:
  * 1. Fluid Responsive Grid: Uses min(100%, ...) for single-column mobile & multi-column desktop.
  * 2. Real-Time Hardware Telemetry: Checks gate scanner pings and PostgreSQL database health.
- * 3. Safe Latency Benchmarking: Sub-100ms response parsing.
- * 4. Zero Emojis: Strictly renders Lucide SVG components.
+ * 3. Safe Latency Benchmarking: Sub-100ms response parsing with AbortController cancellation.
+ * 4. Zero Emojis: Strictly renders Lucide SVG components with zero unused imports.
  * 5. Simple English Terms: Clean labels across all KPI statistics and maintenance tools.
  */
 
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAlert } from '../../context/AlertContext';
 import apiClient from '../../api/client';
 import {
@@ -22,28 +22,9 @@ import {
   RefreshCw,
   Scan,
   TrendingUp,
-  FileSpreadsheet,
-  Activity,
-  Layers,
   Inbox,
-  ChevronRight,
-  ShieldAlert,
-  BarChart3,
-  CreditCard,
-  Gauge,
-  AlertOctagon,
-  CheckCircle2,
-  CalendarCheck,
-  Coins,
-  Cpu,
   Database,
-  HardDrive,
-  Server,
-  XCircle,
-  Ticket,
-  WifiOff,
   Wrench,
-  ShieldCheck,
   RotateCcw,
 } from 'lucide-react';
 
@@ -64,11 +45,11 @@ interface GradeBreakdown {
 interface RecentScan {
   id: string | number;
   person_name: string;
-  role_label: string;
+  role_label?: string;
   grade_section: string;
   direction: 'IN' | 'OUT';
   scan_time: string;
-  scan_method: 'RFID' | 'QR';
+  scan_method: 'RFID' | 'QR' | string;
 }
 
 interface DashboardMetrics {
@@ -88,8 +69,8 @@ interface DashboardMetrics {
   hourly_scans: HourlyScanItem[];
   grade_levels: GradeBreakdown[];
   recent_scans: RecentScan[];
-  analytics?: Record<string, any>;
-  database?: Record<string, any>;
+  analytics?: Record<string, unknown>;
+  database?: Record<string, unknown>;
 }
 
 interface DashboardViewProps {
@@ -112,7 +93,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [fetchFailed, setFetchFailed] = useState<boolean>(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
   const isMounted = useRef<boolean>(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const effectiveRole = (userRole || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const isAdmin = effectiveRole === 'ADMIN' || effectiveRole === 'PRINCIPAL';
@@ -146,12 +129,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const fetchDashboardData = useCallback(
     async (silent = false) => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       try {
         if (!silent) setRefreshing(true);
 
         const res = await apiClient.get<DashboardMetrics>('/dashboard/overview/', {
           params: { silent: silent ? '1' : undefined },
           timeout: 5000,
+          signal: controller.signal,
         });
 
         if (isMounted.current && res.data) {
@@ -160,7 +150,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           const presentStudents = Number(res.data.students_present) || 0;
           const calculatedRate =
             totalStudents > 0
-              ? Math.round((presentStudents / totalStudents) * 100)
+              ? Math.min(100, Math.max(0, Math.round((presentStudents / totalStudents) * 100)))
               : Number(res.data.attendance_rate) || 0;
 
           const rawHourly = Array.isArray(res.data.hourly_scans) ? res.data.hourly_scans : [];
@@ -168,7 +158,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           const normalizedHourly = rawHourly.map((item) => {
             const count = Number(item.count) || 0;
             return {
-              hour: item.hour,
+              hour: String(item.hour || ''),
               count,
               height: count > 0 ? Math.round((count / maxHourlyVolume) * 100) : 0,
               is_peak: Boolean(item.is_peak),
@@ -208,7 +198,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             onGateStatusChange((Number(res.data.kiosks_online) || 0) > 0);
           }
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
+        if (err && typeof err === 'object' && 'name' in err && err.name === 'CanceledError') {
+          return;
+        }
         if (isMounted.current) {
           setFetchFailed(true);
           if (onGateStatusChange) onGateStatusChange(false);
@@ -234,27 +227,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return () => {
       isMounted.current = false;
       clearInterval(interval);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
   }, [fetchDashboardData]);
+
+  const handleManualSync = () => {
+    fetchDashboardData(false);
+    if (onManualRefresh) {
+      onManualRefresh();
+    }
+  };
 
   const runMaintenanceTask = async (taskName: string, endpoint: string) => {
     try {
       setActionLoading(taskName);
-      const res = await apiClient.post(endpoint, {});
+      const res = await apiClient.post<{ message?: string }>(endpoint, {});
       showAlert({
         title: 'Task Completed',
         message: res.data?.message || `${taskName} finished successfully.`,
         type: 'success',
       });
       fetchDashboardData(true);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorResponse = err as { response?: { data?: { message?: string } } };
       showAlert({
         title: 'Task Result',
-        message: err.response?.data?.message || `Could not run ${taskName}. Check backend logs.`,
+        message: errorResponse.response?.data?.message || `Could not run ${taskName}. Check backend connection.`,
         type: 'warning',
       });
     } finally {
-      setActionLoading(null);
+      if (isMounted.current) {
+        setActionLoading(null);
+      }
     }
   };
 
@@ -315,7 +321,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             )}
             <button
               type="button"
-              onClick={() => fetchDashboardData(false)}
+              onClick={handleManualSync}
               disabled={refreshing}
               style={refreshBtnStyle}
             >
@@ -514,8 +520,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
             {data.recent_scans.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                {data.recent_scans.slice(0, 5).map((scan) => (
-                  <div key={scan.id} style={scanItemRow}>
+                {data.recent_scans.slice(0, 5).map((scan, idx) => (
+                  <div key={`${scan.id}-${idx}`} style={scanItemRow}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <span
                         style={{

@@ -1,22 +1,10 @@
 // D:\AttendSure_V3\mobile\src\branding\AttendSureBadge.tsx
 
 import React, { useEffect, useRef } from 'react';
-import { View, StyleSheet, Animated } from 'react-native';
+import { StyleSheet, Animated } from 'react-native';
 import { Image } from 'expo-image';
 
-const getBadgeLogo = () => {
-  try {
-    return require('../../assets/attendsure-logo.png');
-  } catch {
-    try {
-      return require('../../assets/icon.png');
-    } catch {
-      return null;
-    }
-  }
-};
-
-const LOGO_SOURCE = getBadgeLogo();
+const LOGO_SOURCE = require('../../assets/attendsure-logo.svg');
 
 interface AttendSureBadgeProps {
   size?: number;
@@ -28,7 +16,7 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = ({
   animate = false,
 }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
-  const iconSize = Math.round(size * 0.58);
+  const iconSize = Math.round(size * 0.62);
 
   useEffect(() => {
     if (!animate) return;
@@ -64,29 +52,28 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = ({
         },
       ]}
     >
-      {LOGO_SOURCE ? (
-        <Image
-          source={LOGO_SOURCE}
-          style={{ width: iconSize, height: iconSize }}
-          contentFit="contain"
-        />
-      ) : (
-        <View style={{ width: iconSize, height: iconSize, backgroundColor: '#ffffff', borderRadius: iconSize / 2 }} />
-      )}
+      <Image
+        source={LOGO_SOURCE}
+        style={{ width: iconSize, height: iconSize }}
+        contentFit="contain"
+      />
     </Animated.View>
   );
 };
 
 const styles = StyleSheet.create({
   badgeContainer: {
-    backgroundColor: '#004b87',
+    backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
     shadowColor: '#004b87',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 6,
+    overflow: 'hidden',
   },
 });
 

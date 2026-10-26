@@ -80,7 +80,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
           <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
         </TouchableOpacity>
 
-        <TouchableOpacity
+        {/* <TouchableOpacity
           style={styles.menuItem}
           onPress={() => onSelectScreen('class_list')}
           activeOpacity={0.7}
@@ -93,7 +93,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
             <Text style={styles.itemSub}>Active learners and emergency contacts</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-        </TouchableOpacity>
+        </TouchableOpacity> */}
 
         <TouchableOpacity
           style={styles.menuItem}

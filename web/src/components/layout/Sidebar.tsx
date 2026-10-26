@@ -153,7 +153,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         items: [
           { key: 'sms', label: 'SMS', icon: <Send size={18} /> },
           { key: 'gate-passes', label: 'Gate Passes', icon: <Ticket size={18} /> },
-          { key: 'scanners', label: 'IoT', icon: <Cpu size={18} /> },
+          { key: 'scanners', label: 'Scanners', icon: <Cpu size={18} /> },
           { key: 'dtr', label: 'DTR', icon: <Clock size={18} /> },
           { key: 'geofence', label: 'Geofence', icon: <MapPin size={18} /> },
         ],

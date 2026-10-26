@@ -4,6 +4,7 @@ from django.utils import timezone
 from .base import GATE_PASS_STATUS_CHOICES
 from .people import Student, FacultyProfile
 
+
 class FacultyHeartbeat(models.Model):
     id = models.BigAutoField(primary_key=True)
     faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='heartbeats')
@@ -51,6 +52,9 @@ class GatePass(models.Model):
         db_table = 'gate_passes'
         indexes = [models.Index(fields=['status', 'valid_from', 'valid_to'])]
 
+    def __str__(self):
+        return f"Pass #{self.pass_number} [{self.status}]"
+
 
 class SmsOutbox(models.Model):
     PRIORITY_CHOICES = [
@@ -71,6 +75,7 @@ class SmsOutbox(models.Model):
         ('FAILED', 'Failed / No Signal'),
     ]
 
+    id = models.BigAutoField(primary_key=True)
     recipient_name = models.CharField(max_length=150, blank=True, default='')
     recipient_number = models.CharField(max_length=25, db_index=True)
     message_body = models.TextField()
@@ -84,8 +89,12 @@ class SmsOutbox(models.Model):
     sent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        db_table = 'sms_outbox'
         ordering = ['-created_at']
         indexes = [models.Index(fields=['status', 'priority', 'created_at'])]
+
+    def __str__(self):
+        return f"SMS to {self.recipient_number} [{self.status}]"
 
 
 class AuditLog(models.Model):
@@ -104,7 +113,7 @@ class AuditLog(models.Model):
     class Meta:
         db_table = 'audit_logs'
         ordering = ['-created_at']
-        managed = False
+        managed = True
 
 
 class FacultyMonthlyDTR(models.Model):
@@ -126,3 +135,6 @@ class FacultyMonthlyDTR(models.Model):
         db_table = 'faculty_monthly_dtr'
         unique_together = ('faculty', 'month', 'year')
         ordering = ['-year', '-month']
+
+    def __str__(self):
+        return f"{self.faculty} - DTR {self.month}/{self.year}"

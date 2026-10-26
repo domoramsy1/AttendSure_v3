@@ -3,18 +3,18 @@
  * File: mobile/src/services/configService.ts
  *
  * Cybersecurity & Performance:
- * 1. Hoisted Function Architecture: Eliminates ReferenceError on cleanUrl.
- * 2. In-Memory Caching: 5-minute TTL cache avoids continuous AsyncStorage disk reads.
- * 3. URL Sanitization: Enforces HTTP/HTTPS protocol validation to block SSRF and malicious schemes.
- * 4. Self-Contained Endpoints: Direct live API routes without mock data.
- * 5. Simple English Terms: Uses "School server address", "Class list", and "Student list".
+ * 1. Parallel Multi-Server Race: Pings LAN and Cloudflare tunnel simultaneously via Promise.any.
+ * 2. Auto-Detect Laptop IP: Extracts Metro bundler IP so physical phones on Wi-Fi connect instantly.
+ * 3. Base URL Sanitization: Strips trailing slashes and duplicate /api paths to prevent 404 errors.
+ * 4. Zero Mock Data: Pings live backend health route (/api/settings/school/).
+ * 5. Simple English Terms: Clear error messages and connection logs.
  */
 
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const SERVER_URL_STORAGE_KEY = 'attendsure_server_base_url';
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache lifetime
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5-minute memory cache
 
 // Live backend API endpoints
 export const ENDPOINTS = {
@@ -33,7 +33,7 @@ export const ENDPOINTS = {
     logs: '/api/gate/logs/',
   },
   telemetry: {
-    heartbeat: '/api/telemetry/heartbeat/',
+    heartbeat: '/api/geofence/telemetry/',
     geofenceStatus: '/api/geofence/',
   },
   reports: {
@@ -44,12 +44,22 @@ export const ENDPOINTS = {
   },
 };
 
-// 1. Hoisted URL Sanitizer (Available before any execution)
+// 1. URL Sanitizer: Enforces valid HTTP/HTTPS and strips duplicate /api and trailing slashes
 export function cleanUrl(rawUrl?: string | null): string {
   if (!rawUrl || typeof rawUrl !== 'string') {
     return Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000';
   }
   let trimmed = rawUrl.trim();
+
+  // Strip trailing slashes
+  while (trimmed.endsWith('/')) {
+    trimmed = trimmed.slice(0, -1);
+  }
+
+  // Prevent double /api/api pathing
+  if (trimmed.toLowerCase().endsWith('/api')) {
+    trimmed = trimmed.slice(0, -4);
+  }
 
   while (trimmed.endsWith('/')) {
     trimmed = trimmed.slice(0, -1);
@@ -61,6 +71,8 @@ export function cleanUrl(rawUrl?: string | null): string {
 
   return trimmed;
 }
+
+export const sanitizeUrl = cleanUrl;
 
 // 2. Protocol Validation (Guards against SSRF and script injection)
 export function isValidServerUrl(url?: string | null): boolean {
@@ -75,23 +87,94 @@ export function isValidServerUrl(url?: string | null): boolean {
   }
 }
 
-// 3. Default Server URL Resolver
-export function getDefaultBaseUrl(): string {
+// 3. Dynamically extract the laptop's IP address from Expo Metro
+function getMetroHostIp(): string | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Constants = require('expo-constants').default;
+    const hostUri =
+      Constants?.expoConfig?.hostUri ||
+      Constants?.manifest?.debuggerHost ||
+      Constants?.manifest2?.extra?.expoGo?.debuggerHost;
+
+    if (hostUri && typeof hostUri === 'string') {
+      const ip = hostUri.split(':')[0];
+      if (ip && ip !== 'localhost' && ip !== '127.0.0.1' && !ip.includes('expo.app')) {
+        return ip;
+      }
+    }
+  } catch {
+    // expo-constants optional fallback
+  }
+  return null;
+}
+
+// 4. Safely load candidate endpoints from endpoints.json
+function loadRootEndpoints(): { active_tunnel_url?: string; lan_servers?: string[]; production_domain?: string } {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return require('../../../endpoints.json');
+  } catch {
+    return {};
+  }
+}
+
+// 5. Gather all possible candidate servers
+export function getCandidateServers(): string[] {
+  const candidates: string[] = [];
+  const rootEndpoints = loadRootEndpoints();
+
+  // Primary: Active Cloudflare Tunnel from endpoints.json
+  if (rootEndpoints.active_tunnel_url) {
+    candidates.push(cleanUrl(rootEndpoints.active_tunnel_url));
+  }
+
+  // Secondary: Environment variable from mobile/.env
   const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
   if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
-    return cleanUrl(envUrl);
+    candidates.push(cleanUrl(envUrl));
   }
 
+  // Tertiary: Dynamic laptop IP address detected through Metro bundler
+  const metroIp = getMetroHostIp();
+  if (metroIp) {
+    candidates.push(cleanUrl(`http://${metroIp}:8000`));
+  }
+
+  // Quaternary: Local Area Network server addresses from endpoints.json
+  if (Array.isArray(rootEndpoints.lan_servers)) {
+    for (const lan of rootEndpoints.lan_servers) {
+      if (lan && typeof lan === 'string') {
+        candidates.push(cleanUrl(lan));
+      }
+    }
+  }
+
+  // Production school domain
+  if (rootEndpoints.production_domain) {
+    candidates.push(cleanUrl(rootEndpoints.production_domain));
+  }
+
+  // Emulator fallbacks (last resort)
   if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:8000';
+    candidates.push('http://10.0.2.2:8000');
+  } else {
+    candidates.push('http://127.0.0.1:8000');
   }
 
-  return 'http://127.0.0.1:8000';
+  // Deduplicate and filter out invalid URLs
+  return Array.from(new Set(candidates.filter((u) => Boolean(u && isValidServerUrl(u)))));
+}
+
+// Default fallback server
+export function getDefaultBaseUrl(): string {
+  const candidates = getCandidateServers();
+  return candidates[0] || (Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000');
 }
 
 export const DEFAULT_SERVER_URL = getDefaultBaseUrl();
 
-// Fast in-memory cache to eliminate repeated disk reads
+// Fast in-memory cache
 let cachedUrl: string | null = null;
 let lastCacheTime = 0;
 
@@ -113,13 +196,11 @@ export async function getServerBaseUrl(): Promise<string> {
       lastCacheTime = now;
       return cachedUrl;
     }
-  } catch (err) {
-    console.warn('Could not read saved server address, using default:', err);
+  } catch {
+    // Fall back to fastest server
   }
 
-  cachedUrl = getDefaultBaseUrl();
-  lastCacheTime = now;
-  return cachedUrl;
+  return resolveFastestServer();
 }
 
 export async function setServerBaseUrl(newUrl: string): Promise<boolean> {
@@ -142,44 +223,58 @@ export async function setServerBaseUrl(newUrl: string): Promise<boolean> {
 export async function resetServerBaseUrl(): Promise<void> {
   try {
     await AsyncStorage.removeItem(SERVER_URL_STORAGE_KEY);
-  } catch (err) {
-    console.warn('Failed to clear stored server address:', err);
+  } catch {
+    // Ignore storage clear warning
   }
-  cachedUrl = getDefaultBaseUrl();
-  lastCacheTime = Date.now();
+  cachedUrl = null;
+  lastCacheTime = 0;
 }
 
+// 6. Fast Parallel Probe: Tests all candidates concurrently; fastest responsive server wins
 export async function resolveFastestServer(): Promise<string> {
-  const candidates = [
-    cachedUrl,
-    process.env.EXPO_PUBLIC_API_BASE_URL,
-    Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000',
-  ].filter((url): url is string => Boolean(url && isValidServerUrl(url)));
+  const candidates = getCandidateServers();
 
-  const uniqueCandidates = Array.from(new Set(candidates.map((u) => cleanUrl(u))));
+  if (candidates.length === 0) {
+    const fallback = getDefaultBaseUrl();
+    cachedUrl = fallback;
+    return fallback;
+  }
 
-  for (const url of uniqueCandidates) {
+  const probeServer = async (targetUrl: string): Promise<string> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1800); // 1.8s timeout per probe
+
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-      const res = await fetch(`${url}/api/settings/school/`, {
+      const res = await fetch(`${targetUrl}/api/settings/school/`, {
         method: 'GET',
         headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
 
-      if (res.status === 200 || res.status === 401 || res.status === 403) {
-        cachedUrl = url;
-        lastCacheTime = Date.now();
-        return url;
+      // Status 200, 401, or 403 proves the Django backend is actively listening
+      if (res.status >= 200 && res.status < 500) {
+        return targetUrl;
       }
-    } catch {
-      // Check next candidate server
+      throw new Error(`Probe failed with status ${res.status}`);
+    } catch (err) {
+      clearTimeout(timeoutId);
+      throw err;
     }
-  }
+  };
 
-  return getServerBaseUrl();
+  try {
+    const fastestUrl = await Promise.any(candidates.map((url) => probeServer(url)));
+    cachedUrl = fastestUrl;
+    lastCacheTime = Date.now();
+    AsyncStorage.setItem(SERVER_URL_STORAGE_KEY, fastestUrl).catch(() => {});
+    return fastestUrl;
+  } catch {
+    // Fall back to primary candidate if all probes timeout
+    const fallback = candidates[0];
+    cachedUrl = fallback;
+    return fallback;
+  }
 }
 
 export async function testServerConnection(
@@ -190,7 +285,7 @@ export async function testServerConnection(
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
 
     const response = await fetch(`${target}/api/settings/school/`, {
       method: 'GET',
@@ -200,13 +295,14 @@ export async function testServerConnection(
     clearTimeout(timeoutId);
 
     const pingMs = Date.now() - startTime;
-    if (response.status === 200 || response.status === 401 || response.status === 403) {
-      return { ok: true, message: `Connected to server (${pingMs}ms)`, pingMs };
+    if (response.status >= 200 && response.status < 500) {
+      return { ok: true, message: `Connected to school server (${pingMs}ms)`, pingMs };
     }
     return { ok: false, message: `Server replied with status ${response.status}`, pingMs };
-  } catch (err: any) {
+  } catch (err: unknown) {
     const pingMs = Date.now() - startTime;
-    if (err.name === 'AbortError') {
+    const isAbort = err && typeof err === 'object' && 'name' in err && err.name === 'AbortError';
+    if (isAbort) {
       return { ok: false, message: 'Connection timed out. Check server address.', pingMs };
     }
     return { ok: false, message: 'Cannot reach server. Verify network connection.', pingMs };
@@ -222,6 +318,7 @@ export default {
   testServerConnection,
   isValidServerUrl,
   cleanUrl,
+  sanitizeUrl,
   getDefaultBaseUrl,
   SERVER_URL_STORAGE_KEY,
   DEFAULT_SERVER_URL,

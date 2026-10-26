@@ -1,5 +1,7 @@
 {
-  "active_tunnel_url": "https://prominent-unsigned-highway-champions.trycloudflare.com",
-  "lan_servers": [],
+  "active_tunnel_url": "https://course-converted-thin-wells.trycloudflare.com",
+  "lan_servers": [
+    "http://192.168.100.4:8000"
+  ],
   "production_domain": "https://lapasan.attendsure.com.ph"
 }
