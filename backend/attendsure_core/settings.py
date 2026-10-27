@@ -1,10 +1,11 @@
 """
-AttendSure - Core System & Hardware Configuration
+AttendSure V3 - Core System & Hardware Configuration
 Optimized for Campus IoT Gate Kiosks, Mobile Geofencing, and Administrative Portal.
 File: backend/attendsure_core/settings.py
 """
 
 import os
+import sys
 import json
 from pathlib import Path
 from urllib.parse import urlparse
@@ -34,7 +35,7 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 # ==============================================================================
-# 2. DYNAMIC NETWORK & HOST RESOLUTION (PARSED FROM ROOT endpoints.json)
+# 2. DYNAMIC NETWORK & HOST RESOLUTION
 # ==============================================================================
 
 ENDPOINTS_JSON_PATH = BASE_DIR.parent / 'endpoints.json'
@@ -59,7 +60,6 @@ if ENDPOINTS_JSON_PATH.exists():
     except Exception:
         pass
 
-# Parse ALLOWED_HOSTS from .env
 env_hosts = os.getenv('ALLOWED_HOSTS', '')
 if env_hosts:
     ALLOWED_HOSTS = [h.strip() for h in env_hosts.split(',') if h.strip()]
@@ -69,7 +69,7 @@ else:
 REQUIRED_HOSTS = [
     'lapasan.attendsure.com.ph',
     '.attendsure.com.ph',
-    '.trycloudflare.com',        # Allows any active Cloudflare tunnel
+    '.trycloudflare.com',
     '10.16.115.49',
     '172.20.140.221',
     '172.20.141.220',
@@ -78,7 +78,6 @@ REQUIRED_HOSTS = [
     '0.0.0.0',
 ]
 
-# Add hosts discovered from endpoints.json
 if dynamic_tunnel_host and dynamic_tunnel_host not in REQUIRED_HOSTS:
     REQUIRED_HOSTS.append(dynamic_tunnel_host)
 
@@ -93,12 +92,10 @@ for host in REQUIRED_HOSTS:
 if DEBUG and '*' not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append('*')
 
-# Reverse Proxy / L3 Gateway Forwarding
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
 
-# CSRF Trusted Origins
 CSRF_TRUSTED_ORIGINS = [
     'https://*.trycloudflare.com',
     'http://*.trycloudflare.com',
@@ -117,6 +114,7 @@ CSRF_TRUSTED_ORIGINS = [
     'http://127.0.0.1:5173',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
+    'http://172.20.140.27:8000',
 ]
 
 if dynamic_tunnel_origin and dynamic_tunnel_origin not in CSRF_TRUSTED_ORIGINS:
@@ -140,8 +138,8 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'corsheaders',
 
-    # AttendSure local apps
-    'apps.core',
+    # AttendSure Core & Feature Apps (explicit AppConfig classes)
+    'apps.core.apps.CoreConfig',
     'apps.academics.apps.AcademicsConfig',
     'apps.api.apps.ApiConfig',
     'apps.scanners.apps.ScannersConfig',
@@ -185,15 +183,24 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'attendsure_core.wsgi.application'
+ASGI_APPLICATION = 'attendsure_core.asgi.application'
 
 
 # ==============================================================================
-# 5. DATABASE ARCHITECTURE (POSTGRESQL DEFAULT + FASTER FETCHING)
+# 5. DATABASE ARCHITECTURE (POSTGRESQL PRODUCTION + TEST SQLITE SWITCH)
 # ==============================================================================
 
 db_engine_choice = os.getenv('DB_ENGINE', 'postgresql').strip().lower()
 
-if db_engine_choice == 'postgresql':
+# When running automated tests, switch automatically to fast in-memory SQLite
+if 'test' in sys.argv:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
+    }
+elif db_engine_choice == 'postgresql':
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -202,7 +209,6 @@ if db_engine_choice == 'postgresql':
             'PASSWORD': os.getenv('DB_PASSWORD'),
             'HOST': os.getenv('DB_HOST', '127.0.0.1'),
             'PORT': os.getenv('DB_PORT', '5432'),
-            # Keeps TCP connections warm for 300 seconds to accelerate queries
             'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', 300)),
             'OPTIONS': {
                 'connect_timeout': 5,
@@ -219,38 +225,22 @@ else:
 
 
 # ==============================================================================
-# 6. IN-MEMORY CACHE
+# 6. IN-MEMORY CACHE (HIGH-SPEED RAM STORAGE)
 # ==============================================================================
 
-REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
-
-if DEBUG:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "attendsure-local-ram-cache",
-        }
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "attendsure-local-ram-cache",
     }
-else:
-    CACHES = {
-        "default": {
-            "BACKEND": "django_redis.cache.RedisCache",
-            "LOCATION": REDIS_URL,
-            "OPTIONS": {
-                "CLIENT_CLASS": "django_redis.client.DefaultClient",
-                "CONNECTION_POOL_KWARGS": {"max_connections": 100},
-                "SOCKET_CONNECT_TIMEOUT": 5,
-                "SOCKET_TIMEOUT": 5,
-            },
-            "KEY_PREFIX": "attendsure",
-        }
-    }
+}
 
 
 # ==============================================================================
 # 7. ASYNCHRONOUS BACKGROUND TASKS (CELERY & REDIS)
 # ==============================================================================
 
+REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
@@ -263,7 +253,7 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 4
 
 
 # ==============================================================================
-# 8. REST API & THROTTLING (CYBERSECURITY DEFENSE)
+# 8. REST API & THROTTLING (CYBERSECURITY CONTROLS)
 # ==============================================================================
 
 REST_FRAMEWORK = {
@@ -286,7 +276,6 @@ REST_FRAMEWORK = {
     },
 }
 
-# Cross-Origin Resource Sharing (CORS) Configuration
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
 else:
@@ -302,6 +291,8 @@ else:
         'http://172.20.140.221',
         'http://172.20.140.221:5173',
         'http://172.20.140.221:8000',
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
     ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -428,4 +419,4 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = Trues
+    SECURE_HSTS_PRELOAD = True

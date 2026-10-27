@@ -1,44 +1,45 @@
 """
-AttendSure - Software License Enforcement Middleware
+AttendSure V3 - Software License Verification Middleware
 File: backend/apps/core/middleware.py
 """
 
-import os
-from django.conf import settings
+import logging
 from django.http import JsonResponse
-from apps.academics.models import SchoolProfile
-from .licensing import LicenseManager
+from django.utils.deprecation import MiddlewareMixin
+from apps.core.licensing import verify_system_license
 
-class SoftwareLicenseMiddleware:
-    def __init__(self, get_response):
-        self.get_response = get_response
+logger = logging.getLogger(__name__)
 
-    def __call__(self, request):
-        # 1. Bypass static, media, and health check routes
-        if request.path.startswith('/static/') or request.path.startswith('/media/'):
-            return self.get_response(request)
 
-        if request.path in ('/api/health/', '/health/'):
-            return self.get_response(request)
+class SoftwareLicenseMiddleware(MiddlewareMixin):
+    """
+    Validates institutional hardware fingerprint and licensing.
+    Allows authentication, static assets, and health checks to bypass license checks.
+    """
+    EXEMPT_PATHS = [
+        '/api/auth/',
+        '/api/utils/db-check/',
+        '/api/core/maintenance/db-check/',
+        '/admin/',
+        '/static/',
+        '/media/',
+    ]
 
-        # 2. Development Mode Bypass
-        is_dev = getattr(settings, 'DEBUG', False) or os.getenv('ATTENDSURE_DEV_MODE', '').lower() in ('true', '1')
-        if is_dev:
-            return self.get_response(request)
+    def process_request(self, request):
+        path = request.path
 
-        # 3. Production Verification (Matches verify_license in licensing.py)
-        school = SchoolProfile.objects.first()
-        active_school_id = school.school_id if school else ""
+        # Allow exempt system paths
+        if any(path.startswith(exempt) for exempt in self.EXEMPT_PATHS):
+            return None
 
-        try:
-            LicenseManager.verify_license(active_school_id=active_school_id)
-        except (PermissionError, ValueError) as exc:
+        # Verify licensing status
+        is_valid, message = verify_system_license()
+        if not is_valid:
+            logger.warning(f"Software license check rejected: {message}")
             return JsonResponse({
-                "status": "UNLICENSED_INSTANCE",
-                "error": "Access Denied: Unlicensed Software Deployment",
-                "detail": str(exc),
-                "resolution": "Contact the authorized software vendor to acquire a valid license for this institution.",
-                "vendor": "AttendSure Engineering",
+                'error': 'Institutional License Inactive',
+                'detail': message,
+                'status': 'LOCKED',
             }, status=403)
 
-        return self.get_response(request)
+        return None

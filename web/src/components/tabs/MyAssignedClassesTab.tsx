@@ -1,22 +1,31 @@
 /**
- * AttendSure - Assigned Classes & Student Attendance
+ * AttendSure - Assigned Classes & Student Attendance Directory
  * File: web/src/components/tabs/MyAssignedClassesTab.tsx
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import apiClient from '../../api/client';
+import { exportToCsv } from '../common/Pagination';
+import { Modal } from '../ui/Modal';
+import { Button } from '../ui/Button';
 import {
-  BookOpen,
   Users,
-  MapPin,
   Search,
   RefreshCw,
-  ShieldCheck,
-  X,
   CreditCard,
   School,
   Clock,
-  ChevronDown,
+  Download,
+  Copy,
+  Check,
+  User as UserIcon,
+  Phone,
+  QrCode,
+  MapPin,
+  AlertCircle,
+  Printer,
+  ShieldCheck,
+  BookOpen,
 } from 'lucide-react';
 
 export interface StudentItem {
@@ -46,6 +55,45 @@ export interface AssignedClass {
   is_adviser?: boolean;
 }
 
+const isSafeImageUrl = (url?: string | null): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.trim().toLowerCase();
+  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
+  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
+  return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('/') || clean.startsWith('data:image/');
+};
+
+const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
+  const cleanText = String(textToCopy || '').trim();
+  if (!cleanText) return false;
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(cleanText);
+      return true;
+    } catch {}
+  }
+
+  if (typeof document !== 'undefined') {
+    const textArea = document.createElement('textarea');
+    textArea.value = cleanText;
+    textArea.setAttribute('readonly', '');
+    textArea.style.position = 'fixed';
+    textArea.style.top = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.select();
+    let copied = false;
+    try {
+      copied = document.execCommand('copy');
+    } catch {
+      copied = false;
+    }
+    document.body.removeChild(textArea);
+    return copied;
+  }
+  return false;
+};
+
 const extractGradeLevelString = (val: any): string => {
   if (val === null || val === undefined) return 'Grade 7';
   if (typeof val === 'string') return val.trim() || 'Grade 7';
@@ -57,28 +105,25 @@ const extractGradeLevelString = (val: any): string => {
   return String(val).trim() || 'Grade 7';
 };
 
-const sanitizeImageUrl = (url?: string | null): string | null => {
-  if (!url || typeof url !== 'string') return null;
-  const clean = url.trim();
-  if (/^(https?:\/\/|\/media\/|\/static\/|data:image\/(png|jpe?g|webp|gif);base64,)/i.test(clean)) {
-    return clean;
-  }
-  return null;
-};
-
 export const MyAssignedClassesTab: React.FC = () => {
   const [classes, setClasses] = useState<AssignedClass[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedClass, setSelectedClass] = useState<AssignedClass | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [userRole, setUserRole] = useState<string>('FACULTY');
   const [viewScope, setViewScope] = useState<'MY_CLASSES' | 'ALL_CLASSES'>('MY_CLASSES');
+  const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const [badgeStudent, setBadgeStudent] = useState<StudentItem | null>(null);
 
   const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
+  const isInteracting = useRef<boolean>(false);
+  isInteracting.current = Boolean(badgeStudent);
 
-  const fetchClasses = useCallback(async () => {
+  const fetchClasses = useCallback(async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
+      setError(null);
 
       const userRes = await apiClient.get('/me/');
       if (userRes.data) {
@@ -113,15 +158,15 @@ export const MyAssignedClassesTab: React.FC = () => {
             st.full_name ||
             `${st.first_name || ''} ${st.last_name || ''}`.trim() ||
             'Learner',
-          gender: st.gender || st.sex || '—',
-          photo_url: sanitizeImageUrl(st.photo_url || st.photo),
+          gender: st.gender || st.sex || 'Male',
+          photo_url: isSafeImageUrl(st.photo_url || st.photo) ? (st.photo_url || st.photo) : null,
           attendance_status: String(st.attendance_status || 'UNSCANNED').toUpperCase(),
           parent_contact: st.parent_contact || '',
           rfid_uid: st.rfid_uid || '',
         }));
 
-        const sectionName = item.section_name || item.name || 'Garnet';
-        const subjectTitle = item.subject_title || item.subject_name || 'English 7';
+        const sectionName = item.section_name || item.name || 'Section';
+        const subjectTitle = item.subject_title || item.subject_name || 'Subject';
 
         return {
           schedule_id: item.schedule_id || item.id || idx + 1,
@@ -129,11 +174,11 @@ export const MyAssignedClassesTab: React.FC = () => {
           section_name: sectionName,
           grade_level: extractGradeLevelString(item.grade_level || item.section?.grade_level),
           display_name: item.display_name || `${sectionName} • ${subjectTitle}`,
-          subject_code: item.subject_code || item.subject?.code || 'ENG-7',
+          subject_code: item.subject_code || item.subject?.code || 'SUB',
           subject_title: subjectTitle,
-          start_time: item.start_time ? String(item.start_time).slice(0, 5) : '07:00',
-          end_time: item.end_time ? String(item.end_time).slice(0, 5) : '09:00',
-          room_number: item.room_number || item.room || 'Rm-293',
+          start_time: item.start_time ? String(item.start_time).slice(0, 5) : '07:30',
+          end_time: item.end_time ? String(item.end_time).slice(0, 5) : '08:30',
+          room_number: item.room_number || item.room || 'Room —',
           total_students: students.length || Number(item.total_students) || 0,
           students,
           is_adviser: Boolean(item.is_adviser),
@@ -154,16 +199,36 @@ export const MyAssignedClassesTab: React.FC = () => {
       } else {
         setSelectedClass(null);
       }
-    } catch (err) {
-      console.error('Failed to load classes:', err);
+    } catch (err: any) {
+      if (!silent) {
+        setError(err.response?.data?.detail || err.response?.data?.error || 'Failed to load assigned classes.');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [viewScope]);
 
   useEffect(() => {
-    fetchClasses();
+    fetchClasses(false);
   }, [fetchClasses]);
+
+  // Safe live background refresh
+  useEffect(() => {
+    const liveInterval = setInterval(() => {
+      if (!isInteracting.current && document.visibilityState === 'visible') {
+        fetchClasses(true);
+      }
+    }, 10000);
+    return () => clearInterval(liveInterval);
+  }, [fetchClasses]);
+
+  const handleCopy = async (val: string) => {
+    const ok = await copyTextSafely(val);
+    if (ok) {
+      setCopiedValue(val);
+      setTimeout(() => setCopiedValue((prev) => (prev === val ? null : prev)), 2000);
+    }
+  };
 
   const filteredStudents = useMemo(() => {
     if (!selectedClass) return [];
@@ -177,43 +242,97 @@ export const MyAssignedClassesTab: React.FC = () => {
     );
   }, [selectedClass, searchQuery]);
 
+  // 4 Top Metrics matching the screenshot design
   const stats = useMemo(() => {
-    const list = selectedClass?.students || [];
-    const present = list.filter((s) => s.attendance_status === 'PRESENT').length;
-    const late = list.filter((s) => s.attendance_status === 'LATE').length;
-    const flagged = list.filter(
-      (s) => s.attendance_status === 'UNVERIFIED' || s.attendance_status === 'CUTTING'
-    ).length;
-    const unscanned = list.filter((s) => s.attendance_status === 'UNSCANNED').length;
+    const totalClasses = classes.length;
+    const currentRosterCount = selectedClass?.students.length || 0;
+    const presentToday = (selectedClass?.students || []).filter((s) => s.attendance_status === 'PRESENT').length;
+    const cardsPaired = (selectedClass?.students || []).filter((s) => Boolean(s.rfid_uid)).length;
 
-    return { total: list.length, present, late, flagged, unscanned };
-  }, [selectedClass]);
+    return { totalClasses, currentRosterCount, presentToday, cardsPaired };
+  }, [classes, selectedClass]);
 
-  if (loading) {
-    return (
-      <div style={{ padding: 60, textAlign: 'center', color: '#64748b' }}>
-        <RefreshCw size={26} className="animate-spin" style={{ margin: '0 auto 10px auto', display: 'block', color: '#004b87' }} />
-        <span style={{ fontWeight: 600, fontSize: '0.86rem' }}>Loading teaching sessions and students...</span>
-      </div>
+  const handleExportCsv = () => {
+    if (!selectedClass) return;
+    exportToCsv(
+      `AttendSure_ClassAttendance_${selectedClass.section_name}_${new Date().toISOString().slice(0, 10)}.csv`,
+      ['LRN', 'Student Name', 'Sex', 'Class Section', 'Subject', 'RFID UID', 'Parent Contact', 'Attendance Status'],
+      filteredStudents.map((st) => [
+        st.lrn,
+        st.name,
+        st.gender,
+        selectedClass.section_name,
+        selectedClass.subject_title,
+        st.rfid_uid || '',
+        st.parent_contact || '',
+        st.attendance_status,
+      ])
     );
-  }
+  };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
-      {/* 1. Header Bar with Dynamic Scope */}
-      <div style={headerCardStyle}>
-        <div>
-          <h2 style={{ fontSize: '1.20rem', fontWeight: 800, color: '#003460', margin: 0 }}>
-            My Assigned Classes &amp; Student Attendance
-          </h2>
-          <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
-            {isAdmin && viewScope === 'ALL_CLASSES'
-              ? 'Institutional View: Showing all school sections (Administrator mode).'
-              : 'Faculty View: Assigned teaching sessions and class advisory rosters.'}
-          </span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* 1. Four Metric Cards */}
+      <div style={statsGrid}>
+        <div style={statCard}>
+          <div style={statLabel}>ASSIGNED CLASSES</div>
+          <div style={{ ...statVal, color: '#0f172a' }}>{stats.totalClasses}</div>
+          <div style={statSub}>Active teaching timetable sessions</div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={statCard}>
+          <div style={statLabel}>CLASS ROSTER</div>
+          <div style={{ ...statVal, color: '#16a34a' }}>{stats.currentRosterCount}</div>
+          <div style={statSub}>Enrolled learners in selected class</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={statLabel}>PRESENT TODAY</div>
+          <div style={{ ...statVal, color: '#004b87' }}>
+            {stats.presentToday} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentRosterCount}</span>
+          </div>
+          <div style={statSub}>Verified classroom attendance scans</div>
+        </div>
+
+        <div style={statCard}>
+          <div style={statLabel}>RFID CARDS PAIRED</div>
+          <div style={{ ...statVal, color: '#d97706' }}>
+            {stats.cardsPaired} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentRosterCount}</span>
+          </div>
+          <div style={statSub}>Learners with linked gate cards</div>
+        </div>
+      </div>
+
+      {/* 2. Top Filter and Actions Bar */}
+      <div style={controlBar}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <select
+            value={
+              selectedClass
+                ? String(selectedClass.schedule_id || selectedClass.section_id)
+                : ''
+            }
+            onChange={(e) => {
+              const found = classes.find(
+                (c) => String(c.schedule_id || c.section_id) === e.target.value
+              );
+              if (found) {
+                setSelectedClass(found);
+                setSearchQuery('');
+              }
+            }}
+            style={selectStyle}
+          >
+            {classes.map((c, idx) => (
+              <option
+                key={`dropdown-class-${c.schedule_id || c.section_id}-${idx}`}
+                value={String(c.schedule_id || c.section_id)}
+              >
+                {c.section_name} ({c.grade_level}) &bull; {c.subject_title} — {c.total_students} Students {c.is_adviser ? '(Adviser)' : ''}
+              </option>
+            ))}
+          </select>
+
           {isAdmin && (
             <div style={toggleContainerStyle}>
               <button
@@ -240,331 +359,391 @@ export const MyAssignedClassesTab: React.FC = () => {
               </button>
             </div>
           )}
+        </div>
 
-          <div style={roleBadgeStyle}>
-            <ShieldCheck size={13} />
-            <span>{isAdmin ? 'ADMINISTRATOR' : selectedClass?.is_adviser ? 'CLASS ADVISER' : 'SUBJECT TEACHER'}</span>
-          </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" onClick={handleExportCsv} style={secondaryBtnStyle}>
+            <Download size={14} />
+            <span>Export CSV ({filteredStudents.length})</span>
+          </button>
 
-          <button
-            type="button"
-            onClick={fetchClasses}
-            style={refreshButtonStyle}
-          >
-            <RefreshCw size={12} /> Refresh
+          <button type="button" onClick={() => fetchClasses(false)} style={primaryBtnStyle}>
+            <RefreshCw size={14} />
+            <span>Refresh Roster</span>
           </button>
         </div>
       </div>
 
-      {classes.length === 0 ? (
-        <div style={emptyCardStyle}>
-          <BookOpen size={44} color="#94a3b8" style={{ margin: '0 auto 10px auto' }} />
-          <h3 style={{ fontSize: '1.10rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-            No Assigned Classes Found
-          </h3>
-          <p style={{ fontSize: '0.82rem', color: '#64748b', maxWidth: 460, margin: '8px auto 0', lineHeight: 1.5 }}>
-            No teaching timetable slots or advisory sections are currently linked to your faculty profile. Please contact your school administrator or check the Schedules tab.
-          </p>
+      {/* 3. Main Directory White Card */}
+      <div style={mainCard}>
+        <div style={mainCardHeader}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h3 style={titleHeading}>
+                {selectedClass ? `${selectedClass.section_name} • ${selectedClass.subject_title}` : 'Assigned Classes Directory'}
+              </h3>
+              {selectedClass?.is_adviser && (
+                <span style={adviserTagStyle}>Official Class Adviser</span>
+              )}
+            </div>
+            <p style={subtitleText}>
+              {selectedClass
+                ? `${selectedClass.grade_level || 'Grade 7'} • Room: ${selectedClass.room_number || 'Room —'} • Time: ${selectedClass.start_time} - ${selectedClass.end_time}`
+                : 'Manage verified student attendance, check gate scan entries, and inspect class rosters.'}
+            </p>
+          </div>
+
+          <div style={searchWrapper}>
+            <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
+            <input
+              type="text"
+              placeholder="Search by Student Name, LRN..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={searchInput}
+            />
+          </div>
         </div>
-      ) : (
-        <>
-          {/* 2. Top Class Selector */}
-          <div style={selectorCardStyle}>
-            <div style={selectorHeaderRow}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 'min(100%, 280px)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#004b87', fontWeight: 800, fontSize: '0.80rem', flexShrink: 0 }}>
-                  <School size={16} />
-                  <span>TEACHING CLASS:</span>
+
+        {error && (
+          <div style={errorBanner}>
+            <AlertCircle size={16} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading ? (
+          <div style={loadingContainer}>
+            <RefreshCw size={28} className="animate-spin" color="#004b87" />
+            <span style={{ fontSize: '0.84rem', color: '#64748b' }}>Loading class roster...</span>
+          </div>
+        ) : classes.length === 0 ? (
+          <div style={emptyContainer}>
+            <BookOpen size={40} color="#cbd5e1" />
+            <p style={{ margin: '8px 0 2px 0', fontWeight: 700, color: '#334155', fontSize: '0.90rem' }}>
+              No Assigned Classes Found
+            </p>
+            <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8' }}>
+              No teaching timetable slots or advisory sections are currently linked to your faculty profile.
+            </p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr style={tableHeaderRow}>
+                  <th style={thStyle}>Learner Member</th>
+                  <th style={thStyle}>Learner LRN</th>
+                  <th style={thStyle}>Classroom &amp; Time</th>
+                  <th style={thStyle}>School Gate Card</th>
+                  <th style={thStyle}>Parent Contact</th>
+                  <th style={thStyle}>Attendance Status</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredStudents.map((st) => {
+                  const isPresent = st.attendance_status === 'PRESENT';
+                  const isLate = st.attendance_status === 'LATE';
+                  const isCutting = st.attendance_status === 'CUTTING' || st.attendance_status === 'UNVERIFIED';
+
+                  return (
+                    <tr key={st.id || st.lrn} style={tableRowStyle}>
+                      {/* 1. Learner Member with Avatar */}
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <div style={avatarStyle}>
+                            {st.photo_url ? (
+                              <img src={st.photo_url} alt={st.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                              <UserIcon size={18} color="#94a3b8" />
+                            )}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.86rem' }}>
+                              {st.name}
+                            </div>
+                            <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: 1 }}>
+                              {st.gender} &bull; {selectedClass?.grade_level || 'Grade 7'}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* 2. Learner LRN with Copy Button */}
+                      <td style={tdStyle}>
+                        <div style={codePill}>
+                          <span>{st.lrn}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(st.lrn)}
+                            style={copyBtn}
+                            title="Copy LRN"
+                          >
+                            {copiedValue === st.lrn ? <Check size={11} color="#16a34a" /> : <Copy size={11} color="#64748b" />}
+                          </button>
+                        </div>
+                      </td>
+
+                      {/* 3. Classroom & Time */}
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>
+                          <MapPin size={14} color="#004b87" />
+                          <span>{selectedClass?.room_number || 'Room —'}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>
+                          <Clock size={11} color="#94a3b8" />
+                          <span>{selectedClass?.start_time} - {selectedClass?.end_time}</span>
+                        </div>
+                      </td>
+
+                      {/* 4. School Gate Card */}
+                      <td style={tdStyle}>
+                        {st.rfid_uid ? (
+                          <div style={cardPairedBadge}>
+                            <CreditCard size={13} color="#16a34a" />
+                            <span>{st.rfid_uid}</span>
+                          </div>
+                        ) : (
+                          <div style={cardUnpairedBadge}>
+                            <CreditCard size={13} color="#94a3b8" />
+                            <span>Not Paired</span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 5. Parent Contact */}
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', color: '#334155' }}>
+                          <Phone size={13} color="#64748b" />
+                          <span>{st.parent_contact || 'None'}</span>
+                        </div>
+                      </td>
+
+                      {/* 6. Attendance Status */}
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            ...activePill,
+                            backgroundColor: isPresent ? '#f0fdf4' : isLate ? '#fffbeb' : isCutting ? '#fef2f2' : '#f1f5f9',
+                            borderColor: isPresent ? '#bbf7d0' : isLate ? '#fef3c7' : isCutting ? '#fecaca' : '#e2e8f0',
+                            color: isPresent ? '#16a34a' : isLate ? '#d97706' : isCutting ? '#dc2626' : '#64748b',
+                          }}
+                        >
+                          {st.attendance_status}
+                        </span>
+                      </td>
+
+                      {/* 7. Actions */}
+                      <td style={{ ...tdStyle, textAlign: 'right' }}>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => setBadgeStudent(st)}
+                            style={actionBtn}
+                            title="Print / View ID Pass"
+                          >
+                            <QrCode size={14} color="#004b87" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Student ID Pass Modal */}
+      {badgeStudent && (
+        <Modal
+          isOpen={Boolean(badgeStudent)}
+          onClose={() => setBadgeStudent(null)}
+          title="Student Classroom & Gate ID Pass"
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '6px 0' }}>
+            <div
+              style={{
+                width: 300,
+                backgroundColor: '#ffffff',
+                border: '2px solid #004b87',
+                borderRadius: 14,
+                overflow: 'hidden',
+                boxShadow: '0 8px 24px rgba(0, 75, 135, 0.12)',
+              }}
+            >
+              <div style={{ background: '#004b87', color: '#ffffff', padding: '12px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: '0.68rem', fontWeight: 800 }}>
+                  <ShieldCheck size={14} color="#38bdf8" />
+                  <span>ATTENDSURE STUDENT PASS</span>
+                </div>
+                <div style={{ fontSize: '0.58rem', color: '#e0f2fe', marginTop: 2 }}>
+                  Department of Education &bull; Classroom &amp; Gate Pass
+                </div>
+              </div>
+
+              <div style={{ padding: '16px 14px' }}>
+                <div style={{ margin: '0 auto 10px auto', display: 'flex', justifyContent: 'center' }}>
+                  <div style={avatarStyle}>
+                    {badgeStudent.photo_url ? (
+                      <img src={badgeStudent.photo_url} alt={badgeStudent.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <UserIcon size={34} color="#94a3b8" />
+                    )}
+                  </div>
                 </div>
 
-                <div style={{ position: 'relative', flex: 1, maxWidth: 380 }}>
-                  <select
-                    value={
-                      selectedClass
-                        ? String(selectedClass.schedule_id || selectedClass.section_id)
-                        : ''
-                    }
-                    onChange={(e) => {
-                      const found = classes.find(
-                        (c) => String(c.schedule_id || c.section_id) === e.target.value
-                      );
-                      if (found) {
-                        setSelectedClass(found);
-                        setSearchQuery('');
-                      }
-                    }}
-                    style={dropdownSelectStyle}
-                  >
-                    {classes.map((c, idx) => (
-                      <option
-                        key={`dropdown-class-${c.schedule_id || c.section_id}-${idx}`}
-                        value={String(c.schedule_id || c.section_id)}
-                      >
-                        {c.section_name} ({c.grade_level}) &bull; {c.subject_title} — {c.total_students} Students {c.is_adviser ? '(Adviser)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown
-                    size={16}
-                    color="#004b87"
-                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
+                  {badgeStudent.name}
+                </div>
+
+                <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b', marginTop: 3 }}>
+                  Section: {selectedClass?.section_name || 'Class Roster'}
+                </div>
+
+                <div
+                  onClick={() => handleCopy(badgeStudent.lrn)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    margin: '8px 0',
+                    padding: '4px 10px',
+                    backgroundColor: '#f1f5f9',
+                    borderRadius: 6,
+                    fontFamily: 'monospace',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    color: '#0f172a',
+                    cursor: 'pointer',
+                  }}
+                  title="Click to copy LRN"
+                >
+                  <span>LRN: {badgeStudent.lrn}</span>
+                  <Copy size={11} color="#64748b" />
+                </div>
+
+                <div
+                  style={{
+                    margin: '8px auto',
+                    padding: 6,
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 10,
+                    width: 118,
+                    height: 118,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(
+                      badgeStudent.lrn
+                    )}`}
+                    alt="Student QR Code"
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 </div>
               </div>
 
-              {/* Search Box */}
-              <div style={searchWrapperStyle}>
-                <Search size={14} color="#94a3b8" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
-                <input
-                  type="text"
-                  placeholder="Search student or LRN..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  style={searchFieldStyle}
-                />
-                {searchQuery.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    style={clearSearchButtonStyle}
-                  >
-                    <X size={13} color="#94a3b8" />
-                  </button>
-                )}
+              <div
+                style={{
+                  backgroundColor: '#f8fafc',
+                  borderTop: '1px solid #e2e8f0',
+                  padding: '8px 12px',
+                  fontSize: '0.66rem',
+                  color: '#64748b',
+                }}
+              >
+                Card UID:{' '}
+                <strong style={{ color: badgeStudent.rfid_uid ? '#059669' : '#d97706' }}>
+                  {badgeStudent.rfid_uid || 'No Card Linked'}
+                </strong>
               </div>
             </div>
 
-            {/* Quick-Select Chips */}
-            <div style={quickChipsContainer}>
-              <span style={quickSelectLabelStyle}>QUICK SELECT:</span>
-              {classes.map((c, idx) => {
-                const isSelected =
-                  selectedClass &&
-                  ((c.schedule_id && selectedClass.schedule_id && c.schedule_id === selectedClass.schedule_id) ||
-                    c.section_id === selectedClass.section_id);
-
-                return (
-                  <button
-                    key={`quick-chip-${c.schedule_id || c.section_id}-${idx}`}
-                    type="button"
-                    onClick={() => {
-                      setSelectedClass(c);
-                      setSearchQuery('');
-                    }}
-                    style={{
-                      ...chipButtonStyle,
-                      border: isSelected ? '1px solid #004b87' : '1px solid #e2e8f0',
-                      backgroundColor: isSelected ? '#004b87' : '#f8fafc',
-                      color: isSelected ? '#ffffff' : '#334155',
-                    }}
-                  >
-                    <span>{c.section_name} ({c.subject_code})</span>
-                    <span
-                      style={{
-                        padding: '1px 6px',
-                        borderRadius: 10,
-                        fontSize: '0.66rem',
-                        fontWeight: 800,
-                        backgroundColor: isSelected ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
-                        color: isSelected ? '#ffffff' : '#475569',
-                      }}
-                    >
-                      {c.total_students}
-                    </span>
-                  </button>
-                );
-              })}
+            <div style={{ display: 'flex', gap: 10, marginTop: 16, width: '100%', justifyContent: 'center' }}>
+              <Button variant="secondary" size="md" type="button" onClick={() => setBadgeStudent(null)}>
+                Close
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                type="button"
+                onClick={() => {
+                  window.print();
+                }}
+              >
+                <Printer size={15} style={{ marginRight: 6 }} />
+                Print ID Card
+              </Button>
             </div>
           </div>
-
-          {/* 3. Class Details & Student Attendance Table */}
-          {selectedClass && (
-            <div style={ledgerCardStyle}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <h3 style={{ fontSize: '1.20rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                    {selectedClass.section_name} ({selectedClass.grade_level}) &bull; {selectedClass.subject_title}
-                  </h3>
-                  {selectedClass.is_adviser && (
-                    <span style={adviserTagStyle}>Official Class Adviser</span>
-                  )}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.76rem', color: '#64748b', marginTop: 3, flexWrap: 'wrap' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <MapPin size={12} color="#004b87" /> {selectedClass.room_number || 'Room —'}
-                  </span>
-                  <span>&bull;</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <Clock size={12} color="#64748b" /> {selectedClass.start_time} - {selectedClass.end_time}
-                  </span>
-                  <span>&bull;</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <Users size={12} color="#004b87" /> {selectedClass.total_students} Enrolled Students
-                  </span>
-                </div>
-
-                <div style={responsiveMetricGrid}>
-                  <div style={statCardStyle}>
-                    <span style={statLabelStyle}>TOTAL STUDENTS</span>
-                    <span style={{ ...statValueStyle, color: '#0f172a' }}>{stats.total}</span>
-                  </div>
-                  <div style={{ ...statCardStyle, backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }}>
-                    <span style={{ ...statLabelStyle, color: '#16a34a' }}>PRESENT TODAY</span>
-                    <span style={{ ...statValueStyle, color: '#16a34a' }}>{stats.present}</span>
-                  </div>
-                  <div style={{ ...statCardStyle, backgroundColor: '#fffbeb', borderColor: '#fef3c7' }}>
-                    <span style={{ ...statLabelStyle, color: '#d97706' }}>LATE TODAY</span>
-                    <span style={{ ...statValueStyle, color: '#d97706' }}>{stats.late}</span>
-                  </div>
-                  <div style={{ ...statCardStyle, backgroundColor: '#fef2f2', borderColor: '#fecaca' }}>
-                    <span style={{ ...statLabelStyle, color: '#dc2626' }}>FLAGGED / ANOMALY</span>
-                    <span style={{ ...statValueStyle, color: '#dc2626' }}>{stats.flagged}</span>
-                  </div>
-                  <div style={{ ...statCardStyle, backgroundColor: '#f8fafc', borderColor: '#e2e8f0' }}>
-                    <span style={statLabelStyle}>PENDING SCANS</span>
-                    <span style={{ ...statValueStyle, color: '#64748b' }}>{stats.unscanned}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Roster Table */}
-              <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflowX: 'auto' }}>
-                <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', fontSize: '0.82rem' }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
-                      <th style={{ padding: '10px 14px', width: 34 }}>#</th>
-                      <th style={{ padding: '10px 14px' }}>Student Name &amp; Photo</th>
-                      <th style={{ padding: '10px 14px' }}>12-Digit LRN</th>
-                      <th style={{ padding: '10px 14px' }}>Sex</th>
-                      <th style={{ padding: '10px 14px' }}>Parent Contact (SMS)</th>
-                      <th style={{ padding: '10px 14px' }}>Gate RFID Card</th>
-                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Attendance Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredStudents.length > 0 ? (
-                      filteredStudents.map((st, idx) => {
-                        const isPresent = st.attendance_status === 'PRESENT';
-                        const isLate = st.attendance_status === 'LATE';
-                        const isFlagged =
-                          st.attendance_status === 'UNVERIFIED' || st.attendance_status === 'CUTTING';
-
-                        return (
-                          <tr key={`student-row-${st.id || st.lrn}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                            <td style={{ padding: '10px 14px', color: '#94a3b8' }}>{idx + 1}</td>
-                            <td style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                              {st.photo_url ? (
-                                <img
-                                  src={st.photo_url}
-                                  alt={st.name}
-                                  style={{
-                                    width: 34,
-                                    height: 34,
-                                    borderRadius: '50%',
-                                    objectFit: 'cover',
-                                    border: '1px solid #cbd5e1',
-                                  }}
-                                  onError={(e) => {
-                                    (e.target as HTMLElement).style.display = 'none';
-                                  }}
-                                />
-                              ) : (
-                                <div
-                                  style={{
-                                    width: 34,
-                                    height: 34,
-                                    borderRadius: '50%',
-                                    backgroundColor: '#e0f2fe',
-                                    color: '#004b87',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    fontWeight: 800,
-                                    fontSize: '0.74rem',
-                                  }}
-                                >
-                                  {st.name.charAt(0)}
-                                </div>
-                              )}
-                              <span style={{ fontWeight: 700, color: '#0f172a' }}>{st.name}</span>
-                            </td>
-                            <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: '#334155' }}>
-                              {st.lrn}
-                            </td>
-                            <td style={{ padding: '10px 14px', color: '#64748b' }}>{st.gender}</td>
-                            <td style={{ padding: '10px 14px', color: '#475569' }}>
-                              {st.parent_contact || '—'}
-                            </td>
-                            <td style={{ padding: '10px 14px' }}>
-                              {st.rfid_uid ? (
-                                <span style={rfidBadgeStyle}>
-                                  <CreditCard size={11} color="#059669" />
-                                  {st.rfid_uid}
-                                </span>
-                              ) : (
-                                <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>No card</span>
-                              )}
-                            </td>
-                            <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                              <span
-                                style={{
-                                  padding: '4px 10px',
-                                  borderRadius: 10,
-                                  fontSize: '0.70rem',
-                                  fontWeight: 800,
-                                  backgroundColor: isPresent
-                                    ? '#ecfdf5'
-                                    : isLate
-                                    ? '#fffbeb'
-                                    : isFlagged
-                                    ? '#fef2f2'
-                                    : '#f1f5f9',
-                                  color: isPresent
-                                    ? '#059669'
-                                    : isLate
-                                    ? '#d97706'
-                                    : isFlagged
-                                    ? '#dc2626'
-                                    : '#64748b',
-                                }}
-                              >
-                                {st.attendance_status}
-                              </span>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    ) : (
-                      <tr>
-                        <td colSpan={7} style={{ padding: 36, textAlign: 'center', color: '#94a3b8' }}>
-                          {searchQuery
-                            ? 'No students match your search query.'
-                            : 'No students registered in this section.'}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </>
+        </Modal>
       )}
     </div>
   );
 };
 
-// Styles
-const headerCardStyle: React.CSSProperties = {
+export default MyAssignedClassesTab;
+
+// Visual Design Styles Matching the Faculty Screenshot Exactly
+const statsGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
+  gap: 12,
+};
+
+const statCard: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  borderRadius: 10,
+  border: '1px solid #e2e8f0',
+  padding: '14px 18px',
+};
+
+const statLabel: React.CSSProperties = {
+  fontSize: '0.66rem',
+  fontWeight: 800,
+  color: '#64748b',
+  letterSpacing: '0.4px',
+  textTransform: 'uppercase',
+};
+
+const statVal: React.CSSProperties = {
+  fontSize: '1.60rem',
+  fontWeight: 800,
+  marginTop: 4,
+  lineHeight: 1.1,
+};
+
+const statSub: React.CSSProperties = {
+  fontSize: '0.72rem',
+  color: '#94a3b8',
+  marginTop: 3,
+};
+
+const controlBar: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
-  backgroundColor: '#ffffff',
-  padding: '12px 16px',
-  borderRadius: 12,
-  border: '1px solid #e2e8f0',
   flexWrap: 'wrap',
   gap: 12,
+};
+
+const selectStyle: React.CSSProperties = {
+  padding: '8px 14px',
+  borderRadius: 6,
+  border: '1px solid #cbd5e1',
+  backgroundColor: '#ffffff',
+  fontSize: '0.82rem',
+  color: '#334155',
+  fontWeight: 600,
+  outline: 'none',
+  cursor: 'pointer',
+  minWidth: 260,
 };
 
 const toggleContainerStyle: React.CSSProperties = {
@@ -577,24 +756,68 @@ const toggleContainerStyle: React.CSSProperties = {
 
 const toggleButtonStyle: React.CSSProperties = {
   border: 'none',
-  padding: '5px 12px',
+  padding: '6px 12px',
   borderRadius: 6,
   fontSize: '0.74rem',
   fontWeight: 700,
   cursor: 'pointer',
 };
 
-const roleBadgeStyle: React.CSSProperties = {
+const secondaryBtnStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 5,
-  padding: '5px 12px',
-  borderRadius: 20,
-  backgroundColor: '#ecfdf5',
-  border: '1px solid #a7f3d0',
-  color: '#047857',
-  fontSize: '0.72rem',
+  gap: 6,
+  backgroundColor: '#ffffff',
+  color: '#0f172a',
+  border: '1px solid #cbd5e1',
+  padding: '8px 14px',
+  borderRadius: 6,
+  fontWeight: 700,
+  fontSize: '0.80rem',
+  cursor: 'pointer',
+};
+
+const primaryBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  backgroundColor: '#004b87',
+  color: '#ffffff',
+  border: 'none',
+  padding: '8px 16px',
+  borderRadius: 6,
+  fontWeight: 700,
+  fontSize: '0.80rem',
+  cursor: 'pointer',
+};
+
+const mainCard: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  borderRadius: 12,
+  padding: '20px 24px',
+  border: '1px solid #e2e8f0',
+};
+
+const mainCardHeader: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  flexWrap: 'wrap',
+  gap: 14,
+  marginBottom: 16,
+};
+
+const titleHeading: React.CSSProperties = {
+  margin: 0,
+  fontSize: '1.20rem',
   fontWeight: 800,
+  color: '#0f172a',
+};
+
+const subtitleText: React.CSSProperties = {
+  margin: '4px 0 0 0',
+  fontSize: '0.80rem',
+  color: '#64748b',
 };
 
 const adviserTagStyle: React.CSSProperties = {
@@ -607,168 +830,150 @@ const adviserTagStyle: React.CSSProperties = {
   fontWeight: 800,
 };
 
-const refreshButtonStyle: React.CSSProperties = {
+const searchWrapper: React.CSSProperties = {
+  position: 'relative',
+  width: '100%',
+  maxWidth: 290,
+};
+
+const searchInput: React.CSSProperties = {
+  width: '100%',
+  padding: '8px 14px 8px 34px',
+  borderRadius: 8,
+  border: '1px solid #cbd5e1',
+  fontSize: '0.80rem',
+  outline: 'none',
+  boxSizing: 'border-box',
+  color: '#0f172a',
+};
+
+const tableStyle: React.CSSProperties = {
+  width: '100%',
+  minWidth: 700,
+  borderCollapse: 'collapse',
+  textAlign: 'left',
+};
+
+const tableHeaderRow: React.CSSProperties = {
+  borderBottom: '2px solid #e2e8f0',
+};
+
+const thStyle: React.CSSProperties = {
+  padding: '12px 14px',
+  fontSize: '0.74rem',
+  fontWeight: 700,
+  color: '#475569',
+};
+
+const tableRowStyle: React.CSSProperties = {
+  borderBottom: '1px solid #f1f5f9',
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: '14px 14px',
+  verticalAlign: 'middle',
+};
+
+const avatarStyle: React.CSSProperties = {
+  width: 38,
+  height: 38,
+  borderRadius: '50%',
+  backgroundColor: '#f1f5f9',
+  border: '1px solid #e2e8f0',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  overflow: 'hidden',
+  flexShrink: 0,
+};
+
+const codePill: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  backgroundColor: '#f1f5f9',
-  border: '1px solid #cbd5e1',
-  padding: '6px 12px',
-  borderRadius: 8,
+  padding: '3px 8px',
+  backgroundColor: '#f8fafc',
+  border: '1px solid #e2e8f0',
+  borderRadius: 6,
+  fontFamily: 'monospace',
   fontSize: '0.76rem',
   fontWeight: 700,
-  cursor: 'pointer',
-  color: '#334155',
-};
-
-const emptyCardStyle: React.CSSProperties = {
-  padding: 48,
-  textAlign: 'center',
-  backgroundColor: '#ffffff',
-  borderRadius: 14,
-  border: '1px solid #e2e8f0',
-};
-
-const selectorCardStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  border: '1px solid #e2e8f0',
-  padding: '14px 16px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-};
-
-const selectorHeaderRow: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  flexWrap: 'wrap',
-  gap: 12,
-};
-
-const dropdownSelectStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 32px 8px 12px',
-  borderRadius: 8,
-  border: '2px solid #004b87',
-  fontSize: '0.82rem',
-  fontWeight: 700,
   color: '#0f172a',
-  backgroundColor: '#f0f9ff',
-  outline: 'none',
-  cursor: 'pointer',
-  appearance: 'none',
 };
 
-const searchWrapperStyle: React.CSSProperties = {
-  position: 'relative',
-  width: '100%',
-  maxWidth: 280,
-};
-
-const searchFieldStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 28px 8px 30px',
-  borderRadius: 8,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.78rem',
-  outline: 'none',
-  boxSizing: 'border-box',
-};
-
-const clearSearchButtonStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: 8,
-  top: '50%',
-  transform: 'translateY(-50%)',
+const copyBtn: React.CSSProperties = {
   background: 'none',
   border: 'none',
   cursor: 'pointer',
-  padding: 2,
+  padding: 0,
+  display: 'flex',
+  alignItems: 'center',
 };
 
-const quickChipsContainer: React.CSSProperties = {
+const cardPairedBadge: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  fontSize: '0.76rem',
+  fontWeight: 700,
+  color: '#16a34a',
+  fontFamily: 'monospace',
+};
+
+const cardUnpairedBadge: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  fontSize: '0.76rem',
+  color: '#94a3b8',
+};
+
+const activePill: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '3px 10px',
+  borderRadius: 14,
+  fontSize: '0.70rem',
+  fontWeight: 800,
+};
+
+const actionBtn: React.CSSProperties = {
+  background: '#ffffff',
+  border: '1px solid #cbd5e1',
+  borderRadius: 6,
+  padding: '6px 8px',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+const errorBanner: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  overflowX: 'auto',
-  paddingBottom: 2,
+  backgroundColor: '#fef2f2',
+  border: '1px solid #fecaca',
+  color: '#991b1b',
+  borderRadius: 6,
+  padding: '10px 14px',
+  marginBottom: 14,
+  fontSize: '0.80rem',
 };
 
-const quickSelectLabelStyle: React.CSSProperties = {
-  fontSize: '0.70rem',
-  fontWeight: 800,
-  color: '#64748b',
-  letterSpacing: '0.4px',
-  flexShrink: 0,
-};
-
-const chipButtonStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '5px 12px',
-  borderRadius: 8,
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-  transition: 'all 0.15s ease',
-  flexShrink: 0,
-};
-
-const ledgerCardStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  border: '1px solid #e2e8f0',
-  padding: '16px 18px',
+const loadingContainer: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 16,
-};
-
-const responsiveMetricGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))',
+  alignItems: 'center',
+  justifyContent: 'center',
   gap: 10,
-  marginTop: 12,
+  padding: '40px 0',
 };
 
-const statCardStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 8,
-  padding: '10px 12px',
-  border: '1px solid #e2e8f0',
+const emptyContainer: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-};
-
-const statLabelStyle: React.CSSProperties = {
-  fontSize: '0.62rem',
-  fontWeight: 800,
-  color: '#64748b',
-  letterSpacing: '0.4px',
-};
-
-const statValueStyle: React.CSSProperties = {
-  fontSize: '1.20rem',
-  fontWeight: 800,
-  marginTop: 2,
-};
-
-const rfidBadgeStyle: React.CSSProperties = {
-  display: 'inline-flex',
   alignItems: 'center',
-  gap: 4,
-  padding: '2px 8px',
-  borderRadius: 4,
-  backgroundColor: '#ecfdf5',
-  color: '#059669',
-  fontFamily: 'monospace',
-  fontSize: '0.70rem',
-  fontWeight: 700,
-  border: '1px solid #a7f3d0',
+  justifyContent: 'center',
+  padding: '40px 0',
 };
-
-export default MyAssignedClassesTab;

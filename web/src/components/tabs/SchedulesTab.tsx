@@ -1,14 +1,6 @@
 /**
  * AttendSure - Academic Timetables, Sections & Schedules
  * File: web/src/components/tabs/SchedulesTab.tsx
- *
- * Cybersecurity & Performance:
- * 1. Adviser & Subject Teacher Integration: Highlights Class Adviser and itemizes Subject Teachers per section.
- * 2. Pre-population on Edit: Passes the selected schedule item into the modal so all fields show current data.
- * 3. Fluid Responsive Grid: Auto-fit minmax prevents card overlap on mobile & tablet.
- * 4. Unpaginated Timetable Feed: Loads full schedule slots without the 25-item cutoff.
- * 5. Sanitized Teacher Avatars: Shields against XSS and unsafe script links.
- * 6. SVG Vector Standards: All visual indicators use Lucide icons with zero emojis.
  */
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -16,7 +8,6 @@ import apiClient from '../../api/client';
 import { useAlert } from '../../context/AlertContext';
 import { 
   Calendar, 
-  Layers, 
   DoorOpen, 
   Users, 
   Search, 
@@ -41,9 +32,11 @@ interface ScheduleItem {
   schedule_code?: string;
   code?: string;
   section?: number | { id: number; name: string } | null;
+  section_id?: number;
   section_name?: string;
   grade_level_name?: string;
   subject?: number | { id: number; code?: string; title?: string; name?: string } | null;
+  subject_id?: number;
   subject_code?: string;
   subject_name?: string; 
   subject_title?: string;
@@ -63,14 +56,16 @@ interface SectionOption {
   id: number;
   name: string;
   code?: string;
-  grade_level?: string;
+  grade_level?: number | string;
   grade_level_name?: string;
-  display_label?: string;
+  grade_level_code?: string;
+  adviser?: number | { id: number; full_name?: string } | null;
+  adviser_id?: number | null;
   adviser_name?: string;
   adviser_employee_id?: string;
   adviser_photo_url?: string | null;
-  subject_teachers?: any[];
-  subject_teachers_count?: number;
+  room_number?: string;
+  capacity?: number;
 }
 
 interface FacultyOption {
@@ -85,12 +80,27 @@ interface FacultyOption {
   can_teach?: boolean;
 }
 
+// Cybersecurity helper: blocks dangerous links
 const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
   if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
   if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
   return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('/') || clean.startsWith('data:image/');
+};
+
+// Reads user role from local storage for view-only checks
+const getUserRole = (): string => {
+  try {
+    const raw = localStorage.getItem('attendsure_user') || localStorage.getItem('user');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return String(parsed.role || parsed.system_role || '').toUpperCase();
+    }
+    return String(localStorage.getItem('attendsure_role') || '').toUpperCase();
+  } catch {
+    return '';
+  }
 };
 
 interface ProfileAvatarProps {
@@ -102,7 +112,7 @@ interface ProfileAvatarProps {
 
 const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   photoUrl,
-  name = 'Faculty Member',
+  name = 'Teacher',
   size = 30,
   iconSize = 15,
 }) => {
@@ -172,13 +182,20 @@ export const SchedulesTab: React.FC = () => {
     };
   }, []);
 
+  // Security role check: Only managers can edit academic structure
+  const userRole = useMemo(() => getUserRole(), []);
+  const canManageSchedule = useMemo(() => {
+    return ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole) || userRole === '';
+  }, [userRole]);
+
+  // Faster data fetching with clean error handling
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setError('');
     try {
       const [schedRes, secRes, facRes] = await Promise.all([
-        apiClient.get('/schedules/?page_size=ALL'),
-        apiClient.get('/sections/?page_size=ALL'),
+        apiClient.get('/schedules/?page_size=500'),
+        apiClient.get('/sections/?page_size=500'),
         apiClient.get('/faculty/dropdown/'),
       ]);
 
@@ -196,7 +213,7 @@ export const SchedulesTab: React.FC = () => {
       if (!silent) {
         const status = err?.response?.status;
         const detail = err?.response?.data?.detail || err?.response?.data?.error || err.message;
-        setError(`[HTTP ${status || 'Error'}] Could not load timetable data: ${detail}`);
+        setError(`[Error ${status || 'Network'}] Could not load timetable data: ${detail}`);
       }
     } finally {
       if (!silent && isMounted.current) {
@@ -209,20 +226,30 @@ export const SchedulesTab: React.FC = () => {
     loadData(false);
   }, [loadData]);
 
+  // Safe background refresh (pauses when browser tab is hidden)
   useEffect(() => {
     const liveInterval = setInterval(() => {
-      if (!isInteracting.current && isMounted.current) {
+      if (!isInteracting.current && isMounted.current && document.visibilityState === 'visible') {
         loadData(true);
       }
-    }, 4000);
+    }, 10000);
 
     return () => clearInterval(liveInterval);
   }, [loadData]);
 
   const handleDelete = (id: number, code: string) => {
+    if (!canManageSchedule) {
+      showAlert({
+        title: 'Access Denied',
+        message: 'Only school administrators can delete class schedules.',
+        type: 'error',
+      });
+      return;
+    }
+
     showConfirm({
-      title: 'Delete Schedule Period',
-      message: `Permanently delete schedule period "${code}" from the timetable database? This class period will be unassigned.`,
+      title: 'Delete Class Schedule',
+      message: `Are you sure you want to delete class period "${code}"? The assigned subject teacher will be unassigned.`,
       confirmLabel: 'Delete Schedule',
       isDestructive: true,
       onConfirm: async () => {
@@ -275,9 +302,10 @@ export const SchedulesTab: React.FC = () => {
     return item.schedule_code || item.code || `SCH-${String(item.id).padStart(4, '0')}`;
   };
 
-  const getFacultyInfo = (item: ScheduleItem) => {
+  const getFacultyInfo = useCallback((item: ScheduleItem) => {
     let name = 'Unassigned';
     let photo: string | null = null;
+    let employeeId = '';
 
     if (item.faculty_name && item.faculty_name.trim() !== '') {
       name = item.faculty_name.trim();
@@ -304,11 +332,12 @@ export const SchedulesTab: React.FC = () => {
       if (matched) {
         name = matched.full_name || matched.name || name;
         photo = matched.photo_url || matched.photo || photo;
+        employeeId = matched.employee_id || '';
       }
     }
 
-    return { name, photo };
-  };
+    return { name, photo, employeeId };
+  }, [facultyList]);
 
   const getSubjectCode = (item: ScheduleItem) => {
     if (item.subject_code) return item.subject_code;
@@ -369,13 +398,42 @@ export const SchedulesTab: React.FC = () => {
 
       return true;
     });
-  }, [schedules, selectedSectionFilter, searchQuery, facultyList]);
+  }, [schedules, selectedSectionFilter, searchQuery, getFacultyInfo]);
 
-  // Selected Section Object (for displaying Class Adviser & Subject Teacher status)
+  // Selected Section Object
   const currentSelectedSectionObj = useMemo(() => {
     if (selectedSectionFilter === 'ALL') return null;
     return sections.find((sec) => String(sec.id) === selectedSectionFilter) || null;
   }, [selectedSectionFilter, sections]);
+
+  // Automatically resolves the Homeroom Adviser's real profile
+  const resolvedAdviser = useMemo(() => {
+    if (!currentSelectedSectionObj) return null;
+
+    let adviserId = currentSelectedSectionObj.adviser_id;
+    if (!adviserId && typeof currentSelectedSectionObj.adviser === 'number') {
+      adviserId = currentSelectedSectionObj.adviser;
+    } else if (!adviserId && typeof currentSelectedSectionObj.adviser === 'object' && currentSelectedSectionObj.adviser) {
+      adviserId = currentSelectedSectionObj.adviser.id;
+    }
+
+    if (adviserId) {
+      const match = facultyList.find((f) => f.id === adviserId);
+      if (match) {
+        return {
+          name: match.full_name || match.name || 'Teacher',
+          photo: match.photo_url || match.photo || null,
+          employee_id: match.employee_id || '',
+        };
+      }
+    }
+
+    return {
+      name: currentSelectedSectionObj.adviser_name || null,
+      photo: currentSelectedSectionObj.adviser_photo_url || null,
+      employee_id: currentSelectedSectionObj.adviser_employee_id || '',
+    };
+  }, [currentSelectedSectionObj, facultyList]);
 
   const uniqueSectionsCount = useMemo(() => {
     return new Set(schedules.map((s) => getSectionName(s)).filter((n) => n !== 'Unassigned')).size;
@@ -383,7 +441,7 @@ export const SchedulesTab: React.FC = () => {
 
   const uniqueTeachersCount = useMemo(() => {
     return new Set(schedules.map((s) => getFacultyInfo(s).name).filter((n) => n !== 'Unassigned')).size;
-  }, [schedules, facultyList]);
+  }, [schedules, getFacultyInfo]);
 
   const uniqueRoomsCount = useMemo(() => {
     return new Set(schedules.map((s) => getRoomDisplay(s)).filter((r) => r !== '—')).size;
@@ -391,7 +449,7 @@ export const SchedulesTab: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
-      {/* 1. Academic Telemetry Summary Cards */}
+      {/* 1. Class and Teacher Summary Cards */}
       <div style={statsGrid}>
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -417,7 +475,7 @@ export const SchedulesTab: React.FC = () => {
             <GraduationCap size={18} color="#004b87" />
           </div>
           <div style={{ ...statVal, color: '#004b87' }}>{uniqueTeachersCount}</div>
-          <div style={statSub}>Faculty members with teaching loads</div>
+          <div style={statSub}>Teachers with class loads</div>
         </div>
 
         <div style={statCard}>
@@ -426,7 +484,7 @@ export const SchedulesTab: React.FC = () => {
             <DoorOpen size={18} color="#d97706" />
           </div>
           <div style={{ ...statVal, color: '#d97706' }}>{uniqueRoomsCount}</div>
-          <div style={statSub}>Classrooms and labs in use</div>
+          <div style={statSub}>Rooms currently scheduled</div>
         </div>
       </div>
 
@@ -434,7 +492,7 @@ export const SchedulesTab: React.FC = () => {
       <div style={controlBar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#004b87', fontWeight: 800, fontSize: '0.80rem' }}>
-            <Filter size={15} /> Select Section:
+            <Filter size={15} /> Class Section:
           </div>
           <select
             value={selectedSectionFilter}
@@ -450,43 +508,45 @@ export const SchedulesTab: React.FC = () => {
           </select>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={() => handleOpenModal('SECTION')}
-            style={secondaryBtnStyle}
-            title="Manage Sections & Class Advisers"
-          >
-            <Users size={13} color="#004b87" /> + Section &amp; Adviser
-          </button>
+        {canManageSchedule && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => handleOpenModal('SECTION')}
+              style={secondaryBtnStyle}
+              title="Add a Section and Assign an Adviser"
+            >
+              <Users size={13} color="#004b87" /> + Section &amp; Adviser
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleOpenModal('ROOM')}
-            style={secondaryBtnStyle}
-            title="Add a Classroom / Lab"
-          >
-            <DoorOpen size={13} color="#004b87" /> + Room
-          </button>
+            <button
+              type="button"
+              onClick={() => handleOpenModal('ROOM')}
+              style={secondaryBtnStyle}
+              title="Add a Classroom or Laboratory"
+            >
+              <DoorOpen size={13} color="#004b87" /> + Room
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleOpenModal('SUBJECT')}
-            style={secondaryBtnStyle}
-            title="Add a Subject"
-          >
-            <BookOpen size={13} color="#004b87" /> + Subject
-          </button>
+            <button
+              type="button"
+              onClick={() => handleOpenModal('SUBJECT')}
+              style={secondaryBtnStyle}
+              title="Add an Academic Subject"
+            >
+              <BookOpen size={13} color="#004b87" /> + Subject
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleOpenModal('SCHEDULE')}
-            style={primaryBtnStyle}
-            title="Assign Subject Teacher to Section"
-          >
-            <Plus size={15} /> Add Subject Teacher Slot
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => handleOpenModal('SCHEDULE')}
+              style={primaryBtnStyle}
+              title="Assign a Subject Teacher to this Section"
+            >
+              <Plus size={15} /> Add Subject Teacher Slot
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 3. Section Overview Banner (Shown when a specific section is chosen) */}
@@ -494,10 +554,10 @@ export const SchedulesTab: React.FC = () => {
         <div style={sectionOverviewBanner}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <div style={avatarCircle}>
-              {currentSelectedSectionObj.adviser_photo_url ? (
+              {resolvedAdviser?.photo ? (
                 <img
-                  src={currentSelectedSectionObj.adviser_photo_url}
-                  alt={currentSelectedSectionObj.adviser_name || 'Adviser'}
+                  src={resolvedAdviser.photo}
+                  alt={resolvedAdviser.name || 'Adviser'}
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
               ) : (
@@ -511,7 +571,7 @@ export const SchedulesTab: React.FC = () => {
                   {currentSelectedSectionObj.name}
                 </span>
                 <span style={codeBadgePill}>
-                  {currentSelectedSectionObj.code || 'NO-CODE'}
+                  {currentSelectedSectionObj.code || 'SEC'}
                 </span>
                 {currentSelectedSectionObj.grade_level_name && (
                   <span style={{ fontSize: '0.74rem', color: '#64748b' }}>
@@ -524,12 +584,12 @@ export const SchedulesTab: React.FC = () => {
                 <span style={{ color: '#004b87', fontWeight: 700 }}>
                   Class Adviser:
                 </span>
-                <strong style={{ color: currentSelectedSectionObj.adviser_name ? '#0f172a' : '#d97706' }}>
-                  {currentSelectedSectionObj.adviser_name || 'No Homeroom Adviser Assigned'}
+                <strong style={{ color: resolvedAdviser?.name ? '#0f172a' : '#d97706' }}>
+                  {resolvedAdviser?.name || 'No Homeroom Adviser Assigned'}
                 </strong>
-                {currentSelectedSectionObj.adviser_employee_id && (
+                {resolvedAdviser?.employee_id && (
                   <span style={{ fontFamily: 'monospace', color: '#64748b' }}>
-                    ({currentSelectedSectionObj.adviser_employee_id})
+                    ({resolvedAdviser.employee_id})
                   </span>
                 )}
               </div>
@@ -546,26 +606,28 @@ export const SchedulesTab: React.FC = () => {
               </strong>
             </div>
 
-            <button
-              type="button"
-              onClick={() => handleOpenModal('SECTION', currentSelectedSectionObj)}
-              style={editSectionBtn}
-            >
-              <Edit2 size={12} />
-              <span>Change Adviser</span>
-            </button>
+            {canManageSchedule && (
+              <button
+                type="button"
+                onClick={() => handleOpenModal('SECTION', currentSelectedSectionObj)}
+                style={editSectionBtn}
+              >
+                <Edit2 size={12} />
+                <span>Change Adviser</span>
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {/* 4. Main Timetable Ledger */}
+      {/* 4. Main Timetable List */}
       <div style={cardStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
           <div style={searchContainerStyle}>
             <Search size={15} color="#94a3b8" />
             <input
               type="text"
-              placeholder="Search by section, subject code, subject teacher, room..."
+              placeholder="Search by section, subject, teacher, room..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={searchInputStyle}
@@ -613,10 +675,10 @@ export const SchedulesTab: React.FC = () => {
                   <th style={thStyle}>Code</th>
                   <th style={thStyle}>Class Section</th>
                   <th style={thStyle}>Subject</th>
-                  <th style={thStyle}>Subject Teacher (Faculty)</th>
+                  <th style={thStyle}>Subject Teacher</th>
                   <th style={thStyle}>Time Period</th>
                   <th style={thStyle}>Room</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>
+                  {canManageSchedule && <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -665,9 +727,16 @@ export const SchedulesTab: React.FC = () => {
                             size={30}
                             iconSize={15}
                           />
-                          <span style={{ fontSize: '0.80rem', fontWeight: 600, color: '#334155' }}>
-                            {facultyInfo.name}
-                          </span>
+                          <div>
+                            <span style={{ fontSize: '0.80rem', fontWeight: 600, color: '#334155', display: 'block' }}>
+                              {facultyInfo.name}
+                            </span>
+                            {facultyInfo.employeeId && (
+                              <span style={{ fontSize: '0.68rem', fontFamily: 'monospace', color: '#94a3b8' }}>
+                                {facultyInfo.employeeId}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </td>
 
@@ -686,26 +755,28 @@ export const SchedulesTab: React.FC = () => {
                         </div>
                       </td>
 
-                      <td style={{ ...tdStyle, textAlign: 'center' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', gap: 6 }}>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenModal('SCHEDULE', row)}
-                            style={iconBtnStyle}
-                            title="Edit Subject Teacher / Schedule"
-                          >
-                            <Edit2 size={13} color="#004b87" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(row.id, displayCode)}
-                            style={{ ...iconBtnStyle, borderColor: '#fee2e2', backgroundColor: '#fef2f2' }}
-                            title="Delete Schedule Period"
-                          >
-                            <Trash2 size={13} color="#dc2626" />
-                          </button>
-                        </div>
-                      </td>
+                      {canManageSchedule && (
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: 6 }}>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenModal('SCHEDULE', row)}
+                              style={iconBtnStyle}
+                              title="Edit Class Schedule"
+                            >
+                              <Edit2 size={13} color="#004b87" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(row.id, displayCode)}
+                              style={{ ...iconBtnStyle, borderColor: '#fee2e2', backgroundColor: '#fef2f2' }}
+                              title="Delete Class Schedule"
+                            >
+                              <Trash2 size={13} color="#dc2626" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -731,7 +802,7 @@ export const SchedulesTab: React.FC = () => {
 
 export default SchedulesTab;
 
-// Styles
+// Styles matching AttendSure Design Standards
 const statsGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',

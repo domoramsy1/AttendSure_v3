@@ -1,8 +1,43 @@
+"""
+AttendSure V3 - Academic Structure Models (Rooms, Sections, Subjects, Schedules)
+File: backend/apps/academics/models/structure.py
+"""
+
 from django.db import models
 from django.utils import timezone
 from .base import ENROLLMENT_TYPE_CHOICES, ENROLLMENT_STATUS_CHOICES, DAY_OF_WEEK_CHOICES
 from .institution import AcademicYear
 from .people import Student, FacultyProfile
+
+
+class Room(models.Model):
+    """
+    Classrooms, science laboratories, computer rooms, and lecture halls.
+    Must be created before assigning homerooms and subject schedules.
+    """
+    id = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=100, unique=True, help_text="e.g. Room 101, Science Lab A")
+    building = models.CharField(max_length=100, blank=True, default='', help_text="e.g. Main Building")
+    capacity = models.PositiveIntegerField(default=45, help_text="Maximum student seating capacity")
+    room_type = models.CharField(
+        max_length=50,
+        default='LECTURE',
+        choices=[
+            ('LECTURE', 'Regular Classroom'),
+            ('LAB', 'Laboratory (Science/Computer)'),
+            ('SPECIAL', 'Special Facility / Gymnasium'),
+        ]
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = 'rooms'
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} ({self.building})" if self.building else self.name
+
 
 class GradeLevel(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -23,8 +58,22 @@ class Section(models.Model):
     id = models.BigAutoField(primary_key=True)
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='sections')
     grade_level = models.ForeignKey(GradeLevel, on_delete=models.CASCADE, related_name='sections')
-    adviser = models.ForeignKey(FacultyProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='advising_sections')
+    adviser = models.ForeignKey(
+        FacultyProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='advising_sections'
+    )
+    room = models.ForeignKey(
+        Room,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sections'
+    )
     name = models.CharField(max_length=100)
+    code = models.CharField(max_length=50, blank=True, default='')
     track_strand = models.CharField(max_length=150, blank=True, default='')
     room_number = models.CharField(max_length=50, blank=True, default='')
     capacity = models.IntegerField(default=0)
@@ -33,6 +82,11 @@ class Section(models.Model):
         db_table = 'sections'
         unique_together = ('academic_year', 'grade_level', 'name')
         ordering = ['name']
+
+    def save(self, *args, **kwargs):
+        if self.room and not self.room_number:
+            self.room_number = self.room.name
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.grade_level.code} - {self.name}"
@@ -87,11 +141,27 @@ class Subject(models.Model):
 
 class Schedule(models.Model):
     id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, blank=True, default='')
+    schedule_code = models.CharField(max_length=64, blank=True, default='')
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='schedules')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='schedules')
-    faculty = models.ForeignKey(FacultyProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_schedules')
+    faculty = models.ForeignKey(
+        FacultyProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_schedules'
+    )
+    room = models.ForeignKey(
+        Room,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='schedules'
+    )
     start_time = models.TimeField()
     end_time = models.TimeField()
+    days_of_week = models.CharField(max_length=50, default='MON-FRI')
     room_number = models.CharField(max_length=50, blank=True, default='')
 
     class Meta:
@@ -100,7 +170,17 @@ class Schedule(models.Model):
         indexes = [
             models.Index(fields=['faculty', 'start_time']),
             models.Index(fields=['section', 'start_time']),
+            models.Index(fields=['room', 'start_time']),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.room and not self.room_number:
+            self.room_number = self.room.name
+        if not self.schedule_code and self.code:
+            self.schedule_code = self.code
+        elif not self.code and self.schedule_code:
+            self.code = self.schedule_code
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.section.name} - {self.subject.code} ({self.start_time})"

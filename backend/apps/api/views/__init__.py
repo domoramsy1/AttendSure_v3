@@ -1,5 +1,5 @@
 """
-AttendSure - Unified API Views Module
+AttendSure V3 - API Views Package Initializer
 File: backend/apps/api/views/__init__.py
 """
 
@@ -11,15 +11,38 @@ from .auth import (
     LiveFieldValidationAPIView,
     RegisterPushTokenAPIView,
 )
-from .dashboard import DashboardOverviewAPIView
-from .gate import GateLogsAPIView
 from .classroom import (
     ClassListAPIView,
     MyAssignedClassesAPIView,
     FacultyClassroomListAPIView,
+    StudentListAPIView,
     FacultyClassroomRosterAPIView,
     ClassroomBatchScanAPIView,
-    StudentListAPIView,
+)
+from .common import (
+    resolve_faculty_for_user,
+    get_user_role,
+    is_regular_teacher,
+    is_leadership_role,
+    safe_photo_url,
+    resolve_logo_field,
+    format_full_student_name,
+    format_deduped_section_label,
+    calculate_distance_meters,
+    verify_hardware_secret,
+    IsAcademicManagerPermission,
+    IsSystemAdminRole,
+    get_teacher_student_ids,
+    get_teacher_section_ids,
+    get_student_active_section,
+    get_school_metadata,
+)
+from .dashboard import DashboardOverviewAPIView
+from .gate import GateLogsAPIView, KioskScanAPIView
+from .geofence import (
+    GeofenceStatusAPIView,
+    GeofenceCheckInAPIView,
+    FacultyDeviceResetAPIView,
 )
 from .reports import (
     DepEdSF1DataAPIView,
@@ -29,7 +52,10 @@ from .reports import (
     UnifiedReportExportAPIView,
     UnifiedReportPrintAPIView,
     ReportAuditLogAPIView,
+    IsLeadershipOrAssignedTeacher,
+    IsLeadershipOnly,
 )
+from .sections import SectionListAPIView, SectionDetailAPIView
 from .sms import (
     PendingSmsDispatchAPIView,
     BulkSmsStatusAPIView,
@@ -43,37 +69,82 @@ from .utils import (
     db_check,
     flush_cache,
 )
-from .geofence import (
-    GeofenceStatusAPIView,
-    GeofenceCheckInAPIView,
-    FacultyDeviceResetAPIView,
-)
 from .viewsets import (
-    StudentViewSet,
-    FacultyViewSet,
-    SectionViewSet,
-    ScheduleViewSet,
-    SubjectViewSet,
     RoomViewSet,
     GradeLevelViewSet,
-    UserManagementViewSet,
-    ScannerViewSet,
+    SubjectViewSet,
+    SectionViewSet,
+    ScheduleViewSet,
+    StudentViewSet,
+    FacultyProfileViewSet,
+    IoTKioskViewSet,
     GatePassViewSet,
     SmsOutboxViewSet,
 )
 
 __all__ = [
-    'DatabaseLoginView', 'LoginAPIView', 'CurrentUserView', 'CurrentUserProfileView',
-    'LiveFieldValidationAPIView', 'RegisterPushTokenAPIView', 'DashboardOverviewAPIView',
-    'GateLogsAPIView', 'ClassListAPIView', 'MyAssignedClassesAPIView',
-    'FacultyClassroomListAPIView', 'FacultyClassroomRosterAPIView', 'ClassroomBatchScanAPIView',
-    'StudentListAPIView', 'DepEdSF1DataAPIView', 'DepEdSF2DataAPIView', 'DepEdSF4DataAPIView',
-    'DTRListAPIView', 'UnifiedReportExportAPIView', 'UnifiedReportPrintAPIView',
-    'ReportAuditLogAPIView', 'PendingSmsDispatchAPIView', 'BulkSmsStatusAPIView',
-    'MarkSmsStatusAPIView', 'SchoolSettingsAPIView', 'CalendarExceptionAPIView',
-    'ping_scanners', 'test_sms_gateway', 'db_check', 'flush_cache',
-    'GeofenceStatusAPIView', 'GeofenceCheckInAPIView', 'FacultyDeviceResetAPIView',
-    'StudentViewSet', 'FacultyViewSet', 'SectionViewSet', 'ScheduleViewSet',
-    'SubjectViewSet', 'RoomViewSet', 'GradeLevelViewSet', 'UserManagementViewSet',
-    'ScannerViewSet', 'GatePassViewSet', 'SmsOutboxViewSet',
+    'RoomViewSet',
+    'DatabaseLoginView',
+    'LoginAPIView',
+    'CurrentUserView',
+    'CurrentUserProfileView',
+    'LiveFieldValidationAPIView',
+    'RegisterPushTokenAPIView',
+    'ClassListAPIView',
+    'MyAssignedClassesAPIView',
+    'FacultyClassroomListAPIView',
+    'StudentListAPIView',
+    'FacultyClassroomRosterAPIView',
+    'ClassroomBatchScanAPIView',
+    'DashboardOverviewAPIView',
+    'GateLogsAPIView',
+    'KioskScanAPIView',
+    'GeofenceStatusAPIView',
+    'GeofenceCheckInAPIView',
+    'FacultyDeviceResetAPIView',
+    'DepEdSF1DataAPIView',
+    'DepEdSF2DataAPIView',
+    'DepEdSF4DataAPIView',
+    'DTRListAPIView',
+    'UnifiedReportExportAPIView',
+    'UnifiedReportPrintAPIView',
+    'ReportAuditLogAPIView',
+    'IsLeadershipOrAssignedTeacher',
+    'IsLeadershipOnly',
+    'SectionListAPIView',
+    'SectionDetailAPIView',
+    'PendingSmsDispatchAPIView',
+    'BulkSmsStatusAPIView',
+    'MarkSmsStatusAPIView',
+    'SchoolSettingsAPIView',
+    'CalendarExceptionAPIView',
+    'ping_scanners',
+    'test_sms_gateway',
+    'db_check',
+    'flush_cache',
+    'GradeLevelViewSet',
+    'SubjectViewSet',
+    'SectionViewSet',
+    'ScheduleViewSet',
+    'StudentViewSet',
+    'FacultyProfileViewSet',
+    'IoTKioskViewSet',
+    'GatePassViewSet',
+    'SmsOutboxViewSet',
+    'resolve_faculty_for_user',
+    'get_user_role',
+    'is_regular_teacher',
+    'is_leadership_role',
+    'safe_photo_url',
+    'resolve_logo_field',
+    'format_full_student_name',
+    'format_deduped_section_label',
+    'calculate_distance_meters',
+    'verify_hardware_secret',
+    'IsAcademicManagerPermission',
+    'IsSystemAdminRole',
+    'get_teacher_student_ids',
+    'get_teacher_section_ids',
+    'get_student_active_section',
+    'get_school_metadata',
 ]

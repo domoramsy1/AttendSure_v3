@@ -1,4 +1,7 @@
-# backend/apps/api/views/reports.py
+"""
+AttendSure V3 - Official DepEd & Institutional Reports
+File: backend/apps/api/views/reports.py
+"""
 
 import calendar
 from datetime import date
@@ -18,9 +21,9 @@ from apps.academics.models import (
 from apps.academics.services.sf1_service import get_sf1_data
 from apps.academics.services.sf2_service import generate_sf2_data
 from apps.academics.services.sf4_service import generate_sf4_data
+from apps.common.utils import is_leadership_role
 from .common import (
     get_school_metadata,
-    is_leadership_role,
     resolve_faculty_for_user,
     resolve_logo_field,
 )
@@ -42,15 +45,6 @@ class IsLeadershipOrAssignedTeacher(permissions.BasePermission):
             return False
         if user.is_superuser or user.is_staff or is_leadership_role(user):
             return True
-
-        role = str(getattr(user, 'role', '') or getattr(user, 'system_role', '') or '').upper()
-        profile = getattr(user, 'profile', None) or getattr(user, 'faculty_profile', None)
-        profile_role = str(getattr(profile, 'role', '') or '').upper() if profile else ''
-        user_role = role or profile_role
-
-        if user_role in ['TEACHER', 'FACULTY', 'EMPLOYEE', 'INSTRUCTOR', 'ADVISER']:
-            return True
-
         return resolve_faculty_for_user(user) is not None
 
 
@@ -68,7 +62,6 @@ class DepEdSF1DataAPIView(APIView):
             school_year = request.query_params.get('school_year')
             data = get_sf1_data(section_id, school_year=school_year)
 
-            # Prevent stale database seeds from overriding the active teacher
             user_full_name = request.user.get_full_name().strip()
             role = str(getattr(request.user, 'role', '') or '').upper()
             if role in ['TEACHER', 'FACULTY'] and user_full_name:
@@ -76,7 +69,6 @@ class DepEdSF1DataAPIView(APIView):
             elif not data.get('adviser_name'):
                 data['adviser_name'] = user_full_name or 'Class Adviser'
 
-            # Attach centralized dynamic school profile
             data.update(get_school_metadata(request))
             return Response(data, status=status.HTTP_200_OK)
         except Exception as exc:
@@ -269,6 +261,9 @@ class DTRListAPIView(APIView):
 
 
 class UnifiedReportExportAPIView(APIView):
+    """
+    Renders official DMOS-compliant HTML templates for SF1, SF2, and SF4 forms.
+    """
     permission_classes = [IsLeadershipOrAssignedTeacher]
 
     def post(self, request):
@@ -405,7 +400,7 @@ class UnifiedReportExportAPIView(APIView):
   </table>
 
   <div style="min-height: 250px; padding: 20px 0; text-align: center; font-size: 10pt; color: #475569;">
-    Official DepEd {rep} attendance and enrollment matrix loaded directly from PostgreSQL database records.
+    Official DepEd {rep} attendance and enrollment matrix loaded directly from database records.
   </div>
 
   <table class="sign-table">
@@ -443,11 +438,13 @@ class ReportAuditLogAPIView(APIView):
 
     def post(self, request):
         try:
+            rec_id = request.data.get('record_id') or 0
             AuditLog.objects.create(
-                user=request.user,
-                action=request.data.get('action', 'REPORT_VIEW'),
-                table_name=request.data.get('table_name', 'Reports'),
-                details=request.data.get('details', ''),
+                performed_by=request.user,
+                action=str(request.data.get('action', 'REPORT_VIEW'))[:10],
+                table_name=str(request.data.get('table_name', 'Reports'))[:64],
+                record_id=int(rec_id),
+                new_data={'details': request.data.get('details', '')},
             )
         except Exception:
             pass
@@ -456,17 +453,16 @@ class ReportAuditLogAPIView(APIView):
     def get(self, request):
         if not (is_leadership_role(request.user) or request.user.is_superuser):
             return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
-        try:
-            logs = AuditLog.objects.all().order_by('-created_at')[:50]
-            data = [
-                {
-                    'id': l.id,
-                    'table_name': l.table_name,
-                    'action': l.action,
-                    'created_at': l.created_at.isoformat() if getattr(l, 'created_at', None) else '',
-                }
-                for l in logs
-            ]
-        except Exception:
-            data = []
+        logs = AuditLog.objects.all().order_by('-created_at')[:50]
+        data = [
+            {
+                'id': l.id,
+                'table_name': l.table_name,
+                'action': l.action,
+                'record_id': l.record_id,
+                'performed_by': str(l.performed_by) if l.performed_by else 'System',
+                'created_at': l.created_at.isoformat() if l.created_at else '',
+            }
+            for l in logs
+        ]
         return Response(data, status=status.HTTP_200_OK)

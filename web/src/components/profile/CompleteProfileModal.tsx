@@ -31,7 +31,7 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
     last_name: '',
     suffix: '',
     contact_number: '',
-    department: 'Junior High School',
+    department: '',
     password: '',
   });
   const [saving, setSaving] = useState(false);

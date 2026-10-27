@@ -1,3 +1,8 @@
+"""
+AttendSure V3 - Attendance Logging & Verification Models
+File: backend/apps/academics/models/attendance.py
+"""
+
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -5,6 +10,7 @@ from .base import DIRECTION_CHOICES, SCAN_METHOD_CHOICES, ATTENDANCE_STATUS_CHOI
 from .people import Student, FacultyProfile
 from .institution import IoTKiosk
 from .structure import Section, Schedule
+
 
 class FacultyGateLog(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -14,6 +20,7 @@ class FacultyGateLog(models.Model):
     direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES)
     scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default='RFID')
     raw_identifier = models.CharField(max_length=128)
+    snapshot = models.ImageField(upload_to='gate_snapshots/faculty/%Y/%m/%d/', null=True, blank=True)
     is_violation = models.BooleanField(default=False)
     violation_type = models.CharField(max_length=64, blank=True, default='')
     remarks = models.TextField(blank=True, default='')
@@ -47,6 +54,7 @@ class StudentGateLog(models.Model):
     direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES)
     scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default='RFID')
     raw_identifier = models.CharField(max_length=128)
+    snapshot = models.ImageField(upload_to='gate_snapshots/students/%Y/%m/%d/', null=True, blank=True)
 
     class Meta:
         db_table = 'student_gate_logs_partitioned'

@@ -1,3 +1,8 @@
+"""
+AttendSure V3 - People and User Profiles
+File: backend/apps/academics/models/people.py
+"""
+
 import secrets
 from django.db import models
 from django.contrib.auth import get_user_model
@@ -83,6 +88,7 @@ class UserProfile(models.Model):
     )
     role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default='FACULTY')
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    push_token = models.CharField(max_length=255, blank=True, null=True, help_text="Expo Push Notification Token")
     is_teaching = models.BooleanField(default=True)
     is_profile_completed = models.BooleanField(default=False)
     failed_attempts = models.PositiveIntegerField(default=0)
@@ -160,7 +166,6 @@ class Student(models.Model):
 
     @property
     def gender(self) -> str:
-        """Backward-compatible property alias for DepEd and API consumers."""
         return self.sex
 
     @gender.setter

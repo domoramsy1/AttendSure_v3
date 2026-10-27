@@ -1,7 +1,10 @@
-# backend/apps/academics/services/sf2_service.py
+"""
+AttendSure V3 - School Form 2 (SF2) Daily Attendance Service
+File: backend/apps/academics/services/sf2_service.py
+"""
 
 import calendar
-from datetime import date
+from datetime import date, timedelta
 from apps.academics.models import (
     DailyAttendanceSummary,
     Enrollment,
@@ -21,9 +24,6 @@ def make_metric(m=0, f=0):
 
 
 def generate_sf2_data(section_id, month_name='October', year=2026):
-    """
-    Consolidates daily attendance records and official DepEd compliance metrics.
-    """
     section = (
         Section.objects.select_related('grade_level', 'academic_year', 'adviser')
         .filter(id=section_id)
@@ -39,7 +39,6 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
     month_start = date(year, month_num, 1)
     month_end = date(year, month_num, num_days)
 
-    # 1. School Days (Monday-Friday)
     day_abbrs = {0: 'M', 1: 'T', 2: 'W', 3: 'TH', 4: 'F'}
     school_days = []
     for d in range(1, num_days + 1):
@@ -51,7 +50,6 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
                 "fullDate": dt.strftime('%Y-%m-%d')
             })
 
-    # 2. Fast Query via Enrollment with select_related
     enrollments_qs = (
         Enrollment.objects.filter(section=section)
         .select_related('student')
@@ -60,7 +58,6 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
     enrollments = list(enrollments_qs)
     students = [e.student for e in enrollments if getattr(e, 'student', None)]
 
-    # 3. Pull Attendance Summaries
     daily_summaries = DailyAttendanceSummary.objects.filter(
         section=section,
         attendance_date__gte=month_start,
@@ -69,11 +66,8 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
     records_by_student = {}
     for ds in daily_summaries:
         s_id = ds.student_id
-        if s_id not in records_by_student:
-            records_by_student[s_id] = {}
-        records_by_student[s_id][ds.attendance_date.day] = str(ds.status or 'PRESENT').lower().strip()
+        records_by_student.setdefault(s_id, {})[ds.attendance_date.day] = str(ds.status or 'PRESENT').lower().strip()
 
-    # Cross-reference gate taps
     if students:
         gate_logs = StudentGateLog.objects.filter(
             student__in=students,
@@ -85,12 +79,8 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
         for gl in gate_logs:
             s_id = gl['student_id']
             day_num = gl['scan_time__date'].day
-            if s_id not in records_by_student:
-                records_by_student[s_id] = {}
-            if day_num not in records_by_student[s_id]:
-                records_by_student[s_id][day_num] = 'present'
+            records_by_student.setdefault(s_id, {}).setdefault(day_num, 'present')
 
-    # 4. Build Learner Rows
     def build_learner_record(enr):
         st = enr.student
         raw_sex = str(getattr(st, 'sex', '') or '').strip().upper()
@@ -132,8 +122,15 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
     total_f = len(females_list)
     total_registered = total_m + total_f
 
-    # 5. Baseline Enrollment & Movement Calculations
-    first_friday_june = date(year, 6, 5)
+    # Dynamically resolve First Friday of June from AcademicYear
+    ay = section.academic_year
+    if ay and ay.first_friday_june:
+        first_friday_june = ay.first_friday_june
+    else:
+        june_1 = date(year, 6, 1)
+        days_ahead = (4 - june_1.weekday()) % 7
+        first_friday_june = june_1 + timedelta(days=days_ahead)
+
     enrolled_june_m, enrolled_june_f = 0, 0
     late_m, late_f = 0, 0
     drop_m, drop_f = 0, 0
@@ -163,7 +160,6 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
             if is_m: tin_m += 1
             else: tin_f += 1
 
-    # 6. Compute Average Daily Attendance
     num_school_days = len(school_days) or 1
     male_present_count = sum(
         1 for m in males_list for status in m["attendance"].values()
@@ -174,8 +170,8 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
         if status in ['present', 'tardy', 'cutting', '0', '']
     )
 
-    avg_daily_m = (male_present_count / num_school_days)
-    avg_daily_f = (female_present_count / num_school_days)
+    avg_daily_m = male_present_count / num_school_days
+    avg_daily_f = female_present_count / num_school_days
     avg_daily_total = avg_daily_m + avg_daily_f
 
     pct_att_m = round((avg_daily_m / total_m * 100), 1) if total_m > 0 else 0.0

@@ -1,16 +1,17 @@
-# backend/apps/academics/services/sf4_service.py
+"""
+AttendSure V3 - School Form 4 (SF4) Optimized Consolidated Service
+File: backend/apps/academics/services/sf4_service.py
+"""
 
 import calendar
 from datetime import date, datetime
 from django.db.models import Q
-
 from apps.academics.models import (
     AcademicYear,
     DailyAttendanceSummary,
     Enrollment,
     GradeLevel,
     Section,
-    Student,
     StudentGateLog,
 )
 from apps.api.views.common import get_school_metadata
@@ -48,7 +49,6 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
     ]
     num_school_days = len(school_days) or 1
 
-    # 1. Resolve Academic Year cleanly
     target_ay = None
     if school_year:
         if str(school_year).isdigit():
@@ -56,19 +56,48 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
         else:
             target_ay = AcademicYear.objects.filter(code__iexact=str(school_year).strip()).first()
 
-    # 2. Query Sections with pre-selected relations
-    sections_qs = (
-        Section.objects.select_related('grade_level', 'academic_year', 'adviser')
-        .all()
-    )
+    sections_qs = Section.objects.select_related('grade_level', 'academic_year', 'adviser').all()
     if target_ay:
         sections_qs = sections_qs.filter(Q(academic_year=target_ay) | Q(academic_year__isnull=True))
     elif school_year:
         sections_qs = sections_qs.filter(
             Q(academic_year__code__iexact=str(school_year).strip()) | Q(academic_year__isnull=True)
         )
+    sections = list(sections_qs.order_by('grade_level__level_order', 'name'))
 
-    sections_qs = sections_qs.order_by('grade_level__level_order', 'name')
+    all_enr_qs = (
+        Enrollment.objects.filter(section__in=sections)
+        .select_related('student', 'section')
+    )
+    if target_ay:
+        all_enr_qs = all_enr_qs.filter(Q(academic_year=target_ay) | Q(academic_year__isnull=True))
+    all_enrollments = list(all_enr_qs)
+
+    enr_by_section = {}
+    all_student_ids = set()
+    for enr in all_enrollments:
+        if enr.student_id:
+            enr_by_section.setdefault(enr.section_id, []).append(enr)
+            all_student_ids.add(enr.student_id)
+
+    # High-Performance Batch Prefetching (Replaces 120+ sequential queries)
+    summary_map = set()
+    if all_student_ids:
+        summaries = DailyAttendanceSummary.objects.filter(
+            student_id__in=all_student_ids,
+            attendance_date__gte=start_month_date,
+            attendance_date__lte=end_month_date,
+            status__in=['PRESENT', 'P', 'TARDY', 'LATE', 'T', 'CUTTING', 'CUT', 'CC']
+        ).values_list('student_id', 'attendance_date')
+        summary_map = set(summaries)
+
+        gate_logs = StudentGateLog.objects.filter(
+            student_id__in=all_student_ids,
+            direction='IN',
+            scan_time__date__gte=start_month_date,
+            scan_time__date__lte=end_month_date
+        ).values_list('student_id', 'scan_time__date')
+        summary_map.update(gate_logs)
 
     registered_grades = list(
         GradeLevel.objects.all().order_by('level_order').values_list('name', flat=True)
@@ -79,22 +108,12 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
     grade_groups_dict = {g: [] for g in registered_grades if g}
     non_graded_sections = []
 
-    for sec in sections_qs:
+    for sec in sections:
         grade = str(sec.grade_level.name if sec.grade_level else '').strip()
         is_non_graded = not grade or "NON-GRADED" in grade.upper()
         adviser_name = sec.adviser.full_name if sec.adviser else "Unassigned"
 
-        enr_qs = (
-            Enrollment.objects.filter(section=sec)
-            .select_related('student')
-        )
-        if target_ay:
-            enr_qs = enr_qs.filter(Q(academic_year=target_ay) | Q(academic_year__isnull=True))
-
-        enrollments = list(enr_qs)
-        students = [e.student for e in enrollments if e.student]
-        enr_map = {e.student_id: e for e in enrollments if e.student_id}
-
+        sec_enrollments = enr_by_section.get(sec.id, [])
         males_registered, females_registered = 0, 0
         drop_prev_m, drop_prev_f = 0, 0
         drop_month_m, drop_month_f = 0, 0
@@ -102,9 +121,13 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
         tout_month_m, tout_month_f = 0, 0
         tin_prev_m, tin_prev_f = 0, 0
         tin_month_m, tin_month_f = 0, 0
+        total_m_daily_attendance, total_f_daily_attendance = 0, 0
 
-        for s in students:
-            enr_rec = enr_map.get(s.id)
+        for enr_rec in sec_enrollments:
+            s = enr_rec.student
+            if not s:
+                continue
+
             raw_sex = str(getattr(s, 'sex', '') or '').strip().upper()
             is_male = raw_sex.startswith('M')
 
@@ -152,6 +175,11 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
                 else:
                     females_registered += 1
 
+            for s_day in school_days:
+                if (s.id, s_day) in summary_map:
+                    if is_male: total_m_daily_attendance += 1
+                    else: total_f_daily_attendance += 1
+
         registered_end = make_triplet(males_registered, females_registered)
         dropped_out_prev = make_triplet(drop_prev_m, drop_prev_f)
         dropped_out_month = make_triplet(drop_month_m, drop_month_f)
@@ -165,40 +193,6 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
         transferred_in_month = make_triplet(tin_month_m, tin_month_f)
         transferred_in_cumulative = add_triplets(transferred_in_prev, transferred_in_month)
 
-        total_m_daily_attendance, total_f_daily_attendance = 0, 0
-
-        if students and num_school_days > 0:
-            daily_summaries = DailyAttendanceSummary.objects.filter(
-                section=sec,
-                student__in=students,
-                attendance_date__gte=start_month_date,
-                attendance_date__lte=end_month_date
-            )
-            summary_map = {
-                (ds.student_id, ds.attendance_date): (ds.status or '').upper()
-                for ds in daily_summaries
-            }
-
-            gate_logs = StudentGateLog.objects.filter(
-                student__in=students,
-                direction='IN',
-                scan_time__date__gte=start_month_date,
-                scan_time__date__lte=end_month_date
-            ).values('student_id', 'scan_time__date')
-            gate_set = {(gl['student_id'], gl['scan_time__date']) for gl in gate_logs}
-
-            for s in students:
-                raw_sex = str(getattr(s, 'sex', '') or '').strip().upper()
-                is_male = raw_sex.startswith('M')
-
-                for s_day in school_days:
-                    key = (s.id, s_day)
-                    status_found = summary_map.get(key, '')
-
-                    if status_found in ('PRESENT', 'P', 'TARDY', 'LATE', 'T', 'CUTTING', 'CUT', 'CC') or key in gate_set:
-                        if is_male: total_m_daily_attendance += 1
-                        else: total_f_daily_attendance += 1
-
         ada_m = round(total_m_daily_attendance / num_school_days, 1)
         ada_f = round(total_f_daily_attendance / num_school_days, 1)
         daily_average = make_triplet(ada_m, ada_f)
@@ -206,7 +200,6 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
         pct_m = round((daily_average["m"] / registered_end["m"] * 100), 1) if registered_end["m"] > 0 else 0.0
         pct_f = round((daily_average["f"] / registered_end["f"] * 100), 1) if registered_end["f"] > 0 else 0.0
         pct_total = round((daily_average["total"] / registered_end["total"] * 100), 1) if registered_end["total"] > 0 else 0.0
-        attendance_percentage = {"m": pct_m, "f": pct_f, "total": pct_total}
 
         sec_record = {
             "section_id": sec.id,
@@ -215,7 +208,7 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
             "adviser_name": adviser_name.upper(),
             "registered_end": registered_end,
             "daily_average": daily_average,
-            "attendance_percentage": attendance_percentage,
+            "attendance_percentage": {"m": pct_m, "f": pct_f, "total": pct_total},
             "dropped_out_prev": dropped_out_prev,
             "dropped_out_month": dropped_out_month,
             "dropped_out_cumulative": dropped_out_cumulative,
@@ -230,11 +223,8 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
         if is_non_graded:
             non_graded_sections.append(sec_record)
         else:
-            if grade not in grade_groups_dict:
-                grade_groups_dict[grade] = []
-            grade_groups_dict[grade].append(sec_record)
+            grade_groups_dict.setdefault(grade, []).append(sec_record)
 
-    # 4. Compile Subtotals and Grand Totals
     grade_groups = []
     grand_registered = make_triplet(0, 0)
     grand_daily_avg = make_triplet(0, 0)

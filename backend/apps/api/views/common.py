@@ -1,12 +1,6 @@
 """
-AttendSure - Common API Resolvers & Role Helpers
+AttendSure - Real Database Common Resolvers & Security Helpers
 File: backend/apps/api/views/common.py
-
-Cybersecurity & Reliability:
-1. Zero Circular Imports: Defines utility functions and sanitizers independently of top-level model imports.
-2. Account-Based Faculty Resolution: Resolves FacultyProfile using the 'account' foreign key (NOT 'user').
-3. Scope-Accurate Access Control: Authorizes faculty for both their assigned subject loads and advised homerooms.
-4. Input & Media Sanitization: Prevents XSS, path traversal, and SSRF in media URL generation.
 """
 
 import base64
@@ -22,15 +16,8 @@ from rest_framework import permissions
 logger = logging.getLogger(__name__)
 
 
-# ==============================================================================
-# 1. PHOTO & MEDIA URL RESOLVER (CYBERSECURITY ENFORCED)
-# ==============================================================================
-
 def safe_photo_url(photo_field, request=None):
-    """
-    Safely converts ImageFields or relative media paths into fully qualified URLs.
-    Validates file formats and prevents XSS / SSRF script injection.
-    """
+    """Returns the real storage URL for an uploaded image file."""
     if not photo_field:
         return None
     try:
@@ -40,13 +27,10 @@ def safe_photo_url(photo_field, request=None):
                 return None
             if val.startswith(('data:image/', 'http://', 'https://')):
                 return val
-            if val.startswith('/media/') and request:
-                return request.build_absolute_uri(val)
-            if val.startswith('/media/'):
-                return val
+            clean_path = val if val.startswith('/') else f'/{val}'
             if request:
-                return request.build_absolute_uri(f"/media/{val.lstrip('/')}")
-            return f"/media/{val.lstrip('/')}"
+                return request.build_absolute_uri(clean_path)
+            return clean_path
 
         if hasattr(photo_field, 'name') and photo_field.name:
             val_name = str(photo_field.name).strip()
@@ -65,7 +49,7 @@ def safe_photo_url(photo_field, request=None):
 
 
 def resolve_logo_field(val, request=None):
-    """Resolves Base64 or relative logo paths into clean URLs."""
+    """Loads and returns real institution logos from disk storage."""
     if not val:
         return None
     val_str = str(val).strip()
@@ -107,7 +91,7 @@ def resolve_logo_field(val, request=None):
 
 
 def format_full_student_name(student) -> str:
-    """Formats student names consistently: Last, First M. Suffix."""
+    """Formats student names directly from database columns."""
     if not student:
         return ""
     if hasattr(student, 'full_name') and isinstance(student.full_name, str) and student.full_name.strip():
@@ -129,12 +113,8 @@ def format_deduped_section_label(grade_name, section_name) -> str:
     return f"{g} - {s}"
 
 
-# ==============================================================================
-# 2. ROLE-BASED ACCESS CONTROL (RBAC) HELPERS
-# ==============================================================================
-
 def get_user_role(user) -> str:
-    """Safely extracts role string without throwing unhandled exceptions."""
+    """Extracts the actual role assigned in the UserProfile database table."""
     if not user or not user.is_authenticated:
         return ''
     if getattr(user, 'is_superuser', False):
@@ -162,71 +142,48 @@ def is_leadership_role(user) -> bool:
     return get_user_role(user) in {'ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'}
 
 
-# ==============================================================================
-# 3. FACULTY & TEACHING SCOPE RESOLUTION
-# ==============================================================================
-
 def resolve_faculty_for_user(user):
     """
-    Finds the FacultyProfile associated with an authenticated user account.
-    Uses 'account' (NOT 'user') to prevent Django FieldError exceptions.
+    Connects a User to their authentic FacultyProfile database row.
+    Uses account__user to query through UserProfile correctly.
     """
     if not user or not user.is_authenticated:
         return None
 
     from apps.academics.models import FacultyProfile, UserProfile
 
-    # 1. Direct model attributes
-    if hasattr(user, 'faculty_profile') and user.faculty_profile:
-        return user.faculty_profile
-    if hasattr(user, 'faculty') and user.faculty:
-        return user.faculty
-
-    # 2. Check UserProfile table if present
+    # 1. Direct one-to-one link via UserProfile.faculty
     try:
-        user_prof = UserProfile.objects.filter(user=user).first()
-        if user_prof and getattr(user_prof, 'faculty_id', None):
+        user_prof = getattr(user, 'profile', None) or UserProfile.objects.filter(user=user).first()
+        if user_prof and user_prof.faculty_id and user_prof.faculty:
             return user_prof.faculty
     except Exception:
         pass
 
-    # 3. Match via 'account' foreign key on FacultyProfile
-    faculty = FacultyProfile.objects.filter(account=user, is_active=True).first()
+    # 2. Correct reverse relationship query
+    faculty = FacultyProfile.objects.filter(account__user=user, is_active=True).first()
+    if faculty:
+        return faculty
 
-    # 4. Exact username or employee ID match
-    if not faculty and getattr(user, 'username', None):
+    # 3. Exact employee ID lookup
+    if getattr(user, 'username', None):
         faculty = FacultyProfile.objects.filter(
             Q(employee_id__iexact=user.username) | Q(qr_token__iexact=user.username),
             is_active=True,
         ).first()
+        if faculty:
+            return faculty
 
-    # 5. Email match
-    if not faculty and getattr(user, 'email', None):
+    # 4. Exact institutional email match
+    if getattr(user, 'email', None):
         faculty = FacultyProfile.objects.filter(email__iexact=user.email, is_active=True).first()
+        if faculty:
+            return faculty
 
-    # 6. First & Last name match
-    if not faculty and getattr(user, 'first_name', None) and getattr(user, 'last_name', None):
-        faculty = FacultyProfile.objects.filter(
-            first_name__iexact=user.first_name,
-            last_name__iexact=user.last_name,
-            is_active=True,
-        ).first()
-
-    # 7. Fallback string match for "Faculty User" / "faculty" test account
-    if not faculty and getattr(user, 'username', None):
-        faculty = FacultyProfile.objects.filter(
-            Q(first_name__icontains='Faculty') | Q(last_name__icontains='User') | Q(employee_id__iexact='faculty'),
-            is_active=True,
-        ).first()
-
-    return faculty
+    return None
 
 
 def get_teacher_section_ids(faculty) -> set:
-    """
-    Returns section IDs where this faculty member is officially assigned
-    as the Class Adviser OR as the Subject Teacher (e.g. Garnet, Amethyst).
-    """
     if not faculty:
         return set()
     from apps.academics.models import Section, Schedule
@@ -236,10 +193,6 @@ def get_teacher_section_ids(faculty) -> set:
 
 
 def get_teacher_student_ids(faculty) -> set:
-    """
-    Returns student IDs enrolled in sections where this faculty member
-    is officially assigned as the Class Adviser OR as the Subject Teacher.
-    """
     section_ids = get_teacher_section_ids(faculty)
     if not section_ids:
         return set()
@@ -272,24 +225,26 @@ def get_student_active_section(student):
 def get_school_metadata(request=None) -> dict:
     from apps.academics.models import SchoolProfile
     school = SchoolProfile.objects.select_related('principal_faculty').first()
+
     if not school:
         return {
-            'school_id': '55555',
-            'school_name': 'Lapasan National High School',
-            'region': 'Region X',
-            'division': 'Cagayan de Oro',
-            'district': 'II',
-            'academic_year': '2026-2027',
+            'school_id': '',
+            'school_name': '',
+            'region': '',
+            'division': '',
+            'district': '',
+            'academic_year': '',
             'school_address': '',
             'school_contact': '',
             'school_email': '',
             'website': '',
-            'school_head': 'PRINCIPAL',
-            'principal_title': 'Secondary School Principal IV',
+            'school_head': '',
+            'principal_title': '',
             'superintendent_name': '',
             'left_logo': None,
             'right_logo': None,
             'school_logo': None,
+            'is_configured': False,
         }
 
     school_head = str(school.principal_name or '').strip()
@@ -297,22 +252,23 @@ def get_school_metadata(request=None) -> dict:
         school_head = getattr(school.principal_faculty, 'full_name', str(school.principal_faculty))
 
     return {
-        'school_id': str(school.school_id or '55555').strip(),
-        'school_name': str(school.school_name or 'Lapasan National High School').strip(),
-        'region': str(school.region or 'Region X').strip(),
-        'division': str(school.division or 'Cagayan de Oro').strip(),
-        'district': str(school.district or 'II').strip(),
-        'academic_year': str(getattr(school, 'academic_year', '') or '2026-2027').strip(),
+        'school_id': str(school.school_id or '').strip(),
+        'school_name': str(school.school_name or '').strip(),
+        'region': str(school.region or '').strip(),
+        'division': str(school.division or '').strip(),
+        'district': str(school.district or '').strip(),
+        'academic_year': str(getattr(school, 'academic_year', '') or '').strip(),
         'school_address': str(school.address or '').strip(),
         'school_contact': str(school.contact_number or '').strip(),
         'school_email': str(school.email or '').strip(),
         'website': str(getattr(school, 'website', '') or '').strip(),
-        'school_head': school_head.upper() if school_head else 'PRINCIPAL',
-        'principal_title': str(school.principal_title or 'Secondary School Principal IV').strip(),
+        'school_head': school_head.upper() if school_head else '',
+        'principal_title': str(school.principal_title or '').strip(),
         'superintendent_name': str(getattr(school, 'superintendent_name', '') or '').strip(),
         'left_logo': resolve_logo_field(school.left_logo, request),
         'right_logo': resolve_logo_field(school.right_logo, request),
         'school_logo': resolve_logo_field(school.school_logo, request),
+        'is_configured': bool(school.school_name and school.school_id),
     }
 
 

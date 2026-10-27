@@ -1,3 +1,8 @@
+"""
+AttendSure V3 - Academics Models Package Exports
+File: backend/apps/academics/models/__init__.py
+"""
+
 from .base import (
     SUFFIX_CHOICES,
     SEX_CHOICES,
@@ -12,11 +17,12 @@ from .base import (
 )
 from .institution import AcademicYear, SchoolProfile, ClassSchedule, GeofenceSetting, IoTKiosk
 from .people import FacultyProfile, UserProfile, Student
-from .structure import GradeLevel, Section, Enrollment, Subject, Schedule, ScheduleDay
+from .structure import Room, GradeLevel, Section, Enrollment, Subject, Schedule, ScheduleDay
 from .attendance import FacultyGateLog, StudentGateLog, SubjectAttendanceLog, DailyAttendanceSummary
 from .telemetry import FacultyHeartbeat, LoafingIncident, GatePass, SmsOutbox, AuditLog, FacultyMonthlyDTR
 
 __all__ = [
+    'Room',
     'AcademicYear',
     'SchoolProfile',
     'ClassSchedule',

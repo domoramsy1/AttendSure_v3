@@ -1,16 +1,19 @@
+"""
+AttendSure V3 - School Form 1 (SF1) Service
+File: backend/apps/academics/services/sf1_service.py
+"""
+
 from datetime import date, datetime, timedelta
 from apps.academics.models import Section, Enrollment
-from apps.api.views.common import get_school_metadata, format_full_student_name
+from apps.api.views.common import get_school_metadata
+from apps.common.utils import format_full_student_name
 
 
-def calculate_age_as_of_june(birthdate, year):
+def calculate_age_as_of_cut_off(birthdate, cut_off_date: date) -> int | str:
+    """Calculates chronological age as of the official DepEd cut-off date."""
     if not birthdate:
         return ""
     try:
-        june_1 = date(int(year), 6, 1)
-        days_ahead = (4 - june_1.weekday()) % 7
-        first_friday = june_1 + timedelta(days=days_ahead)
-
         if isinstance(birthdate, str):
             for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y'):
                 try:
@@ -22,8 +25,8 @@ def calculate_age_as_of_june(birthdate, year):
         if not isinstance(birthdate, (date, datetime)):
             return ""
 
-        age = first_friday.year - birthdate.year - (
-            (first_friday.month, first_friday.day) < (birthdate.month, birthdate.day)
+        age = cut_off_date.year - birthdate.year - (
+            (cut_off_date.month, cut_off_date.day) < (birthdate.month, birthdate.day)
         )
         return max(0, age)
     except Exception:
@@ -36,8 +39,15 @@ def get_sf1_data(section_id, school_year=None, as_of_date=None):
         raise ValueError(f"Section {section_id} not found.")
 
     school_meta = get_school_metadata()
-    sy_code = str(school_year or (section.academic_year.code if section.academic_year else "2026-2027"))
+    ay = section.academic_year
+    sy_code = str(school_year or (ay.code if ay else "2026-2027"))
     target_year = int(sy_code.split('-')[0]) if '-' in sy_code and sy_code.split('-')[0].isdigit() else 2026
+
+    cut_off = getattr(ay, 'first_friday_june', None)
+    if not cut_off:
+        june_1 = date(target_year, 6, 1)
+        days_ahead = (4 - june_1.weekday()) % 7
+        cut_off = june_1 + timedelta(days=days_ahead)
 
     enrollments = (
         Enrollment.objects.filter(section=section, status='ENROLLED')
@@ -61,7 +71,7 @@ def get_sf1_data(section_id, school_year=None, as_of_date=None):
             'name': format_full_student_name(s),
             'sex': 'M' if is_m else 'F',
             'birthdate': b_str,
-            'age': calculate_age_as_of_june(s.birthdate, target_year),
+            'age': calculate_age_as_of_cut_off(s.birthdate, cut_off),
             'birth_place': str(s.province or '').strip(),
             'mother_tongue': str(s.mother_tongue or '').strip(),
             'ethnic_group': str(s.ethnic_group or '').strip(),
