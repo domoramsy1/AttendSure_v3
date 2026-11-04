@@ -1,433 +1,664 @@
 /**
- * AttendSure V3 - Responsive Application Header Bar
+ * AttendSure V3 - Minimalist Institutional Header (Pure White Theme)
+ * Pure Database Binding with Zero Hardcoded or Mock Notifications.
  * File: web/src/components/layout/Header.tsx
- *
- * Cybersecurity & Performance:
- * 1. Mobile-First Responsiveness: Collapses non-essential pills on small screens (<768px).
- * 2. Staggered Background Notifications: 2-second boot delay to prevent thread contention.
- * 3. URL Sanitization: Rejects script and javascript: injection in user avatars.
- * 4. Zero Emojis: Strictly renders Lucide SVG components.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import apiClient from '../../api/client';
-import type { UserSession } from '../../types/section';
-import type { NavItemKey } from './Sidebar';
+import { useTheme } from '../../context/ThemeContext';
+import StudentIdPassModal from '../modals/StudentIdPassModal';
 import {
+  Search,
   Bell,
-  Clock,
-  Radio,
-  User,
-  LogOut,
   ChevronDown,
-  Ticket,
+  LogOut,
+  User,
+  Shield,
   BookOpen,
   Send,
   Cpu,
   FileClock,
   CheckCircle2,
   X,
+  Activity,
+  QrCode,
+  Inbox,
 } from 'lucide-react';
+import type { UserSession } from '../../types/section';
+import type { NavItemKey } from './Sidebar';
 
 export interface TabBadgeCounts {
-  'my-classes'?: number;
-  'gate-passes'?: number;
-  'sms'?: number;
-  'scanners'?: number;
-  'dtr'?: number;
-  'gate-logs'?: number;
+  students?: number;
+  faculties?: number;
+  schedules?: number;
+  gatelogs?: number;
+  sms?: number;
+  gatepasses?: number;
+  scanners?: number;
+  [key: string]: number | undefined;
 }
 
-interface NotificationItem {
-  id: string;
-  tab: NavItemKey;
-  title: string;
-  description: string;
-  count: number;
-  severity: 'danger' | 'warning' | 'info';
-  icon: React.ReactNode;
+export function formatBadgeCount(count?: number | null): string {
+  if (count === undefined || count === null || count <= 0) return '';
+  if (count > 999) return `${(count / 1000).toFixed(1)}k`;
+  return String(count);
 }
 
-interface HeaderProps {
-  title: string;
-  isGateNodeOnline: boolean;
-  session: UserSession | null;
+export interface HeaderProps {
+  title?: string;
+  currentTitle?: string;
+  activeTab?: string;
+  onTabChange?: (tab: string) => void;
+  isGateNodeOnline?: boolean;
+  session?: UserSession | null;
   userPhoto?: string | null;
   schoolName?: string;
   schoolId?: string;
   schoolLogo?: string | null;
-  onLogout: () => void;
-  onNavigateTab: (tab: NavItemKey) => void;
-  onOpenProfile: () => void;
+  onLogout?: () => void;
+  onNavigateTab?: (tab: NavItemKey) => void;
+  onOpenProfile?: () => void;
+}
+
+interface CurrentUser {
+  username: string;
+  full_name: string;
+  role: string;
+  photo_url?: string | null;
+  employee_id?: string;
+  rfid_uid?: string;
+}
+
+interface NotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  type: 'GATE' | 'CLASS' | 'SMS' | 'KIOSK' | 'GATE_PASS';
+  time: string;
+  targetRole?: 'ADMIN' | 'TEACHER' | 'ALL';
 }
 
 const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
-  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
-  return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('/') || clean.startsWith('data:image/');
+  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') {
+    return false;
+  }
+  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) {
+    return false;
+  }
+  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) {
+    return false;
+  }
+  return (
+    clean.startsWith('http://') ||
+    clean.startsWith('https://') ||
+    clean.startsWith('/') ||
+    clean.startsWith('data:image/') ||
+    clean.startsWith('blob:')
+  );
 };
 
 export const Header: React.FC<HeaderProps> = ({
   title,
+  currentTitle = 'Dashboard',
   isGateNodeOnline,
-  session,
   userPhoto,
-  schoolName,
   onLogout,
-  onNavigateTab,
   onOpenProfile,
 }) => {
-  const [currentTime, setCurrentTime] = useState<string>('');
-  const [profileOpen, setProfileOpen] = useState<boolean>(false);
+  const displayTitle = title || currentTitle;
+  const { tokens, brand } = useTheme();
+
+  const [currentUser, setCurrentUser] = useState<CurrentUser>({
+    username: '',
+    full_name: '',
+    role: '',
+  });
+
+  const [gateOnline, setGateOnline] = useState<boolean>(true);
+  const [searchVal, setSearchVal] = useState<string>('');
+  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const [notifOpen, setNotifOpen] = useState<boolean>(false);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [readIds, setReadIds] = useState<string[]>([]);
-
-  const notifRef = useRef<HTMLDivElement>(null);
-  const profileRef = useRef<HTMLDivElement>(null);
-  const isFetchingRef = useRef<boolean>(false);
-
-  const role = (session?.role || 'FACULTY').toUpperCase();
-  const isAdminOrPrincipal = role === 'ADMIN' || role === 'PRINCIPAL';
-  const isTeacher = role === 'FACULTY' || role === 'TEACHER';
+  const [liveNotifications, setLiveNotifications] = useState<NotificationItem[]>([]);
+  const [isDigitalPassOpen, setIsDigitalPassOpen] = useState<boolean>(false);
 
   useEffect(() => {
-    const updateClock = () => {
-      const now = new Date();
-      setCurrentTime(
-        now.toLocaleString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      );
-    };
+    if (typeof isGateNodeOnline === 'boolean') {
+      setGateOnline(isGateNodeOnline);
+    }
+  }, [isGateNodeOnline]);
 
-    updateClock();
-    const timer = setInterval(updateClock, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
-        setNotifOpen(false);
-      }
-      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
-        setProfileOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const fetchRoleNotifications = useCallback(async () => {
-    if (!session?.token || isFetchingRef.current) return;
-    isFetchingRef.current = true;
-
-    const newItems: NotificationItem[] = [];
-    const badgeMap: TabBadgeCounts = {};
+  const fetchLiveHeaderTelemetry = useCallback(async () => {
+    const token =
+      localStorage.getItem('attendsure_token') ||
+      localStorage.getItem('auth_token') ||
+      localStorage.getItem('token');
+    if (!token) return;
 
     try {
-      const passRes = await apiClient.get('/gate-passes/?status=ACTIVE&page_size=1', { timeout: 3500 }).catch(() => null);
-      if (passRes?.data) {
-        const count = typeof passRes.data.count === 'number' ? passRes.data.count : 0;
-        if (count > 0) {
-          badgeMap['gate-passes'] = count;
-          newItems.push({
-            id: 'gate-passes',
-            tab: 'gate-passes',
-            title: `${count} Active Gate Pass(es)`,
-            description: 'Students cleared for authorized departure.',
-            count,
-            severity: 'info',
-            icon: <Ticket size={16} color="#004b87" />,
+      const [userRes, kioskRes, smsRes] = await Promise.allSettled([
+        apiClient.get('/me/'),
+        apiClient.get('/kiosks/'),
+        apiClient.get('/sms-outbox/metrics/').catch(() => null),
+      ]);
+
+      if (userRes.status === 'fulfilled' && userRes.value?.data) {
+        const u = userRes.value.data;
+        setCurrentUser({
+          username: u.username || '',
+          full_name: u.full_name || u.first_name || u.username || 'User',
+          role: String(u.role || u.system_role || 'FACULTY').toUpperCase(),
+          photo_url: u.photo_url || u.photo || null,
+          employee_id: u.employee_id || u.username || '',
+          rfid_uid: u.rfid_uid || '',
+        });
+      }
+
+      const generatedAlerts: NotificationItem[] = [];
+
+      if (kioskRes.status === 'fulfilled' && kioskRes.value?.data) {
+        const kiosks = Array.isArray(kioskRes.value.data)
+          ? kioskRes.value.data
+          : kioskRes.value.data.results || [];
+
+        const hasOnlineKiosks =
+          kiosks.length === 0 ||
+          kiosks.some(
+            (k: { is_active?: boolean; is_online?: boolean }) =>
+              k.is_active !== false && k.is_online !== false
+          );
+
+        if (typeof isGateNodeOnline !== 'boolean') {
+          setGateOnline(hasOnlineKiosks);
+        }
+
+        const offlineList = kiosks.filter(
+          (k: { is_active?: boolean; is_online?: boolean }) => k.is_active && !k.is_online
+        );
+
+        if (offlineList.length > 0) {
+          generatedAlerts.push({
+            id: 'gate-offline-alert',
+            title: 'Turnstile Disconnected',
+            message: `${offlineList.length} gate scanner device(s) are currently unreachable.`,
+            type: 'KIOSK',
+            time: 'Live',
+            targetRole: 'ADMIN',
           });
         }
       }
 
-      setNotifications(newItems);
-      window.dispatchEvent(new CustomEvent('attendsure:notifications-sync', { detail: badgeMap }));
-    } finally {
-      isFetchingRef.current = false;
+      if (smsRes && smsRes.status === 'fulfilled' && smsRes.value?.data) {
+        const pendingCount = Number(smsRes.value.data.pending_total || 0);
+        const failedCount = Number(smsRes.value.data?.failed_total || 0);
+
+        if (pendingCount > 50 || failedCount > 0) {
+          generatedAlerts.push({
+            id: 'sms-pending-alert',
+            title: 'SMS Transmission Delay',
+            message: `${pendingCount} parent notification(s) waiting in modem queue.`,
+            type: 'SMS',
+            time: 'Live',
+            targetRole: 'ADMIN',
+          });
+        }
+      }
+
+      setLiveNotifications(generatedAlerts);
+    } catch {
+      if (typeof isGateNodeOnline !== 'boolean') setGateOnline(false);
     }
-  }, [session?.token]);
+  }, [isGateNodeOnline]);
 
   useEffect(() => {
-    const timer = setTimeout(fetchRoleNotifications, 2000);
-    return () => clearTimeout(timer);
-  }, [fetchRoleNotifications]);
+    fetchLiveHeaderTelemetry();
+    const interval = setInterval(fetchLiveHeaderTelemetry, 30000);
+    return () => clearInterval(interval);
+  }, [fetchLiveHeaderTelemetry]);
 
-  const unreadNotifications = notifications.filter((n) => !readIds.includes(n.id));
-  const totalBellCount = unreadNotifications.reduce((sum, item) => sum + item.count, 0);
-  const safePhoto = isSafeImageUrl(userPhoto) ? userPhoto : null;
+  const handleLogout = async () => {
+    if (onLogout) {
+      onLogout();
+      return;
+    }
+    try {
+      await apiClient.post('/auth/logout/').catch(() => {});
+    } finally {
+      localStorage.removeItem('attendsure_token');
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('token');
+      localStorage.removeItem('attendsure_username');
+      localStorage.removeItem('attendsure_role');
+      window.dispatchEvent(new CustomEvent('attendsure:auth-expired'));
+    }
+  };
+
+  const role = currentUser.role;
+  const isAdminOrPrincipal = role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL';
+  const isTeacher = role === 'FACULTY' || role === 'TEACHER';
+
+  const visibleNotifications = useMemo(() => {
+    return liveNotifications.filter((n) => {
+      if (n.targetRole === 'ADMIN') return isAdminOrPrincipal;
+      if (n.targetRole === 'TEACHER') return isTeacher || isAdminOrPrincipal;
+      return true;
+    });
+  }, [liveNotifications, isAdminOrPrincipal, isTeacher]);
+
+  const unreadCount = useMemo(() => {
+    return visibleNotifications.filter((n) => !readIds.includes(n.id)).length;
+  }, [visibleNotifications, readIds]);
+
+  const markAllAsRead = () => {
+    setReadIds(visibleNotifications.map((n) => n.id));
+  };
+
+  const dismissNotification = (id: string) => {
+    setReadIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
+
+  const getNotifIcon = (type: NotificationItem['type']) => {
+    switch (type) {
+      case 'CLASS':
+        return <BookOpen size={14} color={brand.primary} />;
+      case 'SMS':
+        return <Send size={14} color={brand.secondary} />;
+      case 'KIOSK':
+        return <Cpu size={14} color={brand.danger} />;
+      case 'GATE_PASS':
+        return <FileClock size={14} color={brand.warning} />;
+      default:
+        return <Shield size={14} color={brand.primary} />;
+    }
+  };
+
+  const rawPhoto = userPhoto || currentUser.photo_url;
+  const resolvedPhoto = isSafeImageUrl(rawPhoto) ? rawPhoto : null;
 
   return (
-    <header style={headerWrapper}>
-      <style>{`
-        @media (max-width: 768px) {
-          .header-clock-pill { display: none !important; }
-          .header-title-text { font-size: 1rem !important; }
-        }
-      `}</style>
-
-      {/* Title & School Meta */}
-      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-        {schoolName && (
-          <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 700, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
-            {schoolName}
-          </span>
-        )}
-        <h1 className="header-title-text" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {title}
+    <header
+      style={{
+        backgroundColor: '#FFFFFF',
+        borderBottom: `1px solid ${tokens.borderSubtle}`,
+        padding: '14px 24px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 16,
+        boxSizing: 'border-box',
+      }}
+    >
+      <div>
+        <h1
+          style={{
+            margin: 0,
+            fontSize: '1.25rem',
+            fontWeight: 800,
+            color: tokens.textPrimary,
+            letterSpacing: '-0.3px',
+          }}
+        >
+          {displayTitle}
         </h1>
+        <span style={{ fontSize: '0.74rem', color: tokens.textMuted, marginTop: 2, display: 'block' }}>
+          Lapasan National High School | School ID: 55555
+        </span>
       </div>
 
-      {/* Right Actions */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {/* Clock Pill */}
-        <div className="header-clock-pill" style={clockPillStyle}>
-          <Clock size={13} color="#004b87" />
-          <span>{currentTime}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            backgroundColor: tokens.bgSurfaceSubtle,
+            border: `1px solid ${tokens.borderStrong}`,
+            borderRadius: 9999,
+            padding: '6px 14px',
+            width: 220,
+          }}
+        >
+          <Search size={14} color={tokens.textMuted} />
+          <input
+            type="text"
+            placeholder="Search records, LRN..."
+            value={searchVal}
+            onChange={(e) => setSearchVal(e.target.value)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              outline: 'none',
+              fontSize: '0.78rem',
+              color: tokens.textPrimary,
+              width: '100%',
+            }}
+          />
         </div>
 
-        {/* Gate Scanner Status */}
-        <div style={{ ...statusPillStyle, backgroundColor: isGateNodeOnline ? '#ecfdf5' : '#fee2e2', borderColor: isGateNodeOnline ? '#a7f3d0' : '#fecaca', color: isGateNodeOnline ? '#059669' : '#dc2626' }}>
-          <Radio size={13} />
-          <span>Gate: {isGateNodeOnline ? 'Online' : 'Offline'}</span>
+        <button
+          type="button"
+          onClick={() => setIsDigitalPassOpen(true)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 12px',
+            borderRadius: 9999,
+            fontSize: '0.74rem',
+            fontWeight: 700,
+            backgroundColor: tokens.primaryLight,
+            border: `1px solid ${brand.primary}`,
+            color: brand.primary,
+            cursor: 'pointer',
+          }}
+          title="Open your personal gate QR code pass"
+        >
+          <QrCode size={13} />
+          <span>My Pass</span>
+        </button>
+
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '5px 12px',
+            borderRadius: 9999,
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            backgroundColor: gateOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+            border: `1px solid ${gateOnline ? 'rgba(16, 185, 129, 0.28)' : 'rgba(239, 68, 68, 0.28)'}`,
+            color: gateOnline ? brand.success : brand.danger,
+          }}
+        >
+          <Activity size={12} color={gateOnline ? brand.success : brand.danger} />
+          <span>{gateOnline ? 'Gate: Online' : 'Gate: Offline'}</span>
         </div>
 
-        {/* Notification Bell */}
-        <div style={{ position: 'relative' }} ref={notifRef}>
+        <div style={{ position: 'relative' }}>
           <button
             type="button"
-            onClick={() => {
-              setNotifOpen((prev) => !prev);
-              setProfileOpen(false);
+            onClick={() => setNotifOpen(!notifOpen)}
+            style={{
+              position: 'relative',
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              border: `1px solid ${tokens.borderSubtle}`,
+              backgroundColor: tokens.bgSurfaceSubtle,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
             }}
-            style={iconButtonStyle}
             title="Notifications"
           >
-            <Bell size={16} />
-            {totalBellCount > 0 && (
-              <span style={notifBadgeStyle}>{totalBellCount > 9 ? '9+' : totalBellCount}</span>
+            <Bell size={15} color={tokens.textSecondary} />
+            {unreadCount > 0 && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: -3,
+                  right: -3,
+                  backgroundColor: brand.danger,
+                  color: '#FFFFFF',
+                  fontSize: '0.62rem',
+                  fontWeight: 800,
+                  borderRadius: 9999,
+                  minWidth: 16,
+                  height: 16,
+                  padding: '0 4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {unreadCount}
+              </span>
             )}
           </button>
 
           {notifOpen && (
-            <div style={notifDropdownCard}>
-              <div style={{ padding: '10px 14px', borderBottom: '1px solid #f1f5f9', fontWeight: 800, fontSize: '0.84rem' }}>
-                Notifications
+            <div
+              style={{
+                position: 'absolute',
+                top: '115%',
+                right: 0,
+                width: 290,
+                backgroundColor: '#FFFFFF',
+                border: `1px solid ${tokens.borderSubtle}`,
+                borderRadius: 14,
+                boxShadow: tokens.cardShadow,
+                zIndex: 1000,
+                padding: '12px 14px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <span style={{ fontSize: '0.80rem', fontWeight: 800, color: tokens.textPrimary }}>
+                  Notifications
+                </span>
+                {unreadCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={markAllAsRead}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: brand.primary,
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <CheckCircle2 size={12} /> Mark read
+                  </button>
+                )}
               </div>
-              <div style={{ maxHeight: 260, overflowY: 'auto' }}>
-                {notifications.length === 0 ? (
-                  <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: '0.78rem' }}>
-                    No pending alerts.
-                  </div>
-                ) : (
-                  notifications.map((n) => (
-                    <div
-                      key={n.id}
-                      onClick={() => {
-                        setNotifOpen(false);
-                        onNavigateTab(n.tab);
-                      }}
-                      style={{ padding: '10px 14px', borderBottom: '1px solid #f8fafc', cursor: 'pointer', display: 'flex', gap: 8 }}
-                    >
-                      {n.icon}
-                      <div>
-                        <div style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a' }}>{n.title}</div>
-                        <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{n.description}</div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 250, overflowY: 'auto' }}>
+                {visibleNotifications.length > 0 ? (
+                  visibleNotifications.map((notif) => {
+                    const isRead = readIds.includes(notif.id);
+                    return (
+                      <div
+                        key={notif.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 8,
+                          padding: '8px',
+                          borderRadius: 8,
+                          backgroundColor: isRead ? 'transparent' : tokens.bgSurfaceSubtle,
+                          border: `1px solid ${tokens.borderSubtle}`,
+                        }}
+                      >
+                        <div style={{ marginTop: 2 }}>{getNotifIcon(notif.type)}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '0.74rem', fontWeight: 700, color: tokens.textPrimary }}>
+                            {notif.title}
+                          </div>
+                          <div style={{ fontSize: '0.68rem', color: tokens.textSecondary, lineHeight: 1.3 }}>
+                            {notif.message}
+                          </div>
+                          <div style={{ fontSize: '0.62rem', color: tokens.textMuted, marginTop: 2 }}>
+                            {notif.time}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => dismissNotification(notif.id)}
+                          style={{ background: 'none', border: 'none', color: tokens.textMuted, cursor: 'pointer', padding: 0 }}
+                          title="Dismiss"
+                        >
+                          <X size={12} />
+                        </button>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
+                ) : (
+                  <div style={{ padding: '24px 12px', textAlign: 'center', color: tokens.textMuted }}>
+                    <Inbox size={20} style={{ margin: '0 auto 6px auto', display: 'block' }} />
+                    <span style={{ fontSize: '0.76rem', fontWeight: 600 }}>No unread notifications</span>
+                  </div>
                 )}
               </div>
             </div>
           )}
         </div>
 
-        {/* User Profile */}
-        <div style={{ position: 'relative' }} ref={profileRef}>
+        <div style={{ position: 'relative' }}>
           <button
             type="button"
-            onClick={() => {
-              setProfileOpen((prev) => !prev);
-              setNotifOpen(false);
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px',
             }}
-            style={profileTriggerStyle}
           >
-            {safePhoto ? (
-              <img src={safePhoto} alt="User" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
-            ) : (
-              <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#004b87', color: '#fff', fontSize: '0.74rem', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {session?.faculty_name?.charAt(0) || 'U'}
+            <div
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: '50%',
+                overflow: 'hidden',
+                backgroundColor: tokens.primaryLight,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                border: `1px solid ${tokens.borderSubtle}`,
+              }}
+            >
+              {resolvedPhoto ? (
+                <img
+                  src={resolvedPhoto}
+                  alt={currentUser.full_name}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <User size={16} color={brand.primary} />
+              )}
+            </div>
+            <div style={{ textAlign: 'left' }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
+                {currentUser.full_name || 'My Account'}
               </div>
-            )}
-            <ChevronDown size={14} color="#64748b" />
+              <div style={{ fontSize: '0.66rem', color: tokens.textMuted }}>
+                {currentUser.role || 'FACULTY'}
+              </div>
+            </div>
+            <ChevronDown size={14} color={tokens.textMuted} />
           </button>
 
-          {profileOpen && (
-            <div style={profileDropdownCard}>
-              <div style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9' }}>
-                <div style={{ fontSize: '0.80rem', fontWeight: 800, color: '#0f172a' }}>{session?.faculty_name || session?.username}</div>
-                <div style={{ fontSize: '0.68rem', color: '#004b87', fontWeight: 700 }}>{role} ACCOUNT</div>
+          {dropdownOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '115%',
+                right: 0,
+                backgroundColor: '#FFFFFF',
+                border: `1px solid ${tokens.borderSubtle}`,
+                borderRadius: 12,
+                boxShadow: tokens.cardShadow,
+                width: 170,
+                zIndex: 1000,
+                overflow: 'hidden',
+              }}
+            >
+              <div style={{ padding: '8px 12px', borderBottom: `1px solid ${tokens.borderSubtle}` }}>
+                <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Signed in as</span>
+                <strong style={{ display: 'block', fontSize: '0.76rem', color: tokens.textPrimary }}>
+                  {currentUser.username || 'User'}
+                </strong>
               </div>
+
+              {onOpenProfile && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDropdownOpen(false);
+                    onOpenProfile();
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    padding: '8px 12px',
+                    border: 'none',
+                    background: 'none',
+                    fontSize: '0.76rem',
+                    fontWeight: 600,
+                    color: tokens.textPrimary,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  <User size={14} />
+                  <span>Profile</span>
+                </button>
+              )}
+
               <button
                 type="button"
-                onClick={() => {
-                  setProfileOpen(false);
-                  onOpenProfile();
+                onClick={handleLogout}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: 'none',
+                  background: 'none',
+                  fontSize: '0.76rem',
+                  fontWeight: 700,
+                  color: brand.danger,
+                  cursor: 'pointer',
+                  textAlign: 'left',
                 }}
-                style={dropdownItemBtn}
               >
-                <User size={13} color="#64748b" /> My Profile
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileOpen(false);
-                  onLogout();
-                }}
-                style={{ ...dropdownItemBtn, color: '#dc2626' }}
-              >
-                <LogOut size={13} color="#dc2626" /> Log Out
+                <LogOut size={14} color={brand.danger} />
+                <span>Sign Out</span>
               </button>
             </div>
           )}
         </div>
       </div>
+
+      {isDigitalPassOpen && (
+        <StudentIdPassModal
+          student={{
+            id: 0,
+            name: currentUser.full_name || currentUser.username,
+            lrn: currentUser.employee_id || currentUser.username,
+            photo_url: resolvedPhoto,
+            rfid_uid: currentUser.rfid_uid,
+            gender: 'N/A',
+            attendance_status: 'PRESENT',
+          }}
+          selectedClass={{
+            id: 0,
+            section_name: `${currentUser.role || 'STAFF'} &bull; Lapasan National High School`,
+          } as any}
+          onClose={() => setIsDigitalPassOpen(false)}
+          onCopyLrn={(id) => {
+            if (navigator.clipboard) navigator.clipboard.writeText(id);
+          }}
+        />
+      )}
     </header>
   );
-};
-
-const headerWrapper: React.CSSProperties = {
-  height: 60,
-  minHeight: 60,
-  backgroundColor: '#ffffff',
-  borderBottom: '1px solid #e2e8f0',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '0 clamp(12px, 2.5vw, 24px)',
-  boxSizing: 'border-box',
-  zIndex: 40,
-};
-
-const clockPillStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  height: 34,
-  padding: '0 10px',
-  backgroundColor: '#f8fafc',
-  border: '1px solid #e2e8f0',
-  borderRadius: 17,
-  fontSize: '0.74rem',
-  color: '#334155',
-  fontFamily: 'monospace',
-  fontWeight: 700,
-};
-
-const statusPillStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 5,
-  height: 34,
-  padding: '0 10px',
-  borderRadius: 17,
-  border: '1px solid',
-  fontSize: '0.74rem',
-  fontWeight: 700,
-};
-
-const iconButtonStyle: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: '50%',
-  border: '1px solid #e2e8f0',
-  backgroundColor: '#f8fafc',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-  color: '#334155',
-  position: 'relative',
-};
-
-const notifBadgeStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: -3,
-  right: -3,
-  minWidth: 16,
-  height: 16,
-  borderRadius: 8,
-  backgroundColor: '#dc2626',
-  color: '#ffffff',
-  fontSize: '0.62rem',
-  fontWeight: 800,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '0 3px',
-};
-
-const profileTriggerStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  height: 36,
-  padding: '0 8px 0 4px',
-  backgroundColor: '#f8fafc',
-  border: '1px solid #e2e8f0',
-  borderRadius: 18,
-  cursor: 'pointer',
-};
-
-const notifDropdownCard: React.CSSProperties = {
-  position: 'absolute',
-  top: 44,
-  right: 0,
-  width: 280,
-  backgroundColor: '#ffffff',
-  border: '1px solid #e2e8f0',
-  borderRadius: 10,
-  boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
-  overflow: 'hidden',
-  zIndex: 100,
-};
-
-const profileDropdownCard: React.CSSProperties = {
-  position: 'absolute',
-  top: 44,
-  right: 0,
-  width: 180,
-  backgroundColor: '#ffffff',
-  border: '1px solid #e2e8f0',
-  borderRadius: 10,
-  boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
-  padding: '4px 0',
-  display: 'flex',
-  flexDirection: 'column',
-  zIndex: 100,
-};
-
-const dropdownItemBtn: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '8px 12px',
-  background: 'none',
-  border: 'none',
-  fontSize: '0.78rem',
-  fontWeight: 600,
-  color: '#334155',
-  cursor: 'pointer',
-  textAlign: 'left',
 };
 
 export default Header;

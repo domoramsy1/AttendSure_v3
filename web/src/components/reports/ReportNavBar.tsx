@@ -1,14 +1,10 @@
 /**
- * AttendSure - Official Reports Navigation & Export Action Bar
+ * AttendSure - Official Reports Navigation & Export Action Bar (Theme Adaptive)
  * File: web/src/components/reports/ReportNavBar.tsx
- *
- * Cybersecurity & Stability:
- * 1. Safe String Normalizer: Converts object, numeric, or undefined grade levels into strings before sorting.
- * 2. Unbreakable Sorting: Fixes "a.localeCompare is not a function" by coercing sort inputs to strings.
- * 3. RBAC Restriction: Hides SF4 form tabs for non-admin/non-principal accounts.
  */
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useTheme } from '../../context/ThemeContext';
 import {
   FileText,
   CalendarCheck,
@@ -168,6 +164,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   exportingText = 'Exporting...',
   disableActions = false,
 }) => {
+  const { tokens, brand } = useTheme();
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -215,7 +212,6 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
     });
   }, [sections, selectedGradeLevel]);
 
-  // Safe string array comparison prevents "a.localeCompare is not a function"
   const availableGradeLevels = useMemo(() => {
     if (gradeLevels && gradeLevels.length > 0) {
       return gradeLevels
@@ -241,10 +237,13 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   };
 
   return (
-    <div className="no-print" style={navBarWrapperStyle}>
-      <div style={topTabBarStyle}>
-        <span style={reportFormLabelStyle}>REPORT FORM:</span>
-        <div style={pillContainerStyle}>
+    <div className="no-print" style={{ display: 'flex', flexDirection: 'column', width: '100%', flexShrink: 0, backgroundColor: tokens.bgSurface, boxSizing: 'border-box' }}>
+      {/* 1. Form Type Selector Tabs */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', backgroundColor: tokens.bgSurface, borderBottom: `1px solid ${tokens.borderSubtle}` }}>
+        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: tokens.textMuted, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
+          REPORT FORM:
+        </span>
+        <div style={{ display: 'flex', gap: 6, backgroundColor: tokens.bgSurfaceSubtle, padding: '4px', borderRadius: 10, border: `1px solid ${tokens.borderSubtle}` }}>
           {filteredReports.map((rep) => {
             const Icon = rep.icon;
             const isActive = rep.id === activeReportId;
@@ -254,10 +253,19 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 type="button"
                 onClick={() => onSelectReport(rep.id)}
                 style={{
-                  ...tabButtonStyle,
-                  backgroundColor: isActive ? '#ffffff' : 'transparent',
-                  color: isActive ? '#004b87' : '#64748b',
-                  boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  padding: '6px 14px',
+                  borderRadius: 8,
+                  border: 'none',
+                  fontSize: '0.80rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  backgroundColor: isActive ? brand.primary : 'transparent',
+                  color: isActive ? '#FFFFFF' : tokens.textSecondary,
+                  boxShadow: isActive ? tokens.cardShadow : 'none',
+                  transition: 'all 0.15s ease',
                 }}
               >
                 {Icon && <Icon size={15} />}
@@ -268,15 +276,16 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
         </div>
       </div>
 
-      <div style={bottomActionBarStyle}>
+      {/* 2. Filters & Action Buttons */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 24px', backgroundColor: tokens.bgSurface, borderBottom: `1px solid ${tokens.borderSubtle}`, flexWrap: 'wrap', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           {showAcademicYearFilter && onAcademicYearChange && academicYears.length > 0 && (
-            <div style={filterGroupStyle}>
-              <span style={filterLabelStyle}>School Year:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>School Year:</span>
               <select
                 value={selectedAcademicYear}
                 onChange={(e) => onAcademicYearChange(e.target.value)}
-                style={selectInputStyle}
+                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none' }}
               >
                 {!selectedAcademicYear && <option value="">-- Select S.Y. --</option>}
                 {academicYears.map((sy) => (
@@ -287,12 +296,12 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
           )}
 
           {showGradeLevelFilter && onGradeLevelChange && (
-            <div style={filterGroupStyle}>
-              <span style={filterLabelStyle}>Grade Level:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>Grade Level:</span>
               <select
                 value={selectedGradeLevel}
                 onChange={(e) => onGradeLevelChange(e.target.value)}
-                style={selectInputStyle}
+                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none' }}
               >
                 <option value="ALL">All Grades</option>
                 {availableGradeLevels.map((g) => (
@@ -303,12 +312,12 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
           )}
 
           {showSectionFilter && (
-            <div style={filterGroupStyle}>
-              <span style={filterLabelStyle}>Section:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>Section:</span>
               <select
                 value={String(selectedSectionId ?? '')}
                 onChange={(e) => onSectionChange(e.target.value)}
-                style={selectInputStyle}
+                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none' }}
               >
                 {!selectedSectionId && <option value="">-- Choose Section --</option>}
                 {filteredSections.length === 0 ? (
@@ -328,27 +337,27 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
           )}
 
           {showDateFilter && onDateChange && (
-            <div style={filterGroupStyle}>
-              <span style={filterLabelStyle}>Date:</span>
-              <div style={dateInputWrapperStyle}>
-                <Calendar size={13} color="#64748b" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>Date:</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurfaceSubtle }}>
+                <Calendar size={13} color={tokens.textMuted} />
                 <input
                   type="date"
                   value={selectedDate}
                   onChange={(e) => onDateChange(e.target.value)}
-                  style={dateInputStyle}
+                  style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: '0.80rem', fontWeight: 600, color: tokens.textPrimary }}
                 />
               </div>
             </div>
           )}
 
           {showMonthFilter && onMonthChange && (
-            <div style={filterGroupStyle}>
-              <span style={filterLabelStyle}>Month:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>Month:</span>
               <select
                 value={selectedMonth}
                 onChange={(e) => onMonthChange(e.target.value)}
-                style={selectInputStyle}
+                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none' }}
               >
                 {monthsList.map((m) => (
                   <option key={m} value={m}>{m}</option>
@@ -358,35 +367,35 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
           )}
 
           {showCalendarYearFilter && onCalendarYearChange && (
-            <div style={filterGroupStyle}>
-              <span style={filterLabelStyle}>Year:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>Year:</span>
               <input
                 type="number"
                 value={selectedCalendarYear || new Date().getFullYear()}
                 onChange={(e) => onCalendarYearChange(Number(e.target.value) || new Date().getFullYear())}
-                style={{ ...selectInputStyle, width: 80 }}
+                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none', width: 80 }}
               />
             </div>
           )}
 
           {showSearch && onSearchChange && (
-            <div style={searchContainerStyle}>
-              <Search size={14} color="#94a3b8" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurfaceSubtle, width: 200 }}>
+              <Search size={14} color={tokens.textMuted} />
               <input
                 type="text"
                 value={searchQuery}
                 placeholder="Search name or LRN..."
                 onChange={(e) => onSearchChange(e.target.value)}
-                style={searchInputStyle}
+                style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: '0.78rem', width: '100%', color: tokens.textPrimary }}
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => onSearchChange('')}
-                  style={clearSearchBtnStyle}
+                  style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0 }}
                   title="Clear search"
                 >
-                  <X size={13} color="#94a3b8" />
+                  <X size={13} color={tokens.textMuted} />
                 </button>
               )}
             </div>
@@ -400,7 +409,19 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               onClick={onRefresh}
               disabled={isRefreshing}
               title="Refresh Record from Database"
-              style={btnActionSecondaryStyle}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 12px',
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                borderRadius: 6,
+                fontSize: '0.80rem',
+                fontWeight: 700,
+                color: tokens.textPrimary,
+                cursor: 'pointer',
+              }}
             >
               <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
               <span>Refresh</span>
@@ -411,12 +432,18 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
             <button
               type="button"
               onClick={() => onToggleLayoutMode(layoutMode === 'pageless' ? 'pages' : 'pageless')}
-              title={layoutMode === 'pageless' ? 'Switch to Paginated Sheets view' : 'Switch to Continuous Pageless view'}
               style={{
-                ...btnActionSecondaryStyle,
-                borderColor: layoutMode === 'pageless' ? '#004b87' : '#cbd5e1',
-                backgroundColor: layoutMode === 'pageless' ? '#f0f9ff' : '#f8fafc',
-                color: layoutMode === 'pageless' ? '#004b87' : '#334155',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 12px',
+                backgroundColor: layoutMode === 'pageless' ? tokens.primaryLight : tokens.bgSurfaceSubtle,
+                border: `1px solid ${layoutMode === 'pageless' ? brand.primary : tokens.borderStrong}`,
+                borderRadius: 6,
+                fontSize: '0.80rem',
+                fontWeight: 700,
+                color: layoutMode === 'pageless' ? brand.primary : tokens.textPrimary,
+                cursor: 'pointer',
               }}
             >
               {layoutMode === 'pageless' ? <Maximize2 size={14} /> : <FileText size={14} />}
@@ -429,7 +456,19 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               type="button"
               onClick={onOpenPageSetup}
               disabled={disableActions}
-              style={btnActionSecondaryStyle}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 12px',
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                borderRadius: 6,
+                fontSize: '0.80rem',
+                fontWeight: 700,
+                color: tokens.textPrimary,
+                cursor: 'pointer',
+              }}
             >
               <SlidersHorizontal size={14} />
               <span>Page Setup</span>
@@ -444,7 +483,19 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 disabled={disableActions || isExporting}
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
-                style={btnDownloadDropdownStyle}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 12px',
+                  backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                  border: '1px solid rgba(16, 185, 129, 0.28)',
+                  borderRadius: 6,
+                  fontSize: '0.80rem',
+                  fontWeight: 700,
+                  color: brand.success,
+                  cursor: 'pointer',
+                }}
               >
                 {isExporting ? (
                   <>
@@ -461,19 +512,19 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               </button>
 
               {isExportDropdownOpen && (
-                <div style={dropdownListStyle}>
+                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: 270, backgroundColor: tokens.bgSurface, borderRadius: 10, boxShadow: tokens.cardShadow, border: `1px solid ${tokens.borderSubtle}`, padding: '6px 0', zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
                   {exportHandlers.onExportPdf && (
                     <>
-                      <div style={dropdownCategoryHeaderStyle}>FILE DOWNLOADS</div>
+                      <div style={{ padding: '6px 14px 2px 14px', fontSize: '0.62rem', fontWeight: 800, color: tokens.textMuted, letterSpacing: '0.5px' }}>FILE DOWNLOADS</div>
                       <button
                         type="button"
                         onClick={() => handleExportAction(exportHandlers.onExportPdf)}
-                        style={dropdownOptionButtonStyle}
+                        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '0.78rem', textAlign: 'left', width: '100%', color: tokens.textPrimary }}
                       >
-                        <Download size={15} color="#004b87" />
+                        <Download size={15} color={brand.primary} />
                         <div style={{ flex: 1, textAlign: 'left' }}>
-                          <div style={{ fontWeight: 700, color: '#0f172a' }}>Adobe PDF (.pdf)</div>
-                          <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Official Document Format</div>
+                          <div style={{ fontWeight: 700, color: tokens.textPrimary }}>Adobe PDF (.pdf)</div>
+                          <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Official Document Format</div>
                         </div>
                       </button>
                     </>
@@ -481,17 +532,17 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
 
                   {(exportHandlers.onExportExcel || exportHandlers.onExportGoogleSheets) && (
                     <>
-                      <div style={dropdownCategoryHeaderStyle}>OFFICIAL SPREADSHEETS</div>
+                      <div style={{ padding: '6px 14px 2px 14px', fontSize: '0.62rem', fontWeight: 800, color: tokens.textMuted, letterSpacing: '0.5px' }}>OFFICIAL SPREADSHEETS</div>
                       {exportHandlers.onExportExcel && (
                         <button
                           type="button"
                           onClick={() => handleExportAction(exportHandlers.onExportExcel)}
-                          style={dropdownOptionButtonStyle}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '0.78rem', textAlign: 'left', width: '100%', color: tokens.textPrimary }}
                         >
-                          <FileSpreadsheet size={15} color="#059669" />
+                          <FileSpreadsheet size={15} color={brand.success} />
                           <div style={{ flex: 1, textAlign: 'left' }}>
-                            <div style={{ fontWeight: 700, color: '#0f172a' }}>Microsoft Excel (.xlsx / .xls)</div>
-                            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Formatted DepEd spreadsheet</div>
+                            <div style={{ fontWeight: 700, color: tokens.textPrimary }}>Microsoft Excel (.xlsx)</div>
+                            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Formatted DepEd spreadsheet</div>
                           </div>
                         </button>
                       )}
@@ -499,44 +550,12 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                         <button
                           type="button"
                           onClick={() => handleExportAction(exportHandlers.onExportGoogleSheets)}
-                          style={dropdownOptionButtonStyle}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '0.78rem', textAlign: 'left', width: '100%', color: tokens.textPrimary }}
                         >
-                          <ExternalLink size={15} color="#16a34a" />
+                          <ExternalLink size={15} color={brand.success} />
                           <div style={{ flex: 1, textAlign: 'left' }}>
-                            <div style={{ fontWeight: 700, color: '#0f172a' }}>Google Sheets</div>
-                            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Opens in web spreadsheet</div>
-                          </div>
-                        </button>
-                      )}
-                    </>
-                  )}
-
-                  {(exportHandlers.onExportWord || exportHandlers.onExportGoogleDocs) && (
-                    <>
-                      <div style={dropdownCategoryHeaderStyle}>DOCUMENT FORMATS</div>
-                      {exportHandlers.onExportWord && (
-                        <button
-                          type="button"
-                          onClick={() => handleExportAction(exportHandlers.onExportWord)}
-                          style={dropdownOptionButtonStyle}
-                        >
-                          <FileText size={15} color="#2563eb" />
-                          <div style={{ flex: 1, textAlign: 'left' }}>
-                            <div style={{ fontWeight: 700, color: '#0f172a' }}>Microsoft Word (.docx / .doc)</div>
-                            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Editable document</div>
-                          </div>
-                        </button>
-                      )}
-                      {exportHandlers.onExportGoogleDocs && (
-                        <button
-                          type="button"
-                          onClick={() => handleExportAction(exportHandlers.onExportGoogleDocs)}
-                          style={dropdownOptionButtonStyle}
-                        >
-                          <ExternalLink size={15} color="#3b82f6" />
-                          <div style={{ flex: 1, textAlign: 'left' }}>
-                            <div style={{ fontWeight: 700, color: '#0f172a' }}>Google Docs</div>
-                            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Opens in web document editor</div>
+                            <div style={{ fontWeight: 700, color: tokens.textPrimary }}>Google Sheets</div>
+                            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Opens in web spreadsheet</div>
                           </div>
                         </button>
                       )}
@@ -545,17 +564,17 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
 
                   {(exportHandlers.onExportCsv || exportHandlers.onExportJson) && (
                     <>
-                      <div style={dropdownCategoryHeaderStyle}>DATA EXCHANGE</div>
+                      <div style={{ padding: '6px 14px 2px 14px', fontSize: '0.62rem', fontWeight: 800, color: tokens.textMuted, letterSpacing: '0.5px' }}>DATA EXCHANGE</div>
                       {exportHandlers.onExportCsv && (
                         <button
                           type="button"
                           onClick={() => handleExportAction(exportHandlers.onExportCsv)}
-                          style={dropdownOptionButtonStyle}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '0.78rem', textAlign: 'left', width: '100%', color: tokens.textPrimary }}
                         >
-                          <TableIcon size={15} color="#d97706" />
+                          <TableIcon size={15} color={brand.warning} />
                           <div style={{ flex: 1, textAlign: 'left' }}>
-                            <div style={{ fontWeight: 700, color: '#0f172a' }}>LIS CSV Spreadsheet (.csv)</div>
-                            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Standard DepEd data exchange</div>
+                            <div style={{ fontWeight: 700, color: tokens.textPrimary }}>LIS CSV Spreadsheet (.csv)</div>
+                            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Standard DepEd data exchange</div>
                           </div>
                         </button>
                       )}
@@ -563,12 +582,12 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                         <button
                           type="button"
                           onClick={() => handleExportAction(exportHandlers.onExportJson)}
-                          style={dropdownOptionButtonStyle}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '0.78rem', textAlign: 'left', width: '100%', color: tokens.textPrimary }}
                         >
-                          <FileCode size={15} color="#7c3aed" />
+                          <FileCode size={15} color={brand.secondary} />
                           <div style={{ flex: 1, textAlign: 'left' }}>
-                            <div style={{ fontWeight: 700, color: '#0f172a' }}>Raw JSON Data (.json)</div>
-                            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Database export &amp; backup</div>
+                            <div style={{ fontWeight: 700, color: tokens.textPrimary }}>Raw JSON Data (.json)</div>
+                            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Database export &amp; backup</div>
                           </div>
                         </button>
                       )}
@@ -584,7 +603,19 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               type="button"
               onClick={onPrint}
               disabled={disableActions}
-              style={btnPrintStyle}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 16px',
+                backgroundColor: brand.primary,
+                border: 'none',
+                borderRadius: 6,
+                fontSize: '0.80rem',
+                fontWeight: 700,
+                color: '#FFFFFF',
+                cursor: 'pointer',
+              }}
             >
               <Printer size={15} />
               <span>Print</span>
@@ -597,217 +628,3 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
 };
 
 export default ReportNavBar;
-
-// Styles
-const navBarWrapperStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  width: '100%',
-  flexShrink: 0,
-  backgroundColor: '#ffffff',
-  boxSizing: 'border-box',
-};
-
-const topTabBarStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  padding: '8px 24px',
-  backgroundColor: '#ffffff',
-  borderBottom: '1px solid #e2e8f0',
-};
-
-const reportFormLabelStyle: React.CSSProperties = {
-  fontSize: '0.78rem',
-  fontWeight: 800,
-  color: '#475569',
-  letterSpacing: '0.4px',
-  textTransform: 'uppercase',
-};
-
-const pillContainerStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: 6,
-  backgroundColor: '#f1f5f9',
-  padding: '3px',
-  borderRadius: 8,
-};
-
-const tabButtonStyle: React.CSSProperties = {
-  padding: '6px 14px',
-  borderRadius: 6,
-  border: 'none',
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  transition: 'all 0.15s ease',
-};
-
-const bottomActionBarStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  padding: '8px 24px',
-  backgroundColor: '#ffffff',
-  borderBottom: '1px solid #cbd5e1',
-  flexWrap: 'wrap',
-  gap: 12,
-};
-
-const filterGroupStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-};
-
-const filterLabelStyle: React.CSSProperties = {
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#1e293b',
-  whiteSpace: 'nowrap',
-};
-
-const selectInputStyle: React.CSSProperties = {
-  padding: '5px 10px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.8rem',
-  fontWeight: 600,
-  backgroundColor: '#f8fafc',
-  color: '#0f172a',
-  outline: 'none',
-  cursor: 'pointer',
-};
-
-const dateInputWrapperStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '3px 8px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#f8fafc',
-};
-
-const dateInputStyle: React.CSSProperties = {
-  border: 'none',
-  outline: 'none',
-  background: 'transparent',
-  fontSize: '0.8rem',
-  fontWeight: 600,
-  color: '#0f172a',
-  cursor: 'pointer',
-};
-
-const searchContainerStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '4px 10px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#f8fafc',
-  width: 190,
-};
-
-const searchInputStyle: React.CSSProperties = {
-  border: 'none',
-  outline: 'none',
-  background: 'transparent',
-  fontSize: '0.78rem',
-  width: '100%',
-  color: '#0f172a',
-};
-
-const clearSearchBtnStyle: React.CSSProperties = {
-  border: 'none',
-  background: 'transparent',
-  cursor: 'pointer',
-  padding: 0,
-  display: 'flex',
-  alignItems: 'center',
-};
-
-const btnActionSecondaryStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '6px 12px',
-  backgroundColor: '#f8fafc',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#334155',
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-};
-
-const btnDownloadDropdownStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '6px 12px',
-  backgroundColor: '#ecfdf5',
-  border: '1px solid #a7f3d0',
-  borderRadius: 6,
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#065f46',
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-};
-
-const btnPrintStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '6px 16px',
-  backgroundColor: '#004b87',
-  border: 'none',
-  borderRadius: 6,
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#ffffff',
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-};
-
-const dropdownListStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 'calc(100% + 6px)',
-  right: 0,
-  width: 270,
-  backgroundColor: '#ffffff',
-  borderRadius: 8,
-  boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.15)',
-  border: '1px solid #e2e8f0',
-  padding: '6px 0',
-  zIndex: 1000,
-  display: 'flex',
-  flexDirection: 'column',
-};
-
-const dropdownCategoryHeaderStyle: React.CSSProperties = {
-  padding: '6px 14px 2px 14px',
-  fontSize: '0.62rem',
-  fontWeight: 800,
-  color: '#94a3b8',
-  letterSpacing: '0.5px',
-};
-
-const dropdownOptionButtonStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  padding: '8px 14px',
-  border: 'none',
-  backgroundColor: 'transparent',
-  cursor: 'pointer',
-  fontSize: '0.78rem',
-  textAlign: 'left',
-  width: '100%',
-};

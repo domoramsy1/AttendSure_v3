@@ -1,15 +1,10 @@
 /**
- * AttendSure - User Account & Profile Popover Menu
- * File: frontend/src/components/layout/ProfileDropdown.tsx
- *
- * Capabilities:
- * - Dynamic session identity, role badges, and initial avatar fallback.
- * - Dynamic backend admin routing (avoids hardcoded 127.0.0.1 loops).
- * - Keyboard accessibility (Escape key dismissal & outside click detection).
- * - Quick shortcuts to DTR (CSC DTR), User Management, and Settings.
+ * AttendSure - User Account & Profile Popover Menu (Theme Adaptive)
+ * File: web/src/components/layout/ProfileDropdown.tsx
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useTheme } from '../../context/ThemeContext';
 import {
   Clock,
   KeyRound,
@@ -43,8 +38,8 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
 }) => {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [imgError, setImgError] = useState(false);
+  const { tokens, brand } = useTheme();
 
-  // Close popover on outside click or Escape key press
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -106,13 +101,41 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
       ref={dropdownRef}
       role="menu"
       aria-label="User Account Menu"
-      style={popoverContainerStyle}
+      style={{
+        position: 'absolute',
+        top: 52,
+        right: 0,
+        width: 'min(300px, 90vw)',
+        backgroundColor: tokens.bgSurface,
+        borderRadius: 14,
+        boxShadow: tokens.cardShadow,
+        border: `1px solid ${tokens.borderSubtle}`,
+        zIndex: 100,
+        overflow: 'hidden',
+        color: tokens.textPrimary,
+        userSelect: 'none',
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      }}
     >
-      {/* 1. Identity Header */}
-      <div style={headerStyle}>
+      <div style={{ padding: '16px 16px 12px 16px', borderBottom: `1px solid ${tokens.borderSubtle}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* User Avatar Circle */}
-          <div style={avatarCircleStyle}>
+          <div
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: '50%',
+              backgroundColor: brand.primary,
+              color: '#ffffff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 800,
+              fontSize: '1.05rem',
+              flexShrink: 0,
+              overflow: 'hidden',
+              border: `2px solid ${tokens.primaryLight}`,
+            }}
+          >
             {userPhoto && !imgError ? (
               <img
                 src={userPhoto}
@@ -126,14 +149,14 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
           </div>
 
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={userNameStyle} title={userName}>
+            <div style={{ fontSize: '0.90rem', fontWeight: 700, color: tokens.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={userName}>
               {userName}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-              <span style={roleBadgeStyle}>
+              <span style={{ fontSize: '0.62rem', fontWeight: 800, color: brand.primary, backgroundColor: tokens.primaryLight, padding: '1px 6px', borderRadius: 4 }}>
                 {userRole}
               </span>
-              <span style={activeStatusStyle}>
+              <span style={{ fontSize: '0.68rem', color: brand.success, display: 'flex', alignItems: 'center', gap: 3, fontWeight: 600 }}>
                 <CheckCircle2 size={11} /> Active
               </span>
             </div>
@@ -147,83 +170,119 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
               onClose();
               onOpenProfile();
             }}
-            style={manageProfileBtnStyle}
+            style={{
+              marginTop: 12,
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              padding: '7px 10px',
+              backgroundColor: tokens.bgSurfaceSubtle,
+              border: `1px solid ${tokens.borderSubtle}`,
+              borderRadius: 8,
+              color: tokens.textPrimary,
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'background-color 0.15s ease',
+            }}
           >
-            <UserCog size={14} color="#0284c7" />
+            <UserCog size={14} color={brand.primary} />
             <span>Manage Profile &amp; Details</span>
           </button>
         )}
       </div>
 
-      {/* 2. Quick Actions */}
       <div style={{ padding: '6px' }}>
-        {/* CSC DTR DTR Link */}
         <button
           type="button"
           onClick={() => handleAction('dtr')}
-          style={actionItemStyle}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: 'none',
+            backgroundColor: 'transparent',
+            width: '100%',
+            cursor: 'pointer',
+            transition: 'background-color 0.12s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = tokens.bgSurfaceHover)}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          <div style={iconBoxStyle}>
-            <Clock size={16} color="#0284c7" />
+          <div style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: tokens.bgSurfaceSubtle, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Clock size={16} color={brand.primary} />
           </div>
           <div style={{ flex: 1, textAlign: 'left' }}>
-            <div style={actionTitleStyle}>
-              My Daily Time Record
-            </div>
-            <div style={actionSubtextStyle}>
-              CSC DTR logs &amp; hours
-            </div>
+            <div style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textPrimary }}>My Daily Time Record</div>
+            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>CSC DTR logs &amp; hours</div>
           </div>
         </button>
 
-        {/* Account Security & User Administration */}
         <button
           type="button"
           onClick={handleSecurityAction}
-          style={actionItemStyle}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: 'none',
+            backgroundColor: 'transparent',
+            width: '100%',
+            cursor: 'pointer',
+            transition: 'background-color 0.12s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = tokens.bgSurfaceHover)}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          <div style={iconBoxStyle}>
-            {userRole === 'ADMIN' ? <Shield size={16} color="#0284c7" /> : <KeyRound size={16} color="#64748b" />}
+          <div style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: tokens.bgSurfaceSubtle, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            {userRole === 'ADMIN' ? <Shield size={16} color={brand.primary} /> : <KeyRound size={16} color={tokens.textMuted} />}
           </div>
           <div style={{ flex: 1, textAlign: 'left' }}>
-            <div style={actionTitleStyle}>
+            <div style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textPrimary }}>
               {userRole === 'ADMIN' ? 'User & Role Security' : 'Account Security'}
             </div>
-            <div style={actionSubtextStyle}>
+            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>
               {userRole === 'ADMIN' ? 'Manage faculty roles & credentials' : 'Credentials & session policies'}
             </div>
           </div>
         </button>
 
-        {/* Institutional Settings Link */}
         <button
           type="button"
           onClick={() => handleAction('settings')}
-          style={actionItemStyle}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: 'none',
+            backgroundColor: 'transparent',
+            width: '100%',
+            cursor: 'pointer',
+            transition: 'background-color 0.12s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = tokens.bgSurfaceHover)}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          <div style={iconBoxStyle}>
-            <Settings size={16} color="#0284c7" />
+          <div style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: tokens.bgSurfaceSubtle, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Settings size={16} color={brand.primary} />
           </div>
           <div style={{ flex: 1, textAlign: 'left' }}>
-            <div style={actionTitleStyle}>
-              School Settings
-            </div>
-            <div style={actionSubtextStyle}>
-              Emblem, seals &amp; geofence
-            </div>
+            <div style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textPrimary }}>School Settings</div>
+            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Emblem, seals &amp; geofence</div>
           </div>
         </button>
       </div>
 
-      <div style={{ height: 1, backgroundColor: '#f1f5f9', margin: '0 8px' }} />
+      <div style={{ height: 1, backgroundColor: tokens.borderSubtle, margin: '0 8px' }} />
 
-      {/* 3. Log Out */}
       <div style={{ padding: '6px' }}>
         <button
           type="button"
@@ -231,146 +290,32 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
             onClose();
             onLogout();
           }}
-          style={actionItemStyle}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#fef2f2')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: 'none',
+            backgroundColor: 'transparent',
+            width: '100%',
+            cursor: 'pointer',
+            transition: 'background-color 0.12s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.12)')}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          <div style={{ ...iconBoxStyle, backgroundColor: '#fee2e2' }}>
-            <LogOut size={16} color="#dc2626" />
+          <div style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: 'rgba(239, 68, 68, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <LogOut size={16} color={brand.danger} />
           </div>
           <div style={{ flex: 1, textAlign: 'left' }}>
-            <div style={{ fontSize: '0.80rem', fontWeight: 700, color: '#dc2626' }}>
-              Log Out
-            </div>
-            <div style={{ fontSize: '0.68rem', color: '#b91c1c' }}>
-              End current session safely
-            </div>
+            <div style={{ fontSize: '0.80rem', fontWeight: 700, color: brand.danger }}>Log Out</div>
+            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>End current session safely</div>
           </div>
         </button>
       </div>
     </div>
   );
-};
-
-// ============================================================================
-// STYLES
-// ============================================================================
-
-const popoverContainerStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 52,
-  right: 0,
-  width: 300,
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05)',
-  border: '1px solid #e2e8f0',
-  zIndex: 100,
-  overflow: 'hidden',
-  color: '#0f172a',
-  userSelect: 'none',
-};
-
-const headerStyle: React.CSSProperties = {
-  padding: '16px 16px 12px 16px',
-  borderBottom: '1px solid #f1f5f9',
-};
-
-const avatarCircleStyle: React.CSSProperties = {
-  width: 44,
-  height: 44,
-  borderRadius: '50%',
-  backgroundColor: '#0284c7',
-  color: '#ffffff',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontWeight: 800,
-  fontSize: '1.05rem',
-  flexShrink: 0,
-  overflow: 'hidden',
-  border: '2px solid #e0f2fe',
-};
-
-const userNameStyle: React.CSSProperties = {
-  fontSize: '0.90rem',
-  fontWeight: 700,
-  color: '#0f172a',
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-};
-
-const roleBadgeStyle: React.CSSProperties = {
-  fontSize: '0.62rem',
-  fontWeight: 800,
-  color: '#0284c7',
-  backgroundColor: '#e0f2fe',
-  padding: '1px 6px',
-  borderRadius: 4,
-  letterSpacing: '0.3px',
-};
-
-const activeStatusStyle: React.CSSProperties = {
-  fontSize: '0.68rem',
-  color: '#10b981',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 3,
-  fontWeight: 600,
-};
-
-const manageProfileBtnStyle: React.CSSProperties = {
-  marginTop: 12,
-  width: '100%',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 6,
-  padding: '7px 10px',
-  backgroundColor: '#f8fafc',
-  border: '1px solid #e2e8f0',
-  borderRadius: 6,
-  color: '#0f172a',
-  fontSize: '0.78rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-  transition: 'background-color 0.15s ease',
-};
-
-const actionItemStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  padding: '8px 10px',
-  borderRadius: 8,
-  border: 'none',
-  backgroundColor: 'transparent',
-  width: '100%',
-  cursor: 'pointer',
-  transition: 'background-color 0.12s ease',
-};
-
-const iconBoxStyle: React.CSSProperties = {
-  width: 32,
-  height: 32,
-  borderRadius: 8,
-  backgroundColor: '#f1f5f9',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-};
-
-const actionTitleStyle: React.CSSProperties = {
-  fontSize: '0.80rem',
-  fontWeight: 600,
-  color: '#1e293b',
-};
-
-const actionSubtextStyle: React.CSSProperties = {
-  fontSize: '0.68rem',
-  color: '#64748b',
 };
 
 export default ProfileDropdown;

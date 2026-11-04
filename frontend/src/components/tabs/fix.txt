@@ -1,0 +1,53 @@
+[{
+	"resource": "/d:/AttendSure_V3/frontend/src/components/tabs/SF1ReportTab.tsx",
+	"owner": "typescript",
+	"code": "7022",
+	"severity": 8,
+	"message": "'pageNum' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+	"source": "ts",
+	"startLineNumber": 248,
+	"startColumn": 13,
+	"endLineNumber": 248,
+	"endColumn": 20,
+	"modelVersionId": 31,
+	"origin": "extHost1"
+},{
+	"resource": "/d:/AttendSure_V3/frontend/src/components/tabs/SF1ReportTab.tsx",
+	"owner": "typescript",
+	"code": "2552",
+	"severity": 8,
+	"message": "Cannot find name 'handleDownloadJSON'. Did you mean 'handleDownloadPDF'?",
+	"source": "ts",
+	"startLineNumber": 799,
+	"startColumn": 25,
+	"endLineNumber": 799,
+	"endColumn": 43,
+	"relatedInformation": [
+		{
+			"startLineNumber": 385,
+			"startColumn": 9,
+			"endLineNumber": 385,
+			"endColumn": 26,
+			"message": "'handleDownloadPDF' is declared here.",
+			"resource": "/d:/AttendSure_V3/frontend/src/components/tabs/SF1ReportTab.tsx"
+		}
+	],
+	"modelVersionId": 31,
+	"origin": "extHost1"
+},{
+	"resource": "/d:/AttendSure_V3/frontend/src/components/tabs/SF1ReportTab.tsx",
+	"owner": "typescript",
+	"code": "6133",
+	"severity": 4,
+	"message": "'handleExportJSON' is declared but its value is never read.",
+	"source": "ts",
+	"startLineNumber": 538,
+	"startColumn": 9,
+	"endLineNumber": 538,
+	"endColumn": 25,
+	"modelVersionId": 31,
+	"tags": [
+		1
+	],
+	"origin": "extHost1"
+}]

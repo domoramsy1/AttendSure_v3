@@ -1,18 +1,11 @@
 /**
- * AttendSure - Faculty & Staff Directory
+ * AttendSure - Faculty & Staff Directory (Theme Adaptive)
  * File: web/src/components/tabs/FacultyTab.tsx
- *
- * Cybersecurity & Performance:
- * 1. Fluid Responsive Layout: Replaces rigid 4-column styles with minmax auto-fit.
- * 2. Instant Input Sanitization: Normalizes Employee IDs, RFID tokens, and phone numbers.
- * 3. Race-Condition Defense: AbortController cancels stale in-flight requests.
- * 4. SVG Vector Standards: All visual indicators use Lucide icons with zero emojis.
- * 5. Simple English Terms: Clean labels for "Faculty and staff directory", "Add faculty member", and "ID Card".
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient from '../../api/client';
-import { ModuleTableLayout } from './ModuleTableLayout';
+import { useTheme } from '../../context/ThemeContext';
 import { Pagination, ALL_ROWS_SIZE, exportToCsv } from '../common/Pagination';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -26,16 +19,9 @@ import {
   Copy,
   Check,
   Camera,
-  X,
   Loader2,
-  CreditCard,
-  Mail,
-  Phone,
-  Briefcase,
-  Building,
-  ShieldCheck,
-  Printer,
   Download,
+  Search,
 } from 'lucide-react';
 
 export interface Faculty {
@@ -142,79 +128,21 @@ const INITIAL_FORM_DATA = {
   photo: null as string | null,
 };
 
-interface ProfileAvatarProps {
-  photoUrl?: string | null;
-  name?: string;
-  size?: number;
-  iconSize?: number;
-}
-
-const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
-  photoUrl,
-  name = 'Faculty Member',
-  size = 40,
-  iconSize = 20,
-}) => {
-  const [imageFailed, setImageFailed] = useState(false);
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [photoUrl]);
-
-  const hasPhoto = Boolean(
-    photoUrl &&
-      typeof photoUrl === 'string' &&
-      photoUrl.trim() !== '' &&
-      photoUrl.trim().toLowerCase() !== 'null' &&
-      photoUrl.trim().toLowerCase() !== 'undefined'
-  );
-
-  return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        backgroundColor: '#f1f5f9',
-        border: '1px solid #e2e8f0',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-        flexShrink: 0,
-      }}
-      title={name}
-    >
-      {hasPhoto && !imageFailed ? (
-        <img
-          src={photoUrl!}
-          alt={name}
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          onError={() => setImageFailed(true)}
-        />
-      ) : (
-        <User size={iconSize} color="#94a3b8" />
-      )}
-    </div>
-  );
-};
-
 export const FacultyTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
+  const { tokens, brand } = useTheme();
 
   const [facultys, setFacultys] = useState<Faculty[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
 
-  // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
 
-  // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFaculty, setEditingFaculty] = useState<Faculty | null>(null);
   const [inspectingFaculty, setInspectingFaculty] = useState<Faculty | null>(null);
@@ -318,7 +246,7 @@ export const FacultyTab: React.FC = () => {
       if (!isInteracting.current) {
         fetchFacultys(currentPage, pageSize, search, departmentFilter, true);
       }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(liveInterval);
   }, [currentPage, pageSize, search, departmentFilter, fetchFacultys]);
@@ -521,227 +449,337 @@ export const FacultyTab: React.FC = () => {
   const pairedCardsCount = facultys.filter((f) => Boolean(f.rfid_uid && f.rfid_uid.trim().length > 0)).length;
   const uniqueDepartments = new Set(facultys.map((f) => f.department).filter(Boolean)).size;
 
-  const allPositions = FACULTY_POSITIONS.flatMap((p) => p.ranks);
-  const isCustomPosition = Boolean(formData.position && !allPositions.includes(formData.position));
-  const isCustomDepartment = Boolean(formData.department && !FACULTY_DEPARTMENTS.includes(formData.department));
-  const isCustomSuffix = Boolean(formData.suffix && !SUFFIX_OPTIONS.includes(formData.suffix));
+
+  // Dynamic Theme-Driven Styles
+  const dynamicStyles = useMemo(() => {
+    return {
+      container: {
+        display: 'flex',
+        flexDirection: 'column' as const,
+        gap: 16,
+        padding: 'clamp(12px, 2.5vw, 20px)',
+      },
+      statsContainer: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))',
+        gap: 14,
+      },
+      statCard: {
+        backgroundColor: tokens.bgSurface,
+        borderRadius: 14,
+        border: `1px solid ${tokens.borderSubtle}`,
+        boxShadow: tokens.cardShadow,
+        padding: '16px 18px',
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      },
+      statLabel: {
+        fontSize: '0.66rem',
+        fontWeight: 800,
+        color: tokens.textMuted,
+        letterSpacing: '0.4px',
+        textTransform: 'uppercase' as const,
+      },
+      statValue: {
+        fontSize: '1.60rem',
+        fontWeight: 800,
+        color: tokens.textPrimary,
+        margin: '6px 0 2px 0',
+      },
+      statHelp: {
+        fontSize: '0.70rem',
+        color: tokens.textSecondary,
+      },
+      filterBar: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap' as const,
+        gap: 12,
+        backgroundColor: tokens.bgSurface,
+        padding: '12px 18px',
+        borderRadius: 12,
+        border: `1px solid ${tokens.borderSubtle}`,
+        boxShadow: tokens.cardShadow,
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      },
+      searchInput: {
+        width: 240,
+        padding: '8px 12px 8px 34px',
+        borderRadius: 8,
+        border: `1px solid ${tokens.borderStrong}`,
+        backgroundColor: tokens.bgSurfaceSubtle,
+        color: tokens.textPrimary,
+        fontSize: '0.82rem',
+        outline: 'none',
+      },
+      selectInput: {
+        padding: '8px 12px',
+        borderRadius: 8,
+        border: `1px solid ${tokens.borderStrong}`,
+        backgroundColor: tokens.bgSurfaceSubtle,
+        color: tokens.textPrimary,
+        fontSize: '0.82rem',
+        outline: 'none',
+      },
+      tableCard: {
+        backgroundColor: tokens.bgSurface,
+        borderRadius: 14,
+        border: `1px solid ${tokens.borderSubtle}`,
+        boxShadow: tokens.cardShadow,
+        overflow: 'hidden',
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      },
+      th: {
+        padding: '12px 14px',
+        fontSize: '0.72rem',
+        fontWeight: 800,
+        color: tokens.textMuted,
+        textTransform: 'uppercase' as const,
+        letterSpacing: '0.4px',
+        borderBottom: `1px solid ${tokens.borderSubtle}`,
+        backgroundColor: tokens.bgSurfaceSubtle,
+      },
+      td: {
+        padding: '12px 14px',
+        fontSize: '0.80rem',
+        color: tokens.textPrimary,
+        borderBottom: `1px solid ${tokens.borderSubtle}`,
+      },
+      actionBtn: {
+        width: 30,
+        height: 30,
+        borderRadius: 6,
+        border: `1px solid ${tokens.borderSubtle}`,
+        backgroundColor: tokens.bgSurfaceSubtle,
+        color: tokens.textSecondary,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'pointer',
+        transition: 'all 0.15s ease',
+      },
+    };
+  }, [tokens, brand]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
-      {/* 1. Live Faculty Telemetry Cards */}
-      <div style={statsContainer}>
-        <div style={statCard}>
-          <div style={statLabel}>TOTAL REGISTERED FACULTY</div>
-          <div style={statValue}>{totalCount || facultys.length}</div>
-          <div style={statHelp}>Permanent and contractual staff</div>
+    <div style={dynamicStyles.container}>
+      {/* 1. Statistics Cards */}
+      <div style={dynamicStyles.statsContainer}>
+        <div style={dynamicStyles.statCard}>
+          <div style={dynamicStyles.statLabel}>TOTAL REGISTERED FACULTY</div>
+          <div style={dynamicStyles.statValue}>{totalCount || facultys.length}</div>
+          <div style={dynamicStyles.statHelp}>Teaching and non-teaching personnel</div>
         </div>
 
-        <div style={statCard}>
-          <div style={statLabel}>ACTIVE ON DUTY</div>
-          <div style={{ ...statValue, color: '#059669' }}>{activeFacultyCount}</div>
-          <div style={statHelp}>Eligible for DTR gate tracking</div>
+        <div style={dynamicStyles.statCard}>
+          <div style={dynamicStyles.statLabel}>ACTIVE ON DUTY</div>
+          <div style={{ ...dynamicStyles.statValue, color: brand.success }}>{activeFacultyCount}</div>
+          <div style={dynamicStyles.statHelp}>Cleared for real-time tracking</div>
         </div>
 
-        <div style={statCard}>
-          <div style={statLabel}>RFID CARDS PAIRED</div>
-          <div style={{ ...statValue, color: '#004b87' }}>
+        <div style={dynamicStyles.statCard}>
+          <div style={dynamicStyles.statLabel}>RFID CARDS PAIRED</div>
+          <div style={{ ...dynamicStyles.statValue, color: brand.primary }}>
             {pairedCardsCount}
-            <span style={{ fontSize: '0.80rem', color: '#94a3b8', fontWeight: 500 }}> / {facultys.length}</span>
+            <span style={{ fontSize: '0.82rem', color: tokens.textMuted, fontWeight: 500 }}>
+              {' '}
+              / {facultys.length}
+            </span>
           </div>
-          <div style={statHelp}>Linked gate security credentials</div>
+          <div style={dynamicStyles.statHelp}>Active smart ID credentials</div>
         </div>
 
-        <div style={statCard}>
-          <div style={statLabel}>DEPARTMENTS</div>
-          <div style={{ ...statValue, color: '#d97706' }}>{uniqueDepartments}</div>
-          <div style={statHelp}>Academic and admin divisions</div>
+        <div style={dynamicStyles.statCard}>
+          <div style={dynamicStyles.statLabel}>DEPARTMENTS</div>
+          <div style={{ ...dynamicStyles.statValue, color: brand.secondary }}>{uniqueDepartments}</div>
+          <div style={dynamicStyles.statHelp}>Academic instructional units</div>
         </div>
       </div>
 
-      {/* 2. Control Bar */}
-      <div style={controlBar}>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+      {/* 2. Controls & Filter Bar */}
+      <div style={dynamicStyles.filterBar}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={14} color={tokens.textMuted} style={{ position: 'absolute', left: 10, top: 10 }} />
+            <input
+              type="text"
+              placeholder="Search faculty name, ID..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={dynamicStyles.searchInput}
+            />
+          </div>
+
           <select
             value={departmentFilter}
             onChange={(e) => setDepartmentFilter(e.target.value)}
-            style={selectPill}
+            style={dynamicStyles.selectInput}
           >
             <option value="">All Departments</option>
             {FACULTY_DEPARTMENTS.map((dept) => (
-              <option key={dept} value={dept}>
-                {dept}
-              </option>
+              <option key={dept} value={dept}>{dept}</option>
             ))}
           </select>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" onClick={handleExportFacultyCsv} style={exportCsvBtnStyle}>
-            <Download size={13} />
-            <span>Export CSV ({facultys.length})</span>
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Button variant="secondary" size="md" onClick={handleExportFacultyCsv}>
+            <Download size={14} />
+            <span style={{ marginLeft: 6 }}>Export CSV</span>
+          </Button>
 
-          <Button
-            variant="primary"
-            size="md"
-            type="button"
-            onClick={handleOpenCreate}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, backgroundColor: '#004b87', borderColor: '#004b87' }}
-          >
-            <Plus size={15} />
-            Add Faculty Member
+          <Button variant="primary" size="md" onClick={handleOpenCreate}>
+            <Plus size={14} />
+            <span style={{ marginLeft: 6 }}>Add Faculty Member</span>
           </Button>
         </div>
       </div>
 
-      {/* 3. Main Faculty Table */}
-      <div style={{ backgroundColor: '#ffffff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-        <ModuleTableLayout
-          title="Faculty & Staff Directory"
-          subtitle="Manage verified faculty credentials, academic departments, and physical security access."
-          searchPlaceholder="Search by Employee ID, name, or department..."
-          searchValue={search}
-          onSearchChange={setSearch}
-          loading={loading}
-          error={error}
-          data={facultys}
-          keyExtractor={(t) => t.id}
-          columns={[
-            {
-              header: 'Faculty Member',
-              render: (t) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <ProfileAvatar
-                    photoUrl={t.photo_url || t.photo}
-                    name={t.full_name}
-                    size={38}
-                    iconSize={19}
-                  />
-
-                  <div>
-                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.86rem' }}>
-                      {t.full_name}
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                      <Mail size={12} color="#94a3b8" /> {t.email || 'No email registered'}
-                    </div>
-                  </div>
-                </div>
-              ),
-            },
-            {
-              header: 'Employee ID',
-              render: (t) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={empIdBadge}>{t.employee_id}</span>
-                  <button
-                    type="button"
-                    onClick={() => handleCopy(t.employee_id, `emp-${t.id}`)}
-                    title="Copy Employee ID"
-                    style={copyMiniBtn}
-                  >
-                    {copiedKey === `emp-${t.id}` ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
-                  </button>
-                </div>
-              ),
-            },
-            {
-              header: 'Position & Department',
-              render: (t) => (
-                <div>
-                  <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.80rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Briefcase size={12} color="#004b87" /> {t.position}
-                  </div>
-                  <div style={{ fontSize: '0.72rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                    <Building size={12} color="#94a3b8" /> {t.department}
-                  </div>
-                </div>
-              ),
-            },
-            {
-              header: 'School Gate Card',
-              render: (t) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <CreditCard size={14} color={t.rfid_uid ? '#059669' : '#94a3b8'} />
-                  <span
-                    style={{
-                      fontFamily: 'monospace',
-                      fontSize: '0.74rem',
-                      fontWeight: t.rfid_uid ? 700 : 400,
-                      color: t.rfid_uid ? '#059669' : '#94a3b8',
-                    }}
-                  >
-                    {t.rfid_uid || 'Not Paired'}
-                  </span>
-                </div>
-              ),
-            },
-            {
-              header: 'Contact',
-              render: (t) =>
-                t.contact_number ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.76rem', color: '#475569', fontFamily: 'monospace' }}>
-                    <Phone size={12} color="#64748b" /> {t.contact_number}
-                  </div>
-                ) : (
-                  <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>None</span>
-                ),
-            },
-            {
-              header: 'Status',
-              render: (t) => (
-                <span
-                  style={{
-                    padding: '3px 8px',
-                    borderRadius: 12,
-                    fontSize: '0.68rem',
-                    fontWeight: 800,
-                    letterSpacing: '0.3px',
-                    backgroundColor: t.is_active ? '#ecfdf5' : '#fef2f2',
-                    color: t.is_active ? '#059669' : '#dc2626',
-                    border: `1px solid ${t.is_active ? '#a7f3d0' : '#fecaca'}`,
-                  }}
-                >
-                  {t.is_active ? 'ACTIVE' : 'INACTIVE'}
-                </span>
-              ),
-            },
-            {
-              header: 'Actions',
-              align: 'right',
-              render: (t) => (
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={() => setInspectingFaculty(t)}
-                    title="View Gate ID Card"
-                    style={actionBtn}
-                  >
-                    <QrCode size={13} color="#004b87" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleOpenEdit(t)}
-                    title="Edit Faculty Record"
-                    style={actionBtn}
-                  >
-                    <Pencil size={13} color="#004b87" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => promptDelete(t)}
-                    title="Delete Faculty Member"
-                    style={{ ...actionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
-                  >
-                    <Trash2 size={13} color="#dc2626" />
-                  </button>
-                </div>
-              ),
-            },
-          ]}
-        />
+      {/* 3. Faculty Table */}
+      <div style={dynamicStyles.tableCard}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+            <thead>
+              <tr>
+                <th style={{ ...dynamicStyles.th, width: 50 }}>Photo</th>
+                <th style={dynamicStyles.th}>Employee ID</th>
+                <th style={dynamicStyles.th}>Full Name</th>
+                <th style={dynamicStyles.th}>Position</th>
+                <th style={dynamicStyles.th}>Department</th>
+                <th style={dynamicStyles.th}>Contact</th>
+                <th style={dynamicStyles.th}>RFID Card UID</th>
+                <th style={dynamicStyles.th}>Status</th>
+                <th style={{ ...dynamicStyles.th, textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={9} style={{ padding: 40, textAlign: 'center', color: tokens.textMuted }}>
+                    <Loader2 className="animate-spin" size={24} style={{ margin: '0 auto 8px auto', color: brand.primary }} />
+                    <span>Loading faculty records...</span>
+                  </td>
+                </tr>
+              ) : facultys.length === 0 ? (
+                <tr>
+                  <td colSpan={9} style={{ padding: 40, textAlign: 'center', color: tokens.textMuted }}>
+                    No faculty members found matching your search.
+                  </td>
+                </tr>
+              ) : (
+                facultys.map((f) => (
+                  <tr key={f.id}>
+                    <td style={dynamicStyles.td}>
+                      <div
+                        style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: '50%',
+                          overflow: 'hidden',
+                          backgroundColor: tokens.bgSurfaceSubtle,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          border: `1px solid ${tokens.borderSubtle}`,
+                        }}
+                      >
+                        {f.photo_url || f.photo ? (
+                          <img
+                            src={f.photo_url || f.photo!}
+                            alt={f.full_name}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <User size={16} color={tokens.textMuted} />
+                        )}
+                      </div>
+                    </td>
+                    <td style={{ ...dynamicStyles.td, fontFamily: 'monospace', fontWeight: 700 }}>
+                      {f.employee_id}
+                    </td>
+                    <td style={{ ...dynamicStyles.td, fontWeight: 700 }}>
+                      {f.full_name}
+                    </td>
+                    <td style={dynamicStyles.td}>{f.position}</td>
+                    <td style={{ ...dynamicStyles.td, color: tokens.textSecondary }}>{f.department}</td>
+                    <td style={dynamicStyles.td}>
+                      <div style={{ fontSize: '0.74rem' }}>{f.email || '—'}</div>
+                      <div style={{ fontSize: '0.70rem', color: tokens.textMuted }}>{f.contact_number || '—'}</div>
+                    </td>
+                    <td style={dynamicStyles.td}>
+                      {f.rfid_uid ? (
+                        <span
+                          onClick={() => handleCopy(f.rfid_uid!, `rfid-${f.id}`)}
+                          style={{
+                            fontFamily: 'monospace',
+                            backgroundColor: tokens.bgSurfaceSubtle,
+                            padding: '3px 8px',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                          title="Click to copy UID"
+                        >
+                          {copiedKey === `rfid-${f.id}` ? <Check size={11} color={brand.success} /> : <Copy size={11} />}
+                          <span>{f.rfid_uid}</span>
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>Unassigned</span>
+                      )}
+                    </td>
+                    <td style={dynamicStyles.td}>
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '3px 8px',
+                          borderRadius: 6,
+                          fontSize: '0.68rem',
+                          fontWeight: 800,
+                          backgroundColor: f.is_active ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                          color: f.is_active ? brand.success : brand.danger,
+                        }}
+                      >
+                        {f.is_active ? 'ACTIVE' : 'INACTIVE'}
+                      </span>
+                    </td>
+                    <td style={{ ...dynamicStyles.td, textAlign: 'right' }}>
+                      <div style={{ display: 'inline-flex', gap: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => setInspectingFaculty(f)}
+                          style={dynamicStyles.actionBtn}
+                          title="View Digital Pass"
+                        >
+                          <QrCode size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(f)}
+                          style={dynamicStyles.actionBtn}
+                          title="Edit Profile"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => promptDelete(f)}
+                          style={{ ...dynamicStyles.actionBtn, color: brand.danger }}
+                          title="Delete Faculty"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
         <Pagination
           currentPage={currentPage}
@@ -751,280 +789,283 @@ export const FacultyTab: React.FC = () => {
           onPageChange={handlePageChange}
           onPageSizeChange={handlePageSizeChange}
           itemLabel="faculty members"
-          disabled={loading}
+          style={{ backgroundColor: tokens.bgSurface, borderTop: `1px solid ${tokens.borderSubtle}` }}
         />
       </div>
 
-      {/* 4. Registration & Edit Modal */}
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title={editingFaculty ? `Edit Faculty: ${editingFaculty.full_name}` : 'Register Faculty Member'}
-      >
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={photoUploadContainer}>
-            <ProfileAvatar
-              photoUrl={photoPreview}
-              name={formData.first_name || 'Preview'}
-              size={56}
-              iconSize={28}
-            />
+      {/* 4. Add / Edit Faculty Modal */}
+      {isModalOpen && (
+        <Modal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          title={editingFaculty ? `Edit Faculty: ${editingFaculty.full_name}` : 'Register New Faculty'}
+        >
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: '50%',
+                  overflow: 'hidden',
+                  backgroundColor: tokens.bgSurfaceSubtle,
+                  border: `1px solid ${tokens.borderSubtle}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {photoPreview ? (
+                  <img src={photoPreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <User size={22} color={tokens.textMuted} />
+                )}
+              </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0f172a' }}>
-                Official Portrait Photo
-              </span>
-              <span style={{ fontSize: '0.68rem', color: '#64748b' }}>
-                JPEG, PNG, or WebP under 2.5 MB.
-              </span>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+              <div>
                 <input
                   type="file"
+                  accept="image/*"
                   ref={fileInputRef}
-                  accept="image/png, image/jpeg, image/webp"
-                  style={{ display: 'none' }}
                   onChange={handlePhotoSelect}
+                  style={{ display: 'none' }}
                 />
-                <label onClick={() => fileInputRef.current?.click()} style={uploadBtnLabel}>
+                <Button variant="secondary" size="sm" type="button" onClick={() => fileInputRef.current?.click()}>
                   <Camera size={13} />
-                  <span>{photoPreview ? 'Change Photo' : 'Upload Photo'}</span>
-                </label>
-
+                  <span style={{ marginLeft: 6 }}>Upload Photo</span>
+                </Button>
                 {photoPreview && (
-                  <button type="button" onClick={handleRemovePhoto} style={removePhotoBtn}>
-                    <X size={12} />
-                    <span>Remove</span>
+                  <button
+                    type="button"
+                    onClick={handleRemovePhoto}
+                    style={{ marginLeft: 8, fontSize: '0.74rem', color: brand.danger, background: 'none', border: 'none', cursor: 'pointer' }}
+                  >
+                    Remove
                   </button>
                 )}
               </div>
             </div>
-          </div>
 
-          <div>
-            <label style={labelStyle}>Employee ID *</label>
-            <input
-              type="text"
-              required
-              value={formData.employee_id}
-              onChange={(e) => setFormData({ ...formData, employee_id: e.target.value })}
-              style={inputStyle}
-              placeholder="e.g. EMP-2026-004"
-            />
-          </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
+                  Employee ID *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={formData.employee_id}
+                  onChange={(e) => setFormData({ ...formData, employee_id: e.target.value.toUpperCase() })}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    border: `1px solid ${tokens.borderStrong}`,
+                    backgroundColor: tokens.bgSurface,
+                    color: tokens.textPrimary,
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                  placeholder="e.g. EMP-1049"
+                />
+              </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-            <div>
-              <label style={labelStyle}>First Name *</label>
-              <input
-                type="text"
-                required
-                value={formData.first_name}
-                onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                style={inputStyle}
-                placeholder="First name"
-              />
-            </div>
-            <div>
-              <label style={labelStyle}>Last Name *</label>
-              <input
-                type="text"
-                required
-                value={formData.last_name}
-                onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                style={inputStyle}
-                placeholder="Last name"
-              />
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 10 }}>
-            <div>
-              <label style={labelStyle}>Middle Name</label>
-              <input
-                type="text"
-                value={formData.middle_name}
-                onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })}
-                style={inputStyle}
-                placeholder="Optional"
-              />
-            </div>
-            <div>
-              <label style={labelStyle}>Suffix</label>
-              <select
-                value={formData.suffix}
-                onChange={(e) => setFormData({ ...formData, suffix: e.target.value })}
-                style={inputStyle}
-              >
-                <option value="">None</option>
-                {SUFFIX_OPTIONS.filter(Boolean).map((suf) => (
-                  <option key={suf} value={suf}>
-                    {suf}
-                  </option>
-                ))}
-                {isCustomSuffix && <option value={formData.suffix}>{formData.suffix}</option>}
-              </select>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-            <div>
-              <label style={labelStyle}>Position / Official Rank *</label>
-              <select
-                required
-                value={formData.position}
-                onChange={(e) => setFormData({ ...formData, position: e.target.value })}
-                style={inputStyle}
-              >
-                {FACULTY_POSITIONS.map((group) => (
-                  <optgroup key={group.category} label={group.category}>
-                    {group.ranks.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-                {isCustomPosition && <option value={formData.position}>{formData.position}</option>}
-              </select>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
+                  RFID Card UID
+                </label>
+                <input
+                  type="text"
+                  value={formData.rfid_uid}
+                  onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    border: `1px solid ${tokens.borderStrong}`,
+                    backgroundColor: tokens.bgSurface,
+                    color: tokens.textPrimary,
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                    fontFamily: 'monospace',
+                  }}
+                  placeholder="e.g. 8A3F29C1"
+                />
+              </div>
             </div>
 
-            <div>
-              <label style={labelStyle}>Assigned Department *</label>
-              <select
-                required
-                value={formData.department}
-                onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                style={inputStyle}
-              >
-                {FACULTY_DEPARTMENTS.map((dept) => (
-                  <option key={dept} value={dept}>
-                    {dept}
-                  </option>
-                ))}
-                {isCustomDepartment && <option value={formData.department}>{formData.department}</option>}
-              </select>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1.2fr 0.8fr', gap: 10 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>First Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.first_name}
+                  onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Middle Name</label>
+                <input
+                  type="text"
+                  value={formData.middle_name}
+                  onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Last Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.last_name}
+                  onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Suffix</label>
+                <select
+                  value={formData.suffix}
+                  onChange={(e) => setFormData({ ...formData, suffix: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                >
+                  {SUFFIX_OPTIONS.map((s) => (
+                    <option key={s} value={s}>{s || 'None'}</option>
+                  ))}
+                </select>
+              </div>
             </div>
-          </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-            <div>
-              <label style={labelStyle}>Email Address</label>
-              <input
-                type="email"
-                placeholder="faculty@attendsure.edu.ph"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                style={inputStyle}
-              />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Position</label>
+                <select
+                  value={formData.position}
+                  onChange={(e) => setFormData({ ...formData, position: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                >
+                  {FACULTY_POSITIONS.map((grp) => (
+                    <optgroup key={grp.category} label={grp.category}>
+                      {grp.ranks.map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Department</label>
+                <select
+                  value={formData.department}
+                  onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                >
+                  {FACULTY_DEPARTMENTS.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div>
-              <label style={labelStyle}>Contact Number</label>
-              <input
-                type="text"
-                placeholder="09171234567"
-                value={formData.contact_number}
-                onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
-                style={inputStyle}
-              />
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Email</label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Contact Number</label>
+                <input
+                  type="text"
+                  value={formData.contact_number}
+                  onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
             </div>
-          </div>
 
-          <div>
-            <label style={labelStyle}>School Gate Card UID (RFID)</label>
-            <input
-              type="text"
-              placeholder="e.g. 5A92B1C4"
-              value={formData.rfid_uid}
-              onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })}
-              style={{ ...inputStyle, fontFamily: 'monospace' }}
-            />
-          </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+              <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" size="md" type="submit" disabled={saving}>
+                {saving ? <Loader2 className="animate-spin" size={16} /> : 'Save Faculty'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-            <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" size="md" type="submit" disabled={saving} style={{ backgroundColor: '#004b87', borderColor: '#004b87' }}>
-              {saving ? <Loader2 className="animate-spin" size={16} /> : null}
-              {editingFaculty ? 'Save Changes' : 'Register Faculty'}
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* 5. Printable ID Card Modal */}
+      {/* 5. Digital ID Card Inspection Modal */}
       {inspectingFaculty && (
         <Modal
           isOpen={Boolean(inspectingFaculty)}
           onClose={() => setInspectingFaculty(null)}
-          title="Digital Faculty ID Card"
+          title="Digital Faculty Pass"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-            <div style={idCardFrame}>
-              <div style={idCardHeader}>
-                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#ffffff', letterSpacing: '0.5px' }}>
-                  FACULTY &amp; STAFF CREDENTIAL
-                </span>
-                <span style={{ fontSize: '0.62rem', color: '#bfdbfe' }}>AttendSure</span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <div
+              style={{
+                width: 280,
+                backgroundColor: tokens.bgSurface,
+                border: `2px solid ${brand.primary}`,
+                borderRadius: 14,
+                overflow: 'hidden',
+                boxShadow: tokens.cardShadow,
+              }}
+            >
+              <div style={{ backgroundColor: brand.primary, color: '#ffffff', padding: '12px 14px' }}>
+                <div style={{ fontSize: '0.80rem', fontWeight: 800 }}>ATTENDSURE FACULTY PASS</div>
+                <div style={{ fontSize: '0.64rem', color: '#e0f2fe' }}>Lapasan National High School</div>
               </div>
 
-              <div style={{ display: 'flex', gap: 14, padding: '16px 14px', alignItems: 'center' }}>
-                <ProfileAvatar
-                  photoUrl={inspectingFaculty.photo_url || inspectingFaculty.photo}
-                  name={inspectingFaculty.full_name}
-                  size={68}
-                  iconSize={34}
-                />
+              <div style={{ padding: '16px 14px' }}>
+                <div style={{ width: 64, height: 64, borderRadius: '50%', margin: '0 auto 10px auto', overflow: 'hidden', border: `2px solid ${brand.primary}` }}>
+                  {inspectingFaculty.photo_url || inspectingFaculty.photo ? (
+                    <img src={inspectingFaculty.photo_url || inspectingFaculty.photo!} alt={inspectingFaculty.full_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : (
+                    <User size={36} color={tokens.textMuted} style={{ margin: '14px auto' }} />
+                  )}
+                </div>
 
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
-                    {inspectingFaculty.full_name}
-                  </div>
-                  <div style={{ fontSize: '0.74rem', color: '#004b87', fontWeight: 700, marginTop: 3 }}>
-                    {inspectingFaculty.position}
-                  </div>
-                  <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 1 }}>
-                    {inspectingFaculty.department}
-                  </div>
-                  <div style={{ fontSize: '0.72rem', color: '#334155', marginTop: 3 }}>
-                    ID: <strong style={{ fontFamily: 'monospace' }}>{inspectingFaculty.employee_id}</strong>
-                  </div>
+                <div style={{ fontSize: '1rem', fontWeight: 800, color: tokens.textPrimary }}>
+                  {inspectingFaculty.full_name}
+                </div>
+                <div style={{ fontSize: '0.74rem', color: tokens.textSecondary, marginTop: 2 }}>
+                  {inspectingFaculty.position}
+                </div>
+                <div style={{ fontSize: '0.70rem', color: tokens.textMuted }}>
+                  {inspectingFaculty.department}
+                </div>
+
+                <div style={{ margin: '12px auto', width: 110, height: 110, padding: 6, backgroundColor: '#ffffff', borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(inspectingFaculty.employee_id)}`}
+                    alt="QR"
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  />
+                </div>
+
+                <div style={{ fontSize: '0.74rem', fontFamily: 'monospace', fontWeight: 700, color: tokens.textPrimary }}>
+                  ID: {inspectingFaculty.employee_id}
                 </div>
               </div>
 
-              <div style={idCardFooter}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <CreditCard size={13} color="#059669" />
-                  <span style={{ fontSize: '0.72rem', fontFamily: 'monospace', fontWeight: 700, color: '#059669' }}>
-                    {inspectingFaculty.rfid_uid || 'NO RFID CARD'}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <ShieldCheck size={13} color="#004b87" />
-                  <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600 }}>DEPED CSC 48</span>
-                </div>
+              <div style={{ backgroundColor: tokens.bgSurfaceSubtle, padding: '8px 12px', borderTop: `1px solid ${tokens.borderSubtle}`, fontSize: '0.68rem', color: tokens.textSecondary }}>
+                Card UID: {inspectingFaculty.rfid_uid || 'No Card Linked'}
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, width: '100%', justifyContent: 'flex-end', marginTop: 4 }}>
-              <Button
-                variant="secondary"
-                size="md"
-                type="button"
-                onClick={() => window.print()}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-              >
-                <Printer size={14} />
-                Print ID
-              </Button>
-              <Button
-                variant="primary"
-                size="md"
-                type="button"
-                onClick={() => setInspectingFaculty(null)}
-                style={{ backgroundColor: '#004b87', borderColor: '#004b87' }}
-              >
+            <div style={{ marginTop: 16 }}>
+              <Button variant="secondary" size="md" onClick={() => setInspectingFaculty(null)}>
                 Close
               </Button>
             </div>
@@ -1035,195 +1076,4 @@ export const FacultyTab: React.FC = () => {
   );
 };
 
-export const FacultysTab = FacultyTab;
 export default FacultyTab;
-
-// ============================================================================
-// STYLES
-// ============================================================================
-
-const statsContainer: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
-  gap: 12,
-};
-
-const statCard: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 10,
-  border: '1px solid #e2e8f0',
-  padding: '12px 16px',
-};
-
-const statLabel: React.CSSProperties = {
-  fontSize: '0.64rem',
-  fontWeight: 800,
-  color: '#64748b',
-  marginBottom: 4,
-  letterSpacing: '0.4px',
-};
-
-const statValue: React.CSSProperties = {
-  fontSize: '1.40rem',
-  fontWeight: 800,
-  color: '#0f172a',
-  lineHeight: 1.1,
-};
-
-const statHelp: React.CSSProperties = {
-  fontSize: '0.68rem',
-  color: '#94a3b8',
-  marginTop: 3,
-};
-
-const controlBar: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  padding: '10px 14px',
-  backgroundColor: '#ffffff',
-  borderRadius: 10,
-  border: '1px solid #e2e8f0',
-  flexWrap: 'wrap',
-  gap: 10,
-};
-
-const selectPill: React.CSSProperties = {
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  padding: '6px 12px',
-  fontSize: '0.78rem',
-  color: '#334155',
-  outline: 'none',
-  backgroundColor: '#ffffff',
-  cursor: 'pointer',
-};
-
-const exportCsvBtnStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '6px 12px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#f8fafc',
-  color: '#334155',
-  fontSize: '0.76rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const empIdBadge: React.CSSProperties = {
-  fontFamily: 'monospace',
-  fontWeight: 700,
-  fontSize: '0.78rem',
-  backgroundColor: '#f8fafc',
-  padding: '2px 6px',
-  borderRadius: 4,
-  border: '1px solid #e2e8f0',
-  color: '#334155',
-};
-
-const copyMiniBtn: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  padding: 1,
-  display: 'flex',
-  alignItems: 'center',
-};
-
-const actionBtn: React.CSSProperties = {
-  background: '#f8fafc',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  padding: '5px 7px',
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.76rem',
-  fontWeight: 700,
-  color: '#334155',
-  marginBottom: 4,
-};
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 12px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.82rem',
-  outline: 'none',
-  boxSizing: 'border-box',
-  color: '#0f172a',
-  backgroundColor: '#ffffff',
-};
-
-const photoUploadContainer: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 14,
-  padding: '12px 14px',
-  backgroundColor: '#f8fafc',
-  borderRadius: 8,
-  border: '1px solid #e2e8f0',
-};
-
-const uploadBtnLabel: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '5px 10px',
-  backgroundColor: '#004b87',
-  color: '#ffffff',
-  borderRadius: 6,
-  fontSize: '0.72rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const removePhotoBtn: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '4px 8px',
-  backgroundColor: '#ffffff',
-  color: '#dc2626',
-  border: '1px solid #fecaca',
-  borderRadius: 6,
-  fontSize: '0.70rem',
-  fontWeight: 600,
-  cursor: 'pointer',
-};
-
-const idCardFrame: React.CSSProperties = {
-  width: '100%',
-  maxWidth: 360,
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  border: '1px solid #cbd5e1',
-  boxShadow: '0 4px 10px rgba(0,0,0,0.06)',
-  overflow: 'hidden',
-};
-
-const idCardHeader: React.CSSProperties = {
-  backgroundColor: '#004b87',
-  padding: '10px 14px',
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-};
-
-const idCardFooter: React.CSSProperties = {
-  padding: '10px 14px',
-  backgroundColor: '#f8fafc',
-  borderTop: '1px solid #e2e8f0',
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-};

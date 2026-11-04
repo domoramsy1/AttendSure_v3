@@ -1,4 +1,7 @@
-# backend/apps/api/serializers/users.py
+"""
+AttendSure V3 - School Profile & User Management Serializer
+File: backend/apps/api/serializers/users.py
+"""
 
 import secrets
 from django.contrib.auth import get_user_model
@@ -8,6 +11,7 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework import serializers
 from apps.academics.models import SchoolProfile, UserProfile, FacultyProfile
+from apps.common.utils import get_user_role
 from .base import FlexibleImageField, safe_photo_url
 
 User = get_user_model()
@@ -18,7 +22,6 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
     right_logo = FlexibleImageField(required=False, allow_null=True)
     school_logo = FlexibleImageField(required=False, allow_null=True)
 
-    # Dynamic School Head / Principal Credentials fetched from database
     principal_photo_url = serializers.SerializerMethodField()
     principal_employee_id = serializers.SerializerMethodField()
     principal_department = serializers.SerializerMethodField()
@@ -69,7 +72,6 @@ class UserManagementSerializer(serializers.ModelSerializer):
     is_profile_completed = serializers.BooleanField(required=False, read_only=True)
     faculty_id = serializers.IntegerField(required=False, read_only=True, allow_null=True)
 
-    # Extended Faculty & Staff Fields
     employee_id = serializers.CharField(required=False, allow_blank=True)
     middle_name = serializers.CharField(required=False, allow_blank=True)
     suffix = serializers.CharField(required=False, allow_blank=True)
@@ -122,7 +124,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
             if prof and prof.faculty_id:
                 qs = qs.exclude(id=prof.faculty_id)
         if qs.exists():
-            raise serializers.ValidationError(f"Employee ID '{clean_id}' is already registered to another faculty member.")
+            raise serializers.ValidationError(f"Employee ID '{clean_id}' is already registered.")
         return clean_id
 
     def validate_rfid_uid(self, value):
@@ -171,18 +173,12 @@ class UserManagementSerializer(serializers.ModelSerializer):
         return ret
 
     def _sync_school_principal_settings(self, faculty):
-        """
-        Automatically updates SchoolProfile when a Principal user is created or updated.
-        """
         if not faculty:
             return
         try:
             school = SchoolProfile.objects.first()
             if not school:
-                school = SchoolProfile.objects.create(
-                    school_id="",
-                    school_name=""
-                )
+                school = SchoolProfile.objects.create(school_id="", school_name="")
             school.principal_faculty = faculty
             school.principal_name = faculty.full_name
             school.principal_title = faculty.position or 'Secondary School Principal IV'
@@ -217,9 +213,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
         default_pos = 'Secondary School Principal IV' if str(raw_role).upper() == 'PRINCIPAL' else 'Faculty I'
         position = str(pos_val if pos_val is not None else self.initial_data.get('position') or default_pos).strip()
 
-        raw_rfid = validated_data.pop('rfid_uid', None)
-        if raw_rfid is None:
-            raw_rfid = self.initial_data.get('rfid_uid')
+        raw_rfid = validated_data.pop('rfid_uid', None) or self.initial_data.get('rfid_uid')
         rfid_uid = str(raw_rfid).strip().upper() if raw_rfid and str(raw_rfid).strip() else None
 
         clean_role_str = str(raw_role).upper()
@@ -243,7 +237,6 @@ class UserManagementSerializer(serializers.ModelSerializer):
         validated_data['is_staff'] = is_admin
         validated_data['is_superuser'] = is_admin
 
-        # 1. Create User
         user = User(**validated_data)
         if password and str(password).strip():
             user.set_password(str(password).strip())
@@ -251,7 +244,6 @@ class UserManagementSerializer(serializers.ModelSerializer):
             user.set_unusable_password()
         user.save()
 
-        # 2. Duplicate ContentFile stream so both profile.avatar and faculty.photo persist
         photo_bytes = None
         photo_name = getattr(photo, 'name', 'avatar.jpg') if photo else 'avatar.jpg'
         if photo and hasattr(photo, 'read'):
@@ -271,7 +263,6 @@ class UserManagementSerializer(serializers.ModelSerializer):
             profile.avatar = photo
         profile.save()
 
-        # 3. Synchronize FacultyProfile
         clean_emp_id = employee_id or user.username.upper()[:50]
         faculty = (
             FacultyProfile.objects.filter(employee_id__iexact=clean_emp_id).first()
@@ -324,10 +315,23 @@ class UserManagementSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def update(self, instance, validated_data):
+        request = self.context.get('request')
+        is_request_admin = False
+        if request and request.user and request.user.is_authenticated:
+            is_request_admin = request.user.is_superuser or get_user_role(request.user) == 'ADMIN'
+
         password = validated_data.pop('password', None)
         raw_role = validated_data.pop('role', None) or self.initial_data.get('role', None)
         is_teaching_param = validated_data.pop('is_teaching', None)
         photo = validated_data.pop('photo', None)
+
+        # Cybersecurity: Non-admin users cannot alter administrative fields
+        if not is_request_admin:
+            raw_role = None
+            is_teaching_param = None
+            validated_data.pop('is_staff', None)
+            validated_data.pop('is_superuser', None)
+            validated_data.pop('is_active', None)
 
         employee_id_val = validated_data.pop('employee_id', None)
         employee_id = employee_id_val if employee_id_val is not None else self.initial_data.get('employee_id')
@@ -347,15 +351,13 @@ class UserManagementSerializer(serializers.ModelSerializer):
         pos_val = validated_data.pop('position', None)
         position = pos_val if pos_val is not None else self.initial_data.get('position')
 
-        raw_rfid = validated_data.pop('rfid_uid', None)
-        if raw_rfid is None:
-            raw_rfid = self.initial_data.get('rfid_uid')
-        rfid_uid = str(raw_rfid).strip().upper() if raw_rfid and str(raw_rfid).strip() else (None if raw_rfid == '' else None)
+        raw_rfid = validated_data.pop('rfid_uid', None) or self.initial_data.get('rfid_uid')
+        rfid_uid = str(raw_rfid).strip().upper() if raw_rfid and str(raw_rfid).strip() else None
 
         if password and str(password).strip():
             instance.set_password(str(password).strip())
 
-        if raw_role:
+        if raw_role and is_request_admin:
             clean_role_str = str(raw_role).upper()
             if clean_role_str == 'FACULTY_ADMIN':
                 final_role = 'ADMIN'
@@ -384,7 +386,6 @@ class UserManagementSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
 
-        # Stream cloning for photo update
         photo_bytes = None
         photo_name = getattr(photo, 'name', 'avatar.jpg') if photo else 'avatar.jpg'
         if photo and hasattr(photo, 'read'):
@@ -397,7 +398,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
         profile, _ = UserProfile.objects.get_or_create(user=instance)
         if final_role:
             profile.role = final_role
-        if final_is_teaching is not None:
+        if final_is_teaching is not None and is_request_admin:
             profile.is_teaching = bool(final_is_teaching)
         profile.is_profile_completed = bool(instance.first_name and instance.last_name)
         if photo_bytes:
@@ -419,7 +420,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
         faculty_photo = ContentFile(photo_bytes, name=photo_name) if photo_bytes else photo
 
         if faculty:
-            if employee_id is not None and str(employee_id).strip():
+            if is_request_admin and employee_id is not None and str(employee_id).strip():
                 faculty.employee_id = str(employee_id).strip().upper()[:50]
             faculty.first_name = instance.first_name or faculty.first_name
             if middle_name is not None:
@@ -430,17 +431,17 @@ class UserManagementSerializer(serializers.ModelSerializer):
             faculty.email = instance.email or faculty.email
             if contact_number is not None:
                 faculty.contact_number = str(contact_number).strip()
-            if department is not None:
+            if is_request_admin and department is not None:
                 faculty.department = str(department).strip()
-            if position is not None:
+            if is_request_admin and position is not None:
                 faculty.position = str(position).strip()
-            if raw_rfid is not None:
+            if is_request_admin and raw_rfid is not None:
                 faculty.rfid_uid = rfid_uid
             if faculty_photo is not None:
                 faculty.photo = faculty_photo
             elif profile.avatar and not faculty.photo:
                 faculty.photo = profile.avatar
-            if final_is_teaching is not None:
+            if final_is_teaching is not None and is_request_admin:
                 faculty.can_teach = bool(final_is_teaching)
             faculty.is_active = instance.is_active
             faculty.save()
@@ -456,9 +457,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
                 contact_number=str(contact_number or '').strip(),
                 department=str(department or 'Junior High School').strip(),
                 position=str(position or 'Faculty I').strip(),
-                rfid_uid=rfid_uid,
+                rfid_uid=rfid_uid if is_request_admin else None,
                 photo=faculty_photo if faculty_photo else profile.avatar,
-                can_teach=bool(final_is_teaching) if final_is_teaching is not None else False,
+                can_teach=bool(final_is_teaching) if (final_is_teaching is not None and is_request_admin) else False,
                 is_active=instance.is_active,
                 qr_token=secrets.token_urlsafe(32),
             )

@@ -9,11 +9,9 @@ import { exportToCsv } from '../common/Pagination';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import {
-  Users,
   Search,
   RefreshCw,
   CreditCard,
-  School,
   Clock,
   Download,
   Copy,

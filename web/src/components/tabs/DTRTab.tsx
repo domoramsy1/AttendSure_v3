@@ -1,11 +1,15 @@
-// D:\AttendSure_V3\web\src\components\tabs\DTRTab.tsx
+/**
+ * AttendSure V3 - Daily Time Record (DTR) Tab
+ * File: web/src/components/tabs/DTRTab.tsx
+ */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient from '../../api/client';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { useAlert } from '../../context/AlertContext';
 import { useSchool } from '../../context/SchoolContext';
+import { useTheme } from '../../context/ThemeContext';
 import {
   Printer,
   Download,
@@ -90,6 +94,7 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   iconSize = 18,
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
+  const { tokens } = useTheme();
 
   useEffect(() => {
     setImageFailed(false);
@@ -109,8 +114,8 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
         width: size,
         height: size,
         borderRadius: '50%',
-        backgroundColor: '#f1f5f9',
-        border: '1px solid #e2e8f0',
+        backgroundColor: tokens.bgSurfaceSubtle,
+        border: `1px solid ${tokens.borderSubtle}`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -127,7 +132,7 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
           onError={() => setImageFailed(true)}
         />
       ) : (
-        <User size={iconSize} color="#94a3b8" />
+        <User size={iconSize} color={tokens.textMuted} />
       )}
     </div>
   );
@@ -135,31 +140,28 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
 
 export const DTRTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
+  const { tokens, brand } = useTheme();
   const schoolContext = useSchool() as any;
   const schoolProfile = schoolContext?.profile;
 
   const currentUserRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const isTeacher = currentUserRole === 'FACULTY';
 
-  // Selection & Period Filters
   const [facultyList, setFacultyList] = useState<FacultyMember[]>([]);
   const [selectedFacultyId, setSelectedFacultyId] = useState<string>('');
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
 
-  // Prescribed Working Hours (Populated from database, no dummy fallbacks)
   const [regularHours, setRegularHours] = useState('');
   const [saturdayHours, setSaturdayHours] = useState('');
   const [viewSide, setViewSide] = useState<'BOTH' | 'FRONT' | 'BACK'>('BOTH');
 
-  // Report Data & Action States
   const [dtrData, setDtrData] = useState<DTRReportData | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionProcessing, setActionProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
 
-  // Principal Review Modal State
   const [selectedViolationRow, setSelectedViolationRow] = useState<DailyDTRRow | null>(null);
   const [pardonRemarks, setPardonRemarks] = useState('');
 
@@ -169,7 +171,6 @@ export const DTRTab: React.FC = () => {
 
   const activeFaculty = facultyList.find((f) => String(f.id) === selectedFacultyId);
 
-  // Load faculty list for administrative roles
   useEffect(() => {
     let isMounted = true;
     if (isTeacher) return;
@@ -217,7 +218,6 @@ export const DTRTab: React.FC = () => {
     };
   }, [isTeacher, selectedFacultyId]);
 
-  // Fetch real DTR attendance logs
   const fetchDTR = useCallback(
     async (silent = false) => {
       const endpoint = isTeacher && !selectedFacultyId
@@ -243,7 +243,6 @@ export const DTRTab: React.FC = () => {
           setSelectedFacultyId(String(loadedData.faculty_id));
         }
 
-        // Bind prescribed hours from database
         if (loadedData.regular_days_hours) {
           setRegularHours(loadedData.regular_days_hours);
         }
@@ -304,7 +303,7 @@ export const DTRTab: React.FC = () => {
       if (!isInteracting.current) {
         fetchDTR(true);
       }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(liveHeartbeat);
   }, [fetchDTR]);
@@ -330,14 +329,14 @@ export const DTRTab: React.FC = () => {
           });
           showAlert({
             title: 'DTR Submitted',
-            message: 'Your DTR DTR has been submitted to your Department Head for endorsement.',
+            message: 'Your DTR has been submitted to your Department Head for endorsement.',
             type: 'success',
           });
           fetchDTR(true);
         } catch (err: any) {
           showAlert({
             title: 'Submission Failed',
-            message: err?.response?.data?.error || 'Failed to submit DTR DTR.',
+            message: err?.response?.data?.error || 'Failed to submit DTR.',
             type: 'error',
           });
         } finally {
@@ -486,7 +485,6 @@ export const DTRTab: React.FC = () => {
     window.print();
   };
 
-  // Pure Database Resolution: No Dummy Defaults
   const resolvedSchoolHead = (
     dtrData?.school_head ||
     schoolProfile?.principal_name ||
@@ -498,6 +496,72 @@ export const DTRTab: React.FC = () => {
     schoolProfile?.principal_title ||
     ''
   ).trim();
+
+  // Dynamic Theme-Driven Styles
+  const dynamicStyles = useMemo(() => {
+    return {
+      controlBar: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: tokens.bgSurface,
+        padding: '12px 18px',
+        borderRadius: 12,
+        border: `1px solid ${tokens.borderSubtle}`,
+        boxShadow: tokens.cardShadow,
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      },
+      scheduleBar: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: tokens.bgSurfaceSubtle,
+        padding: '8px 16px',
+        borderRadius: 10,
+        border: `1px solid ${tokens.borderSubtle}`,
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      },
+      selectControl: {
+        padding: '6px 10px',
+        borderRadius: 8,
+        border: `1px solid ${tokens.borderStrong}`,
+        fontSize: '0.82rem',
+        color: tokens.textPrimary,
+        backgroundColor: tokens.bgSurface,
+        outline: 'none',
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      },
+      inputSchedule: {
+        padding: '4px 8px',
+        borderRadius: 6,
+        border: `1px solid ${tokens.borderStrong}`,
+        fontSize: '0.76rem',
+        color: tokens.textPrimary,
+        backgroundColor: tokens.bgSurface,
+        width: 220,
+        outline: 'none',
+      },
+      errorBanner: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '10px 14px',
+        backgroundColor: 'rgba(239, 68, 68, 0.12)',
+        color: brand.danger,
+        borderRadius: 8,
+        fontSize: '0.82rem',
+        border: `1px solid rgba(239, 68, 68, 0.28)`,
+      },
+      paperPreviewWrapper: {
+        overflowX: 'auto' as const,
+        padding: '16px',
+        backgroundColor: tokens.bgSurfaceSubtle,
+        borderRadius: 14,
+        border: `1px solid ${tokens.borderSubtle}`,
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      },
+    };
+  }, [tokens, brand]);
 
   const renderDTRCopy = () => {
     if (!dtrData) return null;
@@ -600,22 +664,22 @@ export const DTRTab: React.FC = () => {
                       </span>
                     )}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : 'inherit', fontWeight: isViolating ? 700 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 700 : 'normal' }}>
                     {row.am_arrival}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : 'inherit', fontWeight: isViolating ? 700 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 700 : 'normal' }}>
                     {row.am_departure}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : 'inherit', fontWeight: isViolating ? 700 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 700 : 'normal' }}>
                     {row.pm_arrival}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : 'inherit', fontWeight: isViolating ? 700 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 700 : 'normal' }}>
                     {row.pm_departure}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : 'inherit', fontWeight: isViolating ? 800 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 800 : 'normal' }}>
                     {row.undertime_hours}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : 'inherit', fontWeight: isViolating ? 800 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 800 : 'normal' }}>
                     {row.undertime_minutes}
                   </td>
                 </tr>
@@ -644,7 +708,6 @@ export const DTRTab: React.FC = () => {
           </div>
         </div>
 
-        {/* Real Database Binding for Principal / School Head */}
         <div style={{ marginTop: 10, textAlign: 'center' }}>
           <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto', minHeight: 14 }}>
             <span style={{ fontSize: '7.5pt', fontWeight: 800, textTransform: 'uppercase' }}>
@@ -703,7 +766,7 @@ export const DTRTab: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       
       {/* 1. Control Header Bar */}
-      <div style={controlBar}>
+      <div style={dynamicStyles.controlBar}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <ProfileAvatar
@@ -720,16 +783,16 @@ export const DTRTab: React.FC = () => {
                   alignItems: 'center',
                   gap: 6,
                   padding: '6px 12px',
-                  borderRadius: 6,
-                  border: '1px solid #cbd5e1',
-                  backgroundColor: '#f8fafc',
+                  borderRadius: 8,
+                  border: `1px solid ${tokens.borderSubtle}`,
+                  backgroundColor: tokens.bgSurfaceSubtle,
                   fontSize: '0.82rem',
                   fontWeight: 700,
-                  color: '#0f172a',
+                  color: tokens.textPrimary,
                 }}
                 title="Your view is locked to your personal time record."
               >
-                <Lock size={13} color="#64748b" />
+                <Lock size={13} color={tokens.textMuted} />
                 <span>
                   {dtrData?.faculty_name || ''}{' '}
                   {dtrData?.employee_id ? `(${dtrData.employee_id})` : ''}
@@ -739,7 +802,7 @@ export const DTRTab: React.FC = () => {
               <select
                 value={selectedFacultyId}
                 onChange={(e) => setSelectedFacultyId(e.target.value)}
-                style={selectControl}
+                style={dynamicStyles.selectControl}
               >
                 {facultyList.map((f) => (
                   <option key={f.id} value={f.id}>
@@ -751,11 +814,11 @@ export const DTRTab: React.FC = () => {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Calendar size={15} color="#0284c7" />
+            <Calendar size={15} color={brand.primary} />
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(Number(e.target.value))}
-              style={selectControl}
+              style={dynamicStyles.selectControl}
             >
               {[
                 'January', 'February', 'March', 'April', 'May', 'June',
@@ -769,7 +832,7 @@ export const DTRTab: React.FC = () => {
           <select
             value={selectedYear}
             onChange={(e) => setSelectedYear(Number(e.target.value))}
-            style={selectControl}
+            style={dynamicStyles.selectControl}
           >
             {[2025, 2026, 2027].map((y) => (
               <option key={y} value={y}>{y}</option>
@@ -777,11 +840,11 @@ export const DTRTab: React.FC = () => {
           </select>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Layers size={14} color="#64748b" />
+            <Layers size={14} color={tokens.textMuted} />
             <select
               value={viewSide}
               onChange={(e) => setViewSide(e.target.value as any)}
-              style={selectControl}
+              style={dynamicStyles.selectControl}
             >
               <option value="BOTH">Full Form (Front &amp; Back)</option>
               <option value="FRONT">Front Side Only (DTR)</option>
@@ -802,7 +865,7 @@ export const DTRTab: React.FC = () => {
               size="md"
               onClick={handleSubmitDTR}
               disabled={actionProcessing}
-              style={{ backgroundColor: '#0284c7', borderColor: '#0284c7' }}
+              style={{ backgroundColor: brand.primary, borderColor: brand.primary }}
             >
               {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <Send size={14} />}
               <span style={{ marginLeft: 6 }}>Certify &amp; Submit DTR</span>
@@ -815,7 +878,7 @@ export const DTRTab: React.FC = () => {
               size="md"
               onClick={handleApproveByDeptHead}
               disabled={actionProcessing}
-              style={{ backgroundColor: '#059669', borderColor: '#059669' }}
+              style={{ backgroundColor: brand.success, borderColor: brand.success }}
             >
               {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
               <span style={{ marginLeft: 6 }}>Approve as Dept Head</span>
@@ -829,7 +892,7 @@ export const DTRTab: React.FC = () => {
             disabled={exportingPdf || !dtrData || !dtrData.dept_head_approved}
             title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before exporting.' : 'Export DTR PDF'}
           >
-            {exportingPdf ? <Loader2 className="animate-spin" size={14} /> : !dtrData?.dept_head_approved ? <Lock size={14} color="#dc2626" /> : <Download size={14} />}
+            {exportingPdf ? <Loader2 className="animate-spin" size={14} /> : !dtrData?.dept_head_approved ? <Lock size={14} color={brand.danger} /> : <Download size={14} />}
             <span style={{ marginLeft: 6 }}>Export PDF</span>
           </Button>
 
@@ -853,27 +916,28 @@ export const DTRTab: React.FC = () => {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            padding: '10px 16px',
-            borderRadius: 8,
+            padding: '12px 18px',
+            borderRadius: 10,
             backgroundColor: dtrData.dept_head_approved
-              ? '#ecfdf5'
+              ? 'rgba(16, 185, 129, 0.12)'
               : dtrData.dtr_submitted
-              ? '#eff6ff'
-              : '#fffbeb',
+              ? 'rgba(2, 132, 199, 0.12)'
+              : 'rgba(245, 158, 11, 0.12)',
             border: `1px solid ${
               dtrData.dept_head_approved
-                ? '#a7f3d0'
+                ? 'rgba(16, 185, 129, 0.28)'
                 : dtrData.dtr_submitted
-                ? '#bfdbfe'
-                : '#fde68a'
+                ? 'rgba(2, 132, 199, 0.28)'
+                : 'rgba(245, 158, 11, 0.28)'
             }`,
+            transition: 'all 0.2s ease',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {dtrData.dept_head_approved ? (
-              <ShieldCheck size={20} color="#059669" />
+              <ShieldCheck size={20} color={brand.success} />
             ) : (
-              <ShieldAlert size={20} color={dtrData.dtr_submitted ? '#0284c7' : '#d97706'} />
+              <ShieldAlert size={20} color={dtrData.dtr_submitted ? brand.primary : brand.warning} />
             )}
             <div>
               <div
@@ -881,10 +945,10 @@ export const DTRTab: React.FC = () => {
                   fontSize: '0.82rem',
                   fontWeight: 800,
                   color: dtrData.dept_head_approved
-                    ? '#065f46'
+                    ? brand.success
                     : dtrData.dtr_submitted
-                    ? '#1e40af'
-                    : '#92400e',
+                    ? brand.primary
+                    : brand.warning,
                 }}
               >
                 {dtrData.dept_head_approved
@@ -893,7 +957,7 @@ export const DTRTab: React.FC = () => {
                   ? 'SUBMITTED TO DEPARTMENT HEAD — AWAITING DIGITAL ENDORSEMENT'
                   : 'DRAFT MODE — PLEASE CERTIFY AND SUBMIT TO YOUR DEPARTMENT HEAD'}
               </div>
-              <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: 2 }}>
+              <div style={{ fontSize: '0.72rem', color: tokens.textSecondary, marginTop: 2 }}>
                 {dtrData.dept_head_approved
                   ? 'Official hard-copy printing is unlocked. Submit physical copy to Principal with your signature.'
                   : 'Digital endorsement from your Department Head is required before official hard-copy printing is unlocked.'}
@@ -901,15 +965,15 @@ export const DTRTab: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#334155' }}>
+          <div style={{ fontSize: '0.74rem', fontWeight: 700, color: tokens.textPrimary }}>
             Status:{' '}
             <span
               style={{
                 color: dtrData.dept_head_approved
-                  ? '#059669'
+                  ? brand.success
                   : dtrData.dtr_submitted
-                  ? '#0284c7'
-                  : '#d97706',
+                  ? brand.primary
+                  : brand.warning,
               }}
             >
               {dtrData.dept_head_approved
@@ -923,48 +987,48 @@ export const DTRTab: React.FC = () => {
       )}
 
       {/* 3. Official Working Hours Bar */}
-      <div style={scheduleBar}>
+      <div style={dynamicStyles.scheduleBar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.78rem' }}>
-          <Clock size={15} color="#64748b" />
-          <span style={{ fontWeight: 700, color: '#334155' }}>Prescribed Hours:</span>
+          <Clock size={15} color={tokens.textMuted} />
+          <span style={{ fontWeight: 700, color: tokens.textPrimary }}>Prescribed Hours:</span>
         </div>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.76rem' }}>
-            <span style={{ color: '#64748b' }}>Regular:</span>
+            <span style={{ color: tokens.textSecondary }}>Regular:</span>
             <input
               type="text"
               value={regularHours}
               placeholder="Enter regular working hours"
               onChange={(e) => setRegularHours(e.target.value)}
-              style={inputSchedule}
+              style={dynamicStyles.inputSchedule}
             />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.76rem' }}>
-            <span style={{ color: '#64748b' }}>Saturdays:</span>
+            <span style={{ color: tokens.textSecondary }}>Saturdays:</span>
             <input
               type="text"
               value={saturdayHours}
               placeholder="Enter Saturday working hours"
               onChange={(e) => setSaturdayHours(e.target.value)}
-              style={inputSchedule}
+              style={dynamicStyles.inputSchedule}
             />
           </div>
         </div>
       </div>
 
       {error && (
-        <div style={errorBanner}>
+        <div style={dynamicStyles.errorBanner}>
           <AlertCircle size={18} />
           <span>{error}</span>
         </div>
       )}
 
-      {/* 4. Official Printable Sheets Container (2-Up Side-by-Side) */}
-      <div style={{ overflowX: 'auto', paddingBottom: 24 }}>
+      {/* 4. Official Printable Sheets Preview */}
+      <div style={dynamicStyles.paperPreviewWrapper}>
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 320, gap: 10 }}>
-            <Loader2 className="animate-spin" size={26} color="#0284c7" />
-            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: '#475569' }}>
+            <Loader2 className="animate-spin" size={26} color={brand.primary} />
+            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: tokens.textMuted }}>
               Loading attendance logs and verifying clearance...
             </span>
           </div>
@@ -997,20 +1061,20 @@ export const DTRTab: React.FC = () => {
           title="Principal Discretion: Loafing Violation Review"
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, backgroundColor: '#fef2f2', borderRadius: 8, border: '1px solid #fee2e2' }}>
-              <AlertTriangle size={24} color="#dc2626" style={{ flexShrink: 0 }} />
-              <div style={{ fontSize: '0.78rem', color: '#991b1b', lineHeight: 1.35 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, backgroundColor: 'rgba(239, 68, 68, 0.12)', borderRadius: 8, border: '1px solid rgba(239, 68, 68, 0.28)' }}>
+              <AlertTriangle size={24} color={brand.danger} style={{ flexShrink: 0 }} />
+              <div style={{ fontSize: '0.78rem', color: brand.danger, lineHeight: 1.35 }}>
                 An unexcused departure or loafing flag was recorded for <strong>{dtrData?.faculty_name}</strong> on <strong>{selectedViolationRow.date_str}</strong>.
                 If not excused by the Principal, this date will incur a salary deduction.
               </div>
             </div>
 
-            <div style={{ fontSize: '0.80rem', color: '#334155' }}>
+            <div style={{ fontSize: '0.80rem', color: tokens.textPrimary }}>
               <strong>Recorded Gate Note:</strong> {selectedViolationRow.loafing_remarks || 'None'}
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
                 Principal Pardon Reason / Official Remarks:
               </label>
               <input
@@ -1021,7 +1085,9 @@ export const DTRTab: React.FC = () => {
                   width: '100%',
                   padding: '8px 12px',
                   borderRadius: 6,
-                  border: '1px solid #cbd5e1',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.bgSurface,
+                  color: tokens.textPrimary,
                   fontSize: '0.84rem',
                   outline: 'none',
                   boxSizing: 'border-box',
@@ -1039,7 +1105,7 @@ export const DTRTab: React.FC = () => {
                 size="md"
                 onClick={handleExcuseLoafingByPrincipal}
                 disabled={actionProcessing}
-                style={{ backgroundColor: '#059669', borderColor: '#059669' }}
+                style={{ backgroundColor: brand.success, borderColor: brand.success }}
               >
                 {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
                 <span style={{ marginLeft: 6 }}>Pardon &amp; Clear Deduction</span>
@@ -1090,58 +1156,6 @@ export const DTRTab: React.FC = () => {
   );
 };
 
-const controlBar: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  backgroundColor: '#ffffff',
-  padding: '12px 18px',
-  borderRadius: 8,
-  border: '1px solid #e2e8f0',
-  boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
-};
-
-const scheduleBar: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  backgroundColor: '#f8fafc',
-  padding: '8px 16px',
-  borderRadius: 8,
-  border: '1px solid #cbd5e1',
-};
-
-const selectControl: React.CSSProperties = {
-  padding: '6px 10px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.82rem',
-  color: '#0f172a',
-  backgroundColor: '#ffffff',
-  outline: 'none',
-};
-
-const inputSchedule: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 4,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.76rem',
-  color: '#0f172a',
-  backgroundColor: '#ffffff',
-  width: 220,
-};
-
-const errorBanner: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '10px 14px',
-  backgroundColor: '#fef2f2',
-  color: '#dc2626',
-  borderRadius: 8,
-  fontSize: '0.82rem',
-};
-
 const printableSheetContainer: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr auto 1fr',
@@ -1151,7 +1165,7 @@ const printableSheetContainer: React.CSSProperties = {
   margin: '0 auto',
   padding: '0.35in 0.35in',
   borderRadius: 4,
-  boxShadow: '0 4px 18px rgba(0,0,0,0.08)',
+  boxShadow: '0 4px 18px rgba(0,0,0,0.20)',
   boxSizing: 'border-box',
 };
 

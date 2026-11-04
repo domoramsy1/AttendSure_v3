@@ -1,0 +1,139 @@
+import React, { useState, useEffect } from 'react';
+import apiClient from '../../api/client';
+import { SF1ReportTab } from './SF1ReportTab'; 
+import type { SectionItem } from '../../types/section';
+import { FileSpreadsheet, Loader2, Layers } from 'lucide-react';
+
+export const ReportsTab: React.FC = () => {
+  const [sections, setSections] = useState<SectionItem[]>([]);
+  const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchSections();
+  }, []);
+
+  const fetchSections = async () => {
+    try {
+      setLoading(true);
+      const res = await apiClient.get<SectionItem[]>('/sections/');
+      setSections(res.data);
+      if (res.data.length > 0 && !selectedSectionId) {
+        setSelectedSectionId(res.data[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to load class sections:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExportXLSX = () => {
+    if (!selectedSectionId) return;
+    // Direct API trigger for Excel download
+    window.open(`/api/reports/sf1/${selectedSectionId}/export-excel/`, '_blank');
+  };
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        width: '100%',
+        overflow: 'hidden',
+        backgroundColor: '#f1f5f9',
+      }}
+    >
+      {/* Top Document Controls Bar (Hidden during print) */}
+      <div
+        className="no-print"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 20px',
+          backgroundColor: '#ffffff',
+          borderBottom: '1px solid #e2e8f0',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+          flexShrink: 0,
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        {/* Left: Class Section Selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7', fontWeight: 700, fontSize: '0.85rem' }}>
+            <Layers size={18} />
+            <span>Class Section:</span>
+          </div>
+
+          {loading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: '#64748b' }}>
+              <Loader2 className="animate-spin" size={14} />
+              <span>Loading sections...</span>
+            </div>
+          ) : (
+            <select
+              value={selectedSectionId || ''}
+              onChange={(e) => setSelectedSectionId(Number(e.target.value))}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                border: '1px solid #cbd5e1',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+                color: '#0f172a',
+                backgroundColor: '#f8fafc',
+                outline: 'none',
+                minWidth: '260px',
+                cursor: 'pointer',
+              }}
+            >
+              {sections.map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.display_label} {sec.adviser_name ? `(Adviser: ${sec.adviser_name})` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {/* Right: Quick Export Button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={handleExportXLSX}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 14px',
+              backgroundColor: '#059669',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+            }}
+          >
+            <FileSpreadsheet size={15} />
+            <span>Export Official XLSX</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Document Viewport Area */}
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
+        {selectedSectionId ? (
+          <SF1ReportTab sectionId={selectedSectionId} />
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b' }}>
+            Please select an active class section to inspect School Form 1.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

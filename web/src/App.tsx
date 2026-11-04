@@ -1,4 +1,7 @@
-// D:\AttendSure_V3\web\src\App.tsx
+/**
+ * AttendSure V3 - Main Application Layout & State Container
+ * File: web/src/App.tsx
+ */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import apiClient from './api/client';
@@ -6,17 +9,19 @@ import { LoginView } from './components/auth/LoginView';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { Sidebar, type NavItemKey } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
-import { ProfileModal, type ProfileUpdatePayload } from './components/profile/ProfileModal';
-import { CompleteProfileModal, type CompletedProfileUser } from './components/profile/CompleteProfileModal';
+import { ProfileModal, type ProfileUpdatePayload } from './components/modals/ProfileModal';
+import { CompleteProfileModal, type CompletedProfileUser } from './components/modals/CompleteProfileModal';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { SchoolProvider, useSchool } from './context/SchoolContext';
 import { AlertProvider } from './context/AlertContext';
+import { ThemeProvider, useTheme } from './context/ThemeContext';
 import type { UserSession } from './types/section';
 import {
   ShieldAlert,
   ArrowLeft,
   Database,
   Radio,
+  Building2,
 } from 'lucide-react';
 
 // Modular Tab Views
@@ -26,7 +31,7 @@ import {
   SF2ReportTab,
   SF4ReportTab,
   StudentsTab,
-  FacultysTab,
+  FacultyTab,
   DTRTab,
   ScannersTab,
   GatePassesTab,
@@ -94,7 +99,6 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'dtr',
     'gate-passes',
     'reports',
-
   ],
   GUARD: [
     'dashboard',
@@ -104,7 +108,7 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
 };
 
 // ============================================================================
-// ATTENDSURE TELEMETRY VEIL (Only activates if network genuinely fails)
+// ATTENDSURE TELEMETRY VEIL (Activates only if network fails)
 // ============================================================================
 
 interface TelemetrySyncVeilProps {
@@ -119,7 +123,7 @@ const TelemetrySyncVeil: React.FC<TelemetrySyncVeilProps> = ({ onManualRetry, is
         position: 'absolute',
         inset: 0,
         zIndex: 35,
-        backgroundColor: 'rgba(11, 25, 44, 0.65)',
+        backgroundColor: 'rgba(7, 13, 24, 0.70)',
         backdropFilter: 'blur(6px) grayscale(90%)',
         WebkitBackdropFilter: 'blur(6px) grayscale(90%)',
         display: 'flex',
@@ -140,8 +144,8 @@ const TelemetrySyncVeil: React.FC<TelemetrySyncVeilProps> = ({ onManualRetry, is
           gap: 12,
           padding: '8px 18px',
           borderRadius: 9999,
-          backgroundColor: 'rgba(15, 23, 42, 0.95)',
-          border: '1px solid rgba(56, 189, 248, 0.35)',
+          backgroundColor: '#0E1729',
+          border: '1px solid rgba(0, 75, 135, 0.45)',
           boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.45)',
           marginBottom: 22,
           cursor: 'pointer',
@@ -151,7 +155,7 @@ const TelemetrySyncVeil: React.FC<TelemetrySyncVeilProps> = ({ onManualRetry, is
       >
         <Radio size={14} color="#38bdf8" />
         <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#f8fafc' }}>
-          {isChecking ? 'Reconnecting to AttendSure Server...' : 'Server Unreachable • Click to Reconnect'}
+          {isChecking ? 'Reconnecting to AttendSure Server...' : 'Server Unreachable | Click to Reconnect'}
         </span>
       </div>
     </div>
@@ -164,6 +168,7 @@ const TelemetrySyncVeil: React.FC<TelemetrySyncVeilProps> = ({ onManualRetry, is
 
 const AppContent: React.FC = () => {
   const { school, loading: isSchoolLoading } = useSchool();
+  const { tokens, brand } = useTheme();
 
   const [session, setSession] = useState<UserSession | null>(() => {
     const token = localStorage.getItem('attendsure_token');
@@ -189,7 +194,6 @@ const AppContent: React.FC = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
 
-  // Connection State: Starts true to avoid initial delay flash
   const [isServerOnline, setIsServerOnline] = useState<boolean>(true);
   const [isGateOnline, setIsGateOnline] = useState<boolean>(false);
   const [isCheckingServer, setIsCheckingServer] = useState<boolean>(false);
@@ -233,7 +237,6 @@ const AppContent: React.FC = () => {
     setIsCompleteProfileModalOpen(false);
   }, []);
 
-  // Rapid Initial Warmup: Loads profile immediately without waterfall chaining
   useEffect(() => {
     if (!session?.token) return;
 
@@ -293,7 +296,6 @@ const AppContent: React.FC = () => {
     };
   }, [session?.token, handleAuthExpired]);
 
-  // Lightweight Reconnection Check (Only runs when explicitly offline or requested)
   const retryConnection = useCallback(async () => {
     setIsCheckingServer(true);
     try {
@@ -344,16 +346,16 @@ const AppContent: React.FC = () => {
     if (!isAllowedToAccess) {
       return (
         <div style={{ height: '100%', minHeight: 400, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
-          <div style={{ width: 56, height: 56, borderRadius: '50%', backgroundColor: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
-            <ShieldAlert size={28} color="#dc2626" />
+          <div style={{ width: 56, height: 56, borderRadius: '50%', backgroundColor: 'rgba(239, 68, 68, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+            <ShieldAlert size={28} color={brand.danger} />
           </div>
-          <h2 style={{ fontSize: '1.20rem', fontWeight: 800, color: '#0f172a', margin: '0 0 6px 0' }}>Access Restricted</h2>
-          <p style={{ fontSize: '0.82rem', color: '#64748b', maxWidth: 440, margin: '0 0 20px 0' }}>
-            Your account role (<strong style={{ color: '#0f172a' }}>{userRole}</strong>) does not have permission to view this section.
+          <h2 style={{ fontSize: '1.20rem', fontWeight: 800, color: tokens.textPrimary, margin: '0 0 6px 0' }}>Access Restricted</h2>
+          <p style={{ fontSize: '0.82rem', color: tokens.textMuted, maxWidth: 440, margin: '0 0 20px 0' }}>
+            Your account role (<strong style={{ color: tokens.textPrimary }}>{userRole}</strong>) does not have permission to view this section.
           </p>
           <button
             onClick={() => setActiveTab(allowedTabs[0] || 'dashboard')}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 16px', backgroundColor: '#0284c7', color: '#ffffff', borderRadius: 6, border: 'none', fontWeight: 700, cursor: 'pointer' }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 16px', backgroundColor: brand.primary, color: '#ffffff', borderRadius: 8, border: 'none', fontWeight: 700, cursor: 'pointer' }}
             type="button"
           >
             <ArrowLeft size={14} /> Return to Dashboard
@@ -376,7 +378,7 @@ const AppContent: React.FC = () => {
           </div>
         );
       case 'students': return <StudentsTab />;
-      case 'facultys': return <FacultysTab />;
+      case 'facultys': return <FacultyTab />;
       case 'dtr': return <DTRTab />;
       case 'scanners': return <ScannersTab />;
       case 'sms': return <SmsTab />;
@@ -393,7 +395,6 @@ const AppContent: React.FC = () => {
 
   return (
     <>
-      {/* QUICK SPLASH SCREEN: Reduced from 1500ms+ to 300ms for instant feel */}
       <SplashScreen loading={isSchoolLoading} minDurationMs={300} />
 
       {!session ? (
@@ -404,22 +405,68 @@ const AppContent: React.FC = () => {
           }}
         />
       ) : (
-        <div style={{ display: 'flex', height: '100vh', width: '100%', maxWidth: '100vw', overflow: 'hidden', backgroundColor: '#f8fafc', textAlign: 'left' }}>
-          <Sidebar
-            activeTab={activeTab}
-            onSelectTab={handleTabSelection}
-            session={session}
-            userPhoto={userPhoto}
-            isCollapsed={isSidebarCollapsed}
-            onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
-            schoolName={school.school_name}
-            schoolId={school.school_id}
-            schoolLogo={resolvedSchoolLogo}
-            canTeach={canTeach}
-            allowedTabs={allowedTabs}
-          />
+        /* Padded App Shell: 16px margins from all 4 screen edges */
+        <div
+          style={{
+            display: 'flex',
+            height: '100vh',
+            width: '100vw',
+            maxWidth: '100vw',
+            overflow: 'hidden',
+            backgroundColor: tokens.bgApp,
+            padding: '16px',
+            gap: '16px',
+            boxSizing: 'border-box',
+            textAlign: 'left',
+            transition: 'background-color 0.2s ease',
+          }}
+        >
+          {/* Rounded Floating Sidebar Card */}
+          <div
+            style={{
+              height: '100%',
+              borderRadius: 16,
+              overflow: 'hidden',
+              boxShadow: tokens.cardShadow,
+              border: `1px solid ${tokens.borderSubtle}`,
+              display: 'flex',
+              flexShrink: 0,
+              backgroundColor: tokens.bgSurface,
+              transition: 'background-color 0.2s ease, border-color 0.2s ease',
+            }}
+          >
+            <Sidebar
+              activeTab={activeTab}
+              onSelectTab={handleTabSelection}
+              session={session}
+              userPhoto={userPhoto}
+              isCollapsed={isSidebarCollapsed}
+              onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
+              schoolName={school.school_name}
+              schoolId={school.school_id}
+              schoolLogo={resolvedSchoolLogo}
+              canTeach={canTeach}
+              allowedTabs={allowedTabs}
+            />
+          </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, height: '100vh', overflow: 'hidden' }}>
+          {/* Rounded Floating Main Content Card */}
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              minWidth: 0,
+              height: '100%',
+              borderRadius: 16,
+              backgroundColor: tokens.bgSurface,
+              boxShadow: tokens.cardShadow,
+              border: `1px solid ${tokens.borderSubtle}`,
+              overflow: 'hidden',
+              boxSizing: 'border-box',
+              transition: 'background-color 0.2s ease, border-color 0.2s ease',
+            }}
+          >
             <Header
               title={getPageTitle()}
               isGateNodeOnline={isServerOnline && isGateOnline}
@@ -433,7 +480,7 @@ const AppContent: React.FC = () => {
               onOpenProfile={() => setIsProfileModalOpen(true)}
             />
 
-            <main style={{ flex: 1, minWidth: 0, height: 'calc(100vh - 100px)', overflowY: activeTab === 'dashboard' || activeTab === 'reports' ? 'hidden' : 'auto', overflowX: 'hidden', position: 'relative' }}>
+            <main style={{ flex: 1, minWidth: 0, overflowY: activeTab === 'dashboard' || activeTab === 'reports' ? 'hidden' : 'auto', overflowX: 'hidden', position: 'relative', backgroundColor: tokens.bgSurfaceSubtle }}>
               <div style={{ height: '100%', width: '100%', filter: !isServerOnline ? 'grayscale(90%) blur(3px) opacity(0.30)' : 'none', pointerEvents: !isServerOnline ? 'none' : 'auto', userSelect: !isServerOnline ? 'none' : 'auto', transition: 'filter 0.25s ease' }}>
                 {renderActiveTabContent()}
               </div>
@@ -443,31 +490,52 @@ const AppContent: React.FC = () => {
               )}
             </main>
 
-            <footer style={{ height: 38, minHeight: 38, backgroundColor: '#ffffff', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', fontSize: '0.74rem', color: '#64748b', boxSizing: 'border-box', userSelect: 'none' }}>
+            {/* Institutional Telemetry Footer with Lucide Icons */}
+            <footer
+              style={{
+                height: 38,
+                minHeight: 38,
+                backgroundColor: tokens.bgSurface,
+                borderTop: `1px solid ${tokens.borderSubtle}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0 24px',
+                fontSize: '0.74rem',
+                color: tokens.textSecondary,
+                boxSizing: 'border-box',
+                userSelect: 'none',
+                transition: 'background-color 0.2s ease, border-color 0.2s ease',
+              }}
+            >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontWeight: 700, color: '#334155' }}>
-                  School ID: <span style={{ fontFamily: 'monospace' }}>{school.school_id || '340964'}</span>
+                <Building2 size={13} color={brand.primary} />
+                <span style={{ fontWeight: 700, color: tokens.textPrimary }}>
+                  School ID: <span style={{ fontFamily: 'monospace' }}>{school.school_id || '55555'}</span>
                 </span>
                 {school.division && (
                   <>
-                    <span style={{ color: '#cbd5e1' }}>•</span>
-                    <span>{school.division}</span>
+                    <span style={{ color: tokens.borderSubtle }}>|</span>
+                    <span style={{ color: tokens.textMuted }}>{school.division}</span>
                   </>
                 )}
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: isServerOnline ? '#059669' : '#64748b', fontWeight: 600 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: isServerOnline ? brand.success : tokens.textMuted, fontWeight: 600 }}>
                   <Database size={12} />
                   <span>{isServerOnline ? 'Database Live' : 'Reconnecting...'}</span>
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: isGateOnline ? brand.primary : brand.danger, fontWeight: 600 }}>
+                  <Radio size={12} />
+                  <span>{isGateOnline ? 'Gate Live' : 'Gate Standby'}</span>
+                </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>&copy; 2026 AttendSure • Developed by</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: tokens.textMuted }}>
+                <span>&copy; 2026 AttendSure | Developed by</span>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <img src="/techblazer.svg" alt="TECHBLAZER" style={{ width: 14, height: 14, objectFit: 'contain' }} />
-                  <strong style={{ color: '#0A1F3D', letterSpacing: '0.06em' }}>TECHBLAZER</strong>
+                  <strong style={{ color: tokens.textPrimary, letterSpacing: '0.04em' }}>TECHBLAZER</strong>
                 </div>
               </div>
             </footer>
@@ -514,11 +582,13 @@ const AppContent: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <SchoolProvider>
-      <AlertProvider>
-        <AppContent />
-      </AlertProvider>
-    </SchoolProvider>
+    <ThemeProvider>
+      <SchoolProvider>
+        <AlertProvider>
+          <AppContent />
+        </AlertProvider>
+      </SchoolProvider>
+    </ThemeProvider>
   );
 };
 

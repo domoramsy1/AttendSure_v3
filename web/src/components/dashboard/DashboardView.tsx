@@ -1,31 +1,30 @@
 /**
- * AttendSure V3 - All-in-One Dashboard & Telemetry Hub
+ * AttendSure V3 - School Executive Dashboard & Telemetry Hub
+ * Pure White Institutional Theme with Bento Quick-Action Launchpad & Right-Side Calendar Rail.
  * File: web/src/components/dashboard/DashboardView.tsx
- *
- * Cybersecurity & Performance:
- * 1. Fluid Responsive Grid: Uses min(100%, ...) for single-column mobile & multi-column desktop.
- * 2. Real-Time Hardware Telemetry: Checks gate scanner pings and PostgreSQL database health.
- * 3. Safe Latency Benchmarking: Sub-100ms response parsing with AbortController cancellation.
- * 4. Zero Emojis: Strictly renders Lucide SVG components with zero unused imports.
- * 5. Simple English Terms: Clean labels across all KPI statistics and maintenance tools.
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useAlert } from '../../context/AlertContext';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient from '../../api/client';
+import { useTheme } from '../../context/ThemeContext';
 import {
   UserCheck,
   UserX,
   Clock,
-  Send,
   Radio,
   RefreshCw,
   Scan,
   TrendingUp,
   Inbox,
   Database,
-  Wrench,
-  RotateCcw,
+  Ticket,
+  CalendarCheck,
+  Send,
+  Users,
+  ChevronLeft,
+  ChevronRight,
+  Bell,
+  Sparkles,
 } from 'lucide-react';
 
 interface HourlyScanItem {
@@ -52,6 +51,20 @@ interface RecentScan {
   scan_method: 'RFID' | 'QR' | string;
 }
 
+interface CampusNotice {
+  id: string | number;
+  title: string;
+  date: string;
+  category: string;
+  details: string;
+}
+
+interface CalendarEvent {
+  date: string;
+  title: string;
+  is_holiday?: boolean;
+}
+
 interface DashboardMetrics {
   total_students: number;
   students_present: number;
@@ -69,6 +82,8 @@ interface DashboardMetrics {
   hourly_scans: HourlyScanItem[];
   grade_levels: GradeBreakdown[];
   recent_scans: RecentScan[];
+  notices?: CampusNotice[];
+  events?: CalendarEvent[];
   analytics?: Record<string, unknown>;
   database?: Record<string, unknown>;
 }
@@ -86,13 +101,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onGateStatusChange,
   onManualRefresh,
 }) => {
-  const { showAlert } = useAlert();
+  const { tokens, brand } = useTheme();
 
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [fetchFailed, setFetchFailed] = useState<boolean>(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Live Calendar State
+  const [calendarDate, setCalendarDate] = useState<Date>(new Date());
 
   const isMounted = useRef<boolean>(true);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -117,6 +134,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     hourly_scans: [],
     grade_levels: [],
     recent_scans: [],
+    notices: [],
+    events: [],
     analytics: {},
     database: {},
   });
@@ -140,7 +159,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         const res = await apiClient.get<DashboardMetrics>('/dashboard/overview/', {
           params: { silent: silent ? '1' : undefined },
-          timeout: 5000,
+          timeout: 6000,
           signal: controller.signal,
         });
 
@@ -182,6 +201,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             hourly_scans: normalizedHourly,
             grade_levels: Array.isArray(res.data.grade_levels) ? res.data.grade_levels : [],
             recent_scans: Array.isArray(res.data.recent_scans) ? res.data.recent_scans : [],
+            notices: Array.isArray(res.data.notices) ? res.data.notices : [],
+            events: Array.isArray(res.data.events) ? res.data.events : [],
             analytics: res.data.analytics || {},
             database: res.data.database || {},
           });
@@ -222,7 +243,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
     const interval = setInterval(() => {
       fetchDashboardData(true);
-    }, 15000);
+    }, 20000);
 
     return () => {
       isMounted.current = false;
@@ -240,74 +261,97 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
   };
 
-  const runMaintenanceTask = async (taskName: string, endpoint: string) => {
-    try {
-      setActionLoading(taskName);
-      const res = await apiClient.post<{ message?: string }>(endpoint, {});
-      showAlert({
-        title: 'Task Completed',
-        message: res.data?.message || `${taskName} finished successfully.`,
-        type: 'success',
-      });
-      fetchDashboardData(true);
-    } catch (err: unknown) {
-      const errorResponse = err as { response?: { data?: { message?: string } } };
-      showAlert({
-        title: 'Task Result',
-        message: errorResponse.response?.data?.message || `Could not run ${taskName}. Check backend connection.`,
-        type: 'warning',
-      });
-    } finally {
-      if (isMounted.current) {
-        setActionLoading(null);
-      }
-    }
-  };
-
   const hasHourlyScans = isOnline && data.hourly_scans.some((h) => h.count > 0);
+
+  const currentMonthYear = useMemo(() => {
+    return calendarDate.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  }, [calendarDate]);
+
+  const calendarDays = useMemo(() => {
+    const year = calendarDate.getFullYear();
+    const month = calendarDate.getMonth();
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days: Array<{ day: number | null; isToday: boolean }> = [];
+    const now = new Date();
+
+    for (let i = 0; i < firstDayIndex; i++) {
+      days.push({ day: null, isToday: false });
+    }
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const isToday =
+        now.getFullYear() === year && now.getMonth() === month && now.getDate() === d;
+      days.push({ day: d, isToday });
+    }
+
+    return days;
+  }, [calendarDate]);
 
   if (loading) {
     return (
-      <div style={{ padding: 60, textAlign: 'center', color: '#64748b' }}>
-        <RefreshCw size={26} className="animate-spin" style={{ margin: '0 auto 10px auto', display: 'block', color: '#004b87' }} />
+      <div style={{ padding: 60, textAlign: 'center', color: tokens.textMuted }}>
+        <RefreshCw size={26} className="animate-spin" style={{ margin: '0 auto 10px auto', display: 'block', color: brand.primary }} />
         <span style={{ fontWeight: 600, fontSize: '0.86rem' }}>Synchronizing school dashboard and hardware telemetry...</span>
       </div>
     );
   }
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', backgroundColor: '#f8fafc', padding: 'clamp(14px, 2.5vw, 24px)', boxSizing: 'border-box' }}>
-      <div style={{ maxWidth: 1280, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* 1. Top Telemetry Status Card */}
-        <div style={telemetryStatusHeader}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+    <div
+      style={{
+        height: '100%',
+        overflowY: 'auto',
+        backgroundColor: tokens.bgSurfaceSubtle,
+        padding: 'clamp(14px, 2.5vw, 24px)',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div style={{ maxWidth: 1380, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* 1. Telemetry Status Header */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 10,
+            backgroundColor: '#FFFFFF',
+            padding: '10px 18px',
+            borderRadius: 14,
+            border: `1px solid ${tokens.borderSubtle}`,
+            boxShadow: tokens.cardShadow,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 5,
+                gap: 6,
                 padding: '4px 10px',
-                borderRadius: 12,
-                backgroundColor: isOnline ? '#ecfdf5' : '#fee2e2',
-                color: isOnline ? '#059669' : '#dc2626',
+                borderRadius: 9999,
+                backgroundColor: isOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                color: isOnline ? brand.success : brand.danger,
                 fontSize: '0.70rem',
                 fontWeight: 800,
-                border: `1px solid ${isOnline ? '#a7f3d0' : '#fca5a5'}`,
+                border: `1px solid ${isOnline ? 'rgba(16, 185, 129, 0.28)' : 'rgba(239, 68, 68, 0.28)'}`,
               }}
             >
-              <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: isOnline ? '#10b981' : '#dc2626' }} />
+              <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: isOnline ? brand.success : brand.danger }} />
               {isOnline ? 'DATABASE CONNECTED' : 'DATABASE OFFLINE'}
             </span>
 
             {isAdmin && (
               <>
-                <span style={telemetryPill}>
-                  <Database size={12} color="#004b87" />
-                  <span>PostgreSQL: {isOnline ? 'Online' : 'Unavailable'}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
+                  <Database size={13} color={brand.primary} />
+                  <span>PostgreSQL: {isOnline ? 'Active' : 'Offline'}</span>
                 </span>
-                <span style={telemetryPill}>
-                  <Radio size={12} color="#004b87" />
-                  <span>Scanners: {data.kiosks_online}/{data.total_kiosks} Online</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
+                  <Radio size={13} color={brand.primary} />
+                  <span>Turnstiles: {data.kiosks_online} of {data.total_kiosks} Online</span>
                 </span>
               </>
             )}
@@ -315,7 +359,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {lastSyncTime && (
-              <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
+              <span style={{ fontSize: '0.72rem', color: tokens.textMuted, fontFamily: 'monospace' }}>
                 Synced: {lastSyncTime}
               </span>
             )}
@@ -323,7 +367,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               type="button"
               onClick={handleManualSync}
               disabled={refreshing}
-              style={refreshBtnStyle}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                borderRadius: 8,
+                padding: '5px 12px',
+                fontSize: '0.76rem',
+                fontWeight: 700,
+                color: tokens.textPrimary,
+                cursor: 'pointer',
+              }}
             >
               <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
               <span>{refreshing ? 'Syncing...' : 'Sync Now'}</span>
@@ -331,76 +387,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* 2. Admin System Maintenance Console */}
-        {isAdmin && (
-          <div style={maintenanceConsoleCard}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Wrench size={16} color="#38bdf8" />
-                <span style={{ fontSize: '0.88rem', fontWeight: 800 }}>System Health &amp; Maintenance Console</span>
-              </div>
-              <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>Real-time hardware verification &amp; cache management</span>
-            </div>
-
-            <div style={actionButtonsGrid}>
-              <button
-                type="button"
-                disabled={!isOnline || actionLoading !== null}
-                onClick={() => runMaintenanceTask('Ping Gate Scanners', '/telemetry/ping-scanners/')}
-                style={adminActionButton}
-              >
-                <Radio size={13} color="#38bdf8" />
-                <span>{actionLoading === 'Ping Gate Scanners' ? 'Pinging...' : 'Ping Gate Scanners'}</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!isOnline || actionLoading !== null}
-                onClick={() => runMaintenanceTask('Test SMS Gateway', '/sms/test-gateway/')}
-                style={adminActionButton}
-              >
-                <Send size={13} color="#38bdf8" />
-                <span>{actionLoading === 'Test SMS Gateway' ? 'Testing...' : 'Test SMS Gateway'}</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!isOnline || actionLoading !== null}
-                onClick={() => runMaintenanceTask('Check Database', '/core/maintenance/db-check/')}
-                style={adminActionButton}
-              >
-                <Database size={13} color="#38bdf8" />
-                <span>{actionLoading === 'Check Database' ? 'Checking...' : 'Check Database'}</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!isOnline || actionLoading !== null}
-                onClick={() => runMaintenanceTask('Flush Cache', '/core/maintenance/flush-cache/')}
-                style={adminActionButton}
-              >
-                <RotateCcw size={13} color="#38bdf8" />
-                <span>{actionLoading === 'Flush Cache' ? 'Flushing...' : 'Flush Cache'}</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 3. Core KPI Statistics Grid */}
-        <div style={responsiveKpiGrid}>
+        {/* 2. Core KPI Statistics Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
           <div style={kpiCardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <span style={kpiLabelStyle}>STUDENTS IN SCHOOL</span>
+                <span style={kpiLabelStyle}>LEARNERS IN SCHOOL</span>
                 <div style={kpiValueStyle}>{isOnline ? data.students_present.toLocaleString() : '—'}</div>
               </div>
-              <div style={{ ...kpiIconBox, backgroundColor: '#ecfdf5', color: '#059669' }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(16, 185, 129, 0.12)', color: brand.success }}>
                 <UserCheck size={20} />
               </div>
             </div>
             <div style={kpiFooterStyle}>
-              <span style={{ color: '#059669', fontWeight: 800 }}>{data.attendance_rate}%</span>
-              <span style={{ color: '#64748b' }}>of {data.total_students} enrolled learners</span>
+              <span style={{ color: brand.success, fontWeight: 800 }}>{data.attendance_rate}%</span>
+              <span style={{ color: tokens.textMuted }}>of {data.total_students} enrolled learners</span>
             </div>
           </div>
 
@@ -408,16 +409,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <span style={kpiLabelStyle}>ABSENT LEARNERS</span>
-                <div style={{ ...kpiValueStyle, color: data.students_absent > 0 ? '#dc2626' : '#0f172a' }}>
+                <div style={{ ...kpiValueStyle, color: data.students_absent > 0 ? brand.danger : tokens.textPrimary }}>
                   {isOnline ? data.students_absent.toLocaleString() : '—'}
                 </div>
               </div>
-              <div style={{ ...kpiIconBox, backgroundColor: '#fff1f2', color: '#dc2626' }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(239, 68, 68, 0.12)', color: brand.danger }}>
                 <UserX size={20} />
               </div>
             </div>
             <div style={kpiFooterStyle}>
-              <span style={{ color: '#64748b' }}>Unverified learners today</span>
+              <span style={{ color: tokens.textMuted }}>Unverified departures today</span>
             </div>
           </div>
 
@@ -429,12 +430,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   {isOnline ? `${data.faculty_on_duty}/${data.total_faculty}` : '—'}
                 </div>
               </div>
-              <div style={{ ...kpiIconBox, backgroundColor: '#f0fdf4', color: '#16a34a' }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(16, 185, 129, 0.12)', color: brand.success }}>
                 <Clock size={20} />
               </div>
             </div>
             <div style={kpiFooterStyle}>
-              <span style={{ color: '#64748b' }}>Verified on campus DTR</span>
+              <span style={{ color: tokens.textMuted }}>Verified on campus DTR</span>
             </div>
           </div>
 
@@ -444,113 +445,368 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <span style={kpiLabelStyle}>GATE TAPS TODAY</span>
                 <div style={kpiValueStyle}>{isOnline ? data.gate_scans_today.toLocaleString() : '—'}</div>
               </div>
-              <div style={{ ...kpiIconBox, backgroundColor: '#eff6ff', color: '#004b87' }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: tokens.primaryLight, color: brand.primary }}>
                 <Scan size={20} />
               </div>
             </div>
             <div style={kpiFooterStyle}>
-              <span style={{ color: '#004b87', fontWeight: 700 }}>{data.active_gate_passes} Active Gate Passes</span>
+              <span style={{ color: brand.primary, fontWeight: 700 }}>{data.active_gate_passes} Active Gate Passes</span>
             </div>
           </div>
         </div>
 
-        {/* 4. Hourly Turnout & Recent Gate Scans */}
-        <div style={responsiveTwoColGrid}>
-          {/* Hourly Arrivals Chart */}
-          <div style={sectionCardStyle}>
-            <div style={sectionCardHeaderStyle}>
-              <div>
-                <h3 style={sectionCardTitle}>Turnout by Hour</h3>
-                <span style={sectionCardSubtitle}>Gate scanner arrivals recorded today</span>
-              </div>
-              <div style={tagBadgeStyle}>
-                <TrendingUp size={12} color="#004b87" />
-                <span>Today</span>
-              </div>
+        {/* 3. Bento Quick-Action Launchpad */}
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: 16,
+            border: `1px solid ${tokens.borderSubtle}`,
+            boxShadow: tokens.cardShadow,
+            padding: '18px 20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 14,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, backgroundColor: tokens.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Sparkles size={16} color={brand.primary} />
             </div>
-
-            {hasHourlyScans ? (
-              <div style={{ height: 180, display: 'flex', alignItems: 'flex-end', gap: 8, padding: '12px 0 4px 0' }}>
-                {data.hourly_scans.map((item, idx) => (
-                  <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
-                    <span style={{ fontSize: '0.62rem', fontWeight: 700, color: item.is_peak ? '#004b87' : '#64748b', marginBottom: 2 }}>
-                      {item.count > 0 ? item.count : ''}
-                    </span>
-                    <div
-                      style={{
-                        width: '100%',
-                        maxWidth: 28,
-                        height: `${item.height}%`,
-                        backgroundColor: item.is_peak ? '#004b87' : item.count > 0 ? '#93c5fd' : '#e2e8f0',
-                        borderRadius: '4px 4px 0 0',
-                        transition: 'height 0.3s ease',
-                      }}
-                    />
-                    <span style={{ fontSize: '0.62rem', fontWeight: 600, color: '#64748b', marginTop: 4 }}>
-                      {item.hour}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={emptyCardBox}>
-                <Inbox size={26} color="#94a3b8" />
-                <span style={{ fontSize: '0.80rem', fontWeight: 600, color: '#64748b', marginTop: 4 }}>
-                  No Gate Scans Recorded Today
-                </span>
-              </div>
-            )}
+            <div>
+              <h3 style={{ margin: 0, fontSize: '0.94rem', fontWeight: 800, color: tokens.textPrimary }}>
+                Quick Action Center
+              </h3>
+              <span style={{ fontSize: '0.70rem', color: tokens.textMuted }}>
+                Immediate 1-click shortcuts for daily school operations
+              </span>
+            </div>
           </div>
 
-          {/* Latest Gate Activity Feed */}
-          <div style={sectionCardStyle}>
-            <div style={sectionCardHeaderStyle}>
-              <div>
-                <h3 style={sectionCardTitle}>Recent Gate Taps</h3>
-                <span style={sectionCardSubtitle}>Real-time campus entrance &amp; exit feed</span>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
+              gap: 12,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => navigateTo('gate-passes')}
+              style={actionTileStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
+            >
+              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(0, 75, 135, 0.1)', color: brand.primary }}>
+                <Ticket size={20} />
               </div>
-              <button
-                type="button"
-                onClick={() => navigateTo('gate-logs')}
-                style={textLinkButtonStyle}
-              >
-                View All
-              </button>
+              <div>
+                <div style={actionTileTitle}>Issue Gate Pass</div>
+                <div style={actionTileDesc}>Authorize student or teacher exit</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigateTo({ tab: 'reports', report: 'sf2' })}
+              style={actionTileStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
+            >
+              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(16, 185, 129, 0.1)', color: brand.success }}>
+                <CalendarCheck size={20} />
+              </div>
+              <div>
+                <div style={actionTileTitle}>Daily Attendance (SF2)</div>
+                <div style={actionTileDesc}>Official DepEd attendance register</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigateTo('dtr')}
+              style={actionTileStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
+            >
+              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(2, 132, 199, 0.1)', color: brand.secondary }}>
+                <Clock size={20} />
+              </div>
+              <div>
+                <div style={actionTileTitle}>Civil Service DTR</div>
+                <div style={actionTileDesc}>Inspect and endorse Form 48 hours</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigateTo('sms')}
+              style={actionTileStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
+            >
+              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(245, 158, 11, 0.1)', color: brand.warning }}>
+                <Send size={20} />
+              </div>
+              <div>
+                <div style={actionTileTitle}>SMS Parent Alert</div>
+                <div style={actionTileDesc}>Send emergency broadcast to parents</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigateTo('gate-logs')}
+              style={actionTileStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
+            >
+              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(124, 58, 237, 0.1)', color: '#7c3aed' }}>
+                <Scan size={20} />
+              </div>
+              <div>
+                <div style={actionTileTitle}>Live Gate Monitor</div>
+                <div style={actionTileDesc}>Real-time arrival &amp; departure taps</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigateTo(effectiveRole === 'FACULTY' ? 'my-classes' : 'students')}
+              style={actionTileStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
+            >
+              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(100, 116, 139, 0.1)', color: tokens.textSecondary }}>
+                <Users size={20} />
+              </div>
+              <div>
+                <div style={actionTileTitle}>Class Rosters</div>
+                <div style={actionTileDesc}>Verify enrolled students by section</div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* 4. Split Main Content: Left Analytics & Right Utility Rail */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.8fr) minmax(320px, 1fr)', gap: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={sectionCardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                <div>
+                  <h3 style={sectionCardTitle}>Arrivals by Hour</h3>
+                  <span style={sectionCardSubtitle}>Gate scanner arrivals recorded today</span>
+                </div>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 6, backgroundColor: tokens.primaryLight, color: brand.primary, fontSize: '0.68rem', fontWeight: 700 }}>
+                  <TrendingUp size={12} color={brand.primary} />
+                  <span>Today</span>
+                </div>
+              </div>
+
+              {hasHourlyScans ? (
+                <div style={{ height: 180, display: 'flex', alignItems: 'flex-end', gap: 8, padding: '12px 0 4px 0' }}>
+                  {data.hourly_scans.map((item, idx) => (
+                    <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
+                      <span style={{ fontSize: '0.62rem', fontWeight: 700, color: item.is_peak ? brand.primary : tokens.textMuted, marginBottom: 2 }}>
+                        {item.count > 0 ? item.count : ''}
+                      </span>
+                      <div
+                        style={{
+                          width: '100%',
+                          maxWidth: 28,
+                          height: `${item.height}%`,
+                          backgroundColor: item.is_peak ? brand.primary : item.count > 0 ? brand.secondary : tokens.borderSubtle,
+                          borderRadius: '4px 4px 0 0',
+                          transition: 'height 0.3s ease',
+                        }}
+                      />
+                      <span style={{ fontSize: '0.62rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
+                        {item.hour}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={emptyCardBox}>
+                  <Inbox size={26} color={tokens.textMuted} />
+                  <span style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
+                    No Gate Scans Recorded Today
+                  </span>
+                </div>
+              )}
             </div>
 
-            {data.recent_scans.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                {data.recent_scans.slice(0, 5).map((scan, idx) => (
-                  <div key={`${scan.id}-${idx}`} style={scanItemRow}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span
-                        style={{
-                          ...directionPill,
-                          backgroundColor: scan.direction === 'IN' ? '#ecfdf5' : '#fef2f2',
-                          color: scan.direction === 'IN' ? '#059669' : '#dc2626',
-                        }}
-                      >
-                        {scan.direction}
-                      </span>
-                      <div>
-                        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>{scan.person_name}</div>
-                        <div style={{ fontSize: '0.70rem', color: '#64748b' }}>
-                          {scan.grade_section} &bull; {scan.scan_method}
+            <div style={sectionCardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                <div>
+                  <h3 style={sectionCardTitle}>Recent Gate Taps</h3>
+                  <span style={sectionCardSubtitle}>Real-time campus entrance &amp; exit feed</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigateTo('gate-logs')}
+                  style={{ background: 'none', border: 'none', color: brand.primary, fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                >
+                  View All
+                </button>
+              </div>
+
+              {data.recent_scans.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {data.recent_scans.slice(0, 5).map((scan, idx) => (
+                    <div
+                      key={`${scan.id}-${idx}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 12px',
+                        backgroundColor: tokens.bgSurfaceSubtle,
+                        borderRadius: 10,
+                        border: `1px solid ${tokens.borderSubtle}`,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            fontSize: '0.66rem',
+                            fontWeight: 800,
+                            backgroundColor: scan.direction === 'IN' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                            color: scan.direction === 'IN' ? brand.success : brand.danger,
+                          }}
+                        >
+                          {scan.direction}
+                        </span>
+                        <div>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: tokens.textPrimary }}>{scan.person_name}</div>
+                          <div style={{ fontSize: '0.70rem', color: tokens.textMuted }}>
+                            {scan.grade_section} &bull; {scan.scan_method}
+                          </div>
                         </div>
                       </div>
+                      <span style={{ fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>{scan.scan_time}</span>
                     </div>
-                    <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#334155' }}>{scan.scan_time}</span>
+                  ))}
+                </div>
+              ) : (
+                <div style={emptyCardBox}>
+                  <Inbox size={26} color={tokens.textMuted} />
+                  <span style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
+                    No Gate Taps Recorded Yet
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={sectionCardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <span style={{ fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
+                  {currentMonthYear}
+                </span>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}
+                    style={calNavBtn}
+                    title="Previous month"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCalendarDate(new Date())}
+                    style={{ ...calNavBtn, fontSize: '0.70rem', fontWeight: 700, padding: '0 8px', width: 'auto' }}
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}
+                    style={calNavBtn}
+                    title="Next month"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', marginBottom: 6 }}>
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+                  <span key={d} style={{ fontSize: '0.66rem', fontWeight: 800, color: tokens.textMuted }}>
+                    {d}
+                  </span>
+                ))}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, textAlign: 'center' }}>
+                {calendarDays.map((item, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      height: 32,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: 8,
+                      fontSize: '0.76rem',
+                      fontWeight: item.isToday ? 800 : 600,
+                      backgroundColor: item.isToday ? brand.primary : 'transparent',
+                      color: item.isToday ? '#FFFFFF' : item.day ? tokens.textPrimary : 'transparent',
+                      border: item.isToday ? 'none' : `1px solid transparent`,
+                    }}
+                  >
+                    {item.day || ''}
                   </div>
                 ))}
               </div>
-            ) : (
-              <div style={emptyCardBox}>
-                <Inbox size={26} color="#94a3b8" />
-                <span style={{ fontSize: '0.80rem', fontWeight: 600, color: '#64748b', marginTop: 4 }}>
-                  No Gate Taps Recorded Yet
-                </span>
+            </div>
+
+            <div style={sectionCardStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <Bell size={16} color={brand.primary} />
+                <h3 style={sectionCardTitle}>Campus Bulletin</h3>
               </div>
-            )}
+
+              {data.notices && data.notices.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {data.notices.map((notice) => (
+                    <div
+                      key={notice.id}
+                      style={{
+                        padding: '10px 12px',
+                        backgroundColor: tokens.bgSurfaceSubtle,
+                        borderRadius: 10,
+                        border: `1px solid ${tokens.borderSubtle}`,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.66rem', fontWeight: 800, color: brand.primary }}>
+                          {notice.category}
+                        </span>
+                        <span style={{ fontSize: '0.64rem', color: tokens.textMuted }}>{notice.date}</span>
+                      </div>
+                      <div style={{ fontSize: '0.80rem', fontWeight: 800, color: tokens.textPrimary, marginTop: 2 }}>
+                        {notice.title}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: tokens.textSecondary, marginTop: 2 }}>
+                        {notice.details}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ ...emptyCardBox, padding: '24px 12px' }}>
+                  <Inbox size={22} color={tokens.textMuted} />
+                  <span style={{ fontSize: '0.76rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
+                    No announcements posted in database
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -558,195 +814,97 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
 };
 
-// ==========================================
-// STYLES
-// ==========================================
-
-const telemetryStatusHeader: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  flexWrap: 'wrap',
-  gap: 10,
-  backgroundColor: '#ffffff',
-  padding: '10px 16px',
-  borderRadius: 10,
-  border: '1px solid #e2e8f0',
-};
-
-const telemetryPill: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  color: '#334155',
-};
-
-const refreshBtnStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  backgroundColor: '#f8fafc',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  padding: '5px 12px',
-  fontSize: '0.76rem',
-  fontWeight: 700,
-  color: '#334155',
-  cursor: 'pointer',
-};
-
-const maintenanceConsoleCard: React.CSSProperties = {
-  backgroundColor: '#0f172a',
-  borderRadius: 12,
-  padding: '14px 18px',
-  color: '#ffffff',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-};
-
-const actionButtonsGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
-  gap: 10,
-};
-
-const adminActionButton: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 8,
-  padding: '8px 12px',
-  backgroundColor: '#1e293b',
-  border: '1px solid #334155',
-  borderRadius: 8,
-  color: '#ffffff',
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const responsiveKpiGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
-  gap: 14,
-};
+export default DashboardView;
 
 const kpiCardStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 10,
-  border: '1px solid #e2e8f0',
-  padding: '14px 16px',
+  backgroundColor: '#FFFFFF',
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  boxShadow: '0 4px 16px -2px rgba(15, 23, 42, 0.05)',
+  padding: '16px 18px',
 };
 
 const kpiLabelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: '0.66rem',
   fontWeight: 800,
-  color: '#64748b',
+  color: '#64748B',
   marginBottom: 4,
   letterSpacing: '0.4px',
 };
 
 const kpiValueStyle: React.CSSProperties = {
-  fontSize: '1.50rem',
+  fontSize: '1.60rem',
   fontWeight: 800,
-  color: '#0f172a',
+  color: '#0F172A',
   lineHeight: 1.1,
-};
-
-const kpiIconBox: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 8,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
 };
 
 const kpiFooterStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
-  marginTop: 8,
+  marginTop: 10,
   paddingTop: 8,
-  borderTop: '1px solid #f8fafc',
+  borderTop: '1px solid #E2E8F0',
   fontSize: '0.72rem',
 };
 
-const responsiveTwoColGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
-  gap: 14,
+const actionTileStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '12px 14px',
+  borderRadius: 12,
+  border: '1px solid #E2E8F0',
+  backgroundColor: '#FFFFFF',
+  cursor: 'pointer',
+  textAlign: 'left',
+  transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+};
+
+const actionIconFrame: React.CSSProperties = {
+  width: 42,
+  height: 42,
+  borderRadius: 10,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+};
+
+const actionTileTitle: React.CSSProperties = {
+  fontSize: '0.84rem',
+  fontWeight: 800,
+  color: '#0F172A',
+};
+
+const actionTileDesc: React.CSSProperties = {
+  fontSize: '0.70rem',
+  color: '#64748B',
+  marginTop: 1,
 };
 
 const sectionCardStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 10,
-  border: '1px solid #e2e8f0',
-  padding: '16px 18px',
-};
-
-const sectionCardHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-start',
-  marginBottom: 10,
+  backgroundColor: '#FFFFFF',
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  boxShadow: '0 4px 16px -2px rgba(15, 23, 42, 0.05)',
+  padding: '18px 20px',
 };
 
 const sectionCardTitle: React.CSSProperties = {
-  fontSize: '0.90rem',
+  fontSize: '0.94rem',
   fontWeight: 800,
-  color: '#0f172a',
+  color: '#0F172A',
   margin: 0,
 };
 
 const sectionCardSubtitle: React.CSSProperties = {
   fontSize: '0.70rem',
-  color: '#64748b',
+  color: '#64748B',
   marginTop: 2,
   display: 'block',
-};
-
-const tagBadgeStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '3px 8px',
-  borderRadius: 6,
-  backgroundColor: '#f0f9ff',
-  color: '#004b87',
-  fontSize: '0.68rem',
-  fontWeight: 700,
-};
-
-const scanItemRow: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '8px 10px',
-  backgroundColor: '#f8fafc',
-  borderRadius: 6,
-  border: '1px solid #f1f5f9',
-};
-
-const directionPill: React.CSSProperties = {
-  padding: '2px 6px',
-  borderRadius: 4,
-  fontSize: '0.66rem',
-  fontWeight: 800,
-};
-
-const textLinkButtonStyle: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: '#004b87',
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-  padding: 0,
 };
 
 const emptyCardBox: React.CSSProperties = {
@@ -758,4 +916,15 @@ const emptyCardBox: React.CSSProperties = {
   textAlign: 'center',
 };
 
-export default DashboardView;
+const calNavBtn: React.CSSProperties = {
+  width: 26,
+  height: 26,
+  borderRadius: 6,
+  border: '1px solid #E2E8F0',
+  backgroundColor: '#F8FAFC',
+  color: '#475569',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+};

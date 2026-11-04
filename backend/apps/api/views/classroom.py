@@ -1,9 +1,10 @@
 """
-AttendSure V3 - Classroom API Views (Real Database Queries)
+AttendSure V3 - Classroom API Views (Batch Aggregated Fast Queries & Gate Validation)
 File: backend/apps/api/views/classroom.py
 """
 
 from datetime import datetime
+import json
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q
@@ -29,16 +30,25 @@ from .common import resolve_faculty_for_user
 from apps.api.serializers import ClassroomBatchScanSerializer
 
 
-def get_section_enrolled_count(sec) -> int:
-    if not sec:
-        return 0
-    try:
-        return Enrollment.objects.filter(section=sec, status='ENROLLED', student__is_active=True).count()
-    except Exception:
-        return 0
+def sanitize_qr_token(raw_token: str) -> str:
+    """Extracts raw LRN or token from plain text, JSON, or tagged QR formats."""
+    clean = str(raw_token or '').strip().replace('\r', '').replace('\n', '')
+    if clean.startswith('{') and clean.endswith('}'):
+        try:
+            parsed = json.loads(clean)
+            return str(parsed.get('lrn') or parsed.get('student_lrn') or parsed.get('qr_token') or parsed.get('id') or clean).strip()
+        except Exception:
+            pass
+    if ':' in clean:
+        return clean.split(':')[-1].strip()
+    return clean
 
 
 class ClassListAPIView(APIView):
+    """
+    Returns teaching classes for the authenticated teacher with enrolled student lists
+    and today's real attendance status pre-calculated in fast batch queries.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -46,49 +56,89 @@ class ClassListAPIView(APIView):
         faculty = resolve_faculty_for_user(user)
         is_admin = is_leadership_role(user) or user.is_superuser
         view_mode = str(request.query_params.get('mode', '')).lower()
+        today = timezone.localdate()
 
         if is_admin and view_mode == 'all':
-            scheds = (
-                Schedule.objects.all()
-                .select_related('section', 'section__grade_level', 'subject', 'faculty')
-                .order_by('start_time')
-            )
+            scheds = Schedule.objects.all()
         elif faculty:
-            scheds = (
-                Schedule.objects.filter(Q(faculty=faculty) | Q(section__adviser=faculty))
-                .select_related('section', 'section__grade_level', 'subject', 'faculty')
-                .distinct()
-                .order_by('start_time')
-            )
+            scheds = Schedule.objects.filter(Q(faculty=faculty) | Q(section__adviser=faculty)).distinct()
         elif is_admin:
-            scheds = (
-                Schedule.objects.all()
-                .select_related('section', 'section__grade_level', 'subject', 'faculty')
-                .order_by('start_time')
-            )
+            scheds = Schedule.objects.all()
         else:
             scheds = Schedule.objects.none()
+
+        scheds = scheds.select_related('section', 'section__grade_level', 'subject', 'faculty').order_by('start_time')
+        scheds_list = list(scheds)
+        section_ids = [s.section_id for s in scheds_list if s.section_id]
+
+        if faculty:
+            extra_advisory = Section.objects.filter(adviser=faculty).exclude(id__in=section_ids).select_related('grade_level')
+            for sec in extra_advisory:
+                section_ids.append(sec.id)
+        else:
+            extra_advisory = []
+
+        enrollments_qs = (
+            Enrollment.objects.filter(section_id__in=section_ids, status='ENROLLED', student__is_active=True)
+            .select_related('student')
+            .order_by('student__last_name', 'student__first_name')
+        )
+
+        students_by_section = {}
+        all_student_ids = []
+        for enr in enrollments_qs:
+            if enr.student:
+                students_by_section.setdefault(enr.section_id, []).append(enr.student)
+                all_student_ids.append(enr.student_id)
+
+        subject_logs = {
+            (log['schedule_id'], log['student_id']): log['status']
+            for log in SubjectAttendanceLog.objects.filter(
+                attendance_date=today,
+                student_id__in=all_student_ids
+            ).values('schedule_id', 'student_id', 'status')
+        }
+        daily_logs = dict(
+            DailyAttendanceSummary.objects.filter(
+                attendance_date=today,
+                student_id__in=all_student_ids
+            ).values_list('student_id', 'status')
+        )
 
         classes_data = []
         seen_section_ids = set()
 
-        for s in scheds:
+        def build_student_items(students_list, schedule_id=None):
+            items = []
+            for st in students_list:
+                status_val = (
+                    (subject_logs.get((schedule_id, st.id)) if schedule_id else None)
+                    or daily_logs.get(st.id)
+                    or 'UNSCANNED'
+                )
+                items.append({
+                    'id': st.id,
+                    'lrn': str(st.lrn).strip(),
+                    'full_name': format_full_student_name(st),
+                    'name': format_full_student_name(st),
+                    'gender': getattr(st, 'sex', ''),
+                    'photo_url': safe_photo_url(st.photo, request),
+                    'attendance_status': status_val,
+                    'parent_contact': st.parent_contact or '',
+                    'qr_token': st.qr_token or '',
+                    'rfid_uid': st.rfid_uid or '',
+                })
+            return items
+
+        for s in scheds_list:
             sec = s.section
             if not sec:
                 continue
 
-            enrolled_count = get_section_enrolled_count(sec)
-            start_str = str(s.start_time)[:5] if getattr(s, 'start_time', None) else ''
-            end_str = str(s.end_time)[:5] if getattr(s, 'end_time', None) else ''
-            time_display = f"{start_str} - {end_str}".strip(" -")
-            room_str = getattr(sec, 'room_number', '') or getattr(s, 'room_number', '')
-
-            is_user_adviser = bool(faculty and sec.adviser_id == faculty.id)
-            subj_code = getattr(s.subject, 'code', '') if s.subject else ''
-            subj_title = getattr(s.subject, 'title', '') if s.subject else ''
-
-            grade_name = sec.grade_level.name if getattr(sec, 'grade_level', None) else ''
-            grade_code = sec.grade_level.code if getattr(sec, 'grade_level', None) else ''
+            sec_students = students_by_section.get(sec.id, [])
+            student_items = build_student_items(sec_students, s.id)
+            start_str = str(s.start_time)[:5] if s.start_time else ''
+            end_str = str(s.end_time)[:5] if s.end_time else ''
 
             classes_data.append({
                 'id': s.id,
@@ -96,53 +146,50 @@ class ClassListAPIView(APIView):
                 'section_id': sec.id,
                 'name': sec.name,
                 'section_name': sec.name,
-                'grade_level': grade_name,
-                'grade_level_code': grade_code,
-                'subject_code': subj_code,
-                'subject_name': subj_title,
-                'subject_title': subj_title,
-                'room': room_str,
-                'room_number': room_str,
+                'grade_level': sec.grade_level.name if sec.grade_level else '',
+                'grade_level_code': sec.grade_level.code if sec.grade_level else '',
+                'subject_code': s.subject.code if s.subject else '',
+                'subject_name': s.subject.title if s.subject else '',
+                'subject_title': s.subject.title if s.subject else '',
+                'room': getattr(sec, 'room_number', '') or getattr(s, 'room_number', ''),
                 'start_time': start_str,
                 'end_time': end_str,
-                'time_display': time_display,
-                'enrolled_count': enrolled_count,
-                'student_count': enrolled_count,
-                'students_count': enrolled_count,
-                'total_students': enrolled_count,
-                'is_adviser': is_user_adviser,
+                'time_display': f"{start_str} - {end_str}".strip(" -"),
+                'total_students': len(student_items),
+                'enrolled_count': len(student_items),
+                'student_count': len(student_items),
+                'students': student_items,
+                'is_adviser': bool(faculty and sec.adviser_id == faculty.id),
             })
             seen_section_ids.add(sec.id)
 
-        if faculty:
-            extra_advisory = Section.objects.filter(adviser=faculty).exclude(id__in=seen_section_ids).select_related('grade_level')
-            for sec in extra_advisory:
-                enrolled_count = get_section_enrolled_count(sec)
-                room_str = getattr(sec, 'room_number', '')
-                grade_name = getattr(sec.grade_level, 'name', '') if getattr(sec, 'grade_level', None) else ''
+        for sec in extra_advisory:
+            if sec.id in seen_section_ids:
+                continue
+            sec_students = students_by_section.get(sec.id, [])
+            student_items = build_student_items(sec_students)
 
-                classes_data.append({
-                    'id': sec.id,
-                    'schedule_id': sec.id,
-                    'section_id': sec.id,
-                    'name': sec.name,
-                    'section_name': sec.name,
-                    'grade_level': grade_name,
-                    'grade_level_code': getattr(sec.grade_level, 'code', '') if getattr(sec, 'grade_level', None) else '',
-                    'subject_code': 'ADV',
-                    'subject_name': 'Advisory Homeroom',
-                    'subject_title': 'Advisory Homeroom',
-                    'room': room_str,
-                    'room_number': room_str,
-                    'start_time': '',
-                    'end_time': '',
-                    'time_display': '',
-                    'enrolled_count': enrolled_count,
-                    'student_count': enrolled_count,
-                    'students_count': enrolled_count,
-                    'total_students': enrolled_count,
-                    'is_adviser': True,
-                })
+            classes_data.append({
+                'id': sec.id,
+                'schedule_id': sec.id,
+                'section_id': sec.id,
+                'name': sec.name,
+                'section_name': sec.name,
+                'grade_level': sec.grade_level.name if sec.grade_level else '',
+                'grade_level_code': sec.grade_level.code if sec.grade_level else '',
+                'subject_code': 'ADV',
+                'subject_name': 'Advisory Homeroom',
+                'subject_title': 'Advisory Homeroom',
+                'room': getattr(sec, 'room_number', ''),
+                'start_time': '07:30',
+                'end_time': '16:30',
+                'time_display': 'All Day',
+                'total_students': len(student_items),
+                'enrolled_count': len(student_items),
+                'student_count': len(student_items),
+                'students': student_items,
+                'is_adviser': True,
+            })
 
         return Response(classes_data, status=status.HTTP_200_OK)
 
@@ -155,127 +202,39 @@ class FacultyClassroomListAPIView(APIView):
 
     def get(self, request):
         section_id = request.query_params.get('section_id') or request.query_params.get('section')
+        if not section_id:
+            return ClassListAPIView().get(request)
+
         today = timezone.localdate()
-        user = request.user
-        faculty = resolve_faculty_for_user(user)
-        is_admin = is_leadership_role(user) or user.is_superuser
+        students = (
+            Student.objects.filter(enrollments__section_id=section_id, enrollments__status='ENROLLED', is_active=True)
+            .distinct()
+            .order_by('last_name', 'first_name')
+        )
 
-        if section_id:
-            if not is_admin and faculty:
-                is_authorized = (
-                    Section.objects.filter(id=section_id, adviser=faculty).exists()
-                    or Schedule.objects.filter(section_id=section_id, faculty=faculty).exists()
-                )
-                if not is_authorized:
-                    return Response([], status=status.HTTP_200_OK)
+        subject_logs = dict(
+            SubjectAttendanceLog.objects.filter(student__in=students, attendance_date=today).values_list('student_id', 'status')
+        )
+        daily_logs = dict(
+            DailyAttendanceSummary.objects.filter(student__in=students, attendance_date=today).values_list('student_id', 'status')
+        )
 
-            students = (
-                Student.objects.filter(
-                    enrollments__section_id=section_id,
-                    enrollments__status='ENROLLED',
-                    is_active=True
-                )
-                .distinct()
-                .order_by('last_name', 'first_name')
-            )
-
-            today_logs = dict(
-                SubjectAttendanceLog.objects.filter(
-                    student__in=students,
-                    attendance_date=today
-                ).values_list('student_id', 'status')
-            )
-
-            data = [{
+        data = [
+            {
                 'id': s.id,
                 'lrn': str(s.lrn).strip(),
                 'name': format_full_student_name(s),
                 'full_name': format_full_student_name(s),
-                'first_name': getattr(s, 'first_name', ''),
-                'last_name': getattr(s, 'last_name', ''),
-                'sex': getattr(s, 'gender', None) or getattr(s, 'sex', ''),
-                'gender': getattr(s, 'gender', None) or getattr(s, 'sex', ''),
-                'photo_url': safe_photo_url(getattr(s, 'photo', None), request),
-                'attendance_status': today_logs.get(s.id, 'UNSCANNED'),
-                'parent_contact': getattr(s, 'parent_contact', '') or '',
-                'qr_token': str(getattr(s, 'qr_token', '') or '').strip(),
-                'rfid_uid': str(getattr(s, 'rfid_uid', '') or '').strip(),
-            } for s in students]
-            return Response(data, status=status.HTTP_200_OK)
-
-        if is_admin:
-            schedules = Schedule.objects.all().select_related('section', 'subject', 'faculty').order_by('start_time')
-        elif faculty:
-            schedules = (
-                Schedule.objects.filter(Q(faculty=faculty) | Q(section__adviser=faculty))
-                .select_related('section', 'subject', 'faculty')
-                .distinct()
-                .order_by('start_time')
-            )
-        else:
-            return Response([], status=status.HTTP_200_OK)
-
-        student_list = []
-        seen_section_ids = set()
-
-        for sched in schedules:
-            sec = sched.section
-            if not sec:
-                continue
-
-            students = (
-                Student.objects.filter(
-                    enrollments__section=sec,
-                    enrollments__status='ENROLLED',
-                    is_active=True
-                )
-                .distinct()
-                .order_by('last_name', 'first_name')
-            )
-
-            today_logs = dict(
-                SubjectAttendanceLog.objects.filter(
-                    schedule=sched,
-                    attendance_date=today
-                ).values_list('student_id', 'status')
-            )
-
-            items = [{
-                'id': s.id,
-                'lrn': str(s.lrn).strip(),
-                'full_name': format_full_student_name(s),
-                'name': format_full_student_name(s),
-                'sex': getattr(s, 'gender', None) or getattr(s, 'sex', ''),
-                'gender': getattr(s, 'gender', None) or getattr(s, 'sex', ''),
-                'photo_url': safe_photo_url(getattr(s, 'photo', None), request),
-                'attendance_status': today_logs.get(s.id, 'UNSCANNED'),
-                'qr_token': str(getattr(s, 'qr_token', '') or '').strip(),
-                'rfid_uid': str(getattr(s, 'rfid_uid', '') or '').strip(),
-                'parent_contact': getattr(s, 'parent_contact', '') or '',
-            } for s in students]
-
-            start_str = str(sched.start_time)[:5] if getattr(sched, 'start_time', None) else ''
-            end_str = str(sched.end_time)[:5] if getattr(sched, 'end_time', None) else ''
-            room_str = getattr(sec, 'room_number', '') or getattr(sched, 'room_number', '')
-            subj_title = getattr(sched.subject, 'title', '') if sched.subject else ''
-
-            student_list.append({
-                'schedule_id': sched.id,
-                'section_id': sec.id,
-                'section_name': sec.name,
-                'subject_name': subj_title,
-                'subject_title': subj_title,
-                'subject_code': getattr(sched.subject, 'code', '') if sched.subject else '',
-                'room': room_str,
-                'room_number': room_str,
-                'start_time': start_str,
-                'end_time': end_str,
-                'total_students': len(items),
-                'students': items,
-            })
-            seen_section_ids.add(sec.id)
-
-        return Response(student_list, status=status.HTTP_200_OK)
+                'gender': getattr(s, 'sex', ''),
+                'photo_url': safe_photo_url(s.photo, request),
+                'attendance_status': subject_logs.get(s.id) or daily_logs.get(s.id, 'UNSCANNED'),
+                'parent_contact': s.parent_contact or '',
+                'qr_token': s.qr_token or '',
+                'rfid_uid': s.rfid_uid or '',
+            }
+            for s in students
+        ]
+        return Response(data, status=status.HTTP_200_OK)
 
 
 StudentListAPIView = FacultyClassroomListAPIView
@@ -283,6 +242,13 @@ FacultyClassroomRosterAPIView = FacultyClassroomListAPIView
 
 
 class ClassroomBatchScanAPIView(APIView):
+    """
+    Records student attendance verified by a teacher inside the classroom.
+    Validates Gate Attendance:
+    - If the student has NO gate scan today: Flagged as UNVERIFIED (fence-jumping / bypassed gate).
+    - If the student's last gate scan was OUT: Flagged as CUTTING.
+    - If verified inside campus via Gate scan: Confirmed as PRESENT or LATE.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
@@ -299,84 +265,94 @@ class ClassroomBatchScanAPIView(APIView):
             return Response({'error': 'Active class section not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         today = timezone.localdate()
-        processed_records = []
-        now_time_str = timezone.localtime().strftime('%I:%M:%S %p')
-
         today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
         today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
 
-        gate_in_students = set(
-            StudentGateLog.objects.filter(
-                scan_time__gte=today_start,
-                scan_time__lte=today_end,
-                direction='IN'
-            ).values_list('student_id', flat=True)
+        sec_to_check = sched.section if sched else target_section
+        enrolled_student_ids = set(
+            Enrollment.objects.filter(section=sec_to_check, status='ENROLLED').values_list('student_id', flat=True)
         )
 
-        gate_out_students = set(
-            StudentGateLog.objects.filter(
-                scan_time__gte=today_start,
-                scan_time__lte=today_end,
-                direction='OUT'
-            ).values_list('student_id', flat=True)
+        today_gate_logs = (
+            StudentGateLog.objects.filter(scan_time__gte=today_start, scan_time__lte=today_end)
+            .order_by('student_id', '-scan_time')
+            .values('student_id', 'direction')
+        )
+        latest_gate_dir = {}
+        for gl in today_gate_logs:
+            if gl['student_id'] not in latest_gate_dir:
+                latest_gate_dir[gl['student_id']] = gl['direction']
+
+        scans_data = serializer.validated_data['scans']
+        clean_tokens = [sanitize_qr_token(item['qr_token']) for item in scans_data]
+
+        matched_students = Student.objects.filter(
+            Q(qr_token__in=clean_tokens) | Q(rfid_uid__in=clean_tokens) | Q(lrn__in=clean_tokens),
+            is_active=True
         )
 
-        for item in serializer.validated_data['scans']:
-            raw_token = str(item['qr_token']).strip().replace('\r', '').replace('\n', '')[:64]
+        token_to_student = {}
+        for st in matched_students:
+            if st.qr_token: token_to_student[st.qr_token] = st
+            if st.rfid_uid: token_to_student[st.rfid_uid.upper()] = st
+            if st.lrn: token_to_student[str(st.lrn).strip()] = st
+
+        processed_records = []
+        now_dt = timezone.now()
+        now_time_str = timezone.localtime(now_dt).strftime('%I:%M:%S %p')
+        faculty = resolve_faculty_for_user(request.user)
+
+        for item in scans_data:
+            token = sanitize_qr_token(item['qr_token'])
             target_status = str(item.get('status', 'PRESENT')).upper()
-
-            st = Student.objects.filter(
-                Q(qr_token=raw_token) | Q(rfid_uid__iexact=raw_token) | Q(lrn=raw_token),
-                is_active=True
-            ).first()
+            st = token_to_student.get(token) or token_to_student.get(token.upper())
 
             if not st:
                 continue
 
-            sec_to_check = sched.section if sched else target_section
-            is_enrolled = Enrollment.objects.filter(
-                student=st,
-                section=sec_to_check,
-                status='ENROLLED'
-            ).exists()
-
-            is_anomaly = False
-            anomaly_remarks = 'Classroom attendance verified.'
-            final_status = target_status
+            is_enrolled = st.id in enrolled_student_ids
+            last_gate_scan = latest_gate_dir.get(st.id)
 
             if not is_enrolled:
                 is_anomaly = True
                 final_status = 'UNVERIFIED'
-                anomaly_remarks = 'Student enrolled in a different class section.'
-            elif st.id not in gate_in_students:
+                anomaly_remarks = 'Student is enrolled in a different class section.'
+            elif last_gate_scan is None:
                 is_anomaly = True
                 final_status = 'UNVERIFIED'
-                anomaly_remarks = 'No school gate entry log found for today.'
-            elif st.id in gate_out_students:
+                anomaly_remarks = 'FLAGGED: No gate entry recorded today. Possible fence jump or unscanned entrance.'
+            elif last_gate_scan == 'OUT':
                 is_anomaly = True
                 final_status = 'CUTTING'
-                anomaly_remarks = 'Student already recorded exiting school gate.'
+                anomaly_remarks = 'FLAGGED: Student was previously recorded exiting the campus gate.'
+            else:
+                is_anomaly = False
+                final_status = target_status
+                anomaly_remarks = 'Classroom attendance verified. Gate entry confirmed.'
 
+            # 1. Update Subject Attendance Log
             if sched:
                 SubjectAttendanceLog.objects.update_or_create(
                     student=st,
                     schedule=sched,
                     attendance_date=today,
                     defaults={
-                        'faculty': sched.faculty or resolve_faculty_for_user(request.user),
+                        'faculty': sched.faculty or faculty,
                         'status': final_status,
-                        'scanned_at': timezone.now(),
+                        'scanned_at': now_dt,
                     }
                 )
 
-            if sec_to_check and final_status in ['PRESENT', 'LATE']:
+            # 2. Update Daily Attendance Summary for web portal
+            if sec_to_check:
+                summary_status = final_status if final_status in ['PRESENT', 'LATE', 'CUTTING'] else 'ABSENT'
                 DailyAttendanceSummary.objects.update_or_create(
                     student=st,
                     attendance_date=today,
                     defaults={
                         'section': sec_to_check,
-                        'status': final_status,
-                        'remarks': 'CLASSROOM_SCAN',
+                        'status': summary_status,
+                        'remarks': anomaly_remarks[:255],
                     }
                 )
 
@@ -384,9 +360,10 @@ class ClassroomBatchScanAPIView(APIView):
                 'student_id': st.id,
                 'name': format_full_student_name(st),
                 'lrn': str(st.lrn),
-                'rfid_uid': getattr(st, 'rfid_uid', '') or '',
-                'photo_url': safe_photo_url(getattr(st, 'photo', None), request),
-                'parent_contact': getattr(st, 'parent_contact', '') or '',
+                'rfid_uid': st.rfid_uid or '',
+                'photo_url': safe_photo_url(st.photo, request),
+                'parent_contact': st.parent_contact or '',
+                'section': sec_to_check.name if sec_to_check else '',
                 'status': final_status,
                 'is_anomaly': is_anomaly,
                 'remarks': anomaly_remarks,

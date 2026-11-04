@@ -1,265 +1,164 @@
 /**
- * AttendSure - Standalone Top Navigation Bar (Role-Secured)
+ * AttendSure V3 - Modular Tab Navigation Bar
  * File: web/src/components/layout/Navbar.tsx
- *
- * Upgrades:
- * - Red circle notification counter ("4", "20+") on the Bell button.
- * - Hides "Institutional Settings" from regular teachers and guards.
- * - Safe image URL validation against XSS.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
-import { useSchool } from '../../context/SchoolContext';
-import type { TabBadgeCounts } from './Header';
-import { formatBadgeCount } from './Header';
+import React, { useState, useEffect } from 'react';
+import apiClient from '../../api/client';
+import { useTheme } from '../../context/ThemeContext';
+import { formatBadgeCount, type TabBadgeCounts } from './Header';
 import {
+  LayoutDashboard,
+  DoorOpen,
+  BookOpen,
   GraduationCap,
-  Clock,
-  Radio,
-  Bell,
-  LogOut,
-  Settings,
-  ShieldCheck,
-  ChevronDown,
-  Menu,
+  Users,
+  Calendar,
+  MessageSquare,
+  Ticket,
+  Cpu,
 } from 'lucide-react';
 
 interface NavbarProps {
-  onToggleSidebar?: () => void;
-  isScannerOnline?: boolean;
+  activeTab: string;
+  onTabChange: (tabId: string) => void;
+  badgeCounts?: TabBadgeCounts;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
-  onToggleSidebar,
-  isScannerOnline = true,
+  activeTab,
+  onTabChange,
+  badgeCounts = {},
 }) => {
-  const { school } = useSchool();
-  const [timeString, setTimeString] = useState<string>('');
-  const [profileOpen, setProfileOpen] = useState<boolean>(false);
-  const [totalAlerts, setTotalAlerts] = useState<number>(0);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const facultyName = localStorage.getItem('attendsure_faculty_name') || 'User';
-  const username = localStorage.getItem('attendsure_username') || 'user';
-  const role = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
-  const isAdminOrPrincipal = role === 'ADMIN' || role === 'PRINCIPAL';
+  const { tokens, brand } = useTheme();
+  const [internalBadges, setInternalBadges] = useState<TabBadgeCounts>(badgeCounts);
+  const [totalBadges, setTotalBadges] = useState<number>(0);
 
   useEffect(() => {
-    const updatePSTClock = () => {
-      const now = new Date();
-      setTimeString(
-        now.toLocaleString('en-US', {
-          timeZone: 'Asia/Manila',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: true,
-        }) + ' PST'
-      );
-    };
+    let isMounted = true;
+    const fetchBadges = async () => {
+      try {
+        const results = await Promise.allSettled([
+          apiClient.get('/students/metrics/'),
+          apiClient.get('/sms-outbox/metrics/'),
+        ]);
 
-    updatePSTClock();
-    const interval = setInterval(updatePSTClock, 1000);
-    return () => clearInterval(interval);
-  }, []);
+        if (!isMounted) return;
 
-  // Sync badge counts from global notification event
-  useEffect(() => {
-    const handleSync = (e: Event) => {
-      const custom = e as CustomEvent<TabBadgeCounts>;
-      if (custom.detail) {
-        const sum = Object.values(custom.detail).reduce((acc, v) => acc + (Number(v) || 0), 0);
-        setTotalAlerts(sum);
+        const studRes = results[0].status === 'fulfilled' ? results[0].value : null;
+        const smsRes = results[1].status === 'fulfilled' ? results[1].value : null;
+
+        const counts: TabBadgeCounts = {
+          ...badgeCounts,
+          students: studRes?.data?.total || badgeCounts.students,
+          sms: smsRes?.data?.pending_total || badgeCounts.sms,
+        };
+
+        setInternalBadges(counts);
+
+        const sum = Object.values(counts).reduce<number>((acc: number, curr: unknown) => {
+          return acc + (typeof curr === 'number' ? curr : 0);
+        }, 0);
+
+        setTotalBadges(sum);
+      } catch {
+        const fallbackSum = Object.values(badgeCounts).reduce<number>((acc: number, curr: unknown) => {
+          return acc + (typeof curr === 'number' ? curr : 0);
+        }, 0);
+        if (isMounted) setTotalBadges(fallbackSum);
       }
     };
-    window.addEventListener('attendsure:notifications-sync', handleSync);
-    return () => window.removeEventListener('attendsure:notifications-sync', handleSync);
-  }, []);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setProfileOpen(false);
-      }
+    fetchBadges();
+    const interval = setInterval(fetchBadges, 25000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [badgeCounts]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('attendsure_token');
-    localStorage.removeItem('attendsure_username');
-    localStorage.removeItem('attendsure_faculty_name');
-    localStorage.removeItem('attendsure_role');
-    localStorage.removeItem('attendsure_user_photo');
-    localStorage.removeItem('attendsure_can_teach');
-    window.location.reload();
-  };
-
-  const getInitials = (name: string): string => {
-    return (
-      name
-        .split(' ')
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((n) => n[0].toUpperCase())
-        .join('') || 'U'
-    );
-  };
-
-  const badgeLabel = formatBadgeCount(totalAlerts);
+  const navItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'gatelogs', label: 'Gate Logs', icon: DoorOpen, badgeKey: 'gatelogs' },
+    { id: 'classes', label: 'Classes', icon: BookOpen },
+    { id: 'students', label: 'Students', icon: GraduationCap, badgeKey: 'students' },
+    { id: 'faculties', label: 'Faculties', icon: Users, badgeKey: 'faculties' },
+    { id: 'schedules', label: 'Schedules', icon: Calendar, badgeKey: 'schedules' },
+    { id: 'sms', label: 'SMS Alerts', icon: MessageSquare, badgeKey: 'sms' },
+    { id: 'gatepasses', label: 'Gate Passes', icon: Ticket, badgeKey: 'gatepasses' },
+    { id: 'scanners', label: 'Scanners', icon: Cpu, badgeKey: 'scanners' },
+  ];
 
   return (
-    <nav className="h-16 bg-white border-b border-slate-200 px-4 md:px-6 flex items-center justify-between sticky top-0 z-40 select-none">
-      {/* Left: School Branding */}
-      <div className="flex items-center gap-3">
-        {onToggleSidebar && (
+    <nav
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: tokens.bgSurface,
+        borderBottom: `1px solid ${tokens.borderSubtle}`,
+        padding: '0 clamp(12px, 2.5vw, 24px)',
+        overflowX: 'auto',
+        WebkitOverflowScrolling: 'touch',
+        boxSizing: 'border-box',
+        width: '100%',
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      }}
+      aria-label="Navigation Tabs"
+    >
+      {navItems.map((item) => {
+        const Icon = item.icon;
+        const isActive = activeTab === item.id;
+        const rawCount = item.badgeKey ? internalBadges[item.badgeKey] : undefined;
+        const badgeLabel = formatBadgeCount(rawCount);
+
+        return (
           <button
+            key={item.id}
             type="button"
-            onClick={onToggleSidebar}
-            className="md:hidden p-2 rounded-lg text-slate-500 hover:bg-slate-100"
-            aria-label="Toggle navigation menu"
+            onClick={() => onTabChange(item.id)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '12px 14px',
+              border: 'none',
+              background: 'transparent',
+              borderBottom: isActive ? `2.5px solid ${brand.primary}` : '2.5px solid transparent',
+              color: isActive ? brand.primary : tokens.textSecondary,
+              fontSize: '0.80rem',
+              fontWeight: isActive ? 700 : 500,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+              transition: 'all 0.15s ease',
+            }}
           >
-            <Menu size={20} />
+            <Icon size={16} color={isActive ? brand.primary : tokens.textMuted} />
+            <span>{item.label}</span>
+            {badgeLabel && (
+              <span
+                style={{
+                  padding: '2px 6px',
+                  borderRadius: 10,
+                  fontSize: '0.64rem',
+                  fontWeight: 800,
+                  backgroundColor: isActive ? tokens.primaryLight : tokens.bgSurfaceSubtle,
+                  color: isActive ? brand.primary : tokens.textMuted,
+                }}
+              >
+                {badgeLabel}
+              </span>
+            )}
           </button>
-        )}
+        );
+      })}
 
-        <div className="flex items-center gap-3">
-          {school.school_logo ? (
-            <img
-              src={school.school_logo}
-              alt={school.school_name || 'School Emblem'}
-              className="h-10 w-10 object-contain rounded-full border border-slate-100"
-            />
-          ) : (
-            <div className="h-10 w-10 rounded-full bg-sky-600 flex items-center justify-center text-white">
-              <GraduationCap size={22} />
-            </div>
-          )}
-
-          <div>
-            <span className="font-extrabold text-slate-900 text-sm md:text-base leading-tight block truncate">
-              {school.school_name || 'Lapasan National High School'}
-            </span>
-            <span className="text-[11px] text-slate-500 font-medium hidden sm:block">
-              {school.school_id ? `ID: ${school.school_id} • ` : ''}Attendance &amp; Security Portal
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Right Controls */}
-      <div className="flex items-center gap-3">
-        <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold">
-          <Clock size={14} className="text-sky-600" />
-          <span className="font-mono">{timeString}</span>
-        </div>
-
-        <div
-          className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${
-            isScannerOnline
-              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-              : 'bg-rose-50 text-rose-700 border-rose-200'
-          }`}
-        >
-          <Radio size={12} />
-          <span>Gate: {isScannerOnline ? 'Online' : 'Offline'}</span>
-        </div>
-
-        {/* Bell Icon with Red Circle Counter */}
-        <button
-          type="button"
-          onClick={() => {
-            const targetTab = isAdminOrPrincipal ? 'sms' : 'gate-passes';
-            window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail: targetTab }));
-          }}
-          style={{ position: 'relative' }}
-          className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 transition-colors"
-          title="Notifications"
-        >
-          <Bell size={18} />
-          {badgeLabel && (
-            <span
-              style={{
-                position: 'absolute',
-                top: -4,
-                right: -5,
-                minWidth: 19,
-                height: 19,
-                padding: '0 5px',
-                borderRadius: 9999,
-                backgroundColor: '#e11d48',
-                color: '#ffffff',
-                fontSize: '0.66rem',
-                fontWeight: 800,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                border: '2px solid #ffffff',
-              }}
-            >
-              {badgeLabel}
-            </span>
-          )}
-        </button>
-
-        {/* User Profile Dropdown */}
-        <div className="relative" ref={dropdownRef}>
-          <button
-            type="button"
-            onClick={() => setProfileOpen((prev) => !prev)}
-            className="flex items-center gap-2 p-1 pl-1.5 rounded-full hover:bg-slate-100 border border-slate-200"
-          >
-            <div className="w-8 h-8 rounded-full bg-sky-700 text-white font-bold text-xs flex items-center justify-center">
-              {getInitials(facultyName)}
-            </div>
-            <ChevronDown size={14} className="text-slate-400 mr-1" />
-          </button>
-
-          {profileOpen && (
-            <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50">
-              <div className="px-4 py-2.5 border-b border-slate-100">
-                <div className="text-xs font-bold text-slate-900 truncate">{facultyName}</div>
-                <div className="text-[11px] text-slate-500 font-mono truncate">@{username}</div>
-                <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-700 border border-sky-200">
-                  <ShieldCheck size={11} />
-                  <span>{role}</span>
-                </div>
-              </div>
-
-              {/* Least Privilege: Only Admin & Principal see School Settings */}
-              {isAdminOrPrincipal && (
-                <div className="py-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setProfileOpen(false);
-                      window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail: 'settings' }));
-                    }}
-                    className="w-full px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2.5"
-                  >
-                    <Settings size={14} className="text-slate-400" />
-                    <span>School Settings</span>
-                  </button>
-                </div>
-              )}
-
-              <div className="border-t border-slate-100 pt-1">
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="w-full px-4 py-2 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50 flex items-center gap-2.5"
-                >
-                  <LogOut size={14} className="text-rose-500" />
-                  <span>Log Out</span>
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      {totalBadges > 0 && (
+        <span style={{ display: 'none' }} aria-hidden="true">
+          {totalBadges}
+        </span>
+      )}
     </nav>
   );
 };

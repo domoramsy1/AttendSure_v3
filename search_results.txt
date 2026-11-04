@@ -1,0 +1,94 @@
+.\find_terms.py [Line 5]: PATTERN = re.compile(r"roster|turnstile", re.IGNORECASE)
+.\backend\apps\api\urls.py [Line 26]: FacultyClassroomRosterAPIView,
+.\backend\apps\api\urls.py [Line 165]: path('classroom/student_list/', FacultyClassroomRosterAPIView.as_view(), name='api-classroom-student_list'),
+.\backend\apps\api\urls.py [Line 166]: path('classroom/student-list/', FacultyClassroomRosterAPIView.as_view(), name='api-classroom-student_list-dash'),
+.\backend\apps\api\views\classroom.py [Line 118]: class FacultyClassroomRosterAPIView(APIView):
+.\backend\apps\api\views\classroom.py [Line 122]: Endpoint: GET /api/classroom/student_list/ and GET /api/classroom/roster/
+.\backend\apps\api\views\classroom.py [Line 215]: StudentListAPIView = FacultyClassroomRosterAPIView
+.\backend\apps\api\views\geofence.py [Line 228]: Handles GET (dashboard telemetry & real faculty roster)
+.\backend\apps\api\views\geofence.py [Line 254]: faculty_roster = []
+.\backend\apps\api\views\geofence.py [Line 365]: faculty_roster.append({
+.\backend\apps\api\views\geofence.py [Line 397]: 'faculty_roster': faculty_roster,
+.\backend\apps\api\views\__init__.py [Line 5]: from .classroom import FacultyClassroomRosterAPIView, ClassroomBatchScanAPIView, MyAssignedClassesAPIView
+.\backend\apps\api\views\__init__.py [Line 22]: 'FacultyClassroomRosterAPIView', 'ClassroomBatchScanAPIView', 'MyAssignedClassesAPIView',
+.\mobile\src\components\reports\SF1ReportView.tsx [Line 100]: const activeRosterList =
+.\mobile\src\components\reports\SF1ReportView.tsx [Line 102]: const isRosterEmpty = activeRosterList.length === 0;
+.\mobile\src\components\reports\SF1ReportView.tsx [Line 237]: {isRosterEmpty ? (
+.\mobile\src\components\reports\SF1ReportView.tsx [Line 244]: activeRosterList.map((learner: Learner, idx: number) => {
+.\mobile\src\components\reports\SF2ReportView.tsx [Line 184]: const isRosterEmpty = males.length === 0 && females.length === 0;
+.\mobile\src\components\reports\SF2ReportView.tsx [Line 318]: {isRosterEmpty ? (
+.\mobile\src\screens\HomeScreen.tsx [Line 65]: interface StudentRosterItem {
+.\mobile\src\screens\HomeScreen.tsx [Line 75]: interface SectionRoster {
+.\mobile\src\screens\HomeScreen.tsx [Line 85]: students: StudentRosterItem[];
+.\mobile\src\screens\HomeScreen.tsx [Line 166]: const [sections, setSections] = useState<SectionRoster[]>([]);
+.\mobile\src\screens\HomeScreen.tsx [Line 335]: // GATE TURNSTILE STATUS
+.\mobile\src\screens\HomeScreen.tsx [Line 437]: rosterRes,
+.\mobile\src\screens\HomeScreen.tsx [Line 452]: if (rosterRes.status === 'fulfilled' && rosterRes.value.data) {
+.\mobile\src\screens\HomeScreen.tsx [Line 453]: const rosterData = Array.isArray(rosterRes.value.data)
+.\mobile\src\screens\HomeScreen.tsx [Line 454]: ? rosterRes.value.data
+.\mobile\src\screens\HomeScreen.tsx [Line 455]: : rosterRes.value.data.results || [];
+.\mobile\src\screens\HomeScreen.tsx [Line 456]: setSections(rosterData);
+.\mobile\src\screens\HomeScreen.tsx [Line 457]: AsyncStorage.setItem('attendsure_cached_sections', JSON.stringify(rosterData)).catch(() => {});
+.\mobile\src\screens\ScannerScreen.tsx [Line 31]: interface StudentRosterItem {
+.\mobile\src\screens\ScannerScreen.tsx [Line 45]: interface SectionRoster {
+.\mobile\src\screens\ScannerScreen.tsx [Line 57]: students: StudentRosterItem[];
+.\mobile\src\screens\ScannerScreen.tsx [Line 95]: // Faculty Roster Data
+.\mobile\src\screens\ScannerScreen.tsx [Line 96]: const [sections, setSections] = useState<SectionRoster[]>([]);
+.\mobile\src\screens\ScannerScreen.tsx [Line 98]: const [rosterLoading, setRosterLoading] = useState<boolean>(true);
+.\mobile\src\screens\ScannerScreen.tsx [Line 99]: const [showRosterDrawer, setShowRosterDrawer] = useState<boolean>(false);
+.\mobile\src\screens\ScannerScreen.tsx [Line 147]: const fetchFacultyRoster = useCallback(async () => {
+.\mobile\src\screens\ScannerScreen.tsx [Line 148]: setRosterLoading(true);
+.\mobile\src\screens\ScannerScreen.tsx [Line 154]: const normalizedData: SectionRoster[] = rawData.map((item: any) => ({
+.\mobile\src\screens\ScannerScreen.tsx [Line 174]: Alert.alert('Roster Sync Notice', 'Unable to fetch assigned classroom sections from server.');
+.\mobile\src\screens\ScannerScreen.tsx [Line 176]: setRosterLoading(false);
+.\mobile\src\screens\ScannerScreen.tsx [Line 181]: fetchFacultyRoster();
+.\mobile\src\screens\ScannerScreen.tsx [Line 182]: }, [fetchFacultyRoster]);
+.\mobile\src\screens\ScannerScreen.tsx [Line 350]: {rosterLoading ? (
+.\mobile\src\screens\ScannerScreen.tsx [Line 353]: <Text style={styles.loadingBannerText}>Synchronizing assigned teaching rosters...</Text>
+.\mobile\src\screens\ScannerScreen.tsx [Line 375]: onPress={fetchFacultyRoster}
+.\mobile\src\screens\ScannerScreen.tsx [Line 521]: style={[styles.rosterDrawerBtn, !activeSection && styles.btnDisabled]}
+.\mobile\src\screens\ScannerScreen.tsx [Line 523]: onPress={() => setShowRosterDrawer(true)}
+.\mobile\src\screens\ScannerScreen.tsx [Line 526]: <Text style={styles.rosterDrawerBtnText}>
+.\mobile\src\screens\ScannerScreen.tsx [Line 589]: {/* Class Student Roster Modal */}
+.\mobile\src\screens\ScannerScreen.tsx [Line 590]: <Modal visible={showRosterDrawer} animationType="slide">
+.\mobile\src\screens\ScannerScreen.tsx [Line 592]: <View style={styles.rosterModalHeader}>
+.\mobile\src\screens\ScannerScreen.tsx [Line 594]: <Text style={styles.rosterModalTitle}>{activeSection?.section_name} Students</Text>
+.\mobile\src\screens\ScannerScreen.tsx [Line 595]: <Text style={styles.rosterModalSub}>
+.\mobile\src\screens\ScannerScreen.tsx [Line 599]: <TouchableOpacity onPress={() => setShowRosterDrawer(false)} style={styles.closeBtn}>
+.\mobile\src\screens\ScannerScreen.tsx [Line 618]: style={styles.studentRosterRow}
+.\mobile\src\screens\ScannerScreen.tsx [Line 620]: setShowRosterDrawer(false);
+.\mobile\src\screens\ScannerScreen.tsx [Line 624]: <View style={styles.rosterAvatarBox}>
+.\mobile\src\screens\ScannerScreen.tsx [Line 626]: <Image source={{ uri: avatarUri }} style={styles.rosterAvatarImg} />
+.\mobile\src\screens\ScannerScreen.tsx [Line 974]: rosterDrawerBtn: {
+.\mobile\src\screens\ScannerScreen.tsx [Line 986]: rosterDrawerBtnText: { fontSize: 11.5, fontWeight: '700', color: '#004b87' },
+.\mobile\src\screens\ScannerScreen.tsx [Line 1034]: rosterModalHeader: {
+.\mobile\src\screens\ScannerScreen.tsx [Line 1043]: rosterModalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+.\mobile\src\screens\ScannerScreen.tsx [Line 1044]: rosterModalSub: { fontSize: 11, color: '#64748b', marginTop: 1 },
+.\mobile\src\screens\ScannerScreen.tsx [Line 1046]: studentRosterRow: {
+.\mobile\src\screens\ScannerScreen.tsx [Line 1053]: rosterAvatarBox: {
+.\mobile\src\screens\ScannerScreen.tsx [Line 1064]: rosterAvatarImg: { width: '100%', height: '100%' },
+.\mobile\src\types\index.ts [Line 21]: // 2. TURNSTILE GATE LOGS & CAMPUS PROFILE
+.\web\src\components\layout\Sidebar.tsx [Line 143]: groupTitle: 'ACADEMICS & ROSTER',
+.\web\src\components\tabs\GeofenceTab.tsx [Line 33]: export interface FacultyRosterItem {
+.\web\src\components\tabs\GeofenceTab.tsx [Line 70]: faculty_roster: FacultyRosterItem[];
+.\web\src\components\tabs\GeofenceTab.tsx [Line 422]: const getStatusBadge = (s: FacultyRosterItem) => {
+.\web\src\components\tabs\GeofenceTab.tsx [Line 471]: Real-time telemetry: Live GPS verification, hardware device locks, and turnstile gate cross-referencing.
+.\web\src\components\tabs\GeofenceTab.tsx [Line 877]: Total Faculty: <strong>{geoData?.faculty_roster?.length || 0}</strong>
+.\web\src\components\tabs\GeofenceTab.tsx [Line 896]: {geoData?.faculty_roster && geoData.faculty_roster.length > 0 ? (
+.\web\src\components\tabs\GeofenceTab.tsx [Line 897]: geoData.faculty_roster.map((s) => (
+.\web\src\components\tabs\MyAssignedClassesTab.tsx [Line 10]: interface StudentRosterItem {
+.\web\src\components\tabs\MyAssignedClassesTab.tsx [Line 31]: students: StudentRosterItem[];
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 306]: const activeRosterList = useMemo(() => {
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 310]: const isRosterEmpty = activeRosterList.length === 0;
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 358]: learners: activeRosterList,
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 380]: if (activeRosterList.length <= singlePageCapacity) {
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 385]: learners: activeRosterList,
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 395]: const page1Learners = activeRosterList.slice(0, page1Capacity);
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 396]: const page2Learners = activeRosterList.slice(page1Capacity);
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 416]: }, [activePageConfig, activeRosterList, pageHeightInches]);
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 584]: const rows = activeRosterList.map((l, idx) => {
+.\web\src\components\tabs\SF1ReportTab.tsx [Line 1006]: {isRosterEmpty ? (
+.\web\src\components\tabs\SF2ReportTab.tsx [Line 462]: const isRosterEmpty =
+.\web\src\components\tabs\SF2ReportTab.tsx [Line 728]: {isRosterEmpty ? (
+.\web\src\components\tabs\SF2ReportTab.tsx [Line 855]: {isRosterEmpty ? (
+.\web\src\components\tabs\SF2ReportTab.tsx [Line 927]: {isRosterEmpty ? (

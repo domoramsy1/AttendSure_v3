@@ -1,4 +1,7 @@
-// D:\AttendSure_V3\mobile\src\screens\SettingsScreen.tsx
+/**
+ * AttendSure - User Profile & Application Settings Screen
+ * File: mobile/src/screens/SettingsScreen.tsx
+ */
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -10,15 +13,15 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import QRCode from 'react-native-qrcode-svg';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
-import { getServerBaseUrl, setServerBaseUrl, resetServerBaseUrl } from '../services/configService';
+import { getServerBaseUrl } from '../services/configService';
 
 export interface ExtendedUserProfile {
   id?: number | string;
@@ -38,28 +41,38 @@ export interface ExtendedUserProfile {
   faculty_id?: string | number;
   photo?: string | null;
   photo_url?: string | null;
-  bound_device_id?: string | null;
 }
 
 export const SettingsScreen: React.FC = () => {
   const { user, logout, updateUser } = useAuth();
 
   const [profile, setProfile] = useState<ExtendedUserProfile | null>(user as ExtendedUserProfile | null);
-  const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
+  const [serverBase, setServerBase] = useState<string>('');
 
-  // Edit fields
-  const [firstName, setFirstName] = useState<string>('');
-  const [lastName, setLastName] = useState<string>('');
-  const [contactNumber, setContactNumber] = useState<string>('');
-  const [email, setEmail] = useState<string>('');
+  // Editable user fields
+  const [firstName, setFirstName] = useState<string>(user?.first_name || '');
+  const [lastName, setLastName] = useState<string>(user?.last_name || '');
+  const [contactNumber, setContactNumber] = useState<string>(user?.contact_number || '');
+  const [email, setEmail] = useState<string>(user?.email || '');
   const [newPassword, setNewPassword] = useState<string>('');
 
-  // Server Endpoint Modal
-  const [serverModalVisible, setServerModalVisible] = useState<boolean>(false);
-  const [serverUrlInput, setServerUrlInput] = useState<string>('');
-  const [currentServerUrl, setCurrentServerUrl] = useState<string>('');
+  // Profile photo state
+  const [newPhotoBase64, setNewPhotoBase64] = useState<string | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
+  const resolvePhotoUri = useCallback(
+    (url?: string | null): string | undefined => {
+      if (!url) return undefined;
+      if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:image/')) {
+        return url;
+      }
+      return `${serverBase.replace(/\/+$/, '')}/${url.replace(/^\/+/, '')}`;
+    },
+    [serverBase]
+  );
+
+  // Automatically fetch profile information in the background
   const fetchProfile = useCallback(async () => {
     try {
       const res = await apiClient.get<ExtendedUserProfile>('me/');
@@ -71,26 +84,65 @@ export const SettingsScreen: React.FC = () => {
         setEmail(res.data.email || '');
       }
     } catch {
-      if (user) {
-        setFirstName(user.first_name || '');
-        setLastName(user.last_name || '');
-        setContactNumber(user.contact_number || '');
-        setEmail(user.email || '');
-      }
-    } finally {
-      setLoading(false);
+      // Keep session state intact
     }
-  }, [user]);
+  }, []);
 
   useEffect(() => {
+    getServerBaseUrl().then((url) => setServerBase(url));
     fetchProfile();
-    getServerBaseUrl().then((url) => {
-      setCurrentServerUrl(url);
-      setServerUrlInput(url);
-    });
   }, [fetchProfile]);
 
+  // Pick new profile picture with size validation
+  const handlePickPhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Needed', 'Please allow photo library access in phone settings.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.6,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets[0]) {
+        const asset = result.assets[0];
+
+        // Cybersecurity check: file size limit 5 MB
+        if (asset.fileSize && asset.fileSize > 5 * 1024 * 1024) {
+          Alert.alert('File Too Large', 'Please select a photo smaller than 5 MB.');
+          return;
+        }
+
+        if (asset.base64) {
+          setNewPhotoBase64(`data:image/jpeg;base64,${asset.base64}`);
+          setPhotoPreview(asset.uri);
+        } else {
+          setPhotoPreview(asset.uri);
+        }
+      }
+    } catch {
+      Alert.alert('Photo Error', 'Unable to open photo picker.');
+    }
+  };
+
+  // Save personal updates to the database
   const handleSaveProfile = async () => {
+    if (!firstName.trim() || !lastName.trim()) {
+      Alert.alert('Missing Name', 'First name and last name are required.');
+      return;
+    }
+
+    if (newPassword.trim() && newPassword.trim().length < 8) {
+      Alert.alert('Weak Password', 'Password must be at least 8 characters long.');
+      return;
+    }
+
     setSaving(true);
     try {
       const payload: Record<string, string> = {
@@ -99,8 +151,13 @@ export const SettingsScreen: React.FC = () => {
         contact_number: contactNumber.trim(),
         email: email.trim(),
       };
+
       if (newPassword.trim()) {
         payload.password = newPassword.trim();
+      }
+
+      if (newPhotoBase64) {
+        payload.photo = newPhotoBase64;
       }
 
       const res = await apiClient.put('me/', payload);
@@ -108,66 +165,54 @@ export const SettingsScreen: React.FC = () => {
         setProfile(res.data);
         updateUser(res.data);
       }
+
       setNewPassword('');
-      Alert.alert('Saved', 'Your profile details have been updated.');
+      setNewPhotoBase64(null);
+      Alert.alert('Success', 'Your personal information has been saved.');
     } catch (err: any) {
-      Alert.alert('Error', err?.response?.data?.error || 'Failed to update profile.');
+      const msg = err?.response?.data?.error || err?.response?.data?.detail || 'Failed to update personal details.';
+      Alert.alert('Update Failed', msg);
     } finally {
       setSaving(false);
     }
   };
 
-  const handleSaveServer = async () => {
-    try {
-      await setServerBaseUrl(serverUrlInput);
-      const updated = await getServerBaseUrl();
-      setCurrentServerUrl(updated);
-      setServerModalVisible(false);
-      Alert.alert('Server Connected', `Active address: ${updated}`);
-    } catch (err: any) {
-      Alert.alert('Invalid URL', err?.message || 'Please check server address format.');
-    }
-  };
-
-  const handleResetServer = async () => {
-    await resetServerBaseUrl();
-    const def = await getServerBaseUrl();
-    setCurrentServerUrl(def);
-    setServerUrlInput(def);
-    setServerModalVisible(false);
-    Alert.alert('Reset', 'Restored default school server address.');
-  };
-
   const qrPayload = JSON.stringify({
     app: 'ATTENDSURE_PASS',
-    id: profile?.employee_id || profile?.username || 'EMPLOYEE',
+    id: profile?.employee_id || profile?.username || 'USER',
     name: profile?.full_name || `${firstName} ${lastName}`.trim(),
     role: profile?.role || 'FACULTY',
   });
 
-  if (loading) {
-    return (
-      <View style={styles.centerBox}>
-        <ActivityIndicator size="small" color="#004b87" />
-        <Text style={styles.loadingText}>Loading profile settings...</Text>
-      </View>
-    );
-  }
+  const displayPhoto = photoPreview || resolvePhotoUri(profile?.photo_url || profile?.photo);
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Profile Header Card */}
+        {/* Profile Header & Photo Manager */}
         <View style={styles.profileHeaderCard}>
-          <View style={styles.avatarCircle}>
-            {profile?.photo_url || profile?.photo ? (
-              <Image source={{ uri: profile.photo_url || profile.photo || '' }} style={styles.avatarImg} contentFit="cover" />
-            ) : (
-              <Ionicons name="person" size={36} color="#004b87" />
-            )}
+          <View style={styles.avatarWrapper}>
+            <View style={styles.avatarCircle}>
+              {displayPhoto ? (
+                <Image source={{ uri: displayPhoto }} style={styles.avatarImg} contentFit="cover" />
+              ) : (
+                <Ionicons name="person" size={40} color="#004b87" />
+              )}
+            </View>
+
+            <TouchableOpacity
+              style={styles.cameraBadgeBtn}
+              onPress={handlePickPhoto}
+              accessibilityLabel="Change Photo"
+            >
+              <Ionicons name="camera" size={15} color="#ffffff" />
+            </TouchableOpacity>
           </View>
-          <Text style={styles.profileName}>{profile?.full_name || `${firstName} ${lastName}`.trim() || 'Employee'}</Text>
-          <Text style={styles.profileRole}>{profile?.position || profile?.role || 'Faculty'}</Text>
+
+          <Text style={styles.profileName}>
+            {profile?.full_name || `${firstName} ${lastName}`.trim() || 'User Account'}
+          </Text>
+          <Text style={styles.profileRole}>{profile?.position || profile?.role || 'Staff Member'}</Text>
           <Text style={styles.profileDept}>{profile?.department || 'Academic Department'}</Text>
 
           <View style={styles.badgeRow}>
@@ -177,29 +222,42 @@ export const SettingsScreen: React.FC = () => {
             </View>
             <View style={styles.idChip}>
               <Ionicons name="shield-checkmark-outline" size={12} color="#059669" />
-              <Text style={[styles.idChipText, { color: '#059669' }]}>Hardware Paired</Text>
+              <Text style={[styles.idChipText, { color: '#059669' }]}>Verified Account</Text>
             </View>
           </View>
         </View>
 
-        {/* Digital Clearance QR Pass */}
+        {/* Digital School Clearance Pass */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Digital Clearance Pass</Text>
-          <Text style={styles.cardSubtitle}>Scan at campus gate kiosks for physical check-in and check-out.</Text>
+          <Text style={styles.cardTitle}>Digital Gate Pass</Text>
+          <Text style={styles.cardSubtitle}>Scan this QR code at campus gate kiosks for check-in and check-out.</Text>
           <View style={styles.qrContainer}>
-            <QRCode value={qrPayload} size={150} color="#004b87" backgroundColor="#ffffff" />
+            <QRCode value={qrPayload} size={140} color="#004b87" backgroundColor="#ffffff" />
           </View>
         </View>
 
-        {/* Edit Information Form */}
+        {/* User Information Form */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Account Details</Text>
+          <Text style={styles.cardTitle}>Personal Information</Text>
+          <Text style={styles.cardSubtitle}>Manage your name, contact phone, email, and password.</Text>
 
           <Text style={styles.inputLabel}>First Name</Text>
-          <TextInput style={styles.input} value={firstName} onChangeText={setFirstName} placeholder="First Name" />
+          <TextInput
+            style={styles.input}
+            value={firstName}
+            onChangeText={setFirstName}
+            placeholder="Enter first name"
+            placeholderTextColor="#94a3b8"
+          />
 
           <Text style={styles.inputLabel}>Last Name</Text>
-          <TextInput style={styles.input} value={lastName} onChangeText={setLastName} placeholder="Last Name" />
+          <TextInput
+            style={styles.input}
+            value={lastName}
+            onChangeText={setLastName}
+            placeholder="Enter last name"
+            placeholderTextColor="#94a3b8"
+          />
 
           <Text style={styles.inputLabel}>Email Address</Text>
           <TextInput
@@ -208,24 +266,28 @@ export const SettingsScreen: React.FC = () => {
             onChangeText={setEmail}
             keyboardType="email-address"
             autoCapitalize="none"
+            placeholder="name@school.edu"
+            placeholderTextColor="#94a3b8"
           />
 
-          <Text style={styles.inputLabel}>Mobile Phone</Text>
+          <Text style={styles.inputLabel}>Mobile Phone Number</Text>
           <TextInput
             style={styles.input}
             value={contactNumber}
             onChangeText={setContactNumber}
             keyboardType="phone-pad"
-            placeholder="09123456789"
+            placeholder="09XXXXXXXXX"
+            placeholderTextColor="#94a3b8"
           />
 
-          <Text style={styles.inputLabel}>Change Password (leave blank to keep current)</Text>
+          <Text style={styles.inputLabel}>New Password (leave blank to keep current)</Text>
           <TextInput
             style={styles.input}
             value={newPassword}
             onChangeText={setNewPassword}
             secureTextEntry
-            placeholder="New password"
+            placeholder="Minimum 8 characters"
+            placeholderTextColor="#94a3b8"
           />
 
           <TouchableOpacity
@@ -237,69 +299,24 @@ export const SettingsScreen: React.FC = () => {
             {saving ? (
               <ActivityIndicator size="small" color="#ffffff" />
             ) : (
-              <Text style={styles.saveBtnText}>Save Account Changes</Text>
+              <Text style={styles.saveBtnText}>Save Changes</Text>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* Server & Connectivity Settings */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>School Server Endpoint</Text>
-          <Text style={styles.cardSubtitle}>Active Backend: {currentServerUrl || 'Detecting...'}</Text>
-
-          <TouchableOpacity style={styles.serverBtn} onPress={() => setServerModalVisible(true)} activeOpacity={0.8}>
-            <Ionicons name="server-outline" size={16} color="#004b87" />
-            <Text style={styles.serverBtnText}>Change Server Address</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Sign Out */}
+        {/* Sign Out Button */}
         <TouchableOpacity style={styles.logoutBtn} onPress={logout} activeOpacity={0.8}>
           <Ionicons name="log-out-outline" size={18} color="#dc2626" />
           <Text style={styles.logoutBtnText}>Sign Out</Text>
         </TouchableOpacity>
       </ScrollView>
-
-      {/* Server Config Modal */}
-      <Modal visible={serverModalVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Configure School Server</Text>
-            <Text style={styles.modalSubtitle}>Enter your local Wi-Fi IP address or Cloudflare tunnel URL.</Text>
-
-            <TextInput
-              style={styles.modalInput}
-              value={serverUrlInput}
-              onChangeText={setServerUrlInput}
-              placeholder="http://192.168.100.4:8000"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-            <View style={styles.modalRow}>
-              <TouchableOpacity style={styles.resetBtn} onPress={handleResetServer}>
-                <Text style={styles.resetBtnText}>Reset Default</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.saveServerBtn} onPress={handleSaveServer}>
-                <Text style={styles.saveServerBtnText}>Apply</Text>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity style={styles.closeBtn} onPress={() => setServerModalVisible(false)}>
-              <Text style={styles.closeBtnText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
-  centerBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  loadingText: { fontSize: 12, color: '#64748b', marginTop: 8, fontWeight: '600' },
-  scrollContent: { padding: 16, paddingBottom: 110, gap: 14 },
+  scrollContent: { padding: 16, paddingBottom: 100, gap: 14 },
   profileHeaderCard: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
@@ -308,19 +325,35 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
+  avatarWrapper: {
+    position: 'relative',
+    marginBottom: 10,
+  },
   avatarCircle: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: '#e6f0fa',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
     borderWidth: 2,
     borderColor: '#b8d6f0',
-    marginBottom: 10,
   },
   avatarImg: { width: '100%', height: '100%' },
+  cameraBadgeBtn: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#004b87',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
   profileName: { fontSize: 17, fontWeight: '800', color: '#0f172a', textAlign: 'center' },
   profileRole: { fontSize: 12.5, fontWeight: '700', color: '#004b87', marginTop: 2 },
   profileDept: { fontSize: 11.5, color: '#64748b', marginTop: 1 },
@@ -330,7 +363,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     backgroundColor: '#f1f5f9',
-    paddingVertical: 3,
+    paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 6,
   },
@@ -365,18 +398,6 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   saveBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
-  serverBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: '#e6f0fa',
-    borderRadius: 8,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#b8d6f0',
-  },
-  serverBtnText: { color: '#004b87', fontSize: 12, fontWeight: '700' },
   logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -390,54 +411,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   logoutBtnText: { color: '#dc2626', fontSize: 13, fontWeight: '800' },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 20,
-    width: '100%',
-    maxWidth: 340,
-  },
-  modalTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
-  modalSubtitle: { fontSize: 11, color: '#64748b', marginTop: 2, marginBottom: 12 },
-  modalInput: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 44,
-    fontSize: 13,
-    color: '#0f172a',
-    marginBottom: 12,
-  },
-  modalRow: { flexDirection: 'row', gap: 8 },
-  resetBtn: {
-    flex: 1,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 40,
-  },
-  resetBtnText: { fontSize: 12, fontWeight: '700', color: '#475569' },
-  saveServerBtn: {
-    flex: 1,
-    backgroundColor: '#004b87',
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 40,
-  },
-  saveServerBtnText: { fontSize: 12, fontWeight: '700', color: '#ffffff' },
-  closeBtn: { marginTop: 10, alignItems: 'center', paddingVertical: 6 },
-  closeBtnText: { fontSize: 11.5, color: '#64748b', fontWeight: '600' },
 });
 
 export default SettingsScreen;

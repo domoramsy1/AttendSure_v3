@@ -3,7 +3,7 @@ AttendSure V3 - Gate Logging & Hardware Kiosk Scanner API
 File: backend/apps/api/views/gate.py
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q
@@ -18,12 +18,14 @@ from apps.academics.models import (
     FacultyGateLog,
     IoTKiosk,
     SmsOutbox,
-    GatePass,
+    Enrollment,
 )
 from apps.common.utils import (
     get_user_role,
     is_regular_teacher,
     format_full_student_name,
+    format_deduped_section_label,
+    safe_photo_url,
     verify_hardware_secret,
 )
 from .common import (
@@ -55,8 +57,9 @@ class GateLogsAPIView(APIView):
                 'direction': l.direction,
                 'scan_method': l.scan_method,
                 'kiosk': l.kiosk.terminal_name if l.kiosk else 'Main Gate',
-                'scan_time': l.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
+                'scan_time': timezone.localtime(l.scan_time).strftime('%b %d, %Y - %I:%M:%S %p'),
                 'snapshot_url': l.snapshot.url if l.snapshot else None,
+                'photo_url': safe_photo_url(l.student.photo, request),
                 'raw_time': l.scan_time.isoformat(),
             }
             for l in stu_qs
@@ -73,8 +76,9 @@ class GateLogsAPIView(APIView):
                     'direction': f_log.direction,
                     'scan_method': f_log.scan_method,
                     'kiosk': f_log.kiosk.terminal_name if f_log.kiosk else 'Main Gate',
-                    'scan_time': f_log.scan_time.strftime('%b %d, %Y - %I:%M:%S %p'),
+                    'scan_time': timezone.localtime(f_log.scan_time).strftime('%b %d, %Y - %I:%M:%S %p'),
                     'snapshot_url': f_log.snapshot.url if f_log.snapshot else None,
+                    'photo_url': safe_photo_url(f_log.faculty.photo, request),
                     'raw_time': f_log.scan_time.isoformat(),
                 })
             logs.sort(key=lambda x: x['raw_time'], reverse=True)
@@ -84,21 +88,20 @@ class GateLogsAPIView(APIView):
 
 class KioskScanAPIView(APIView):
     """
-    Hardware Ingestion Endpoint:
-    Processes Raspberry Pi scans (RFID card taps and backup optical QR tokens)
-    with anti-cheating camera snapshot capture and automated parent SMS notifications.
-    Endpoint: POST /api/gate/scan/
+    Hardware Kiosk Scanner Endpoint:
+    Processes gate taps and returns the student photo and profile info directly
+    to the kiosk display with anti-bounce protection and parent SMS alerts.
     """
     permission_classes = [permissions.AllowAny]
 
     @transaction.atomic
     def post(self, request):
-        kiosk_code = request.data.get('kiosk_code') or request.headers.get('X-Kiosk-Code')
-        secret_key = request.data.get('secret_key') or request.headers.get('X-Kiosk-Key')
+        kiosk_code = str(request.data.get('kiosk_code') or request.headers.get('X-Kiosk-Code') or '').strip()
+        secret_key = str(request.data.get('secret_key') or request.headers.get('X-Kiosk-Key') or '').strip()
 
         kiosk = IoTKiosk.objects.filter(kiosk_code=kiosk_code, is_active=True).first()
         if not kiosk or not verify_hardware_secret(kiosk, secret_key):
-            return Response({'error': 'Unauthorized kiosk terminal.'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized kiosk terminal credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         kiosk.last_ping = timezone.now()
         kiosk.save(update_fields=['last_ping'])
@@ -111,6 +114,9 @@ class KioskScanAPIView(APIView):
         if not raw_id:
             return Response({'error': 'Card serial or QR token required.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        now = timezone.now()
+        debounce_window = now - timedelta(seconds=45)
+
         # 1. Match Student Record
         student = Student.objects.filter(
             Q(rfid_uid__iexact=raw_id) | Q(qr_token=raw_id) | Q(lrn=raw_id),
@@ -118,6 +124,38 @@ class KioskScanAPIView(APIView):
         ).first()
 
         if student:
+            # Resolve student section for display
+            enr = Enrollment.objects.filter(student=student, status='ENROLLED').select_related('section', 'section__grade_level').first()
+            section_label = format_deduped_section_label(
+                enr.section.grade_level.name if (enr and enr.section and enr.section.grade_level) else '',
+                enr.section.name if (enr and enr.section) else 'Unassigned'
+            )
+            photo_url = safe_photo_url(student.photo, request)
+
+            # Prevent double scans within grace period
+            recent_duplicate = StudentGateLog.objects.filter(
+                student=student,
+                direction=direction,
+                scan_time__gte=debounce_window
+            ).first()
+
+            if recent_duplicate:
+                return Response({
+                    'success': True,
+                    'person_type': 'STUDENT',
+                    'name': student.full_name,
+                    'full_name': student.full_name,
+                    'identifier': student.lrn,
+                    'lrn': student.lrn,
+                    'photo_url': photo_url,
+                    'section': section_label,
+                    'grade_section': section_label,
+                    'direction': direction,
+                    'timestamp': timezone.localtime(recent_duplicate.scan_time).strftime('%I:%M:%S %p'),
+                    'is_duplicate': True,
+                    'message': 'Card already tapped. Verified on screen.'
+                }, status=status.HTTP_200_OK)
+
             log = StudentGateLog.objects.create(
                 student=student,
                 kiosk=kiosk,
@@ -125,10 +163,10 @@ class KioskScanAPIView(APIView):
                 scan_method=scan_method,
                 raw_identifier=raw_id,
                 snapshot=snapshot_file,
-                scan_time=timezone.now()
+                scan_time=now
             )
 
-            # Automated Parental SMS Dispatch
+            # Parent SMS Notification Dispatch
             if student.parent_contact and len(student.parent_contact) >= 10:
                 verb = "entered" if direction == "IN" else "left"
                 time_str = timezone.localtime(log.scan_time).strftime('%I:%M %p')
@@ -148,9 +186,16 @@ class KioskScanAPIView(APIView):
                 'success': True,
                 'person_type': 'STUDENT',
                 'name': student.full_name,
+                'full_name': student.full_name,
                 'identifier': student.lrn,
+                'lrn': student.lrn,
+                'photo_url': photo_url,
+                'section': section_label,
+                'grade_section': section_label,
                 'direction': direction,
-                'timestamp': log.scan_time.strftime('%I:%M:%S %p'),
+                'timestamp': timezone.localtime(log.scan_time).strftime('%I:%M:%S %p'),
+                'is_duplicate': False,
+                'message': f"Gate {direction} entry logged successfully."
             }, status=status.HTTP_201_CREATED)
 
         # 2. Match Faculty Record
@@ -160,6 +205,30 @@ class KioskScanAPIView(APIView):
         ).first()
 
         if faculty:
+            fac_photo = safe_photo_url(faculty.photo, request)
+            recent_fac_duplicate = FacultyGateLog.objects.filter(
+                faculty=faculty,
+                direction=direction,
+                scan_time__gte=debounce_window
+            ).first()
+
+            if recent_fac_duplicate:
+                return Response({
+                    'success': True,
+                    'person_type': 'FACULTY',
+                    'name': faculty.full_name,
+                    'full_name': faculty.full_name,
+                    'identifier': faculty.employee_id,
+                    'employee_id': faculty.employee_id,
+                    'department': faculty.department,
+                    'position': faculty.position,
+                    'photo_url': fac_photo,
+                    'direction': direction,
+                    'timestamp': timezone.localtime(recent_fac_duplicate.scan_time).strftime('%I:%M:%S %p'),
+                    'is_duplicate': True,
+                    'message': 'Teacher ID card already tapped.'
+                }, status=status.HTTP_200_OK)
+
             log = FacultyGateLog.objects.create(
                 faculty=faculty,
                 kiosk=kiosk,
@@ -167,16 +236,22 @@ class KioskScanAPIView(APIView):
                 scan_method=scan_method,
                 raw_identifier=raw_id,
                 snapshot=snapshot_file,
-                scan_time=timezone.now()
+                scan_time=now
             )
 
             return Response({
                 'success': True,
                 'person_type': 'FACULTY',
                 'name': faculty.full_name,
+                'full_name': faculty.full_name,
                 'identifier': faculty.employee_id,
+                'employee_id': faculty.employee_id,
+                'department': faculty.department,
+                'position': faculty.position,
+                'photo_url': fac_photo,
                 'direction': direction,
-                'timestamp': log.scan_time.strftime('%I:%M:%S %p'),
+                'timestamp': timezone.localtime(log.scan_time).strftime('%I:%M:%S %p'),
+                'is_duplicate': False,
             }, status=status.HTTP_201_CREATED)
 
-        return Response({'error': 'Unregistered ID token.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'Unregistered ID card or QR pass.'}, status=status.HTTP_404_NOT_FOUND)

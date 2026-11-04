@@ -1,6 +1,6 @@
 """
 AttendSure V3 - Core System & Hardware Configuration
-Optimized for Campus IoT Gate Kiosks, Mobile Geofencing, and Administrative Portal.
+Optimized for Single Production Server (Nginx + Waitress/Gunicorn + PostgreSQL).
 File: backend/attendsure_core/settings.py
 """
 
@@ -18,14 +18,14 @@ from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment file (.env) from backend root directory
+# Load environment configuration from backend/.env
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False').strip().lower() in ('true', '1', 'yes')
 
 if not SECRET_KEY and not DEBUG:
-    raise ImproperlyConfigured("CRITICAL: SECRET_KEY environment variable is missing in production!")
+    raise ImproperlyConfigured("CRITICAL: SECRET_KEY environment variable is missing in production.")
 
 if not SECRET_KEY:
     SECRET_KEY = 'django-insecure-attendsure-dev-key-never-use-in-production'
@@ -35,7 +35,7 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 # ==============================================================================
-# 2. DYNAMIC NETWORK & HOST RESOLUTION
+# 2. DYNAMIC NETWORK & HOST RESOLUTION (CYBERSECURITY CONTROLS)
 # ==============================================================================
 
 ENDPOINTS_JSON_PATH = BASE_DIR.parent / 'endpoints.json'
@@ -89,9 +89,7 @@ for host in REQUIRED_HOSTS:
     if host not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(host)
 
-if DEBUG and '*' not in ALLOWED_HOSTS:
-    ALLOWED_HOSTS.append('*')
-
+# Reverse proxy protocol trust for Nginx and Cloudflare
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
@@ -110,6 +108,8 @@ CSRF_TRUSTED_ORIGINS = [
     'http://172.20.140.221:5173',
     'http://172.20.140.221',
     'https://172.20.140.221',
+    'http://localhost',
+    'http://127.0.0.1',
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'http://localhost:8000',
@@ -138,7 +138,7 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'corsheaders',
 
-    # AttendSure Core & Feature Apps (explicit AppConfig classes)
+    # AttendSure Core & Feature Apps
     'apps.core.apps.CoreConfig',
     'apps.academics.apps.AcademicsConfig',
     'apps.api.apps.ApiConfig',
@@ -187,12 +187,11 @@ ASGI_APPLICATION = 'attendsure_core.asgi.application'
 
 
 # ==============================================================================
-# 5. DATABASE ARCHITECTURE (POSTGRESQL PRODUCTION + TEST SQLITE SWITCH)
+# 5. DATABASE CONFIGURATION (HIGH-SPEED TRANSACTIONS & CONNECTION POOLING)
 # ==============================================================================
 
 db_engine_choice = os.getenv('DB_ENGINE', 'postgresql').strip().lower()
 
-# When running automated tests, switch automatically to fast in-memory SQLite
 if 'test' in sys.argv:
     DATABASES = {
         'default': {
@@ -209,7 +208,8 @@ elif db_engine_choice == 'postgresql':
             'PASSWORD': os.getenv('DB_PASSWORD'),
             'HOST': os.getenv('DB_HOST', '127.0.0.1'),
             'PORT': os.getenv('DB_PORT', '5432'),
-            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', 300)),
+            # Keeps database connections open for 120 seconds to eliminate handshake delays
+            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', 120)),
             'OPTIONS': {
                 'connect_timeout': 5,
             },
@@ -220,24 +220,33 @@ else:
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': BASE_DIR / 'db.sqlite3',
+            'CONN_MAX_AGE': 60,
         }
     }
 
 
 # ==============================================================================
-# 6. IN-MEMORY CACHE (HIGH-SPEED RAM STORAGE)
+# 6. IN-MEMORY CACHE & HIGH-SPEED SESSIONS
 # ==============================================================================
 
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "attendsure-local-ram-cache",
+        "LOCATION": "attendsure-production-ram-cache",
+        "TIMEOUT": 300,
+        "OPTIONS": {
+            "MAX_ENTRIES": 10000,
+        }
     }
 }
 
+# Cache sessions in memory first and write through to database to cut user lookup latency
+SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
+SESSION_COOKIE_AGE = 86400 * 7  # 7 Days
+
 
 # ==============================================================================
-# 7. ASYNCHRONOUS BACKGROUND TASKS (CELERY & REDIS)
+# 7. ASYNCHRONOUS TASKS (CELERY & REDIS)
 # ==============================================================================
 
 REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
@@ -253,7 +262,7 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 4
 
 
 # ==============================================================================
-# 8. REST API & THROTTLING (CYBERSECURITY CONTROLS)
+# 8. REST FRAMEWORK & CYBERSECURITY RATE LIMITS
 # ==============================================================================
 
 REST_FRAMEWORK = {
@@ -291,6 +300,8 @@ else:
         'http://172.20.140.221',
         'http://172.20.140.221:5173',
         'http://172.20.140.221:8000',
+        'http://localhost',
+        'http://127.0.0.1',
         'http://localhost:5173',
         'http://127.0.0.1:5173',
     ]
@@ -299,7 +310,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 
 # ==============================================================================
-# 9. ATTENDSURE HARDWARE, SMS & IOT PARAMETERS
+# 9. HARDWARE, IOT & SMS PARAMETERS
 # ==============================================================================
 
 GATE_DEBOUNCE_SECONDS = int(os.getenv('GATE_DEBOUNCE_SECONDS', 10))
@@ -391,7 +402,7 @@ USE_TZ = True
 
 
 # ==============================================================================
-# 12. MEDIA & STATIC STORAGE
+# 12. STATIC & MEDIA FILE SECURITY
 # ==============================================================================
 
 STATIC_URL = '/static/'
@@ -399,8 +410,14 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
-FILE_UPLOAD_MAX_MEMORY_SIZE = 2621440
+# Security: Set strict file permissions on uploaded photos (read/write by owner, read-only by server)
+FILE_UPLOAD_PERMISSIONS = 0o644
+FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
+
+# Memory protection: Cap upload sizes to defend against buffer overflow and memory denial-of-service
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024   # 5 MB
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
@@ -408,15 +425,28 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # 13. CYBERSECURITY HARDENING
 # ==============================================================================
 
+# Protect cookies from JavaScript access (defends against Cross-Site Scripting session theft)
 SESSION_COOKIE_HTTPONLY = True
-CSRF_COOKIE_HTTPONLY = False
-X_FRAME_OPTIONS = 'DENY'
+CSRF_COOKIE_HTTPONLY = False  # Allows Web frontend headers to read token for state-changing requests
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
 
-if not DEBUG:
-    SECURE_BROWSER_XSS_FILTER = True
-    SECURE_CONTENT_TYPE_NOSNIFF = True
+# Clickjacking and MIME sniffing defenses
+X_FRAME_OPTIONS = 'DENY'
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_BROWSER_XSS_FILTER = True
+
+# Adaptive SSL protection: enforces HTTPS security when served through an SSL proxy or tunnel
+IS_HTTPS_STRICT = os.getenv('ENABLE_HTTPS_STRICT', 'False').strip().lower() in ('true', '1')
+if IS_HTTPS_STRICT and not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = True
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+else:
+    # Allows school LAN operations over HTTP (e.g. http://10.16.115.49) without cookie rejections
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_SSL_REDIRECT = False

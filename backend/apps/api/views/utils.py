@@ -79,7 +79,7 @@ class CalendarExceptionAPIView(APIView):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([permissions.AllowAny])
+@permission_classes([permissions.IsAuthenticated])
 def ping_scanners(request):
     """Checks the live online status of active hardware kiosks."""
     start_time = time.perf_counter()
@@ -100,7 +100,7 @@ def ping_scanners(request):
             'name': k.terminal_name,
             'location': k.location,
             'status': 'ONLINE' if (k.last_ping and k.last_ping >= online_cutoff) else 'OFFLINE',
-            'last_seen': k.last_ping.strftime('%I:%M:%S %p') if k.last_ping else 'Never',
+            'last_seen': timezone.localtime(k.last_ping).strftime('%I:%M:%S %p') if k.last_ping else 'Never',
         }
         for k in kiosks
     ]
@@ -118,13 +118,16 @@ def ping_scanners(request):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([permissions.AllowAny])
+@permission_classes([permissions.IsAuthenticated])
 def test_sms_gateway(request):
     """Pulls genuine counts from the SMS outbox database table."""
     today = timezone.localdate()
-    sent_count = SmsOutbox.objects.filter(status='SENT', created_at__date=today).count()
+    today_start = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time()))
+    today_end = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.max.time()))
+
+    sent_count = SmsOutbox.objects.filter(status='SENT', created_at__gte=today_start, created_at__lte=today_end).count()
     pending_count = SmsOutbox.objects.filter(status='PENDING').count()
-    failed_count = SmsOutbox.objects.filter(status='FAILED', created_at__date=today).count()
+    failed_count = SmsOutbox.objects.filter(status='FAILED', created_at__gte=today_start, created_at__lte=today_end).count()
 
     return Response({
         'status': 'ONLINE',
@@ -136,7 +139,7 @@ def test_sms_gateway(request):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([permissions.AllowAny])
+@permission_classes([permissions.IsAuthenticated])
 def db_check(request):
     """Executes a real SQL query to verify PostgreSQL latency."""
     start_time = time.perf_counter()
@@ -166,8 +169,9 @@ def db_check(request):
 
 
 @api_view(['POST'])
-@permission_classes([permissions.AllowAny])
+@permission_classes([permissions.IsAuthenticated, IsSystemAdminRole])
 def flush_cache(request):
+    """Clears system application cache. Restricted to verified system administrators."""
     cache.clear()
     return Response({
         'success': True,

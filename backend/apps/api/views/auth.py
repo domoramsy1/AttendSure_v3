@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Authentication & Identity APIs
+AttendSure V3 - Authentication & Identity APIs (Full Profile CRUD)
 File: backend/apps/api/views/auth.py
 """
 
@@ -10,6 +10,7 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email
+from django.db import transaction
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -33,14 +34,9 @@ class ValidationRateThrottle(AnonRateThrottle):
 
 
 def _process_uploaded_photo(raw_photo):
-    """
-    Safely processes an uploaded photo from multipart/form-data or Base64 string.
-    Returns a ContentFile instance or None.
-    """
     if not raw_photo:
         return None
 
-    # 1. Direct file upload via request.FILES
     if hasattr(raw_photo, 'read'):
         try:
             raw_photo.seek(0)
@@ -50,7 +46,6 @@ def _process_uploaded_photo(raw_photo):
         except Exception:
             return None
 
-    # 2. Base64 data string from canvas or FileReader
     if isinstance(raw_photo, str):
         clean = raw_photo.strip()
         if clean.startswith('data:image') and ';base64,' in clean:
@@ -72,10 +67,6 @@ def _process_uploaded_photo(raw_photo):
 
 
 def build_authenticated_user_payload(user, request=None):
-    """
-    Builds the user identity payload directly from the database
-    without using mock or fake data.
-    """
     faculty = resolve_faculty_for_user(user)
     school = SchoolProfile.objects.first()
     profile = getattr(user, 'profile', None)
@@ -91,7 +82,6 @@ def build_authenticated_user_payload(user, request=None):
         else " ".join(filter(None, [first_name, middle_name, last_name])).strip() or user.username
     )
 
-    # Resolve photo from faculty or user profile
     photo_url = None
     if faculty and faculty.photo:
         photo_url = safe_photo_url(faculty.photo, request)
@@ -138,10 +128,7 @@ class DatabaseLoginView(APIView):
         password = str(request.data.get('password', '')).strip()
 
         if not username or not password:
-            return Response(
-                {'error': 'Username and password are required.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({'error': 'Username and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         existing_user = User.objects.filter(username__iexact=username).first()
         profile = getattr(existing_user, 'profile', None) if existing_user else None
@@ -159,19 +146,13 @@ class DatabaseLoginView(APIView):
             return Response({'error': 'Invalid credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         if not user.is_active:
-            return Response(
-                {'error': 'Account is inactive. Contact school admin.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({'error': 'Account is inactive. Contact school admin.'}, status=status.HTTP_403_FORBIDDEN)
 
         if profile and hasattr(profile, 'reset_failed_attempts'):
             profile.reset_failed_attempts()
 
         token, _ = Token.objects.get_or_create(user=user)
-        return Response(
-            {'token': token.key, 'user': build_authenticated_user_payload(user, request)},
-            status=status.HTTP_200_OK,
-        )
+        return Response({'token': token.key, 'user': build_authenticated_user_payload(user, request)}, status=status.HTTP_200_OK)
 
 
 LoginAPIView = DatabaseLoginView
@@ -179,33 +160,33 @@ LoginAPIView = DatabaseLoginView
 
 class CurrentUserView(APIView):
     """
-    Handles current session user details and profile updates.
-    Syncs all fields across User, UserProfile, and FacultyProfile.
+    Complete Profile CRUD for Authenticated Users:
+    - GET: Read personal profile details.
+    - POST: Complete/create initial profile information.
+    - PUT / PATCH: Update name, email, phone, photo, or password.
+    - DELETE: Delete or deactivate own account.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         return Response(build_authenticated_user_payload(request.user, request), status=status.HTTP_200_OK)
 
+    def post(self, request):
+        return self.put(request)
+
+    @transaction.atomic
     def put(self, request):
         user = request.user
         data = request.data
         files = request.FILES
 
-        # 1. Extract values supporting both snake_case and camelCase
         first_name = data.get('first_name') if 'first_name' in data else data.get('firstName')
         last_name = data.get('last_name') if 'last_name' in data else data.get('lastName')
         middle_name = data.get('middle_name') if 'middle_name' in data else data.get('middleName')
         suffix = data.get('suffix')
-        contact_number = (
-            data.get('contact_number') if 'contact_number' in data
-            else (data.get('contactNumber') if 'contactNumber' in data else data.get('phone'))
-        )
-        department = data.get('department')
-        position = data.get('position')
+        contact_number = data.get('contact_number') or data.get('contactNumber') or data.get('phone')
         raw_photo = files.get('photo') or files.get('avatar') or data.get('photo') or data.get('avatar')
 
-        # 2. Update core User model
         user_updates = []
         if first_name is not None:
             user.first_name = str(first_name).strip()
@@ -231,10 +212,7 @@ class CurrentUserView(APIView):
         if new_password:
             clean_pw = str(new_password).strip()
             if len(clean_pw) < 8:
-                return Response(
-                    {'error': 'Password must be at least 8 characters long.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return Response({'error': 'Password must be at least 8 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
             try:
                 validate_password(clean_pw, user=user)
             except DjangoValidationError as exc:
@@ -245,10 +223,8 @@ class CurrentUserView(APIView):
         if user_updates:
             user.save()
 
-        # 3. Process photo / avatar
         photo_file = _process_uploaded_photo(raw_photo)
 
-        # 4. Synchronize UserProfile
         profile, _ = UserProfile.objects.get_or_create(user=user)
         profile.is_profile_completed = bool(user.first_name and user.last_name)
         if photo_file:
@@ -257,7 +233,6 @@ class CurrentUserView(APIView):
         else:
             profile.save(update_fields=['is_profile_completed'])
 
-        # 5. Synchronize or create FacultyProfile
         faculty = resolve_faculty_for_user(user)
         if not faculty:
             clean_emp_id = (user.username or 'EMP').strip().upper()[:50]
@@ -271,8 +246,6 @@ class CurrentUserView(APIView):
                     suffix=str(suffix or '').strip(),
                     email=user.email or '',
                     contact_number=str(contact_number or '').strip(),
-                    department=str(department or 'Administration').strip(),
-                    position=str(position or 'Staff').strip(),
                     photo=photo_file,
                     is_active=True,
                 )
@@ -298,12 +271,6 @@ class CurrentUserView(APIView):
             if contact_number is not None:
                 faculty.contact_number = str(contact_number).strip()
                 fac_updates.append('contact_number')
-            if department is not None:
-                faculty.department = str(department).strip()
-                fac_updates.append('department')
-            if position is not None:
-                faculty.position = str(position).strip()
-                fac_updates.append('position')
             if photo_file:
                 faculty.photo = photo_file
                 fac_updates.append('photo')
@@ -315,6 +282,17 @@ class CurrentUserView(APIView):
 
     def patch(self, request):
         return self.put(request)
+
+    @transaction.atomic
+    def delete(self, request):
+        """Allows users to delete or close their own profile."""
+        user = request.user
+        if user.is_superuser and User.objects.filter(is_superuser=True, is_active=True).count() <= 1:
+            return Response({'error': 'Cannot delete the only system administrator account.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        Token.objects.filter(user=user).delete()
+        user.delete()
+        return Response({'success': True, 'message': 'Your account has been deleted.'}, status=status.HTTP_200_OK)
 
 
 CurrentUserProfileView = CurrentUserView
@@ -349,25 +327,14 @@ class LiveFieldValidationAPIView(APIView):
             except DjangoValidationError:
                 return {'valid': False, 'is_taken': False, 'message': 'Invalid email format.'}
 
-        return {
-            'valid': not is_taken,
-            'is_taken': is_taken,
-            'message': message,
-        }
+        return {'valid': not is_taken, 'is_taken': is_taken, 'message': message}
 
     def get(self, request):
-        field = request.query_params.get('field')
-        val = request.query_params.get('value')
-        exclude_id = request.query_params.get('exclude_id')
-        result = self._validate(field, val, exclude_id)
-        return Response(result, status=status.HTTP_200_OK)
+        return Response(self._validate(request.query_params.get('field'), request.query_params.get('value'), request.query_params.get('exclude_id')), status=status.HTTP_200_OK)
 
     def post(self, request):
-        field = request.data.get('field') or request.query_params.get('field')
-        val = request.data.get('value') or request.query_params.get('value')
-        exclude_id = request.data.get('exclude_id') or request.query_params.get('exclude_id')
-        result = self._validate(field, val, exclude_id)
-        return Response(result, status=status.HTTP_200_OK)
+        data = request.data or request.query_params
+        return Response(self._validate(data.get('field'), data.get('value'), data.get('exclude_id')), status=status.HTTP_200_OK)
 
 
 class RegisterPushTokenAPIView(APIView):
@@ -382,7 +349,4 @@ class RegisterPushTokenAPIView(APIView):
         profile.push_token = token
         profile.save(update_fields=['push_token'])
 
-        return Response({
-            'success': True,
-            'message': 'Push token registered successfully.'
-        }, status=status.HTTP_200_OK)
+        return Response({'success': True, 'message': 'Push token registered successfully.'}, status=status.HTTP_200_OK)

@@ -1,17 +1,11 @@
 /**
- * AttendSure V3 - Institutional Navigation Sidebar (Role-Secured + Live Badge Counts)
+ * AttendSure V3 - Minimalist Floating Rail Navigation
+ * Displays compact icons by default and reveals the tab name on hover.
  * File: web/src/components/layout/Sidebar.tsx
- *
- * UI/UX & Cybersecurity Upgrades:
- * 1. RED NOTIFICATION BADGES: Renders red count pills ("4", "20+") on tabs with
- *    active tasks (Gate Passes, Unscanned Classes, Queued/Failed SMS, Offline Scanners, Draft DTR).
- * 2. COLLAPSED ICON BADGES: When collapsed, the red circle badge overlaps the top-right
- *    of the circular icon button (matching modern notification badge UX).
- * 3. PRINCIPLE OF LEAST PRIVILEGE: Strictly hides unauthorized tabs and empty groups.
- * 4. XSS IMAGE SHIELD: Validates school logo and user photo URLs before rendering.
  */
 
 import React, { useMemo, useState, useEffect } from 'react';
+import { useTheme } from '../../context/ThemeContext';
 import type { UserSession } from '../../types/section';
 import type { TabBadgeCounts } from './Header';
 import {
@@ -28,8 +22,6 @@ import {
   MapPin,
   Cpu,
   UserCheck,
-  ChevronLeft,
-  ChevronRight,
   BookOpen,
 } from 'lucide-react';
 
@@ -52,10 +44,10 @@ export type NavItemKey =
 interface SidebarProps {
   activeTab: NavItemKey;
   onSelectTab: (tab: NavItemKey) => void;
-  session: UserSession | null;
+  session?: UserSession | null;
   userPhoto?: string | null;
-  isCollapsed: boolean;
-  onToggleCollapse: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
   schoolName?: string;
   schoolId?: string;
   schoolLogo?: string | null;
@@ -75,6 +67,14 @@ interface NavGroup {
   items: NavItem[];
 }
 
+interface HoverTooltipState {
+  label: string;
+  badge?: string;
+  top: number;
+  left: number;
+}
+
+// Cybersecurity: Block malicious URI schemes (XSS protection)
 const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
@@ -92,7 +92,7 @@ const isSafeImageUrl = (url?: string | null): boolean => {
 
 const formatBadge = (count?: number): string => {
   if (!count || count <= 0) return '';
-  return count > 20 ? '20+' : String(count);
+  return count > 99 ? '99+' : String(count);
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -100,21 +100,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   session,
   userPhoto,
-  isCollapsed,
-  onToggleCollapse,
-  schoolName,
-  schoolId,
+  schoolName = 'Lapasan National High School',
+  schoolId = '55555',
   schoolLogo,
   canTeach = false,
   allowedTabs,
   badgeCounts: propBadgeCounts,
 }) => {
+  const { tokens, brand } = useTheme();
   const [liveBadges, setLiveBadges] = useState<TabBadgeCounts>({});
+  const [tooltip, setTooltip] = useState<HoverTooltipState | null>(null);
 
-  const role = (session?.role || 'FACULTY').toUpperCase();
-  const isLeadership = role === 'ADMIN' || role === 'PRINCIPAL' || role === 'DEPT_HEAD';
+  const role = (session?.role || 'ADMIN').toUpperCase();
+  const isLeadership = role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL' || role === 'DEPT_HEAD';
 
-  // Listen for live notification badge counts broadcasted from Header.tsx
   useEffect(() => {
     const handleBadgeSync = (e: Event) => {
       const customEvent = e as CustomEvent<TabBadgeCounts>;
@@ -122,55 +121,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setLiveBadges(customEvent.detail);
       }
     };
-
     window.addEventListener('attendsure:notifications-sync', handleBadgeSync);
     return () => window.removeEventListener('attendsure:notifications-sync', handleBadgeSync);
   }, []);
 
   const mergedBadges: TabBadgeCounts = { ...liveBadges, ...propBadgeCounts };
 
-  // Master definition of all possible navigation groups
   const allMenuGroups: NavGroup[] = useMemo(
     () => [
       {
         groupTitle: 'OVERVIEW',
         items: [
-          { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
-          { key: 'gate-logs', label: 'Gate Logs', icon: <Scan size={18} /> },
+          { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
+          { key: 'gate-logs', label: 'Gate Logs', icon: <Scan size={20} /> },
         ],
       },
       {
         groupTitle: 'ACADEMICS & CLASS LIST',
         items: [
-          { key: 'my-classes', label: 'Classes', icon: <BookOpen size={18} /> },
-          { key: 'students', label: 'Students', icon: <GraduationCap size={18} /> },
-          { key: 'facultys', label: 'Faculties', icon: <Users size={18} /> },
-          { key: 'schedules', label: 'Schedules & Sections', icon: <CalendarDays size={18} /> },
+          { key: 'my-classes', label: 'Classes', icon: <BookOpen size={20} /> },
+          { key: 'students', label: 'Students', icon: <GraduationCap size={20} /> },
+          { key: 'facultys', label: 'Faculties', icon: <Users size={20} /> },
+          { key: 'schedules', label: 'Schedules & Sections', icon: <CalendarDays size={20} /> },
         ],
       },
       {
         groupTitle: 'GATE & SECURITY',
         items: [
-          { key: 'sms', label: 'SMS', icon: <Send size={18} /> },
-          { key: 'gate-passes', label: 'Gate Passes', icon: <Ticket size={18} /> },
-          { key: 'scanners', label: 'Scanners', icon: <Cpu size={18} /> },
-          { key: 'dtr', label: 'DTR', icon: <Clock size={18} /> },
-          { key: 'geofence', label: 'Geofence', icon: <MapPin size={18} /> },
+          { key: 'sms', label: 'SMS', icon: <Send size={20} /> },
+          { key: 'gate-passes', label: 'Gate Passes', icon: <Ticket size={20} /> },
+          { key: 'scanners', label: 'Scanners', icon: <Cpu size={20} /> },
+          { key: 'dtr', label: 'DTR', icon: <Clock size={20} /> },
+          { key: 'geofence', label: 'Geofence', icon: <MapPin size={20} /> },
         ],
       },
       {
         groupTitle: 'GOVERNANCE & REPORTS',
         items: [
-          { key: 'reports', label: 'Reports', icon: <FileSpreadsheet size={18} /> },
-          { key: 'users', label: 'Users', icon: <UserCheck size={18} /> },
-          { key: 'settings', label: 'Settings', icon: <Settings size={18} /> },
+          { key: 'reports', label: 'Reports', icon: <FileSpreadsheet size={20} /> },
+          { key: 'users', label: 'Users', icon: <UserCheck size={20} /> },
+          { key: 'settings', label: 'Settings', icon: <Settings size={20} /> },
         ],
       },
     ],
     []
   );
 
-  // Strict UI filtering: Only render items authorized for the user's role
   const filteredMenuGroups = useMemo(() => {
     return allMenuGroups
       .map((group) => ({
@@ -180,11 +176,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             return allowedTabs.includes(item.key);
           }
           if (item.key === 'my-classes') return canTeach;
-          if (item.key === 'users') return role === 'ADMIN';
-          if (item.key === 'settings' || item.key === 'sms' || item.key === 'scanners' || item.key === 'geofence') {
-            return role === 'ADMIN' || role === 'PRINCIPAL';
+          if (item.key === 'users') return role === 'ADMIN' || role === 'SUPERADMIN';
+          if (['settings', 'sms', 'scanners', 'geofence'].includes(item.key)) {
+            return role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL';
           }
-          if (item.key === 'facultys' || item.key === 'reports' || item.key === 'schedules') return isLeadership;
+          if (['facultys', 'reports', 'schedules'].includes(item.key)) return isLeadership;
           if (role === 'GUARD') return ['dashboard', 'gate-logs', 'gate-passes'].includes(item.key);
           return true;
         }),
@@ -196,364 +192,302 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const safeUserPhoto = isSafeImageUrl(userPhoto) ? userPhoto : null;
 
   return (
-    <aside
-      style={{
-        width: isCollapsed ? 74 : 254,
-        minWidth: isCollapsed ? 74 : 254,
-        height: '100vh',
-        backgroundColor: '#0b192c',
-        color: '#ffffff',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        transition: 'width 0.2s ease-in-out',
-        borderRight: '1px solid #1e293b',
-        boxSizing: 'border-box',
-        overflow: 'hidden',
-        zIndex: 50,
-      }}
-    >
-      {/* 1. Header & School Info */}
-      <div
+    <>
+      <aside
         style={{
-          padding: isCollapsed ? '16px 8px' : '16px 14px',
-          borderBottom: '1px solid #1e293b',
+          width: 74,
+          minWidth: 74,
+          height: '100%',
+          backgroundColor: tokens.bgSurface,
+          border: `1px solid ${tokens.borderSubtle}`,
+          borderRadius: 16,
+          boxShadow: tokens.cardShadow,
           display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between',
           alignItems: 'center',
-          justifyContent: isCollapsed ? 'center' : 'space-between',
-          minHeight: 68,
           boxSizing: 'border-box',
-          position: 'relative',
+          overflow: 'hidden',
+          zIndex: 40,
+          flexShrink: 0,
+          transition: 'background-color 0.2s ease, border-color 0.2s ease',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        {/* 1. School Logo */}
+        <div
+          style={{
+            padding: '16px 0',
+            borderBottom: `1px solid ${tokens.borderSubtle}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100%',
+            boxSizing: 'border-box',
+          }}
+          onMouseEnter={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setTooltip({
+              label: `${schoolName} (ID: ${schoolId})`,
+              top: rect.top + rect.height / 2,
+              left: rect.right + 12,
+            });
+          }}
+          onMouseLeave={() => setTooltip(null)}
+        >
           {safeLogo ? (
             <img
               src={safeLogo}
-              alt="School Seal"
+              alt="School Logo"
               style={{
-                width: 38,
-                height: 38,
+                width: 40,
+                height: 40,
                 borderRadius: '50%',
                 objectFit: 'cover',
-                border: '1.5px solid #0284c7',
-                flexShrink: 0,
+                border: `2px solid ${brand.primary}`,
+                cursor: 'pointer',
               }}
             />
           ) : (
             <div
               style={{
-                width: 38,
-                height: 38,
+                width: 40,
+                height: 40,
                 borderRadius: '50%',
-                backgroundColor: '#0284c7',
+                backgroundColor: brand.primary,
                 color: '#ffffff',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontWeight: 800,
                 fontSize: '0.85rem',
-                flexShrink: 0,
+                cursor: 'pointer',
               }}
             >
-              LNHS
-            </div>
-          )}
-
-          {!isCollapsed && (
-            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-              <span
-                title={schoolName}
-                style={{
-                  fontSize: '0.88rem',
-                  fontWeight: 700,
-                  color: '#ffffff',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  maxWidth: 140,
-                }}
-              >
-                {schoolName}
-              </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>ID: {schoolId}</span>
-                <span
-                  style={{
-                    fontSize: '0.62rem',
-                    backgroundColor: 'rgba(2, 132, 199, 0.25)',
-                    color: '#38bdf8',
-                    padding: '1px 5px',
-                    borderRadius: 4,
-                    fontWeight: 700,
-                  }}
-                >
-                  AttendSure
-                </span>
-              </div>
+              AS
             </div>
           )}
         </div>
 
-        {/* Collapse Button */}
-        <button
-          onClick={onToggleCollapse}
-          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          type="button"
+        {/* 2. Navigation Icons Rail */}
+        <nav
           style={{
-            position: isCollapsed ? 'static' : 'relative',
-            width: 24,
-            height: 24,
-            borderRadius: '50%',
-            backgroundColor: '#1e293b',
-            border: '1px solid #334155',
-            color: '#cbd5e1',
+            flex: 1,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '14px 0',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            flexShrink: 0,
+            gap: 12,
+            width: '100%',
+            scrollbarWidth: 'none',
           }}
         >
-          {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-        </button>
-      </div>
+          {filteredMenuGroups.map((group, gIdx) => (
+            <div
+              key={gIdx}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+              }}
+            >
+              {group.items.map((item) => {
+                const isActive = activeTab === item.key;
+                const rawCount = mergedBadges[item.key as keyof TabBadgeCounts] || 0;
+                const badgeText = formatBadge(rawCount);
 
-      {/* 2. Navigation List with Red Circle Badges */}
-      <nav
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          padding: '12px 10px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 16,
-        }}
-      >
-        {filteredMenuGroups.map((group, gIdx) => (
-          <div key={gIdx} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {!isCollapsed && (
-              <span
-                style={{
-                  fontSize: '0.64rem',
-                  fontWeight: 800,
-                  color: '#64748b',
-                  letterSpacing: '0.08em',
-                  padding: '4px 10px',
-                  userSelect: 'none',
-                }}
-              >
-                {group.groupTitle}
-              </span>
-            )}
-
-            {group.items.map((item) => {
-              const isActive = activeTab === item.key;
-              const rawCount = mergedBadges[item.key as keyof TabBadgeCounts] || 0;
-              const badgeText = formatBadge(rawCount);
-
-              return (
-                <button
-                  key={item.key}
-                  onClick={() => onSelectTab(item.key)}
-                  title={isCollapsed ? `${item.label}${badgeText ? ` (${badgeText})` : ''}` : undefined}
-                  type="button"
-                  style={{
-                    position: 'relative',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: isCollapsed ? 'center' : 'space-between',
-                    width: '100%',
-                    height: 40,
-                    padding: isCollapsed ? '0' : '0 12px',
-                    borderRadius: isCollapsed ? 12 : 8,
-                    border: 'none',
-                    backgroundColor: isActive ? '#0284c7' : 'transparent',
-                    color: isActive ? '#ffffff' : '#94a3b8',
-                    fontWeight: isActive ? 700 : 500,
-                    fontSize: '0.84rem',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                    boxSizing: 'border-box',
-                    textAlign: 'left',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isActive) {
-                      e.currentTarget.style.backgroundColor = '#1e293b';
-                      e.currentTarget.style.color = '#ffffff';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isActive) {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                      e.currentTarget.style.color = '#94a3b8';
-                    }
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                return (
+                  <button
+                    key={item.key}
+                    onClick={() => {
+                      setTooltip(null);
+                      onSelectTab(item.key);
+                    }}
+                    onMouseEnter={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setTooltip({
+                        label: item.label,
+                        badge: badgeText,
+                        top: rect.top + rect.height / 2,
+                        left: rect.right + 12,
+                      });
+                    }}
+                    onMouseLeave={() => setTooltip(null)}
+                    type="button"
+                    style={{
+                      position: 'relative',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 46,
+                      height: 46,
+                      borderRadius: 12,
+                      border: 'none',
+                      backgroundColor: isActive ? brand.primary : 'transparent',
+                      color: isActive ? '#FFFFFF' : tokens.textSecondary,
+                      cursor: 'pointer',
+                      transition: 'background-color 0.15s ease, color 0.15s ease',
+                      boxSizing: 'border-box',
+                    }}
+                  >
                     <div
                       style={{
-                        position: 'relative',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
+                        color: isActive ? '#FFFFFF' : tokens.textMuted,
                       }}
                     >
                       {item.icon}
 
-                      {/* Collapsed Mode: Red Circle Badge overlapping top-right of icon */}
-                      {isCollapsed && badgeText && (
+                      {/* Small badge dot on icon */}
+                      {badgeText && (
                         <span
                           style={{
                             position: 'absolute',
-                            top: -7,
-                            right: -9,
-                            minWidth: 18,
-                            height: 18,
+                            top: 4,
+                            right: 4,
+                            minWidth: 16,
+                            height: 16,
                             padding: '0 4px',
                             borderRadius: 9999,
-                            backgroundColor: '#e11d48',
-                            color: '#ffffff',
-                            fontSize: '0.62rem',
+                            backgroundColor: brand.danger,
+                            color: '#FFFFFF',
+                            fontSize: '0.60rem',
                             fontWeight: 800,
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            border: '2px solid #0b192c',
+                            border: `2px solid ${tokens.bgSurface}`,
                             lineHeight: 1,
-                            boxSizing: 'border-box',
                           }}
                         >
                           {badgeText}
                         </span>
                       )}
                     </div>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
 
-                    {!isCollapsed && (
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {item.label}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Expanded Mode: Red Circle/Pill Counter on the right side of the tab */}
-                  {!isCollapsed && badgeText && (
-                    <span
-                      style={{
-                        minWidth: 20,
-                        height: 20,
-                        padding: '0 6px',
-                        borderRadius: 9999,
-                        backgroundColor: '#e11d48',
-                        color: '#ffffff',
-                        fontSize: '0.68rem',
-                        fontWeight: 800,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.3)',
-                        lineHeight: 1,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {badgeText}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        ))}
-      </nav>
-
-      {/* 3. Bottom User Profile Card */}
-      <div
-        style={{
-          padding: '12px 14px',
-          borderTop: '1px solid #1e293b',
-          backgroundColor: '#071220',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          boxSizing: 'border-box',
-        }}
-      >
-        <div style={{ position: 'relative', width: 34, height: 34, flexShrink: 0 }}>
-          {safeUserPhoto ? (
-            <img
-              src={safeUserPhoto}
-              alt="Profile"
+        {/* 3. User Avatar Footer */}
+        <div
+          style={{
+            padding: '14px 0',
+            borderTop: `1px solid ${tokens.borderSubtle}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100%',
+            boxSizing: 'border-box',
+          }}
+          onMouseEnter={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setTooltip({
+              label: `${session?.faculty_name || session?.username || 'User'} (${role})`,
+              top: rect.top + rect.height / 2,
+              left: rect.right + 12,
+            });
+          }}
+          onMouseLeave={() => setTooltip(null)}
+        >
+          <div style={{ position: 'relative', width: 36, height: 36, flexShrink: 0 }}>
+            {safeUserPhoto ? (
+              <img
+                src={safeUserPhoto}
+                alt="Profile"
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: '50%',
+                  objectFit: 'cover',
+                  border: `2px solid ${brand.primary}`,
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: '50%',
+                  backgroundColor: tokens.primaryLight,
+                  color: brand.primary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 700,
+                  fontSize: '0.85rem',
+                  border: `1.5px solid ${tokens.borderSubtle}`,
+                }}
+              >
+                {session?.faculty_name ? session.faculty_name.charAt(0).toUpperCase() : 'U'}
+              </div>
+            )}
+            <span
               style={{
-                width: 34,
-                height: 34,
+                position: 'absolute',
+                bottom: 0,
+                right: 0,
+                width: 10,
+                height: 10,
+                backgroundColor: brand.success,
                 borderRadius: '50%',
-                objectFit: 'cover',
-                border: '1.5px solid #0284c7',
+                border: `2px solid ${tokens.bgSurface}`,
               }}
             />
-          ) : (
-            <div
-              style={{
-                width: 34,
-                height: 34,
-                borderRadius: '50%',
-                backgroundColor: '#1e293b',
-                color: '#38bdf8',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 700,
-                fontSize: '0.80rem',
-                border: '1.5px solid #334155',
-              }}
-            >
-              {session?.faculty_name ? session.faculty_name.charAt(0).toUpperCase() : 'U'}
-            </div>
-          )}
-          <span
-            style={{
-              position: 'absolute',
-              bottom: 0,
-              right: 0,
-              width: 9,
-              height: 9,
-              backgroundColor: '#10b981',
-              borderRadius: '50%',
-              border: '2px solid #071220',
-            }}
-          />
+          </div>
         </div>
+      </aside>
 
-        {!isCollapsed && (
-          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+      {/* Floating Hover Label (Immune to overflow clipping) */}
+      {tooltip && (
+        <div
+          style={{
+            position: 'fixed',
+            top: tooltip.top,
+            left: tooltip.left,
+            transform: 'translateY(-50%)',
+            zIndex: 9999,
+            backgroundColor: tokens.bgSurface,
+            color: tokens.textPrimary,
+            border: `1px solid ${tokens.borderSubtle}`,
+            borderRadius: 8,
+            padding: '7px 12px',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.16)',
+            fontSize: '0.80rem',
+            fontWeight: 700,
+            pointerEvents: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            whiteSpace: 'nowrap',
+            animation: 'fadeIn 0.12s ease',
+          }}
+        >
+          <span>{tooltip.label}</span>
+          {tooltip.badge && (
             <span
               style={{
-                fontSize: '0.82rem',
-                fontWeight: 700,
-                color: '#ffffff',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {session?.faculty_name || session?.username || 'User'}
-            </span>
-            <span
-              style={{
+                backgroundColor: brand.danger,
+                color: '#FFFFFF',
+                borderRadius: 9999,
+                padding: '1px 6px',
                 fontSize: '0.64rem',
                 fontWeight: 800,
-                color: '#38bdf8',
-                letterSpacing: '0.04em',
-                marginTop: 2,
               }}
             >
-              {role}
+              {tooltip.badge}
             </span>
-          </div>
-        )}
-      </div>
-    </aside>
+          )}
+        </div>
+      )}
+    </>
   );
 };
 

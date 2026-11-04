@@ -11,25 +11,23 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 
 from apps.academics.models import (
-    Student,
-    FacultyProfile,
     Schedule,
     StudentGateLog,
     SubjectAttendanceLog,
     GatePass,
+    Enrollment,
 )
 from apps.common.utils import (
     get_user_role,
     format_full_student_name,
     safe_photo_url,
 )
-from .common import resolve_faculty_for_user
 
 
 class LoafingMonitoringAPIView(APIView):
     """
     Scans live attendance records to detect class cutting, unauthorized campus
-    exits, ghost attendance, and faculty roaming outside campus during lectures.
+    exits, and faculty roaming outside campus during lectures.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -37,7 +35,6 @@ class LoafingMonitoringAPIView(APIView):
         user = request.user
         role = get_user_role(user)
 
-        # Only school leaders, administrators, and teachers can inspect loafing logs
         if not (user.is_superuser or role in ('ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY')):
             return Response({'error': 'Unauthorized access.'}, status=status.HTTP_403_FORBIDDEN)
 
@@ -48,20 +45,22 @@ class LoafingMonitoringAPIView(APIView):
         today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
         today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
 
-        # 1. Fetch live Gate Logs for today (Indexed scan)
-        gate_entries = StudentGateLog.objects.filter(
-            scan_time__gte=today_start,
-            scan_time__lte=today_end,
-            direction='IN'
-        ).values_list('student_id', flat=True)
-        gate_in_set = set(gate_entries)
+        # 1. Fetch live Gate Logs for today using indexed datetime bounds
+        gate_in_set = set(
+            StudentGateLog.objects.filter(
+                scan_time__gte=today_start,
+                scan_time__lte=today_end,
+                direction='IN'
+            ).values_list('student_id', flat=True)
+        )
 
-        gate_exits = StudentGateLog.objects.filter(
-            scan_time__gte=today_start,
-            scan_time__lte=today_end,
-            direction='OUT'
-        ).values_list('student_id', flat=True)
-        gate_out_set = set(gate_exits)
+        gate_out_set = set(
+            StudentGateLog.objects.filter(
+                scan_time__gte=today_start,
+                scan_time__lte=today_end,
+                direction='OUT'
+            ).values_list('student_id', flat=True)
+        )
 
         # 2. Fetch Active Approved Gate Passes
         active_student_passes = set(
@@ -83,34 +82,43 @@ class LoafingMonitoringAPIView(APIView):
         )
 
         # 3. Fetch active or completed class schedules for today
-        current_schedules = Schedule.objects.select_related(
-            'section', 'subject', 'faculty'
-        ).filter(
-            start_time__lte=now_time
+        current_schedules = list(
+            Schedule.objects.select_related('section', 'subject', 'faculty')
+            .filter(start_time__lte=now_time)
         )
 
-        # 4. Fetch subject attendance verified by teachers today
-        verified_attendance = SubjectAttendanceLog.objects.filter(
-            attendance_date=today,
-            status__in=['PRESENT', 'LATE']
-        ).values_list('student_id', 'schedule_id')
-        verified_set = set(verified_attendance)
+        # 4. Fetch verified subject attendance for today
+        verified_set = set(
+            SubjectAttendanceLog.objects.filter(
+                attendance_date=today,
+                status__in=['PRESENT', 'LATE']
+            ).values_list('student_id', 'schedule_id')
+        )
+
+        # Batch-prefetch all enrolled students for active sections (eliminates N+1 queries)
+        active_section_ids = [s.section_id for s in current_schedules if s.section_id]
+        students_by_section = {}
+        if active_section_ids:
+            enrollments = (
+                Enrollment.objects.filter(
+                    section_id__in=active_section_ids,
+                    status='ENROLLED',
+                    student__is_active=True
+                )
+                .select_related('student')
+            )
+            for enr in enrollments:
+                students_by_section.setdefault(enr.section_id, []).append(enr.student)
 
         anomalies = []
 
-        # =====================================================================
-        # CHECK A: STUDENT LOAFING & CUTTING
-        # =====================================================================
+        # CHECK A: Student Loafing & Cutting Detection
         for sched in current_schedules:
             sec = sched.section
             if not sec:
                 continue
 
-            enrolled_students = Student.objects.filter(
-                enrollments__section=sec,
-                enrollments__status='ENROLLED',
-                is_active=True
-            ).only('id', 'lrn', 'first_name', 'last_name', 'photo', 'parent_contact')
+            enrolled_students = students_by_section.get(sec.id, [])
 
             for st in enrolled_students:
                 is_in_gate = st.id in gate_in_set
@@ -118,7 +126,7 @@ class LoafingMonitoringAPIView(APIView):
                 has_pass = st.id in active_student_passes
                 is_scanned_in_class = (st.id, sched.id) in verified_set
 
-                # Anomaly 1: Cutting Class (Inside school gate, but missing from ongoing class)
+                # Anomaly 1: Cutting Class
                 if is_in_gate and not is_out_gate and not is_scanned_in_class and not has_pass:
                     anomalies.append({
                         'category': 'STUDENT',
@@ -131,13 +139,13 @@ class LoafingMonitoringAPIView(APIView):
                         'subject': sched.subject.title if sched.subject else '',
                         'teacher': sched.faculty.full_name if sched.faculty else 'Unassigned',
                         'room': sec.room_number or sched.room_number or 'Classroom',
-                        'details': 'Student scanned at school gate, but not verified inside ongoing subject class.',
+                        'details': 'Student scanned at campus gate, but missing from scheduled subject lecture.',
                         'detected_at': timezone.localtime().strftime('%I:%M %p'),
                         'parent_contact': st.parent_contact or '',
                         'photo_url': safe_photo_url(st.photo, request),
                     })
 
-                # Anomaly 2: Unauthorized Campus Exit (Left gate during class hours without pass)
+                # Anomaly 2: Unauthorized Campus Exit
                 elif is_out_gate and not has_pass:
                     anomalies.append({
                         'category': 'STUDENT',
@@ -150,15 +158,13 @@ class LoafingMonitoringAPIView(APIView):
                         'subject': sched.subject.title if sched.subject else '',
                         'teacher': sched.faculty.full_name if sched.faculty else 'Unassigned',
                         'room': sec.room_number or sched.room_number or 'Gate',
-                        'details': 'Student exited campus gate during active school timetable without a valid Gate Pass.',
+                        'details': 'Student exited campus perimeter during active class hours without Gate Pass.',
                         'detected_at': timezone.localtime().strftime('%I:%M %p'),
                         'parent_contact': st.parent_contact or '',
                         'photo_url': safe_photo_url(st.photo, request),
                     })
 
-        # =====================================================================
-        # CHECK B: FACULTY LOAFING (LECTURE PERIOD BUT OFF-CAMPUS)
-        # =====================================================================
+        # CHECK B: Faculty Telemetry Verification (Lecture Period Presence)
         active_lecture_schedules = Schedule.objects.select_related(
             'faculty', 'subject', 'section'
         ).filter(
@@ -176,7 +182,6 @@ class LoafingMonitoringAPIView(APIView):
             telemetry = cache.get(f"attendsure_faculty_telemetry_{fac.id}") or {}
             presence = telemetry.get('presence_status', 'OFF_CAMPUS')
 
-            # Teacher has a lecture right now, but is off campus without an approved pass
             if presence == 'OFF_CAMPUS' and not has_pass:
                 anomalies.append({
                     'category': 'FACULTY',
@@ -189,7 +194,7 @@ class LoafingMonitoringAPIView(APIView):
                     'subject': sched.subject.title if sched.subject else '',
                     'teacher': fac.full_name,
                     'room': sched.room_number or 'Assigned Room',
-                    'details': f"Teacher has scheduled lecture ({sched.start_time.strftime('%I:%M %p')} - {sched.end_time.strftime('%I:%M %p')}) but geofence telemetry reports off-campus.",
+                    'details': f"Teacher has scheduled lecture ({sched.start_time.strftime('%I:%M %p')} - {sched.end_time.strftime('%I:%M %p')}) but telemetry reports off-campus.",
                     'detected_at': timezone.localtime().strftime('%I:%M %p'),
                     'parent_contact': fac.contact_number or '',
                     'photo_url': safe_photo_url(fac.photo, request),

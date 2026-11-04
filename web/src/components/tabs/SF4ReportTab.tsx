@@ -5,7 +5,7 @@ import apiClient from '../../api/client';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
 import { ReportNavBar } from '../reports/ReportNavBar';
-import { PageSetupModal } from '../common/PageSetupModal';
+import { PageSetupModal } from '../modals/PageSetupModal';
 import { usePageSetup } from '../../hooks/usePageSetup';
 import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';

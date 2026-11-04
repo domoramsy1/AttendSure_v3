@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DepEd School Form 1 (SF1) - {{ section.name }}</title>
+    <style>
+        @page {
+            size: legal landscape;
+            margin: 8mm 6mm;
+        }
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 8.5pt;
+            color: #000;
+            background: #fff;
+            margin: 0;
+            padding: 10px;
+        }
+        .header-title {
+            text-align: center;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .header-title h2 {
+            margin: 0;
+            font-size: 11pt;
+            letter-spacing: 0.5px;
+        }
+        .header-title h1 {
+            margin: 2px 0 6px 0;
+            font-size: 13pt;
+        }
+        .meta-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 6px;
+            font-size: 8pt;
+        }
+        .meta-table td {
+            padding: 2px 4px;
+        }
+        .meta-box {
+            border: 1px solid #000;
+            padding: 2px 6px;
+            font-weight: bold;
+        }
+        .sf1-grid {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 7.5pt;
+        }
+        .sf1-grid th, .sf1-grid td {
+            border: 1px solid #000;
+            padding: 3px 2px;
+            text-align: center;
+            vertical-align: middle;
+        }
+        .sf1-grid th {
+            background-color: #e6e6e6;
+            font-weight: bold;
+        }
+        .text-left {
+            text-align: left !important;
+            padding-left: 4px !important;
+        }
+        .section-separator {
+            background-color: #d9d9d9;
+            font-weight: bold;
+            text-align: left;
+            padding-left: 8px;
+            font-size: 8pt;
+        }
+        .footer-table {
+            width: 100%;
+            margin-top: 15px;
+            border-collapse: collapse;
+            font-size: 8pt;
+        }
+        .sig-line {
+            border-bottom: 1px solid #000;
+            width: 240px;
+            margin: 30px auto 4px auto;
+        }
+        .print-btn-bar {
+            margin-bottom: 12px;
+            text-align: right;
+        }
+        .btn-print {
+            padding: 6px 16px;
+            background: #0056b3;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        @media print {
+            .print-btn-bar { display: none; }
+            body { padding: 0; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="print-btn-bar">
+    <button class="btn-print" onclick="window.print()">Print / Export PDF (Legal Landscape)</button>
+</div>
+
+<div class="header-title">
+    <h2>Republic of the Philippines &bull; Department of Education</h2>
+    <h1>School Form 1 (SF1) School Register</h1>
+    <div style="font-size: 8pt; margin-bottom: 6px;">(This replaces Form 1, Master List & STS Form 2-Family Background and Profile)</div>
+</div>
+
+<table class="meta-table">
+    <tr>
+        <td style="width: 8%;">School ID:</td>
+        <td style="width: 14%;"><span class="meta-box">{{ school.school_id }}</span></td>
+        <td style="width: 8%;">Region:</td>
+        <td style="width: 14%;"><span class="meta-box">{{ school.region }}</span></td>
+        <td style="width: 8%;">Division:</td>
+        <td style="width: 18%;"><span class="meta-box">{{ school.division }}</span></td>
+        <td style="width: 8%;">District:</td>
+        <td style="width: 22%;"><span class="meta-box">{{ school.district }}</span></td>
+    </tr>
+    <tr>
+        <td>School Name:</td>
+        <td colspan="3"><span class="meta-box" style="display:inline-block; width: 95%;">{{ school.school_name }}</span></td>
+        <td>School Year:</td>
+        <td><span class="meta-box">{{ academic_year.code }}</span></td>
+        <td>Grade Level:</td>
+        <td><span class="meta-box">{{ section.grade_level.name }}</span> &nbsp; Section: <span class="meta-box">{{ section.name }}</span></td>
+    </tr>
+</table>
+
+<table class="sf1-grid">
+    <thead>
+        <tr>
+            <th rowspan="2" style="width: 2%;">#</th>
+            <th rowspan="2" style="width: 7%;">LRN</th>
+            <th rowspan="2" style="width: 14%;">LEARNER'S NAME<br><span style="font-size: 6.5pt;">(Last Name, First Name, Middle Name)</span></th>
+            <th rowspan="2" style="width: 3%;">Sex</th>
+            <th rowspan="2" style="width: 5%;">Birth Date<br><span style="font-size: 6.5pt;">(mm/dd/yyyy)</span></th>
+            <th rowspan="2" style="width: 3%;">Age</th>
+            <th rowspan="2" style="width: 5%;">Mother<br>Tongue</th>
+            <th rowspan="2" style="width: 4%;">IP<br><span style="font-size: 6.5pt;">(Ethnic)</span></th>
+            <th rowspan="2" style="width: 6%;">Religion</th>
+            <th colspan="1" style="width: 15%;">ADDRESS</th>
+            <th colspan="2" style="width: 14%;">PARENTS' NAME</th>
+            <th colspan="2" style="width: 12%;">GUARDIAN</th>
+            <th rowspan="2" style="width: 5%;">Contact<br>Number</th>
+            <th rowspan="2" style="width: 5%;">REMARKS</th>
+        </tr>
+        <tr>
+            <th>House#/Street/Sitio/Barangay/City</th>
+            <th>Father's Name</th>
+            <th>Mother's Maiden Name</th>
+            <th>Name</th>
+            <th>Relationship</th>
+        </tr>
+    </thead>
+    <tbody>
+        <!-- MALE LEARNERS -->
+        <tr class="section-separator"><td colspan="16">MALE</td></tr>
+        {% for row in males %}
+        <tr>
+            <td>{{ forloop.counter }}</td>
+            <td style="font-weight: bold;">{{ row.lrn }}</td>
+            <td class="text-left" style="font-weight: bold;">{{ row.name }}</td>
+            <td>M</td>
+            <td>{{ row.birthdate }}</td>
+            <td>{{ row.age }}</td>
+            <td>{{ row.mother_tongue }}</td>
+            <td>{{ row.ethnic_group }}</td>
+            <td>{{ row.religion }}</td>
+            <td class="text-left">{{ row.address }}</td>
+            <td class="text-left">{{ row.father_name }}</td>
+            <td class="text-left">{{ row.mother_maiden_name }}</td>
+            <td class="text-left">{{ row.guardian_name }}</td>
+            <td>{{ row.guardian_rel }}</td>
+            <td>{{ row.parent_contact }}</td>
+            <td class="text-left">{{ row.remarks }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="16" style="padding: 6px;">No male learners enrolled.</td></tr>
+        {% endfor %}
+        <tr style="font-weight: bold; background: #fafafa;">
+            <td colspan="3" class="text-left">TOTAL MALE: {{ total_male }}</td>
+            <td colspan="13"></td>
+        </tr>
+
+        <!-- FEMALE LEARNERS -->
+        <tr class="section-separator"><td colspan="16">FEMALE</td></tr>
+        {% for row in females %}
+        <tr>
+            <td>{{ forloop.counter }}</td>
+            <td style="font-weight: bold;">{{ row.lrn }}</td>
+            <td class="text-left" style="font-weight: bold;">{{ row.name }}</td>
+            <td>F</td>
+            <td>{{ row.birthdate }}</td>
+            <td>{{ row.age }}</td>
+            <td>{{ row.mother_tongue }}</td>
+            <td>{{ row.ethnic_group }}</td>
+            <td>{{ row.religion }}</td>
+            <td class="text-left">{{ row.address }}</td>
+            <td class="text-left">{{ row.father_name }}</td>
+            <td class="text-left">{{ row.mother_maiden_name }}</td>
+            <td class="text-left">{{ row.guardian_name }}</td>
+            <td>{{ row.guardian_rel }}</td>
+            <td>{{ row.parent_contact }}</td>
+            <td class="text-left">{{ row.remarks }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="16" style="padding: 6px;">No female learners enrolled.</td></tr>
+        {% endfor %}
+        <tr style="font-weight: bold; background: #fafafa;">
+            <td colspan="3" class="text-left">TOTAL FEMALE: {{ total_female }}</td>
+            <td colspan="13"></td>
+        </tr>
+        <tr style="font-weight: bold; background: #eee; font-size: 8.5pt;">
+            <td colspan="3" class="text-left">COMBINED TOTAL: {{ total_combined }}</td>
+            <td colspan="13"></td>
+        </tr>
+    </tbody>
+</table>
+
+<table class="footer-table">
+    <tr>
+        <td style="width: 50%; text-align: center;">
+            Prepared by:
+            <div class="sig-line"></div>
+            <strong>{{ section.adviser.first_name }} {{ section.adviser.last_name }}</strong><br>
+            Class Adviser
+        </td>
+        <td style="width: 50%; text-align: center;">
+            Certified Correct:
+            <div class="sig-line"></div>
+            <strong>{{ school.principal.first_name }} {{ school.principal.last_name }}</strong><br>
+            School Principal
+        </td>
+    </tr>
+</table>
+
+</body>
+</html>
