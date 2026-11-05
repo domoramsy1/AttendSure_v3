@@ -1,5 +1,5 @@
 /**
- * AttendSure - Mobile Classroom QR Scanner Screen
+ * AttendSure - Continuous Hands-Free Classroom QR Scanner
  * File: mobile/src/screens/ScannerScreen.tsx
  */
 
@@ -59,13 +59,11 @@ interface SectionClass {
   students: StudentItem[];
 }
 
-interface ScanResultData {
-  student_id?: number;
+interface VerifiedScanItem {
+  student_id: number;
   name: string;
   lrn: string;
-  rfid_uid?: string;
   photo_url?: string | null;
-  parent_contact?: string;
   status: string;
   is_anomaly: boolean;
   remarks: string;
@@ -91,8 +89,8 @@ export const ScannerScreen: React.FC = () => {
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const [enableTorch, setEnableTorch] = useState<boolean>(false);
-  const [isScanningLocked, setIsScanningLocked] = useState<boolean>(false);
 
+  // Time & Status State
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const [scanMode, setScanMode] = useState<'PRESENT' | 'LATE'>('PRESENT');
@@ -100,24 +98,32 @@ export const ScannerScreen: React.FC = () => {
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [serverBase, setServerBase] = useState<string>('');
 
+  // Classroom & Student State
   const [sections, setSections] = useState<SectionClass[]>([]);
   const [activeSectionIndex, setActiveSectionIndex] = useState<number>(0);
   const [listLoading, setListLoading] = useState<boolean>(true);
   const [showStudentListModal, setShowStudentListModal] = useState<boolean>(false);
   const [showSectionPicker, setShowSectionPicker] = useState<boolean>(false);
 
+  // Continuous Scanning State (Hands-Free)
+  const [isProcessingScan, setIsProcessingScan] = useState<boolean>(false);
+  const [lastScannedStudent, setLastScannedStudent] = useState<VerifiedScanItem | null>(null);
+  const [recentScans, setRecentScans] = useState<VerifiedScanItem[]>([]);
+  const [scanPulseActive, setScanPulseActive] = useState<boolean>(false);
+
+  // Manual Backup State
   const [manualInputVisible, setManualInputVisible] = useState<boolean>(false);
   const [manualCode, setManualCode] = useState<string>('');
-  const [scanLoading, setScanLoading] = useState<boolean>(false);
-  const [modalVisible, setModalVisible] = useState<boolean>(false);
-  const [lastScannedStudent, setLastScannedStudent] = useState<ScanResultData | null>(null);
 
+  // Quick Editor Modal
   const [editingStudent, setEditingStudent] = useState<StudentItem | null>(null);
   const [editContact, setEditContact] = useState<string>('');
   const [editRfid, setEditRfid] = useState<string>('');
   const [savingProfile, setSavingProfile] = useState<boolean>(false);
 
-  const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Smart Anti-Duplicate Lock: Prevent double scanning the same student within 5 seconds
+  const lastScannedRef = useRef<{ code: string; timestamp: number }>({ code: '', timestamp: 0 });
+  const pulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resolvePhotoUri = useCallback(
     (url?: string | null): string | undefined => {
@@ -125,7 +131,9 @@ export const ScannerScreen: React.FC = () => {
       if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:image/')) {
         return url;
       }
-      return `${serverBase.replace(/\/+$/, '')}/${url.replace(/^\/+/, '')}`;
+      const cleanBase = serverBase.replace(/\/+$/, '');
+      const cleanPath = url.startsWith('/') ? url : `/${url}`;
+      return `${cleanBase}${cleanPath}`;
     },
     [serverBase]
   );
@@ -181,7 +189,7 @@ export const ScannerScreen: React.FC = () => {
         setActiveSectionIndex(0);
       }
     } catch {
-      Alert.alert('Server Notice', 'Could not sync assigned classes.');
+      Alert.alert('Connection Notice', 'Could not sync assigned classes.');
     } finally {
       setListLoading(false);
     }
@@ -193,24 +201,70 @@ export const ScannerScreen: React.FC = () => {
 
   const activeSection = sections[activeSectionIndex] || null;
 
-  const unlockScanning = () => {
-    if (lockTimerRef.current) clearTimeout(lockTimerRef.current);
-    lockTimerRef.current = setTimeout(() => setIsScanningLocked(false), 1200);
-  };
-
+  /**
+   * Continuous Hands-Free Scanning Engine
+   * Eliminates the "Continue" modal. Scans instantaneously, shows the student's photo,
+   * updates stats, and stays ready for the next QR code automatically.
+   */
   const processStudentScan = async (rawCode: string) => {
     const cleanCode = extractLrnOrToken(rawCode);
-    if (!cleanCode || isScanningLocked || scanLoading) return;
+    if (!cleanCode || isProcessingScan) return;
 
-    if (!activeSection) {
-      if (soundEnabled) await playScanErrorSound();
-      Alert.alert('No Class Selected', 'Please select an assigned class first.');
+    const now = Date.now();
+    // Anti-duplicate protection: Ignore if the same student card is held in front of the lens within 5 seconds
+    if (
+      lastScannedRef.current.code === cleanCode &&
+      now - lastScannedRef.current.timestamp < 5000
+    ) {
       return;
     }
 
-    setIsScanningLocked(true);
-    setScanLoading(true);
+    if (!activeSection) {
+      if (soundEnabled) await playScanErrorSound();
+      return;
+    }
 
+    // Set lock for current scan cycle
+    setIsProcessingScan(true);
+    lastScannedRef.current = { code: cleanCode, timestamp: now };
+
+    // 1. Optimistic Local Lookup: Find the student locally to show their picture with zero lag
+    const localMatch = activeSection.students.find(
+      (s) =>
+        s.lrn === cleanCode ||
+        s.qr_token === cleanCode ||
+        s.rfid_uid?.toUpperCase() === cleanCode.toUpperCase()
+    );
+
+    const scanTimeStr = new Date().toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+
+    const optimisticRecord: VerifiedScanItem = {
+      student_id: localMatch ? localMatch.id : 0,
+      name: localMatch ? localMatch.full_name : 'Verifying Student...',
+      lrn: localMatch ? localMatch.lrn : cleanCode,
+      photo_url: localMatch ? resolvePhotoUri(localMatch.photo_url) : null,
+      status: scanMode,
+      is_anomaly: false,
+      remarks: 'Attendance Recorded',
+      scan_time: scanTimeStr,
+    };
+
+    // Show student picture and details immediately
+    setLastScannedStudent(optimisticRecord);
+    setScanPulseActive(true);
+
+    if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
+    pulseTimerRef.current = setTimeout(() => setScanPulseActive(false), 900);
+
+    // Audio & Vibration Cues
+    if (soundEnabled) playScanSuccessSound().catch(() => {});
+    if (vibrateEnabled) Vibration.vibrate(60);
+
+    // 2. Transmit to PostgreSQL in Background
     try {
       const res = await apiClient.post('classroom/batch-scan/', {
         schedule_id: activeSection.schedule_id,
@@ -223,12 +277,10 @@ export const ScannerScreen: React.FC = () => {
 
       if (isAnomaly) {
         if (soundEnabled) await playScanWarningSound();
-        if (vibrateEnabled) Vibration.vibrate([0, 200, 100, 200]);
-      } else {
-        if (soundEnabled) await playScanSuccessSound();
-        if (vibrateEnabled) Vibration.vibrate(80);
+        if (vibrateEnabled) Vibration.vibrate([0, 150, 100, 150]);
       }
 
+      // Update student in local roster
       setSections((prev) =>
         prev.map((sec, idx) => {
           if (idx !== activeSectionIndex) return sec;
@@ -244,29 +296,41 @@ export const ScannerScreen: React.FC = () => {
         })
       );
 
-      setLastScannedStudent({
-        student_id: processed?.student_id,
-        name: processed?.name || 'Student Verified',
+      const confirmedRecord: VerifiedScanItem = {
+        student_id: processed?.student_id || optimisticRecord.student_id,
+        name: processed?.name || optimisticRecord.name,
         lrn: processed?.lrn || cleanCode,
-        rfid_uid: processed?.rfid_uid || '',
-        photo_url: resolvePhotoUri(processed?.photo_url) ?? null,
-        parent_contact: processed?.parent_contact || '',
+        photo_url: resolvePhotoUri(processed?.photo_url || localMatch?.photo_url) ?? null,
         status: resultingStatus,
         is_anomaly: isAnomaly,
-        remarks: processed?.remarks || 'Attendance recorded successfully.',
-        scan_time: processed?.scan_time || currentTime,
-      });
+        remarks: processed?.remarks || 'Attendance Verified',
+        scan_time: processed?.scan_time || scanTimeStr,
+      };
 
-      setModalVisible(true);
-      setManualInputVisible(false);
-      setManualCode('');
+      setLastScannedStudent(confirmedRecord);
+
+      // Append to the Recent Scans stream (keeps last 8 scans)
+      setRecentScans((prev) => [confirmedRecord, ...prev.filter((r) => r.lrn !== confirmedRecord.lrn)].slice(0, 8));
     } catch (err: any) {
       if (soundEnabled) await playScanErrorSound();
-      if (vibrateEnabled) Vibration.vibrate([0, 100, 100, 100]);
-      const msg = err?.response?.data?.detail || err?.response?.data?.error || 'Student scan failed.';
-      Alert.alert('Scan Result', msg, [{ text: 'OK', onPress: unlockScanning }]);
+      if (vibrateEnabled) Vibration.vibrate([0, 100, 80, 100]);
+
+      const errorMsg = err?.response?.data?.detail || err?.response?.data?.error || 'Student not registered in this class.';
+      setLastScannedStudent({
+        student_id: 0,
+        name: localMatch?.full_name || 'Unregistered Card',
+        lrn: cleanCode,
+        photo_url: localMatch ? resolvePhotoUri(localMatch.photo_url) : null,
+        status: 'UNREGISTERED',
+        is_anomaly: true,
+        remarks: errorMsg,
+        scan_time: scanTimeStr,
+      });
     } finally {
-      setScanLoading(false);
+      // Hands-free auto-release: Automatically ready for next student after 1 second
+      setTimeout(() => {
+        setIsProcessingScan(false);
+      }, 1100);
     }
   };
 
@@ -279,13 +343,15 @@ export const ScannerScreen: React.FC = () => {
       if (editRfid.trim()) payload.rfid_uid = editRfid.trim().toUpperCase();
 
       await apiClient.patch(`/students/${editingStudent.id}/`, payload);
-      Alert.alert('Saved', 'Student profile updated.');
+      Alert.alert('Saved', 'Student profile updated in database.');
 
       setSections((prev) =>
         prev.map((sec) => ({
           ...sec,
           students: sec.students.map((s) =>
-            s.id === editingStudent.id ? { ...s, parent_contact: editContact.trim(), rfid_uid: editRfid.trim().toUpperCase() } : s
+            s.id === editingStudent.id
+              ? { ...s, parent_contact: editContact.trim(), rfid_uid: editRfid.trim().toUpperCase() }
+              : s
           ),
         }))
       );
@@ -309,8 +375,8 @@ export const ScannerScreen: React.FC = () => {
       <View style={styles.clockCard}>
         <View style={styles.clockTopRow}>
           <View style={styles.terminalIndicator}>
-            <View style={styles.greenDot} />
-            <Text style={styles.terminalIndicatorText}>CLASSROOM ATTENDANCE SCANNER</Text>
+            <View style={styles.greenPulseDot} />
+            <Text style={styles.terminalIndicatorText}>CONTINUOUS QR SCANNER</Text>
           </View>
           <Text style={styles.clockDate}>{currentDate}</Text>
         </View>
@@ -338,7 +404,7 @@ export const ScannerScreen: React.FC = () => {
       {listLoading ? (
         <View style={styles.loadingBanner}>
           <ActivityIndicator size="small" color={COLORS.primary} />
-          <Text style={styles.loadingBannerText}>Loading assigned classes and student lists...</Text>
+          <Text style={styles.loadingBannerText}>Connecting to assigned class schedule...</Text>
         </View>
       ) : activeSection ? (
         <View style={styles.sectionHeaderBox}>
@@ -372,11 +438,11 @@ export const ScannerScreen: React.FC = () => {
       ) : (
         <View style={styles.emptySectionBanner}>
           <Ionicons name="alert-circle-outline" size={20} color="#b45309" />
-          <Text style={styles.emptySectionTitle}>No teaching schedules found for your profile.</Text>
+          <Text style={styles.emptySectionTitle}>No teaching schedules found for your profile today.</Text>
         </View>
       )}
 
-      {/* 3. Real-Time Counter Chips */}
+      {/* 3. Live Counters */}
       <View style={styles.counterRow}>
         <View style={[styles.counterBox, { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' }]}>
           <Text style={[styles.counterLabel, { color: '#059669' }]}>PRESENT</Text>
@@ -387,29 +453,29 @@ export const ScannerScreen: React.FC = () => {
           <Text style={[styles.counterValue, { color: '#b45309' }]}>{lateCount}</Text>
         </View>
         <View style={[styles.counterBox, { backgroundColor: '#fef2f2', borderColor: '#fecaca' }]}>
-          <Text style={[styles.counterLabel, { color: '#dc2626' }]}>FLAGGED</Text>
+          <Text style={[styles.counterLabel, { color: '#dc2626' }]}>REVIEW</Text>
           <Text style={[styles.counterValue, { color: '#b91c1c' }]}>{flaggedCount}</Text>
         </View>
         <View style={[styles.counterBox, { backgroundColor: '#f1f5f9', borderColor: '#e2e8f0' }]}>
-          <Text style={[styles.counterLabel, { color: '#64748b' }]}>UNSCANNED</Text>
+          <Text style={[styles.counterLabel, { color: '#64748b' }]}>PENDING</Text>
           <Text style={[styles.counterValue, { color: '#334155' }]}>{unscannedCount}</Text>
         </View>
       </View>
 
-      {/* 4. Scanning Camera Viewfinder */}
+      {/* 4. Continuous Scanning Viewfinder */}
       <View style={styles.viewfinderContainer}>
-        <View style={styles.cameraBox}>
+        <View style={[styles.cameraBox, scanPulseActive && styles.cameraBoxPulse]}>
           {Platform.OS === 'web' ? (
             <View style={styles.permissionBox}>
               <Ionicons name="qr-code-outline" size={36} color="#94a3b8" />
-              <Text style={styles.permissionText}>Optical scanning is ready. Point card QR or enter LRN below.</Text>
+              <Text style={styles.permissionText}>Camera active. Present student QR ID to lens.</Text>
             </View>
           ) : !permission?.granted ? (
             <View style={styles.permissionBox}>
               <Ionicons name="camera-outline" size={32} color="#94a3b8" />
-              <Text style={styles.permissionText}>Camera access required to scan student QR codes.</Text>
+              <Text style={styles.permissionText}>Camera permission required for attendance verification.</Text>
               <TouchableOpacity style={styles.grantBtn} onPress={requestPermission}>
-                <Text style={styles.grantBtnText}>Grant Permission</Text>
+                <Text style={styles.grantBtnText}>Grant Camera Permission</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -419,23 +485,19 @@ export const ScannerScreen: React.FC = () => {
                 facing={facing}
                 enableTorch={enableTorch}
                 barcodeScannerSettings={{ barcodeTypes: ['qr', 'code128', 'code39'] }}
-                onBarcodeScanned={isScanningLocked || scanLoading ? undefined : ({ data }) => processStudentScan(data)}
+                onBarcodeScanned={isProcessingScan ? undefined : ({ data }) => processStudentScan(data)}
               />
 
+              {/* Viewfinder Target Framing */}
               <View style={[styles.bracket, styles.bracketTL]} />
               <View style={[styles.bracket, styles.bracketTR]} />
               <View style={[styles.bracket, styles.bracketBL]} />
               <View style={[styles.bracket, styles.bracketBR]} />
 
-              {scanLoading ? (
-                <View style={styles.loadingOverlay}>
-                  <ActivityIndicator size="large" color="#ffffff" />
-                  <Text style={styles.loadingOverlayText}>Registering Attendance...</Text>
-                </View>
-              ) : (
-                <View style={[styles.laserLine, scanMode === 'LATE' && { backgroundColor: '#f59e0b' }]} />
-              )}
+              {/* Animated Continuous Laser */}
+              <View style={[styles.laserLine, scanMode === 'LATE' && { backgroundColor: '#f59e0b' }]} />
 
+              {/* Lens Controls */}
               <TouchableOpacity style={styles.soundToggleBtn} onPress={toggleSound}>
                 <Ionicons name={soundEnabled ? 'volume-high' : 'volume-mute'} size={16} color="#ffffff" />
               </TouchableOpacity>
@@ -445,13 +507,130 @@ export const ScannerScreen: React.FC = () => {
               <TouchableOpacity style={styles.cameraFlipBtn} onPress={() => setFacing((c) => (c === 'back' ? 'front' : 'back'))}>
                 <Ionicons name="camera-reverse-outline" size={18} color="#ffffff" />
               </TouchableOpacity>
+
+              {/* Ready Indicator Tag */}
+              <View style={styles.autoScanBadge}>
+                <View style={styles.greenPulseDot} />
+                <Text style={styles.autoScanBadgeText}>
+                  {isProcessingScan ? 'RECORDING SCAN...' : 'READY • AUTO-SCAN ACTIVE'}
+                </Text>
+              </View>
             </>
           )}
         </View>
-        <Text style={styles.helperText}>Scan student QR card to mark {scanMode}</Text>
       </View>
 
-      {/* 5. Utility Buttons */}
+      {/* 5. Instant Verification Card (Always Displays Student Photo and Info) */}
+      <View style={styles.instantCardContainer}>
+        {lastScannedStudent ? (
+          <View
+            style={[
+              styles.instantVerifiedCard,
+              lastScannedStudent.is_anomaly ? styles.cardBorderAnomaly : styles.cardBorderVerified,
+            ]}
+          >
+            {/* Real Student Photo */}
+            <View style={styles.verifiedPhotoFrame}>
+              {lastScannedStudent.photo_url ? (
+                <Image
+                  source={{ uri: lastScannedStudent.photo_url }}
+                  style={styles.verifiedStudentPhoto}
+                  contentFit="cover"
+                />
+              ) : (
+                <View style={styles.verifiedPhotoFallback}>
+                  <Text style={styles.verifiedInitials}>
+                    {lastScannedStudent.name.charAt(0)}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Student Details */}
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={styles.verifiedStudentName} numberOfLines={1}>
+                  {lastScannedStudent.name}
+                </Text>
+                <View
+                  style={[
+                    styles.verifiedStatusTag,
+                    lastScannedStudent.is_anomaly
+                      ? { backgroundColor: '#fee2e2' }
+                      : lastScannedStudent.status === 'LATE'
+                      ? { backgroundColor: '#fef3c7' }
+                      : { backgroundColor: '#dcfce7' },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.verifiedStatusTagText,
+                      lastScannedStudent.is_anomaly
+                        ? { color: '#dc2626' }
+                        : lastScannedStudent.status === 'LATE'
+                        ? { color: '#b45309' }
+                        : { color: '#15803d' },
+                    ]}
+                  >
+                    {lastScannedStudent.status}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={styles.verifiedStudentLrn}>
+                LRN: {lastScannedStudent.lrn} &bull; {lastScannedStudent.scan_time}
+              </Text>
+              <Text
+                style={[
+                  styles.verifiedStudentRemarks,
+                  lastScannedStudent.is_anomaly ? { color: '#dc2626' } : { color: '#059669' },
+                ]}
+                numberOfLines={1}
+              >
+                {lastScannedStudent.remarks}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.instantStandbyCard}>
+            <Ionicons name="scan-outline" size={24} color="#004b87" />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.instantStandbyTitle}>Ready for QR ID Card</Text>
+              <Text style={styles.instantStandbySub}>
+                Position student QR code within viewfinder. Scans automatically without button press.
+              </Text>
+            </View>
+          </View>
+        )}
+      </View>
+
+      {/* 6. Recent Scans Live Stream (Innovation: Instant Visual Roster) */}
+      {recentScans.length > 0 && (
+        <View style={styles.recentScansSection}>
+          <Text style={styles.recentScansHeaderTitle}>Recently Scanned in this Session:</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.recentScansScroll}>
+            {recentScans.map((item, index) => (
+              <View key={`${item.lrn}-${index}`} style={styles.recentScanChip}>
+                <View style={styles.recentAvatarWrap}>
+                  {item.photo_url ? (
+                    <Image source={{ uri: item.photo_url }} style={styles.recentAvatarImg} contentFit="cover" />
+                  ) : (
+                    <Text style={styles.recentInitials}>{item.name.charAt(0)}</Text>
+                  )}
+                </View>
+                <View style={{ marginLeft: 6 }}>
+                  <Text style={styles.recentScanName} numberOfLines={1}>
+                    {item.name.split(' ')[0]}
+                  </Text>
+                  <Text style={styles.recentScanTime}>{item.scan_time.split(' ')[0]}</Text>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* 7. Class Roster & Manual LRN Buttons */}
       <View style={styles.utilityRow}>
         <TouchableOpacity
           style={[styles.studentListBtn, !activeSection && styles.btnDisabled]}
@@ -460,7 +639,7 @@ export const ScannerScreen: React.FC = () => {
         >
           <Ionicons name="people-outline" size={16} color={COLORS.primary} />
           <Text style={styles.studentListBtnText}>
-            Student List ({activeSection?.total_students || 0})
+            Class Roster ({activeSection?.total_students || 0})
           </Text>
         </TouchableOpacity>
 
@@ -474,7 +653,7 @@ export const ScannerScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* 6. Section Picker Modal */}
+      {/* 8. Class Selector Modal */}
       <Modal visible={showSectionPicker} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.pickerModalSheet}>
@@ -512,13 +691,13 @@ export const ScannerScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* 7. Class Student List Modal */}
+      {/* 9. Class Roster Modal */}
       <Modal visible={showStudentListModal} animationType="slide">
         <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
           <View style={styles.studentListModalHeader}>
             <View>
-              <Text style={styles.studentListModalTitle}>{activeSection?.section_name} Student List</Text>
-              <Text style={styles.studentListModalSub}>Tap student to mark present, or tap pencil to edit</Text>
+              <Text style={styles.studentListModalTitle}>{activeSection?.section_name} Class Roster</Text>
+              <Text style={styles.studentListModalSub}>Tap any student to record attendance manually</Text>
             </View>
             <TouchableOpacity onPress={() => setShowStudentListModal(false)} style={styles.closeBtn}>
               <Ionicons name="close" size={24} color="#64748b" />
@@ -597,7 +776,7 @@ export const ScannerScreen: React.FC = () => {
         </SafeAreaView>
       </Modal>
 
-      {/* 8. Manual LRN Input Dialog */}
+      {/* 10. Manual LRN Modal */}
       <Modal visible={manualInputVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.inputModalSheet}>
@@ -617,8 +796,11 @@ export const ScannerScreen: React.FC = () => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.submitBtn}
-                onPress={() => processStudentScan(manualCode)}
-                disabled={scanLoading}
+                onPress={() => {
+                  setManualInputVisible(false);
+                  processStudentScan(manualCode);
+                  setManualCode('');
+                }}
               >
                 <Text style={styles.submitBtnText}>Verify LRN</Text>
               </TouchableOpacity>
@@ -627,56 +809,7 @@ export const ScannerScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* 9. Scan Success / Anomaly Result Modal */}
-      <Modal visible={modalVisible} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalSheet}>
-            <Ionicons
-              name={lastScannedStudent?.is_anomaly ? 'warning' : 'checkmark-circle'}
-              size={28}
-              color={lastScannedStudent?.is_anomaly ? '#d97706' : '#10b981'}
-            />
-            <Text style={styles.studentModalName}>{lastScannedStudent?.name}</Text>
-            <Text style={styles.studentModalLrn}>LRN: {lastScannedStudent?.lrn}</Text>
-
-            {lastScannedStudent?.is_anomaly && (
-              <View style={styles.anomalyBanner}>
-                <Ionicons name="shield-outline" size={16} color="#b45309" />
-                <Text style={styles.anomalyBannerText}>{lastScannedStudent.remarks}</Text>
-              </View>
-            )}
-
-            <View
-              style={[
-                styles.statusPillLarge,
-                lastScannedStudent?.is_anomaly && { backgroundColor: '#fef3c7' },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.statusPillTitle,
-                  lastScannedStudent?.is_anomaly && { color: '#92400e' },
-                ]}
-              >
-                {lastScannedStudent?.status}
-              </Text>
-              <Text style={styles.statusPillTime}>Recorded at {lastScannedStudent?.scan_time}</Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.confirmModalBtn}
-              onPress={() => {
-                setModalVisible(false);
-                unlockScanning();
-              }}
-            >
-              <Text style={styles.confirmModalBtnText}>Continue</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* 10. Student Profile Quick Editor */}
+      {/* 11. Student Profile Quick Editor */}
       {editingStudent && (
         <Modal visible={Boolean(editingStudent)} transparent animationType="slide">
           <View style={styles.modalBackdrop}>
@@ -723,8 +856,8 @@ const styles = StyleSheet.create({
   clockCard: { backgroundColor: '#ffffff', borderRadius: 16, padding: 12, borderWidth: 1, borderColor: '#e2e8f0', marginTop: 4 },
   clockTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   terminalIndicator: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  greenDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#10b981' },
-  terminalIndicatorText: { fontSize: 9, fontWeight: '800', color: '#004b87' },
+  greenPulseDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#10b981' },
+  terminalIndicatorText: { fontSize: 9.5, fontWeight: '800', color: '#004b87', letterSpacing: 0.3 },
   clockDate: { fontSize: 10, color: '#64748b', fontWeight: '600' },
   clockMainRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
   clockDigits: { fontSize: 22, fontWeight: '800', color: '#003460' },
@@ -749,8 +882,11 @@ const styles = StyleSheet.create({
   counterBox: { flex: 1, borderRadius: 12, padding: 8, borderWidth: 1, alignItems: 'center' },
   counterLabel: { fontSize: 8.5, fontWeight: '800' },
   counterValue: { fontSize: 17, fontWeight: '800', marginTop: 1 },
+
+  // Camera Box & Continuous Viewfinder
   viewfinderContainer: { alignItems: 'center', marginTop: 8 },
-  cameraBox: { width: '100%', height: 215, borderRadius: 18, backgroundColor: '#0f172a', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  cameraBox: { width: '100%', height: 215, borderRadius: 18, backgroundColor: '#0f172a', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#e2e8f0' },
+  cameraBoxPulse: { borderColor: '#10b981' },
   permissionBox: { padding: 20, alignItems: 'center' },
   permissionText: { fontSize: 11, color: '#cbd5e1', marginTop: 10, marginBottom: 12, textAlign: 'center' },
   grantBtn: { backgroundColor: '#004b87', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
@@ -764,15 +900,47 @@ const styles = StyleSheet.create({
   soundToggleBtn: { position: 'absolute', top: 10, left: 10, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(15, 23, 42, 0.75)', alignItems: 'center', justifyContent: 'center' },
   torchToggleBtn: { position: 'absolute', top: 10, left: 48, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(15, 23, 42, 0.75)', alignItems: 'center', justifyContent: 'center' },
   cameraFlipBtn: { position: 'absolute', top: 10, right: 10, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(15, 23, 42, 0.75)', alignItems: 'center', justifyContent: 'center' },
-  loadingOverlay: { position: 'absolute', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.75)', alignItems: 'center', justifyContent: 'center' },
-  loadingOverlayText: { color: '#ffffff', fontSize: 11, fontWeight: '600', marginTop: 8 },
-  helperText: { fontSize: 10.5, color: '#64748b', marginTop: 6, fontWeight: '600' },
-  utilityRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  autoScanBadge: { position: 'absolute', bottom: 10, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(15, 23, 42, 0.85)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  autoScanBadgeText: { color: '#ffffff', fontSize: 9.5, fontWeight: '800', letterSpacing: 0.4 },
+
+  // Instant Verification Card
+  instantCardContainer: { marginTop: 8 },
+  instantVerifiedCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 14, padding: 12, borderWidth: 1.5 },
+  cardBorderVerified: { borderColor: '#10b981' },
+  cardBorderAnomaly: { borderColor: '#ef4444' },
+  verifiedPhotoFrame: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#f1f5f9', overflow: 'hidden', borderWidth: 1.5, borderColor: '#cbd5e1', alignItems: 'center', justifyContent: 'center' },
+  verifiedStudentPhoto: { width: '100%', height: '100%' },
+  verifiedPhotoFallback: { width: '100%', height: '100%', backgroundColor: '#004b87', alignItems: 'center', justifyContent: 'center' },
+  verifiedInitials: { color: '#ffffff', fontSize: 18, fontWeight: '800' },
+  verifiedStudentName: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
+  verifiedStatusTag: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  verifiedStatusTagText: { fontSize: 9.5, fontWeight: '800' },
+  verifiedStudentLrn: { fontSize: 11, color: '#64748b', marginTop: 1 },
+  verifiedStudentRemarks: { fontSize: 10.5, fontWeight: '700', marginTop: 2 },
+  instantStandbyCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 14, padding: 12, borderWidth: 1, borderColor: '#e2e8f0' },
+  instantStandbyTitle: { fontSize: 13, fontWeight: '800', color: '#004b87' },
+  instantStandbySub: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
+
+  // Recent Scans Stream
+  recentScansSection: { marginTop: 8 },
+  recentScansHeaderTitle: { fontSize: 10.5, fontWeight: '800', color: '#64748b', marginBottom: 4 },
+  recentScansScroll: { gap: 8, paddingVertical: 2 },
+  recentScanChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 20, paddingVertical: 4, paddingHorizontal: 8, borderWidth: 1, borderColor: '#e2e8f0' },
+  recentAvatarWrap: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#e2e8f0', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  recentAvatarImg: { width: '100%', height: '100%' },
+  recentInitials: { fontSize: 10, fontWeight: '800', color: '#475569' },
+  recentScanName: { fontSize: 10.5, fontWeight: '700', color: '#0f172a' },
+  recentScanTime: { fontSize: 8.5, color: '#94a3b8' },
+
+  // Utility Buttons
+  utilityRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 8 },
   studentListBtn: { flex: 1.5, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#e6f0fa', borderRadius: 10, paddingVertical: 10, borderWidth: 1, borderColor: '#b8d6f0' },
   studentListBtnText: { fontSize: 11.5, fontWeight: '700', color: '#004b87' },
   manualBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#ffffff', borderRadius: 10, paddingVertical: 10, borderWidth: 1, borderColor: '#cbd5e1' },
   manualBtnText: { fontSize: 11.5, fontWeight: '700', color: '#334155' },
   btnDisabled: { opacity: 0.5 },
+
+  // Modals
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.65)', justifyContent: 'center', alignItems: 'center', padding: 24 },
   pickerModalSheet: { width: '100%', maxHeight: '60%', backgroundColor: '#ffffff', borderRadius: 20, padding: 18 },
   pickerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
@@ -802,16 +970,6 @@ const styles = StyleSheet.create({
   cancelBtnText: { fontSize: 12, fontWeight: '600', color: '#475569' },
   submitBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, backgroundColor: '#004b87' },
   submitBtnText: { fontSize: 12, fontWeight: '700', color: '#ffffff' },
-  modalSheet: { width: '100%', backgroundColor: '#ffffff', borderRadius: 22, padding: 20, alignItems: 'center' },
-  studentModalName: { fontSize: 16, fontWeight: '800', color: '#0f172a', marginTop: 8 },
-  studentModalLrn: { fontSize: 11.5, color: '#64748b', marginTop: 2 },
-  statusPillLarge: { width: '100%', backgroundColor: '#ecfdf5', borderRadius: 10, paddingVertical: 8, alignItems: 'center', marginTop: 12 },
-  statusPillTitle: { fontSize: 14, fontWeight: '800', color: '#047857' },
-  statusPillTime: { fontSize: 11, color: '#065f46', marginTop: 1 },
-  anomalyBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fde68a', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, marginTop: 10 },
-  anomalyBannerText: { flex: 1, fontSize: 10.5, color: '#92400e', fontWeight: '700' },
-  confirmModalBtn: { width: '100%', backgroundColor: '#004b87', borderRadius: 10, paddingVertical: 11, alignItems: 'center', marginTop: 14 },
-  confirmModalBtnText: { color: '#ffffff', fontSize: 12.5, fontWeight: '800' },
   editProfileModalCard: { width: '100%', backgroundColor: '#ffffff', borderRadius: 20, padding: 18 },
   editProfileTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
 });

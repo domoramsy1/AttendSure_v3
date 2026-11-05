@@ -22,6 +22,7 @@ from apps.api.views.gate import GateLogsAPIView, KioskScanAPIView
 from apps.api.views.geofence import (
     GeofenceStatusAPIView,
     GeofenceCheckInAPIView,
+    GeofenceAuditHistoryAPIView,
     FacultyDeviceResetAPIView,
 )
 from apps.api.views.reports import (
@@ -60,10 +61,10 @@ from apps.api.views.viewsets import (
     UserManagementViewSet,
     AcademicYearViewSet,
     EnrollmentViewSet,
-
 )
-
 from apps.api.views.monitoring import LoafingMonitoringAPIView
+
+from apps.api.views.activity import UserActivityLogsAPIView
 
 router = DefaultRouter()
 router.register(r'rooms', RoomViewSet, basename='room')
@@ -83,6 +84,33 @@ router.register(r'academic-years', AcademicYearViewSet, basename='academic-year'
 router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
 
 urlpatterns = [
+    # Direct fallbacks for SMS actions to ensure instant resolution
+    path(
+        'sms-outbox/clear-pending/',
+        SmsOutboxViewSet.as_view({'delete': 'clear_pending', 'post': 'clear_pending'}),
+        name='sms-outbox-clear-pending'
+    ),
+    path(
+        'sms-outbox/delete-delivered/',
+        SmsOutboxViewSet.as_view({'delete': 'delete_delivered', 'post': 'delete_delivered'}),
+        name='sms-outbox-delete-delivered'
+    ),
+    path(
+        'sms-outbox/retry-all-failed/',
+        SmsOutboxViewSet.as_view({'post': 'retry_all_failed'}),
+        name='sms-outbox-retry-all'
+    ),
+    path(
+        'sms-outbox/metrics/',
+        SmsOutboxViewSet.as_view({'get': 'metrics'}),
+        name='sms-outbox-metrics'
+    ),
+    path(
+        'sms-outbox/broadcast/',
+        SmsOutboxViewSet.as_view({'post': 'broadcast_announcement'}),
+        name='sms-outbox-broadcast'
+    ),
+
     # Router endpoints
     path('', include(router.urls)),
 
@@ -93,7 +121,7 @@ urlpatterns = [
     path('auth/validate-field/', LiveFieldValidationAPIView.as_view(), name='auth-validate-field'),
     path('auth/push-token/', RegisterPushTokenAPIView.as_view(), name='auth-push-token'),
 
-    # Classroom Attendance & Rosters
+    # Classroom Attendance
     path('classroom/class_list/', ClassListAPIView.as_view(), name='classroom-class-list'),
     path('classroom/my-classes/', ClassListAPIView.as_view(), name='classroom-my-classes'),
     path('classroom/student_list/', FacultyClassroomListAPIView.as_view(), name='classroom-student-list'),
@@ -107,10 +135,13 @@ urlpatterns = [
     path('gate/scan/', KioskScanAPIView.as_view(), name='gate-scan'),
     path('kiosk/scan/', KioskScanAPIView.as_view(), name='kiosk-scan'),
 
-    # Geofence & Mobile Telemetry
+    # Geofence, Hardware Telemetry & Loafing Audit
     path('geofence/', GeofenceStatusAPIView.as_view(), name='geofence-status'),
     path('geofence/checkin/', GeofenceCheckInAPIView.as_view(), name='geofence-checkin'),
+    path('geofence/audit/', GeofenceAuditHistoryAPIView.as_view(), name='geofence-audit-history'),
     path('geofence/reset-device/<int:pk>/', FacultyDeviceResetAPIView.as_view(), name='geofence-reset-device'),
+    path('faculty/<int:pk>/reset-device/', FacultyDeviceResetAPIView.as_view(), name='faculty-reset-device-alias'),
+    path('telemetry/heartbeat/', GeofenceCheckInAPIView.as_view(), name='telemetry-heartbeat'),
 
     # DepEd Reports & DTR
     path('reports/sf1/<int:section_id>/', DepEdSF1DataAPIView.as_view(), name='reports-sf1'),
@@ -123,26 +154,23 @@ urlpatterns = [
     path('reports/dtr/', DTRListAPIView.as_view(), name='reports-dtr-list'),
     path('reports/dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='reports-dtr-detail'),
 
-    # SMS Gateway
+    # Hardware SMS Daemon
     path('sms/pending/', PendingSmsDispatchAPIView.as_view(), name='sms-pending'),
     path('sms/bulk-status/', BulkSmsStatusAPIView.as_view(), name='sms-bulk-status'),
     path('sms/mark-status/<int:pk>/', MarkSmsStatusAPIView.as_view(), name='sms-mark-status'),
-    path('sms/test-gateway/', test_sms_gateway, name='sms-test-gateway'),  # Fixes POST /api/sms/test-gateway/
+    path('sms/test-gateway/', test_sms_gateway, name='sms-test-gateway'),
 
     # Telemetry Scanners
-    path('telemetry/ping-scanners/', ping_scanners, name='telemetry-ping-scanners'),  # Fixes POST /api/telemetry/ping-scanners/
+    path('telemetry/ping-scanners/', ping_scanners, name='telemetry-ping-scanners'),
 
-    # Core System Maintenance
-    path('core/maintenance/db-check/', db_check, name='core-maintenance-db-check'),          # Fixes POST /api/core/maintenance/db-check/
-    path('core/maintenance/flush-cache/', flush_cache, name='core-maintenance-flush-cache'),  # Fixes POST /api/core/maintenance/flush-cache/
+    # Core Maintenance
+    path('core/maintenance/db-check/', db_check, name='core-maintenance-db-check'),
+    path('core/maintenance/flush-cache/', flush_cache, name='core-maintenance-flush-cache'),
 
-    # Legacy Utility Routes
+    # Settings & Monitoring
     path('settings/school/', SchoolSettingsAPIView.as_view(), name='settings-school'),
     path('calendar/exceptions/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions'),
-    path('utils/ping-scanners/', ping_scanners, name='utils-ping-scanners'),
-    path('utils/test-sms-gateway/', test_sms_gateway, name='utils-test-sms'),
-    path('utils/db-check/', db_check, name='utils-db-check'),
-    path('utils/flush-cache/', flush_cache, name='utils-flush-cache'),
-
     path('monitoring/loafing/', LoafingMonitoringAPIView.as_view(), name='monitoring-loafing'),
+
+    path('activity-logs/', UserActivityLogsAPIView.as_view(), name='user-activity-logs'),
 ]

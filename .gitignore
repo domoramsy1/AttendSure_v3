@@ -19,8 +19,7 @@ local_settings.py
 *.key
 *.crt
 *.cert
-.bat
-.ps1
+
 # Cloud Provider Service Accounts
 google-services.json
 GoogleService-Info.plist

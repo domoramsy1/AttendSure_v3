@@ -16,12 +16,8 @@ import {
   Database,
   MessageSquare,
   Unlock,
-  ChevronRight,
-  Info,
   X,
   ShieldCheck,
-  Cpu,
-  Layers,
 } from 'lucide-react';
 
 interface SystemHealthModalProps {

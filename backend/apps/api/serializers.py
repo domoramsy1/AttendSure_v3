@@ -1,11 +1,13 @@
 """
-AttendSure - DRF Serializers & Data Validation Architecture
+AttendSure V3 - Complete Data Serializers & Security Validation
 File: backend/apps/api/serializers.py
 """
 
 import base64
 import secrets
 import uuid
+import re
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -22,20 +24,19 @@ from apps.academics.models import (
     GatePass,
     GradeLevel,
     IoTKiosk,
+    Room,
     Schedule,
-    ScheduleDay,
     SchoolProfile,
     Section,
     SmsOutbox,
     Student,
     Subject,
     UserProfile,
-    USER_ROLE_CHOICES,
 )
 
 User = get_user_model()
 
-# Cybersecurity: 5 MB upload limit to prevent Denial-of-Service (DoS) via memory exhaustion
+# Security controls: 5 MB cap defends against buffer overflow and memory denial-of-service
 MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
@@ -56,12 +57,8 @@ def ensure_user_profile_columns():
         pass
 
 
-# ============================================================================
-# SHARED MEDIA & SECURE BASE64 IMAGE PARSER
-# ============================================================================
-
 def safe_photo_url(photo_field, request=None):
-    """Safely converts an ImageField or relative URI into an absolute URL."""
+    """Converts image references safely into readable web URLs."""
     if not photo_field:
         return None
     try:
@@ -89,10 +86,7 @@ def safe_photo_url(photo_field, request=None):
 
 
 class FlexibleImageField(serializers.Field):
-    """
-    Validates and converts incoming Base64 image payloads into Django ContentFiles.
-    Enforces format whitelisting and strict file size checks.
-    """
+    """Sanitizes incoming Base64 image files and rejects malicious payloads."""
 
     def to_representation(self, value):
         request = self.context.get('request')
@@ -120,7 +114,7 @@ class FlexibleImageField(serializers.Field):
 
                     if ext not in ALLOWED_IMAGE_EXTENSIONS:
                         raise serializers.ValidationError(
-                            f"Unsupported image format (.{ext}). Allowed: PNG, JPG, WEBP."
+                            f"Unsupported format (.{ext}). Allowed: PNG, JPG, WEBP."
                         )
 
                     decoded_data = base64.b64decode(img_str, validate=True)
@@ -132,7 +126,7 @@ class FlexibleImageField(serializers.Field):
                 except serializers.ValidationError:
                     raise
                 except Exception as exc:
-                    raise serializers.ValidationError(f"Invalid Base64 image: {exc}")
+                    raise serializers.ValidationError(f"Invalid image data: {exc}")
 
             if clean.startswith(('http://', 'https://', '/media/')):
                 raise serializers.SkipField()
@@ -140,9 +134,137 @@ class FlexibleImageField(serializers.Field):
         raise serializers.SkipField()
 
 
-# ============================================================================
-# 1. STUDENT SERIALIZER
-# ============================================================================
+# ==============================================================================
+# 1. ACADEMIC & PHYSICAL STRUCTURE SERIALIZERS
+# ==============================================================================
+
+class RoomSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Room
+        fields = '__all__'
+
+
+class GradeLevelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GradeLevel
+        fields = '__all__'
+
+
+class AcademicYearSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcademicYear
+        fields = '__all__'
+
+
+class SubjectSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source='title', required=False)
+
+    class Meta:
+        model = Subject
+        fields = ['id', 'code', 'title', 'name', 'units']
+
+
+class SectionSerializer(serializers.ModelSerializer):
+    grade_level_name = serializers.CharField(source='grade_level.name', read_only=True)
+    academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
+    adviser_name = serializers.SerializerMethodField()
+    room_name = serializers.CharField(source='room.name', read_only=True)
+    student_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Section
+        fields = [
+            'id',
+            'name',
+            'code',
+            'grade_level',
+            'grade_level_name',
+            'academic_year',
+            'academic_year_name',
+            'adviser',
+            'adviser_name',
+            'room',
+            'room_name',
+            'room_number',
+            'student_count',
+            'is_active',
+        ]
+        extra_kwargs = {
+            'code': {'required': False, 'allow_blank': True},
+            'room_number': {'required': False, 'allow_blank': True},
+            'adviser': {'required': False, 'allow_null': True},
+            'room': {'required': False, 'allow_null': True},
+            'academic_year': {'required': False, 'allow_null': True},
+        }
+
+    def get_adviser_name(self, obj):
+        if getattr(obj, 'adviser', None):
+            return obj.adviser.full_name
+        return "No adviser"
+
+    def get_student_count(self, obj):
+        if hasattr(obj, 'enrollments'):
+            return obj.enrollments.filter(status='ENROLLED').count()
+        return 0
+
+
+class ScheduleSerializer(serializers.ModelSerializer):
+    section_name = serializers.CharField(source='section.name', read_only=True)
+    subject_title = serializers.CharField(source='subject.title', read_only=True)
+    subject_code = serializers.CharField(source='subject.code', read_only=True)
+    faculty_name = serializers.SerializerMethodField()
+    days_of_week = serializers.SerializerMethodField()
+    schedule_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Schedule
+        fields = [
+            'id',
+            'schedule_code',
+            'section',
+            'section_id',
+            'section_name',
+            'subject',
+            'subject_id',
+            'subject_title',
+            'subject_code',
+            'faculty',
+            'faculty_id',
+            'faculty_name',
+            'room_number',
+            'days_of_week',
+            'start_time',
+            'end_time',
+        ]
+
+    def get_schedule_code(self, obj):
+        return f"SCH-{obj.id:04d}"
+
+    def get_faculty_name(self, obj):
+        if getattr(obj, 'faculty', None):
+            return obj.faculty.full_name
+        return "Unassigned"
+
+    def get_days_of_week(self, obj):
+        days_qs = obj.days.all().order_by('day_of_week')
+        if not days_qs.exists():
+            return "MON-FRI"
+        nums = [d.day_of_week for d in days_qs]
+        if nums == [1, 2, 3, 4, 5]:
+            return "MON-FRI"
+        if nums == [1, 3, 5]:
+            return "MWF"
+        if nums == [2, 4]:
+            return "TTH"
+        if nums == [6]:
+            return "SAT"
+        labels = {1: 'MON', 2: 'TUE', 3: 'WED', 4: 'THU', 5: 'FRI', 6: 'SAT', 7: 'SUN'}
+        return ",".join([labels.get(n, str(n)) for n in nums])
+
+
+# ==============================================================================
+# 2. STUDENT & ENROLLMENT SERIALIZERS
+# ==============================================================================
 
 class StudentSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
@@ -194,7 +316,7 @@ class StudentSerializer(serializers.ModelSerializer):
     def validate_lrn(self, value):
         clean_lrn = value.strip()
         if not clean_lrn.isdigit():
-            raise serializers.ValidationError("LRN must contain numbers only.")
+            raise serializers.ValidationError("LRN must contain digits only.")
         return clean_lrn
 
     def validate_rfid_uid(self, value):
@@ -284,15 +406,35 @@ class StudentSerializer(serializers.ModelSerializer):
         return student
 
 
-# ============================================================================
-# 2. FACULTY PROFILE & DROPDOWN SERIALIZERS
-# ============================================================================
+class EnrollmentSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='student.full_name', read_only=True)
+    section_name = serializers.CharField(source='section.name', read_only=True)
+    grade_level = serializers.CharField(source='section.grade_level.name', read_only=True)
+
+    class Meta:
+        model = Enrollment
+        fields = [
+            'id',
+            'student',
+            'student_name',
+            'section',
+            'section_name',
+            'grade_level',
+            'academic_year',
+            'status',
+            'enrolled_date',
+        ]
+        extra_kwargs = {
+            'academic_year': {'required': False, 'allow_null': True},
+            'enrolled_date': {'required': False},
+        }
+
+
+# ==============================================================================
+# 3. FACULTY & HARDWARE SERIALIZERS
+# ==============================================================================
 
 class FacultyDropdownSerializer(serializers.ModelSerializer):
-    """
-    Cybersecurity Hardened: Lightweight serializer for scheduling dropdowns.
-    Only exposes non-sensitive academic credentials. Never leaks RFID or device tokens.
-    """
     full_name = serializers.CharField(read_only=True)
     photo_url = serializers.SerializerMethodField()
 
@@ -374,76 +516,9 @@ class FacultyProfileSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         if not validated_data.get('qr_token'):
             validated_data['qr_token'] = secrets.token_urlsafe(32)
-        # Default can_teach to True on creation if not explicitly specified
         if 'can_teach' not in validated_data:
             validated_data['can_teach'] = True
         return super().create(validated_data)
-
-
-# ============================================================================
-# 3. SCHEDULE, SUBJECT, KIOSK & GATE PASS SERIALIZERS
-# ============================================================================
-
-class SubjectSerializer(serializers.ModelSerializer):
-    name = serializers.CharField(source='title', required=False)
-
-    class Meta:
-        model = Subject
-        fields = ['id', 'code', 'title', 'name', 'units']
-
-
-class ScheduleSerializer(serializers.ModelSerializer):
-    section_name = serializers.CharField(source='section.name', read_only=True)
-    subject_title = serializers.CharField(source='subject.title', read_only=True)
-    subject_code = serializers.CharField(source='subject.code', read_only=True)
-    faculty_name = serializers.SerializerMethodField()
-    days_of_week = serializers.SerializerMethodField()
-    schedule_code = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Schedule
-        fields = [
-            'id',
-            'schedule_code',
-            'section',
-            'section_id',
-            'section_name',
-            'subject',
-            'subject_id',
-            'subject_title',
-            'subject_code',
-            'faculty',
-            'faculty_id',
-            'faculty_name',
-            'room_number',
-            'days_of_week',
-            'start_time',
-            'end_time',
-        ]
-
-    def get_schedule_code(self, obj):
-        return f"SCH-{obj.id:04d}"
-
-    def get_faculty_name(self, obj):
-        if obj.faculty:
-            return obj.faculty.full_name
-        return "Unassigned"
-
-    def get_days_of_week(self, obj):
-        days_qs = obj.days.all().order_by('day_of_week')
-        if not days_qs.exists():
-            return "MON-FRI"
-        nums = [d.day_of_week for d in days_qs]
-        if nums == [1, 2, 3, 4, 5]:
-            return "MON-FRI"
-        if nums == [1, 3, 5]:
-            return "MWF"
-        if nums == [2, 4]:
-            return "TTH"
-        if nums == [6]:
-            return "SAT"
-        day_labels = {1: 'MON', 2: 'TUE', 3: 'WED', 4: 'THU', 5: 'FRI', 6: 'SAT', 7: 'SUN'}
-        return ",".join([day_labels.get(n, str(n)) for n in nums])
 
 
 class IoTKioskSerializer(serializers.ModelSerializer):
@@ -469,10 +544,14 @@ class IoTKioskSerializer(serializers.ModelSerializer):
         return (timezone.now() - obj.last_ping).total_seconds() < 180
 
 
+# ==============================================================================
+# 4. GATE PASS & SMS SERIALIZERS (RESOLVES POST 400 ERRORS)
+# ==============================================================================
+
 class GatePassSerializer(serializers.ModelSerializer):
     faculty_name = serializers.SerializerMethodField()
     student_name = serializers.SerializerMethodField()
-    valid_until = serializers.DateTimeField(source='valid_to', read_only=True)
+    valid_until = serializers.DateTimeField(source='valid_to', required=False, allow_null=True)
 
     class Meta:
         model = GatePass
@@ -491,22 +570,39 @@ class GatePassSerializer(serializers.ModelSerializer):
             'valid_until',
             'status',
         ]
+        # issued_by and pass_number are assigned automatically by the server
+        read_only_fields = ['issued_by', 'pass_number', 'status']
         extra_kwargs = {
-            'pass_number': {'required': False, 'allow_blank': True},
+            'faculty': {'required': False, 'allow_null': True},
+            'valid_from': {'required': False},
+            'valid_to': {'required': False},
+            'reason': {'required': False, 'allow_blank': True},
+            'pass_type': {'required': False},
         }
 
+    def to_internal_value(self, data):
+        mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
+        if 'valid_until' in mutable_data and not mutable_data.get('valid_to'):
+            mutable_data['valid_to'] = mutable_data['valid_until']
+        return super().to_internal_value(mutable_data)
+
     def get_faculty_name(self, obj):
-        if obj.faculty:
+        if getattr(obj, 'faculty', None):
             return obj.faculty.full_name
-        return ""
+        if getattr(obj, 'issued_by', None):
+            return getattr(obj.issued_by, 'full_name', str(obj.issued_by))
+        return "School Staff"
 
     def get_student_name(self, obj):
-        if obj.student:
+        if getattr(obj, 'student', None):
             return obj.student.full_name
         return ""
 
 
 class SmsOutboxSerializer(serializers.ModelSerializer):
+    formatted_created_at = serializers.SerializerMethodField()
+    formatted_sent_at = serializers.SerializerMethodField()
+
     class Meta:
         model = SmsOutbox
         fields = [
@@ -522,6 +618,8 @@ class SmsOutboxSerializer(serializers.ModelSerializer):
             'retry_count',
             'created_at',
             'sent_at',
+            'formatted_created_at',
+            'formatted_sent_at',
         ]
         extra_kwargs = {
             'recipient_name': {'required': False, 'allow_blank': True},
@@ -529,10 +627,18 @@ class SmsOutboxSerializer(serializers.ModelSerializer):
             'category': {'required': False, 'allow_blank': True},
         }
 
+    def get_formatted_created_at(self, obj):
+        created = getattr(obj, 'created_at', None)
+        return created.strftime('%b %d, %Y %I:%M %p') if created else ''
 
-# ============================================================================
-# 4. SCHOOL PROFILE & USER MANAGEMENT SERIALIZERS
-# ============================================================================
+    def get_formatted_sent_at(self, obj):
+        sent = getattr(obj, 'sent_at', None)
+        return sent.strftime('%b %d, %Y %I:%M %p') if sent else 'Not sent'
+
+
+# ==============================================================================
+# 5. USER MANAGEMENT & SETTINGS SERIALIZERS
+# ==============================================================================
 
 class SchoolProfileSerializer(serializers.ModelSerializer):
     left_logo = FlexibleImageField(required=False, allow_null=True)
@@ -545,10 +651,6 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
 
 
 class UserManagementSerializer(serializers.ModelSerializer):
-    """
-    Manages Accounts with Zero-Trust Role Boundaries.
-    Automatically links and syncs FacultyProfile teaching clearances.
-    """
     role = serializers.SerializerMethodField()
     current_role = serializers.SerializerMethodField()
     is_teaching = serializers.SerializerMethodField()
@@ -669,22 +771,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
 
         return final_role, is_teaching
 
-    def _default_position_for_role(self, final_role, is_teaching):
-        if final_role == 'ADMIN' and is_teaching:
-            return 'Faculty I / System Administrator'
-        if final_role == 'ADMIN':
-            return 'Administrative Officer II'
-        if final_role == 'PRINCIPAL':
-            return 'School Principal I'
-        if final_role == 'DEPT_HEAD':
-            return 'Head Faculty I'
-        return 'Faculty I'
-
     def _sync_faculty_and_photo(self, user, prof, final_role, is_teaching, req_data):
-        """
-        Guarantees that newly created or updated accounts synchronize with FacultyProfile,
-        enabling teaching clearances (can_teach=True) and active account states.
-        """
         if final_role == 'GUARD' and not is_teaching:
             return
 
@@ -694,12 +781,8 @@ class UserManagementSerializer(serializers.ModelSerializer):
         if not faculty:
             faculty = FacultyProfile.objects.filter(employee_id__iexact=emp_id).first()
 
-        default_pos = self._default_position_for_role(final_role, is_teaching)
-        default_dept = (
-            'Office of the Principal / Administration'
-            if final_role in ('ADMIN', 'PRINCIPAL') and not is_teaching
-            else 'Junior High School'
-        )
+        default_pos = 'Faculty I / Administrator' if (final_role == 'ADMIN' and is_teaching) else 'Faculty I'
+        default_dept = 'Administration' if final_role == 'ADMIN' else 'Junior High School'
 
         if not faculty:
             faculty = FacultyProfile.objects.create(
@@ -723,7 +806,6 @@ class UserManagementSerializer(serializers.ModelSerializer):
             faculty.is_active = user.is_active
             faculty.can_teach = is_teaching
 
-        # Base64 photo processing
         raw_photo = req_data.get('photo')
         if raw_photo is not None:
             if raw_photo == '':
@@ -793,43 +875,3 @@ class UserManagementSerializer(serializers.ModelSerializer):
         self._sync_faculty_and_photo(instance, prof, final_role, is_teaching, req_data)
         prof.save()
         return instance
-
-
-# ============================================================================
-# 5. HARDWARE GATE SCAN, BATCH SCAN & TELEMETRY INGESTION SERIALIZERS
-# ============================================================================
-
-class GateScanSerializer(serializers.Serializer):
-    raw_identifier = serializers.CharField(max_length=128)
-    scan_method = serializers.ChoiceField(choices=['RFID', 'QR'], default='RFID', required=False)
-    kiosk_code = serializers.CharField(max_length=64)
-    secret_key = serializers.CharField(max_length=256)
-    direction = serializers.ChoiceField(choices=['IN', 'OUT'], required=False, allow_null=True, allow_blank=True)
-    enforce_student_only = serializers.BooleanField(default=False, required=False)
-
-
-class SingleClassroomScanItemSerializer(serializers.Serializer):
-    qr_token = serializers.CharField(max_length=128)
-    status = serializers.ChoiceField(
-        choices=['PRESENT', 'LATE', 'ABSENT', 'EXCUSED', 'CUTTING', 'UNVERIFIED'],
-        default='PRESENT',
-        required=False,
-    )
-
-
-class ClassroomBatchScanSerializer(serializers.Serializer):
-    schedule_id = serializers.IntegerField()
-    scans = SingleClassroomScanItemSerializer(many=True)
-
-    def validate_scans(self, value):
-        if len(value) > 100:
-            raise serializers.ValidationError("Batch size cannot exceed 100 students per submission.")
-        return value
-
-
-class TelemetryHeartbeatSerializer(serializers.Serializer):
-    latitude = serializers.FloatField(min_value=-90.0, max_value=90.0)
-    longitude = serializers.FloatField(min_value=-180.0, max_value=180.0)
-    battery_level = serializers.IntegerField(min_value=0, max_value=100, default=100, required=False)
-    is_mock_location = serializers.BooleanField(default=False, required=False)
-    client_device_id = serializers.CharField(max_length=128, required=False, allow_blank=True)

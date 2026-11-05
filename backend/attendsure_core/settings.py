@@ -1,6 +1,5 @@
 """
 AttendSure V3 - Core System & Hardware Configuration
-Optimized for Single Production Server (Nginx + Waitress/Gunicorn + PostgreSQL).
 File: backend/attendsure_core/settings.py
 """
 
@@ -17,8 +16,6 @@ from django.core.exceptions import ImproperlyConfigured
 # ==============================================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Load environment configuration from backend/.env
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 SECRET_KEY = os.getenv('SECRET_KEY')
@@ -32,7 +29,6 @@ if not SECRET_KEY:
 
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
 os.makedirs(LOGS_DIR, exist_ok=True)
-
 
 # ==============================================================================
 # 2. DYNAMIC NETWORK & HOST RESOLUTION (CYBERSECURITY CONTROLS)
@@ -89,7 +85,6 @@ for host in REQUIRED_HOSTS:
     if host not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(host)
 
-# Reverse proxy protocol trust for Nginx and Cloudflare
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
@@ -114,12 +109,10 @@ CSRF_TRUSTED_ORIGINS = [
     'http://127.0.0.1:5173',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
-    'http://172.20.140.27:8000',
 ]
 
 if dynamic_tunnel_origin and dynamic_tunnel_origin not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append(dynamic_tunnel_origin)
-
 
 # ==============================================================================
 # 3. INSTALLED APPLICATIONS
@@ -133,19 +126,16 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    # Third-party utilities
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
 
-    # AttendSure Core & Feature Apps
     'apps.core.apps.CoreConfig',
     'apps.academics.apps.AcademicsConfig',
     'apps.api.apps.ApiConfig',
     'apps.scanners.apps.ScannersConfig',
     'apps.telemetry.apps.TelemetryConfig',
 ]
-
 
 # ==============================================================================
 # 4. MIDDLEWARE PIPELINE
@@ -185,9 +175,8 @@ TEMPLATES = [
 WSGI_APPLICATION = 'attendsure_core.wsgi.application'
 ASGI_APPLICATION = 'attendsure_core.asgi.application'
 
-
 # ==============================================================================
-# 5. DATABASE CONFIGURATION (HIGH-SPEED TRANSACTIONS & CONNECTION POOLING)
+# 5. DATABASE CONFIGURATION (DEFENDS AGAINST CONNECTION SLOT EXHAUSTION)
 # ==============================================================================
 
 db_engine_choice = os.getenv('DB_ENGINE', 'postgresql').strip().lower()
@@ -208,8 +197,9 @@ elif db_engine_choice == 'postgresql':
             'PASSWORD': os.getenv('DB_PASSWORD'),
             'HOST': os.getenv('DB_HOST', '127.0.0.1'),
             'PORT': os.getenv('DB_PORT', '5432'),
-            # Keeps database connections open for 120 seconds to eliminate handshake delays
-            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', 120)),
+            # Auto-close idle connections in development, pool for 60s in production
+            'CONN_MAX_AGE': 0 if DEBUG else int(os.getenv('DB_CONN_MAX_AGE', 60)),
+            'CONN_HEALTH_CHECKS': True,
             'OPTIONS': {
                 'connect_timeout': 5,
             },
@@ -220,10 +210,9 @@ else:
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': BASE_DIR / 'db.sqlite3',
-            'CONN_MAX_AGE': 60,
+            'CONN_MAX_AGE': 0,
         }
     }
-
 
 # ==============================================================================
 # 6. IN-MEMORY CACHE & HIGH-SPEED SESSIONS
@@ -240,10 +229,8 @@ CACHES = {
     }
 }
 
-# Cache sessions in memory first and write through to database to cut user lookup latency
 SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
-SESSION_COOKIE_AGE = 86400 * 7  # 7 Days
-
+SESSION_COOKIE_AGE = 86400 * 7
 
 # ==============================================================================
 # 7. ASYNCHRONOUS TASKS (CELERY & REDIS)
@@ -259,7 +246,6 @@ CELERY_TIMEZONE = 'Asia/Manila'
 CELERY_ENABLE_UTC = False
 CELERY_WORKER_CONCURRENCY = int(os.getenv('CELERY_WORKER_CONCURRENCY', 4))
 CELERY_WORKER_PREFETCH_MULTIPLIER = 4
-
 
 # ==============================================================================
 # 8. REST FRAMEWORK & CYBERSECURITY RATE LIMITS
@@ -280,8 +266,8 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '120/minute',
-        'user': '1200/minute',
+        'anon': '60/minute',
+        'user': '600/minute',
     },
 }
 
@@ -308,7 +294,6 @@ else:
 
 CORS_ALLOW_CREDENTIALS = True
 
-
 # ==============================================================================
 # 9. HARDWARE, IOT & SMS PARAMETERS
 # ==============================================================================
@@ -321,9 +306,8 @@ DEFAULT_GEOFENCE_RADIUS_METERS = int(os.getenv('GEOFENCE_RADIUS_METERS', 150))
 GSM_MODEM_PORT = os.getenv('GSM_MODEM_PORT', 'COM3' if os.name == 'nt' else '/dev/ttyUSB0')
 GSM_MODEM_BAUDRATE = int(os.getenv('GSM_MODEM_BAUDRATE', 115200))
 
-
 # ==============================================================================
-# 10. ROTATING AUDIT LOGGERS (SYSADMIN & SECURITY MONITORING)
+# 10. ROTATING AUDIT LOGGERS
 # ==============================================================================
 
 LOGGING = {
@@ -390,9 +374,8 @@ LOGGING = {
     },
 }
 
-
 # ==============================================================================
-# 11. LOCALIZATION & REGIONAL STANDARDS
+# 11. LOCALIZATION & SECURITY STANDARDS
 # ==============================================================================
 
 LANGUAGE_CODE = 'en-us'
@@ -400,43 +383,25 @@ TIME_ZONE = 'Asia/Manila'
 USE_I18N = True
 USE_TZ = True
 
-
-# ==============================================================================
-# 12. STATIC & MEDIA FILE SECURITY
-# ==============================================================================
-
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# Security: Set strict file permissions on uploaded photos (read/write by owner, read-only by server)
 FILE_UPLOAD_PERMISSIONS = 0o644
 FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
-
-# Memory protection: Cap upload sizes to defend against buffer overflow and memory denial-of-service
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
-FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024   # 5 MB
-
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-
-# ==============================================================================
-# 13. CYBERSECURITY HARDENING
-# ==============================================================================
-
-# Protect cookies from JavaScript access (defends against Cross-Site Scripting session theft)
 SESSION_COOKIE_HTTPONLY = True
-CSRF_COOKIE_HTTPONLY = False  # Allows Web frontend headers to read token for state-changing requests
+CSRF_COOKIE_HTTPONLY = False
 SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SAMESITE = 'Lax'
-
-# Clickjacking and MIME sniffing defenses
 X_FRAME_OPTIONS = 'DENY'
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_BROWSER_XSS_FILTER = True
 
-# Adaptive SSL protection: enforces HTTPS security when served through an SSL proxy or tunnel
 IS_HTTPS_STRICT = os.getenv('ENABLE_HTTPS_STRICT', 'False').strip().lower() in ('true', '1')
 if IS_HTTPS_STRICT and not DEBUG:
     SESSION_COOKIE_SECURE = True
@@ -446,7 +411,6 @@ if IS_HTTPS_STRICT and not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 else:
-    # Allows school LAN operations over HTTP (e.g. http://10.16.115.49) without cookie rejections
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
     SECURE_SSL_REDIRECT = False

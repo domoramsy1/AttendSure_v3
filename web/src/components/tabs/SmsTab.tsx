@@ -1,12 +1,6 @@
 /**
- * AttendSure - SMS & Outbox Dispatcher (Full Admin CRUD & RBAC Hardened)
+ * AttendSure - SMS & Outbox Dispatcher
  * File: web/src/components/tabs/SmsTab.tsx
- *
- * Cybersecurity & Stability Hardening:
- * 1. Safe Grade Formatter: Resolves "s.grade_level.trim is not a function" by type-checking inputs.
- * 2. Role-Based Access Control (RBAC): Uses `isAdmin` to protect deletions, queue flushes, and broadcasts.
- * 3. Sanitized Phone & Payload: Enforces standard Philippine mobile numbers (+63 / 09).
- * 4. Composite Keys: Prevents collision warnings across recipient option lists.
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -180,7 +174,7 @@ export const SmsTab: React.FC = () => {
     sent_today: 0,
     failed: 0,
     modem_port: 'COM3',
-    modem_baudrate: 9600,
+    modem_baudrate: 115200,
   });
 
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -223,7 +217,6 @@ export const SmsTab: React.FC = () => {
   isInteracting.current =
     isComposeModalOpen || isBroadcastModalOpen || Boolean(editingSms) || Boolean(inspectedSms);
 
-  // Type-safe extraction prevents `.trim is not a function`
   const availableYearLevels = useMemo(() => {
     const list = new Set<string>();
     sections.forEach((s) => {
@@ -254,34 +247,24 @@ export const SmsTab: React.FC = () => {
   };
 
   const handleCopy = async (text: string, id: string) => {
-    let success = false;
-    if (navigator.clipboard && window.isSecureContext) {
-      try {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
-        success = true;
-      } catch {
-        success = false;
-      }
-    }
-    if (!success) {
-      try {
+      } else {
         const textArea = document.createElement('textarea');
         textArea.value = text;
         textArea.style.position = 'fixed';
         textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
-        success = document.execCommand('copy');
+        document.execCommand('copy');
         textArea.remove();
-      } catch (err) {
-        console.error('Copy fallback error:', err);
       }
-    }
-    if (success) {
       setCopiedKey(id);
       setTimeout(() => setCopiedKey(null), 2000);
+    } catch (err) {
+      console.error('Copy error:', err);
     }
   };
 
@@ -463,13 +446,14 @@ export const SmsTab: React.FC = () => {
     return () => clearTimeout(timer);
   }, [search, statusFilter, categoryFilter, pageSize, fetchMessages, fetchMetrics]);
 
+  // Scaled 12-second heartbeat interval prevents PostgreSQL slot starvation
   useEffect(() => {
     const liveHeartbeat = setInterval(() => {
-      if (!isInteracting.current) {
+      if (!isInteracting.current && document.visibilityState === 'visible') {
         fetchMetrics();
         fetchMessages(currentPage, pageSize, search, statusFilter, categoryFilter, true);
       }
-    }, 3000);
+    }, 12000);
 
     return () => clearInterval(liveHeartbeat);
   }, [currentPage, pageSize, search, statusFilter, categoryFilter, fetchMetrics, fetchMessages]);
@@ -512,7 +496,7 @@ export const SmsTab: React.FC = () => {
       });
     } catch {
       showAlert({
-        title: 'Policy Active (Local)',
+        title: 'Policy Saved Locally',
         message: `Classroom notification set to ${newMode === 'GATE_OUT_SUMMARY' ? 'Gate-OUT Daily Summary' : 'Instant Per-Tap'}.`,
         type: 'info',
       });
@@ -610,8 +594,6 @@ export const SmsTab: React.FC = () => {
       const errorMsg =
         err?.response?.data?.error ||
         err?.response?.data?.detail ||
-        err?.response?.data?.message_body?.[0] ||
-        err?.response?.data?.message?.[0] ||
         'Could not queue broadcast messages.';
       showAlert({
         title: 'Broadcast Error',
@@ -699,7 +681,6 @@ export const SmsTab: React.FC = () => {
         err?.response?.data?.recipient_number?.[0] ||
         err?.response?.data?.message_body?.[0] ||
         err?.response?.data?.error ||
-        err?.response?.data?.detail ||
         'Could not queue message.';
       showAlert({
         title: 'Queue Failed',
@@ -977,7 +958,7 @@ export const SmsTab: React.FC = () => {
           <div style={{ ...statVal, fontSize: '1.25rem', fontFamily: 'monospace', color: '#0f172a' }}>
             {metrics.modem_port || 'COM3'}
           </div>
-          <div style={statSub}>Baudrate: {metrics.modem_baudrate || 9600} bps &bull; Online</div>
+          <div style={statSub}>Baudrate: {metrics.modem_baudrate || 115200} bps &bull; Online</div>
         </div>
       </div>
 
@@ -1739,7 +1720,7 @@ export const SmsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 7. MODAL: EDIT SMS (UPDATE - ADMIN ONLY) */}
+      {/* 7. MODAL: EDIT SMS */}
       {editingSms && (
         <Modal
           isOpen={Boolean(editingSms)}
@@ -1839,7 +1820,7 @@ export const SmsTab: React.FC = () => {
         </Modal>
       )}
 
-      {/* 8. MODAL: INSPECT FULL SMS DETAILS (READ) */}
+      {/* 8. MODAL: INSPECT FULL SMS DETAILS */}
       {inspectedSms && (
         <Modal
           isOpen={Boolean(inspectedSms)}
@@ -1962,7 +1943,7 @@ export const SmsTab: React.FC = () => {
 
 export default SmsTab;
 
-// Styles
+// UI Styles
 const statsGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(4, 1fr)',

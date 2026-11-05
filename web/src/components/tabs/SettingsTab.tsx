@@ -3,7 +3,7 @@
  * File: web/src/components/tabs/SettingsTab.tsx
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import apiClient from '../../api/client';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
@@ -34,6 +34,9 @@ import {
   KeyRound,
   HardDrive,
   Layers,
+  History,
+  Search,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface FacultyOption {
@@ -58,6 +61,19 @@ interface MaintenanceHealthStatus {
   smsFailed: number;
   smsSentToday: number;
   lastChecked: string;
+}
+
+interface ActivityRecord {
+  id: number;
+  timestamp: string;
+  time_only: string;
+  date_only: string;
+  user: string;
+  action: string;
+  module: string;
+  details: string;
+  ip_address: string;
+  status: string;
 }
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
@@ -109,8 +125,8 @@ export const SettingsTab: React.FC = () => {
   const { tokens, brand } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Sub-Navigation: 'MAINTENANCE' | 'SETTINGS' | 'ALL'
-  const [activeSubTab, setActiveSubTab] = useState<'MAINTENANCE' | 'SETTINGS' | 'ALL'>('MAINTENANCE');
+  // Sub-Navigation Tabs: 'MAINTENANCE' | 'SETTINGS' | 'LOGS' | 'ALL'
+  const [activeSubTab, setActiveSubTab] = useState<'MAINTENANCE' | 'SETTINGS' | 'LOGS' | 'ALL'>('MAINTENANCE');
 
   const [facultyList, setFacultyList] = useState<FacultyOption[]>([]);
   const [loading, setLoading] = useState(false);
@@ -118,7 +134,15 @@ export const SettingsTab: React.FC = () => {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // Real-time system health metrics
+  // User Activity & Audit Logs State
+  const [activityLogs, setActivityLogs] = useState<ActivityRecord[]>([]);
+  const [logsLoading, setLogsLoading] = useState<boolean>(false);
+  const [logSearch, setLogSearch] = useState<string>('');
+  const [logActionFilter, setLogActionFilter] = useState<string>('ALL');
+  const [logDateFilter, setLogDateFilter] = useState<string>('');
+  const [isSuperAdmin, setIsSuperAdmin] = useState<boolean>(false);
+
+  // Maintenance health status
   const [health, setHealth] = useState<MaintenanceHealthStatus>({
     database: 'ONLINE',
     dbLatencyMs: 2,
@@ -185,6 +209,26 @@ export const SettingsTab: React.FC = () => {
     } catch {}
   };
 
+  const fetchUserActivities = useCallback(async () => {
+    setLogsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (logSearch.trim()) params.append('search', logSearch.trim());
+      if (logActionFilter !== 'ALL') params.append('action', logActionFilter);
+      if (logDateFilter) params.append('date', logDateFilter);
+
+      const res = await apiClient.get(`/activity-logs/?${params.toString()}`);
+      if (res.data) {
+        setActivityLogs(res.data.records || []);
+        setIsSuperAdmin(Boolean(res.data.is_admin));
+      }
+    } catch (err) {
+      console.log('[ActivityLogs] Fetch error:', err);
+    } finally {
+      setLogsLoading(false);
+    }
+  }, [logSearch, logActionFilter, logDateFilter]);
+
   useEffect(() => {
     let isMounted = true;
     const loadInitialData = async () => {
@@ -240,6 +284,12 @@ export const SettingsTab: React.FC = () => {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (activeSubTab === 'LOGS' || activeSubTab === 'ALL') {
+      fetchUserActivities();
+    }
+  }, [activeSubTab, fetchUserActivities]);
 
   const handleFacultyChange = (facultyIdStr: string) => {
     if (!facultyIdStr) {
@@ -344,6 +394,33 @@ export const SettingsTab: React.FC = () => {
         }
       },
     });
+  };
+
+  const exportActivityCSV = () => {
+    if (activityLogs.length === 0) {
+      showAlert({ title: 'Empty Export', message: 'No activity logs available to export.', type: 'warning' });
+      return;
+    }
+
+    const headers = ['Timestamp', 'User Account', 'Action', 'Module', 'Details', 'IP Address', 'Status'];
+    const rows = activityLogs.map((r) => [
+      `"${r.timestamp}"`,
+      `"${r.user}"`,
+      `"${r.action}"`,
+      `"${r.module}"`,
+      `"${r.details.replace(/"/g, '""')}"`,
+      `"${r.ip_address}"`,
+      `"${r.status}"`,
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `AttendSure_User_Activities_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -523,7 +600,7 @@ export const SettingsTab: React.FC = () => {
               School Settings &amp; Maintenance Center
             </h1>
             <p style={{ fontSize: '0.78rem', color: tokens.textSecondary, marginTop: 4 }}>
-              Manage school profiles, DepEd official report seals, and self-service maintenance diagnostics.
+              Manage school profiles, DepEd official report seals, self-service maintenance diagnostics, and activity logs.
             </p>
           </div>
 
@@ -535,6 +612,7 @@ export const SettingsTab: React.FC = () => {
               borderRadius: 10,
               border: `1px solid ${tokens.borderSubtle}`,
               gap: 4,
+              flexWrap: 'wrap',
             }}
           >
             <button
@@ -583,6 +661,28 @@ export const SettingsTab: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => setActiveSubTab('LOGS')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 14px',
+                borderRadius: 8,
+                border: 'none',
+                backgroundColor: activeSubTab === 'LOGS' ? tokens.bgSurface : 'transparent',
+                color: activeSubTab === 'LOGS' ? brand.primary : tokens.textSecondary,
+                fontWeight: 700,
+                fontSize: '0.78rem',
+                cursor: 'pointer',
+                boxShadow: activeSubTab === 'LOGS' ? tokens.cardShadow : 'none',
+              }}
+            >
+              <History size={14} />
+              <span>User Activity Logs</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveSubTab('ALL')}
               style={{
                 display: 'inline-flex',
@@ -600,7 +700,7 @@ export const SettingsTab: React.FC = () => {
               }}
             >
               <Layers size={14} />
-              <span>Show All on One Page</span>
+              <span>Show All</span>
             </button>
           </div>
         </div>
@@ -828,7 +928,188 @@ export const SettingsTab: React.FC = () => {
         )}
 
         {/* =========================================================================
-            SECTION 2: OFFICIAL SCHOOL SETTINGS
+            SECTION 2: USER ACTIVITY & AUDIT LOGS (SETTINGS TAB)
+           ========================================================================= */}
+        {(activeSubTab === 'LOGS' || activeSubTab === 'ALL') && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                <div>
+                  <h2 style={{ fontSize: '0.98rem', fontWeight: 800, color: tokens.textPrimary, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <History size={18} color={brand.primary} />
+                    <span>{isSuperAdmin ? 'System-Wide User Activity & Audit Logs' : 'My Activity Logs'}</span>
+                  </h2>
+                  <p style={{ fontSize: '0.72rem', color: tokens.textSecondary, margin: '2px 0 0 0' }}>
+                    {isSuperAdmin ? 'Audit logins, pass issuances, profile changes, and security operations.' : 'Permanent audit trail of your account operations and logins.'}
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={exportActivityCSV}
+                    disabled={activityLogs.length === 0}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '5px 12px',
+                      backgroundColor: brand.success,
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: 6,
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <FileSpreadsheet size={13} />
+                    <span>Export CSV</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={fetchUserActivities}
+                    disabled={logsLoading}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '5px 12px',
+                      backgroundColor: tokens.bgSurfaceSubtle,
+                      border: `1px solid ${tokens.borderStrong}`,
+                      borderRadius: 6,
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <RefreshCw size={12} className={logsLoading ? 'animate-spin' : ''} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Filter and Search Bar */}
+              <div style={{ padding: 10, backgroundColor: tokens.bgSurfaceSubtle, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}`, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <input
+                    type="text"
+                    placeholder="Search username, action, module, or details..."
+                    value={logSearch}
+                    onChange={(e) => setLogSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && fetchUserActivities()}
+                    style={inputStyle}
+                  />
+                </div>
+
+                <select
+                  value={logActionFilter}
+                  onChange={(e) => setLogActionFilter(e.target.value)}
+                  style={{ ...inputStyle, width: 140 }}
+                >
+                  <option value="ALL">All Actions</option>
+                  <option value="LOGIN">Sign In / Login</option>
+                  <option value="LOGOUT">Sign Out / Logout</option>
+                  <option value="SCAN">QR / RFID Scan</option>
+                  <option value="GATE_PASS">Gate Pass</option>
+                  <option value="SECURITY">Security / Reset</option>
+                  <option value="PROFILE">Profile Change</option>
+                </select>
+
+                <input
+                  type="date"
+                  value={logDateFilter}
+                  onChange={(e) => setLogDateFilter(e.target.value)}
+                  style={{ ...inputStyle, width: 130 }}
+                />
+
+                <button
+                  type="button"
+                  onClick={fetchUserActivities}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '8px 16px',
+                    backgroundColor: brand.primary,
+                    color: '#ffffff',
+                    borderRadius: 6,
+                    border: 'none',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Search size={13} />
+                  <span>Search</span>
+                </button>
+              </div>
+
+              {/* Activity Table */}
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', minWidth: 680, borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: tokens.bgSurfaceSubtle, borderBottom: `1px solid ${tokens.borderSubtle}`, color: tokens.textSecondary }}>
+                      <th style={{ padding: '9px 14px' }}>Timestamp</th>
+                      <th style={{ padding: '9px 14px' }}>User Account</th>
+                      <th style={{ padding: '9px 14px' }}>Action &amp; Module</th>
+                      <th style={{ padding: '9px 14px' }}>Event Details</th>
+                      <th style={{ padding: '9px 14px' }}>Client IP</th>
+                      <th style={{ padding: '9px 14px' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activityLogs.length > 0 ? (
+                      activityLogs.map((log) => (
+                        <tr key={log.id} style={{ borderBottom: `1px solid ${tokens.borderSubtle}` }}>
+                          <td style={{ padding: '9px 14px', fontFamily: 'monospace', color: tokens.textPrimary }}>
+                            <div>{log.time_only}</div>
+                            <div style={{ fontSize: '0.64rem', color: tokens.textMuted }}>{log.date_only}</div>
+                          </td>
+                          <td style={{ padding: '9px 14px' }}>
+                            <strong style={{ color: brand.primary }}>{log.user}</strong>
+                          </td>
+                          <td style={{ padding: '9px 14px' }}>
+                            <span style={{ fontWeight: 700, color: tokens.textPrimary }}>{log.action}</span>
+                            <div style={{ fontSize: '0.64rem', color: tokens.textMuted }}>Module: {log.module}</div>
+                          </td>
+                          <td style={{ padding: '9px 14px', color: tokens.textSecondary }}>{log.details}</td>
+                          <td style={{ padding: '9px 14px', fontFamily: 'monospace', color: tokens.textMuted }}>{log.ip_address}</td>
+                          <td style={{ padding: '9px 14px' }}>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                padding: '2px 8px',
+                                borderRadius: 4,
+                                fontSize: '0.64rem',
+                                fontWeight: 800,
+                                backgroundColor: log.status === 'SUCCESS' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                                color: log.status === 'SUCCESS' ? brand.success : brand.danger,
+                              }}
+                            >
+                              {log.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: tokens.textMuted }}>
+                          {logsLoading ? 'Loading activity logs...' : 'No activity logs found for the selected criteria.'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            SECTION 3: OFFICIAL SCHOOL SETTINGS
            ========================================================================= */}
         {(activeSubTab === 'SETTINGS' || activeSubTab === 'ALL') && (
           <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1097,15 +1378,12 @@ export const SettingsTab: React.FC = () => {
               </div>
             </div>
 
-            {/* Subsection C: Official Contact & Document Footers */}
+            {/* Subsection C: Official Contact Details */}
             <div style={cardStyle}>
               <div style={cardHeaderStyle}>
                 <MapPin size={18} color={brand.primary} />
                 <h2 style={cardTitleStyle}>Official Contact &amp; Document Footer Details</h2>
               </div>
-              <p style={{ fontSize: '0.74rem', color: tokens.textSecondary, margin: '0 0 12px 0' }}>
-                These values print dynamically on the official DepEd Manual of Style footer for SF1, SF2, SF4, and Form 48:
-              </p>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 14 }}>
                 <div style={{ gridColumn: 'span 2' }}>
@@ -1175,9 +1453,6 @@ export const SettingsTab: React.FC = () => {
                 <Compass size={18} color={brand.primary} />
                 <h2 style={cardTitleStyle}>Campus GPS Geofence &amp; Boundary Coordinates</h2>
               </div>
-              <p style={{ fontSize: '0.74rem', color: tokens.textSecondary, margin: '0 0 12px 0' }}>
-                Used by mobile devices for real-time presence verification, DTR loafing checks, and gate arrival validation:
-              </p>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>
                 <div>
@@ -1227,7 +1502,7 @@ export const SettingsTab: React.FC = () => {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 16 }}>
-                {/* 1. Main School Profile Emblem */}
+                {/* 1. Main Emblem */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
                     1. Main School Profile Emblem

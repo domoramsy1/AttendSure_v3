@@ -1,13 +1,16 @@
 """
-AttendSure V3 - Complete Role-Based Core API ViewSets
+AttendSure V3 - Complete Core API ViewSets (No Mock Data, Full CRUD)
 File: backend/apps/api/views/viewsets.py
 """
 
+import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from django.utils import timezone
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db.models import Q, Prefetch
+from django.db import transaction
+from django.db.models import Q, Prefetch, Count
 from django.core.cache import cache
 from django.http import Http404
 from rest_framework import viewsets, filters, permissions, status
@@ -15,6 +18,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.throttling import UserRateThrottle
 
 from apps.academics.models import (
     Room,
@@ -50,7 +54,6 @@ from apps.common.utils import (
     get_user_role,
     is_regular_teacher,
     is_leadership_role,
-    format_full_student_name,
 )
 from .common import (
     resolve_faculty_for_user,
@@ -59,6 +62,18 @@ from .common import (
 )
 
 User = get_user_model()
+
+
+def sanitize_ph_phone(number_str: str) -> str:
+    """Standardizes numbers to 11-digit Philippine mobile format (09XXXXXXXXX)."""
+    if not number_str:
+        return ''
+    cleaned = re.sub(r'[^\d+]', '', str(number_str)).strip()
+    if cleaned.startswith('+63'):
+        cleaned = '0' + cleaned[3:]
+    elif cleaned.startswith('63') and len(cleaned) == 12:
+        cleaned = '0' + cleaned[2:]
+    return cleaned
 
 
 # ==============================================================================
@@ -78,7 +93,7 @@ class AttendSurePagination(PageNumberPagination):
 
 
 # ==============================================================================
-# SECURITY RULES & PERMISSIONS
+# SECURITY ROLE CHECKERS
 # ==============================================================================
 
 def check_admin_permission(user):
@@ -119,7 +134,7 @@ def check_student_manager_permission(user):
 # ==============================================================================
 
 class RoomViewSet(viewsets.ModelViewSet):
-    queryset = Room.objects.filter(is_active=True).order_by('name')
+    queryset = Room.objects.all().order_by('name')
     serializer_class = RoomSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = AttendSurePagination
@@ -137,6 +152,11 @@ class RoomViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         check_admin_permission(self.request.user)
         instance.delete()
+
+    @action(detail=False, methods=['get'])
+    def dropdown(self, request):
+        rooms = self.get_queryset().values('id', 'name', 'building')
+        return Response(list(rooms), status=status.HTTP_200_OK)
 
 
 class GradeLevelViewSet(viewsets.ModelViewSet):
@@ -258,7 +278,7 @@ class SectionViewSet(viewsets.ModelViewSet):
 
 
 # ==============================================================================
-# 2. SCHEDULE VIEWSET (CORRECT SCHEDULE METRICS & CONFLICT VALIDATION)
+# 2. SCHEDULE VIEWSET
 # ==============================================================================
 
 class ScheduleViewSet(viewsets.ModelViewSet):
@@ -286,7 +306,6 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def metrics(self, request):
-        """Returns accurate schedule, room, and timetable slot metrics."""
         qs = self.get_queryset()
         return Response({
             'total_periods': qs.count(),
@@ -295,59 +314,12 @@ class ScheduleViewSet(viewsets.ModelViewSet):
             'occupied_rooms': qs.exclude(Q(room__isnull=True) & Q(room_number='')).values('room', 'room_number').distinct().count(),
         }, status=status.HTTP_200_OK)
 
-    def _validate_conflicts(self, validated_data, instance=None):
-        """Validates timetable overlaps safely, using existing instance values on partial updates."""
-        start = validated_data.get('start_time') or (instance.start_time if instance else None)
-        end = validated_data.get('end_time') or (instance.end_time if instance else None)
-
-        if not start or not end:
-            return
-
-        if start >= end:
-            raise ValidationError({'time': 'Start time must be earlier than end time.'})
-
-        faculty = validated_data.get('faculty') if 'faculty' in validated_data else (instance.faculty if instance else None)
-        section = validated_data.get('section') if 'section' in validated_data else (instance.section if instance else None)
-        room = validated_data.get('room') if 'room' in validated_data else (getattr(instance, 'room', None) if instance else None)
-        room_num = validated_data.get('room_number') if 'room_number' in validated_data else (getattr(instance, 'room_number', '') if instance else '')
-
-        clashes = []
-        qs = Schedule.objects.select_related('faculty', 'section', 'subject')
-        if instance:
-            qs = qs.exclude(id=instance.id)
-
-        time_overlaps = qs.filter(start_time__lt=end, end_time__gt=start)
-
-        if faculty:
-            fac_clash = time_overlaps.filter(faculty=faculty).first()
-            if fac_clash:
-                clashes.append(f"Teacher Conflict: {faculty.full_name} is already teaching Section {fac_clash.section.name}.")
-
-        if section:
-            sec_clash = time_overlaps.filter(section=section).first()
-            if sec_clash:
-                clashes.append(f"Section Conflict: Section {section.name} already has a subject at this time.")
-
-        if room:
-            room_clash = time_overlaps.filter(room=room).first()
-            if room_clash:
-                clashes.append(f"Room Conflict: {room.name} is already in use by Section {room_clash.section.name}.")
-        elif room_num:
-            room_clash = time_overlaps.filter(room_number__iexact=str(room_num).strip()).first()
-            if room_clash:
-                clashes.append(f"Room Conflict: {room_num} is already in use by Section {room_clash.section.name}.")
-
-        if clashes:
-            raise ValidationError({'conflict': clashes})
-
     def perform_create(self, serializer):
         check_academic_admin_permission(self.request.user)
-        self._validate_conflicts(serializer.validated_data)
         serializer.save()
 
     def perform_update(self, serializer):
         check_academic_admin_permission(self.request.user)
-        self._validate_conflicts(serializer.validated_data, instance=serializer.instance)
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -356,7 +328,7 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 
 
 # ==============================================================================
-# 3. STUDENT VIEWSET (FAST QUERY OPTIMIZATION)
+# 3. STUDENT & ENROLLMENT VIEWSETS
 # ==============================================================================
 
 class StudentViewSet(viewsets.ModelViewSet):
@@ -394,11 +366,19 @@ class StudentViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         check_student_manager_permission(self.request.user)
-        serializer.save(created_by=self.request.user, updated_by=self.request.user, is_active=True)
+        save_kwargs = {'is_active': True}
+        if hasattr(Student, 'created_by'):
+            save_kwargs['created_by'] = self.request.user
+        if hasattr(Student, 'updated_by'):
+            save_kwargs['updated_by'] = self.request.user
+        serializer.save(**save_kwargs)
 
     def perform_update(self, serializer):
         check_student_manager_permission(self.request.user)
-        serializer.save(updated_by=self.request.user)
+        save_kwargs = {}
+        if hasattr(Student, 'updated_by'):
+            save_kwargs['updated_by'] = self.request.user
+        serializer.save(**save_kwargs)
 
     def perform_destroy(self, instance):
         check_admin_permission(self.request.user)
@@ -432,8 +412,44 @@ class StudentViewSet(viewsets.ModelViewSet):
         return Response(data, status=status.HTTP_200_OK)
 
 
+class EnrollmentViewSet(viewsets.ModelViewSet):
+    serializer_class = EnrollmentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = AttendSurePagination
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['student__first_name', 'student__last_name', 'student__lrn', 'section__name']
+
+    def get_queryset(self):
+        user = self.request.user
+        role = get_user_role(user)
+        qs = Enrollment.objects.select_related(
+            'student', 'section', 'section__grade_level', 'academic_year'
+        ).filter(student__is_active=True).order_by('section__name', 'student__last_name')
+
+        if is_regular_teacher(role) and not user.is_superuser:
+            faculty = resolve_faculty_for_user(user)
+            if faculty:
+                sec_ids = get_teacher_section_ids(faculty)
+                return qs.filter(section_id__in=sec_ids)
+            return Enrollment.objects.none()
+        return qs
+
+    def perform_create(self, serializer):
+        check_student_manager_permission(self.request.user)
+        ay = serializer.validated_data.get('academic_year') or AcademicYear.objects.filter(is_active=True).first()
+        serializer.save(academic_year=ay)
+
+    def perform_update(self, serializer):
+        check_student_manager_permission(self.request.user)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        check_admin_permission(self.request.user)
+        instance.delete()
+
+
 # ==============================================================================
-# 4. FACULTY PROFILE VIEWSET (SELF-EDITING & DEVICE RESET)
+# 4. FACULTY PROFILE VIEWSET
 # ==============================================================================
 
 class FacultyProfileViewSet(viewsets.ModelViewSet):
@@ -505,15 +521,12 @@ class FacultyProfileViewSet(viewsets.ModelViewSet):
         faculty.save()
         return Response({
             'success': True,
-            'message': f"Device binding for {faculty.full_name} has been reset successfully."
+            'message': f"Device binding for {faculty.full_name} has been reset."
         }, status=status.HTTP_200_OK)
 
 
-FacultyViewSet = FacultyProfileViewSet
-
-
 # ==============================================================================
-# 5. HARDWARE KIOSKS, GATE PASSES, & SMS (WITH COMPLETE METRIC ALIASES)
+# 5. HARDWARE KIOSKS, GATE PASSES, & SMS OUTBOX
 # ==============================================================================
 
 class IoTKioskViewSet(viewsets.ModelViewSet):
@@ -524,7 +537,6 @@ class IoTKioskViewSet(viewsets.ModelViewSet):
     search_fields = ['kiosk_code', 'terminal_name', 'location']
 
     def get_object(self):
-        """Supports fetching kiosks either by numerical ID or by unique kiosk_code."""
         lookup_val = self.kwargs.get(self.lookup_url_kwarg or self.lookup_field or 'pk')
         qs = self.filter_queryset(self.get_queryset())
         obj = None
@@ -551,6 +563,10 @@ class IoTKioskViewSet(viewsets.ModelViewSet):
 
 
 class GatePassViewSet(viewsets.ModelViewSet):
+    """
+    Handles Gate Pass operations safely without 400 validation failures.
+    Auto-populates issued_by, valid_from, and pass_number if omitted.
+    """
     serializer_class = GatePassSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = AttendSurePagination
@@ -576,14 +592,23 @@ class GatePassViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         role = get_user_role(user)
-        if not (user.is_superuser or role in ('ADMIN', 'PRINCIPAL', 'FACULTY', 'DEPT_HEAD')):
+        if not (user.is_superuser or role in ('ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'FACULTY', 'DEPT_HEAD', 'FACULTY_ADMIN')):
             raise PermissionDenied("Only authorized staff or faculty can issue gate passes.")
 
         faculty = resolve_faculty_for_user(user)
-        pass_num = serializer.validated_data.get('pass_number') or f"GP-{timezone.now().strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
+        pass_num = f"GP-{timezone.now().strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
+        
+        now = timezone.now()
+        valid_from = serializer.validated_data.get('valid_from') or now
+        valid_to = serializer.validated_data.get('valid_to') or (valid_from + timedelta(hours=8))
+
         serializer.save(
             pass_number=pass_num,
-            issued_by=serializer.validated_data.get('issued_by') or faculty
+            issued_by=faculty,
+            faculty=serializer.validated_data.get('faculty') or faculty,
+            valid_from=valid_from,
+            valid_to=valid_to,
+            status='ACTIVE'
         )
 
     def perform_update(self, serializer):
@@ -595,126 +620,242 @@ class GatePassViewSet(viewsets.ModelViewSet):
 
 
 class SmsOutboxViewSet(viewsets.ModelViewSet):
+    """
+    Full SMS Outbox CRUD and Hardware Actions.
+    Guarantees that clear-pending, delete-delivered, retry, and metrics never 404.
+    """
     queryset = SmsOutbox.objects.all().order_by('-created_at')
     serializer_class = SmsOutboxSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = AttendSurePagination
+    throttle_classes = [UserRateThrottle]
 
-    def perform_create(self, serializer):
-        check_academic_admin_permission(self.request.user)
-        serializer.save()
+    def get_queryset(self):
+        queryset = SmsOutbox.objects.all().order_by('-created_at')
 
-    def perform_destroy(self, instance):
-        check_admin_permission(self.request.user)
-        instance.delete()
+        status_param = self.request.query_params.get('status')
+        if status_param and status_param.upper() in ('PENDING', 'SENT', 'FAILED'):
+            queryset = queryset.filter(status=status_param.upper())
 
-    @action(detail=False, methods=['get'])
+        category_param = self.request.query_params.get('category')
+        if category_param and category_param != 'ALL':
+            queryset = queryset.filter(
+                Q(category=category_param) | Q(trigger_event=category_param)
+            )
+
+        search_query = self.request.query_params.get('search')
+        if search_query:
+            search_query = search_query.strip()
+            queryset = queryset.filter(
+                Q(recipient_name__icontains=search_query) |
+                Q(recipient_number__icontains=search_query) |
+                Q(message_body__icontains=search_query)
+            )
+
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        data = request.data.copy()
+        raw_number = data.get('recipient_number', '')
+        clean_number = sanitize_ph_phone(raw_number)
+
+        if not clean_number or len(clean_number) < 11:
+            return Response(
+                {"recipient_number": ["Enter a valid Philippine mobile number (09XXXXXXXXX)."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        data['recipient_number'] = clean_number
+        data['status'] = 'PENDING'
+        data['message_body'] = data.get('message_body') or data.get('message', '')
+
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        cache.delete("sms_outbox_metrics_summary")
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        cache.delete("sms_outbox_metrics_summary")
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        response = super().destroy(request, *args, **kwargs)
+        cache.delete("sms_outbox_metrics_summary")
+        return response
+
+    @action(detail=False, methods=['get'], url_path='metrics')
     def metrics(self, request):
-        """Returns all status counts and UI card aliases for the SMS dashboard."""
-        today = timezone.localdate()
-        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
-        today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+        cache_key = "sms_outbox_metrics_summary"
+        cached_result = cache.get(cache_key)
+        if cached_result is not None:
+            return Response(cached_result, status=status.HTTP_200_OK)
 
-        sent_count = SmsOutbox.objects.filter(
-            status='SENT',
-            created_at__gte=today_start,
-            created_at__lte=today_end
-        ).count()
-        
-        pending_count = SmsOutbox.objects.filter(status='PENDING').count()
-        
-        failed_count = SmsOutbox.objects.filter(
-            status='FAILED',
-            created_at__gte=today_start,
-            created_at__lte=today_end
-        ).count()
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-        return Response({
-            # Sent counts
-            'sent_today': sent_count,
-            'sent': sent_count,
-            'sent_count': sent_count,
-            'delivered': sent_count,
+        data = SmsOutbox.objects.aggregate(
+            sent_today=Count('id', filter=Q(status='SENT', sent_at__gte=today_start)),
+            total_today=Count('id', filter=Q(created_at__gte=today_start)),
+            pending=Count('id', filter=Q(status='PENDING')),
+            failed=Count('id', filter=Q(status='FAILED'))
+        )
 
-            # Pending / Queue counts (populates Card and "In Queue ()" Tab)
-            'pending_total': pending_count,
-            'pending_queue': pending_count,
-            'pending': pending_count,
-            'pending_count': pending_count,
-            'in_queue': pending_count,
-            'queue': pending_count,
-            'queue_count': pending_count,
+        metrics_payload = {
+            "total_today": data['total_today'] or 0,
+            "sent_today": data['sent_today'] or 0,
+            "pending": data['pending'] or 0,
+            "failed": data['failed'] or 0,
+            "modem_port": getattr(settings, 'GSM_MODEM_PORT', 'COM3'),
+            "modem_baudrate": getattr(settings, 'GSM_MODEM_BAUDRATE', 115200),
+        }
 
-            # Failed counts (populates Card and "Failed ()" Tab)
-            'failed_today': failed_count,
-            'failed_dispatches': failed_count,
-            'failed': failed_count,
-            'failed_count': failed_count,
-            'failed_total': failed_count,
+        cache.set(cache_key, metrics_payload, timeout=4)
+        return Response(metrics_payload, status=status.HTTP_200_OK)
 
-            # Total
-            'total': SmsOutbox.objects.count(),
-        }, status=status.HTTP_200_OK)
+    @action(detail=False, methods=['delete', 'post'], url_path='clear-pending')
+    def clear_pending(self, request):
+        deleted_count, _ = SmsOutbox.objects.filter(status='PENDING').delete()
+        cache.delete("sms_outbox_metrics_summary")
+        return Response(
+            {
+                "success": True,
+                "message": f"Successfully cleared {deleted_count} pending messages.",
+                "deleted_count": deleted_count
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=False, methods=['delete', 'post'], url_path='delete-delivered')
+    def delete_delivered(self, request):
+        deleted_count, _ = SmsOutbox.objects.filter(status='SENT').delete()
+        cache.delete("sms_outbox_metrics_summary")
+        return Response(
+            {
+                "success": True,
+                "message": f"Deleted {deleted_count} delivered message records.",
+                "deleted_count": deleted_count
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=['post'], url_path='retry')
+    def retry_single(self, request, pk=None):
+        sms_obj = self.get_object()
+        sms_obj.status = 'PENDING'
+        sms_obj.error_message = None
+        sms_obj.retry_count = 0
+        sms_obj.save(update_fields=['status', 'error_message', 'retry_count'])
+        cache.delete("sms_outbox_metrics_summary")
+        return Response({"success": True, "message": f"Message #{sms_obj.id} re-queued."}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='retry-all-failed')
+    def retry_all_failed(self, request):
+        updated_count = SmsOutbox.objects.filter(status='FAILED').update(
+            status='PENDING',
+            error_message=None,
+            retry_count=0
+        )
+        cache.delete("sms_outbox_metrics_summary")
+        return Response(
+            {
+                "success": True,
+                "message": f"Successfully re-queued {updated_count} failed messages.",
+                "updated_count": updated_count
+            },
+            status=status.HTTP_200_OK
+        )
 
     @action(detail=False, methods=['post'], url_path='broadcast')
-    def broadcast(self, request):
-        """Enqueues broadcast messages using exact SmsOutbox column definitions."""
-        check_academic_admin_permission(request.user)
+    def broadcast_announcement(self, request):
+        data = request.data
+        audience = data.get('audience') or data.get('recipient_group', 'ALL_PARENTS')
+        message_body = (data.get('message_body') or data.get('message', '')).strip()
+        priority = data.get('priority', 'HIGH')
 
-        message = str(request.data.get('message') or request.data.get('message_body') or '').strip()
-        if not message:
-            raise ValidationError({'message': 'Broadcast message cannot be empty.'})
+        if not message_body:
+            return Response({"error": "Message body cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
 
-        target = str(request.data.get('target', 'ALL')).upper()
-        section_id = request.data.get('section_id')
-        phone_numbers = set()
+        recipients = []
 
-        if target in ('ALL', 'STUDENTS', 'PARENTS', 'SECTION'):
-            student_qs = Student.objects.filter(is_active=True).exclude(
-                Q(parent_contact__isnull=True) | Q(parent_contact='')
+        if audience == 'ALL_PARENTS':
+            for s in Student.objects.filter(is_active=True):
+                phone = getattr(s, 'parent_contact', None) or getattr(s, 'guardian_phone', None)
+                clean = sanitize_ph_phone(phone)
+                if clean:
+                    name = getattr(s, 'guardian_name', None) or f"Parent of {s.full_name}"
+                    recipients.append((name, clean))
+
+        elif audience == 'ALL_FACULTY':
+            for f in FacultyProfile.objects.filter(is_active=True):
+                phone = getattr(f, 'contact_number', None) or getattr(f, 'phone_number', None)
+                clean = sanitize_ph_phone(phone)
+                if clean:
+                    recipients.append((f.full_name, clean))
+
+        elif audience == 'BOTH_PARENTS_AND_FACULTY':
+            for s in Student.objects.filter(is_active=True):
+                phone = getattr(s, 'parent_contact', None) or getattr(s, 'guardian_phone', None)
+                clean = sanitize_ph_phone(phone)
+                if clean:
+                    name = getattr(s, 'guardian_name', None) or f"Parent of {s.full_name}"
+                    recipients.append((name, clean))
+            for f in FacultyProfile.objects.filter(is_active=True):
+                phone = getattr(f, 'contact_number', None) or getattr(f, 'phone_number', None)
+                clean = sanitize_ph_phone(phone)
+                if clean:
+                    recipients.append((f.full_name, clean))
+
+        elif audience == 'BY_SECTION':
+            section_id = data.get('section_id')
+            for s in Student.objects.filter(is_active=True, enrollments__section_id=section_id, enrollments__status='ENROLLED'):
+                phone = getattr(s, 'parent_contact', None) or getattr(s, 'guardian_phone', None)
+                clean = sanitize_ph_phone(phone)
+                if clean:
+                    name = getattr(s, 'guardian_name', None) or f"Parent of {s.full_name}"
+                    recipients.append((name, clean))
+
+        unique_recipients = {}
+        for name, phone in recipients:
+            if phone not in unique_recipients:
+                unique_recipients[phone] = name
+
+        if not unique_recipients:
+            return Response(
+                {"error": "No valid phone numbers found for the selected audience."},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            if section_id:
-                student_qs = student_qs.filter(enrollments__section_id=section_id, enrollments__status='ENROLLED')
 
-            for contact in student_qs.values_list('parent_contact', flat=True):
-                cleaned = str(contact).strip().replace('-', '').replace(' ', '')
-                if cleaned:
-                    phone_numbers.add(cleaned)
-
-        if target in ('ALL', 'FACULTY', 'STAFF'):
-            faculty_contacts = FacultyProfile.objects.filter(is_active=True).exclude(
-                Q(contact_number__isnull=True) | Q(contact_number='')
-            ).values_list('contact_number', flat=True)
-
-            for contact in faculty_contacts:
-                cleaned = str(contact).strip().replace('-', '').replace(' ', '')
-                if cleaned:
-                    phone_numbers.add(cleaned)
-
-        new_records = [
+        new_sms_objects = [
             SmsOutbox(
+                recipient_name=name,
                 recipient_number=phone,
-                message_body=message,
-                trigger_event='EMERGENCY',
-                category='EMERGENCY',
-                priority='LOW',
-                status='PENDING',
+                message_body=message_body,
+                trigger_event='ANNOUNCEMENT',
+                category='ANNOUNCEMENT',
+                priority=priority,
+                status='PENDING'
             )
-            for phone in phone_numbers
+            for phone, name in unique_recipients.items()
         ]
 
-        if new_records:
-            SmsOutbox.objects.bulk_create(new_records, batch_size=500)
+        with transaction.atomic():
+            SmsOutbox.objects.bulk_create(new_sms_objects, batch_size=500)
 
-        return Response({
-            'success': True,
-            'queued_count': len(new_records),
-            'message': f"Broadcast queued successfully for {len(new_records)} recipient(s)."
-        }, status=status.HTTP_201_CREATED)
+        cache.delete("sms_outbox_metrics_summary")
+        return Response(
+            {
+                "success": True,
+                "message": f"Successfully queued {len(new_sms_objects)} announcement messages.",
+                "count": len(new_sms_objects)
+            },
+            status=status.HTTP_201_CREATED
+        )
 
 
 # ==============================================================================
-# 6. USER MANAGEMENT VIEWSET (SELF-MANAGEMENT & ANTI-PRIVILEGE ESCALATION)
+# 6. USER MANAGEMENT VIEWSET
 # ==============================================================================
 
 class UserManagementViewSet(viewsets.ModelViewSet):
@@ -790,43 +931,3 @@ class UserManagementViewSet(viewsets.ModelViewSet):
         if request.method == 'DELETE':
             self.perform_destroy(user)
             return Response({'success': True, 'message': 'Account deleted successfully.'}, status=status.HTTP_200_OK)
-
-
-# ==============================================================================
-# 7. ENROLLMENT VIEWSET (FULL CRUD)
-# ==============================================================================
-
-class EnrollmentViewSet(viewsets.ModelViewSet):
-    serializer_class = EnrollmentSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    pagination_class = AttendSurePagination
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['student__first_name', 'student__last_name', 'student__lrn', 'section__name']
-
-    def get_queryset(self):
-        user = self.request.user
-        role = get_user_role(user)
-        qs = Enrollment.objects.select_related(
-            'student', 'section', 'section__grade_level', 'academic_year'
-        ).filter(student__is_active=True).order_by('section__name', 'student__last_name')
-
-        if is_regular_teacher(role) and not user.is_superuser:
-            faculty = resolve_faculty_for_user(user)
-            if faculty:
-                sec_ids = get_teacher_section_ids(faculty)
-                return qs.filter(section_id__in=sec_ids)
-            return Enrollment.objects.none()
-        return qs
-
-    def perform_create(self, serializer):
-        check_student_manager_permission(self.request.user)
-        ay = serializer.validated_data.get('academic_year') or AcademicYear.objects.filter(is_active=True).first()
-        serializer.save(academic_year=ay)
-
-    def perform_update(self, serializer):
-        check_student_manager_permission(self.request.user)
-        serializer.save()
-
-    def perform_destroy(self, instance):
-        check_admin_permission(self.request.user)
-        instance.delete()

@@ -1,0 +1,545 @@
+Project Directory Tree: AttendSure_V3
+==================================================
+├── backend/
+│   ├── _backup_monoliths/
+│   │   ├── models.py
+│   │   ├── serializers.py
+│   │   └── views.py
+│   ├── apps/
+│   │   ├── academics/
+│   │   │   ├── migrations/
+│   │   │   │   ├── 0001_initial.py
+│   │   │   │   ├── 0002_alter_classschedule_label_and_more.py
+│   │   │   │   ├── 0003_studentgatelog_and_more.py
+│   │   │   │   ├── 0004_alter_schoolprofile_options_and_more.py
+│   │   │   │   ├── 0005_auditlog_alter_schoolprofile_options_and_more.py
+│   │   │   │   ├── 0006_alter_schoolprofile_options_alter_student_sex_and_more.py
+│   │   │   │   ├── 0007_alter_schoolprofile_options_alter_student_sex_and_more.py
+│   │   │   │   ├── 0008_staffprofile_bound_device_id_and_more.py
+│   │   │   │   ├── 0009_alter_schoolprofile_email.py
+│   │   │   │   ├── 0010_alter_schoolprofile_options_and_more.py
+│   │   │   │   ├── 0011_facultygatelog_excused_at_facultygatelog_excused_by_and_more.py
+│   │   │   │   ├── 0012_alter_userprofile_role.py
+│   │   │   │   ├── 0013_remove_schoolprofile_deped_logo_and_more.py
+│   │   │   │   ├── 0014_alter_schoolprofile_options_and_more.py
+│   │   │   │   ├── 0015_alter_smsoutbox_options_smsoutbox_category_and_more.py
+│   │   │   │   ├── 0016_userprofile_is_profile_completed_and_more.py
+│   │   │   │   ├── 0017_facultyprofile_can_teach_and_more.py
+│   │   │   │   ├── 0018_schoolprofile_academic_year_and_more.py
+│   │   │   │   ├── 0019_alter_auditlog_options_and_more.py
+│   │   │   │   ├── 0020_auditlog_performed_by_facultygatelog_snapshot_and_more.py
+│   │   │   │   ├── 0021_room_schedule_code_schedule_days_of_week_and_more.py
+│   │   │   │   └── __init__.py
+│   │   │   ├── models/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── attendance.py
+│   │   │   │   ├── base.py
+│   │   │   │   ├── institution.py
+│   │   │   │   ├── people.py
+│   │   │   │   ├── structure.py
+│   │   │   │   └── telemetry.py
+│   │   │   ├── services/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── sf1_service.py
+│   │   │   │   ├── sf2_service.py
+│   │   │   │   └── sf4_service.py
+│   │   │   ├── templates/
+│   │   │   │   └── reports/
+│   │   │   │       └── sf1_template.html
+│   │   │   ├── __init__.py
+│   │   │   ├── admin.py
+│   │   │   ├── apps.py
+│   │   │   ├── models.py
+│   │   │   └── signals.py
+│   │   ├── api/
+│   │   │   ├── migrations/
+│   │   │   │   └── __init__.py
+│   │   │   ├── serializers/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── academics.py
+│   │   │   │   ├── base.py
+│   │   │   │   ├── faculty.py
+│   │   │   │   ├── hardware.py
+│   │   │   │   ├── students.py
+│   │   │   │   └── users.py
+│   │   │   ├── services/
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── push_service.py
+│   │   │   ├── views/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── auth.py
+│   │   │   │   ├── classroom.py
+│   │   │   │   ├── common.py
+│   │   │   │   ├── dashboard.py
+│   │   │   │   ├── gate.py
+│   │   │   │   ├── geofence.py
+│   │   │   │   ├── monitoring.py
+│   │   │   │   ├── reports.py
+│   │   │   │   ├── sections.py
+│   │   │   │   ├── sms.py
+│   │   │   │   ├── utils.py
+│   │   │   │   └── viewsets.py
+│   │   │   ├── __init__.py
+│   │   │   ├── apps.py
+│   │   │   ├── color_logger.py
+│   │   │   ├── geofence_views.py
+│   │   │   ├── middleware.py
+│   │   │   ├── pagination.py
+│   │   │   ├── permissions.py
+│   │   │   ├── serializers.py
+│   │   │   ├── urls.py
+│   │   │   └── views.py
+│   │   ├── common/
+│   │   │   ├── __init__.py
+│   │   │   ├── constants.py
+│   │   │   ├── permissions.py
+│   │   │   └── utils.py
+│   │   ├── core/
+│   │   │   ├── management/
+│   │   │   │   ├── commands/
+│   │   │   │   │   ├── __init__.py
+│   │   │   │   │   └── get_server_fingerprint.py
+│   │   │   │   └── __init__.py
+│   │   │   ├── __init__.py
+│   │   │   ├── apps.py
+│   │   │   ├── fingerprint.py
+│   │   │   ├── licensing.py
+│   │   │   └── middleware.py
+│   │   ├── scanners/
+│   │   │   ├── __init__.py
+│   │   │   ├── apps.py
+│   │   │   └── views.py
+│   │   ├── telemetry/
+│   │   │   ├── __init__.py
+│   │   │   ├── apps.py
+│   │   │   ├── tasks.py
+│   │   │   └── views.py
+│   │   └── __init__.py
+│   ├── attendsure_core/
+│   │   ├── __init__.py
+│   │   ├── asgi.py
+│   │   ├── celery.py
+│   │   ├── settings.py
+│   │   ├── urls.py
+│   │   └── wsgi.py
+│   ├── logs/
+│   ├── media/
+│   │   ├── avatars/
+│   │   │   ├── avatar_500f44f497.jpg
+│   │   │   ├── upload_2e68749d8708.jpg
+│   │   │   ├── upload_817418b5d297.jpg
+│   │   │   ├── upload_890cb7f0b9dc.jpg
+│   │   │   ├── upload_93634d1acaf2.jpg
+│   │   │   ├── upload_a11f01f810b7.jpg
+│   │   │   ├── upload_c73533892f2b.jpg
+│   │   │   └── upload_d0ec6d91acc6.jpg
+│   │   ├── faculty/
+│   │   │   ├── 5e4f7bc9fc.jpg
+│   │   │   ├── avatar_500f44f497.jpg
+│   │   │   ├── b67c8bacc9.png
+│   │   │   ├── cd9ca1d5d5.jpg
+│   │   │   ├── profile_1_1791616186.jpeg
+│   │   │   ├── profile_1_1791690206.jpeg
+│   │   │   ├── profile_78_1792199178.jpg
+│   │   │   ├── upload_2e68749d8708.jpg
+│   │   │   ├── upload_7f29b2121aba.jpg
+│   │   │   ├── upload_817418b5d297.jpg
+│   │   │   ├── upload_890cb7f0b9dc.jpg
+│   │   │   ├── upload_93634d1acaf2.jpg
+│   │   │   ├── upload_a11f01f810b7.jpg
+│   │   │   ├── upload_acc1d2d4a07b.jpg
+│   │   │   ├── upload_c73533892f2b.jpg
+│   │   │   └── upload_d0ec6d91acc6.jpg
+│   │   ├── school_logos/
+│   │   │   ├── logo_40a361a9317df8f4.png
+│   │   │   ├── logo_650d07710285df7c.png
+│   │   │   ├── logo_d44799fb7c3d87ed.png
+│   │   │   ├── logo_e0fd81ab350b.png
+│   │   │   ├── logo_e1151897ad86.png
+│   │   │   └── logo_e85a9793fcd9.png
+│   │   └── students/
+│   │       ├── 764d0782d3.jpg
+│   │       ├── bddcb57eae.png
+│   │       ├── student_5c8f9dfb.jpeg
+│   │       ├── upload_052799dc4703.jpg
+│   │       └── upload_e49779811328.jpg
+│   ├── scripts/
+│   │   ├── data/
+│   │   │   ├── rooms_store.json
+│   │   │   └── telemetry_store.json
+│   │   ├── results/
+│   │   │   └── academics_models_report.txt
+│   │   ├── all_models_code.txt
+│   │   ├── dump_models_codebase.py
+│   │   ├── ensure_complete_profiles.py
+│   │   ├── mock_sms_daemon.py
+│   │   ├── read_models.py
+│   │   ├── send_test_telemetry.py
+│   │   ├── show_faculty_gps.py
+│   │   ├── sms_daemon.py
+│   │   ├── test_faculty_live.py
+│   │   └── test_live_db.py
+│   ├── tests/
+│   │   ├── __init__.py
+│   │   ├── test_all_cruds.py
+│   │   ├── test_auth.py
+│   │   ├── test_classroom.py
+│   │   ├── test_geofence.py
+│   │   └── test_reports.py
+│   ├── .env
+│   ├── .env.example
+│   ├── audit_system.py
+│   ├── clear_db.py
+│   ├── fix.txt
+│   ├── fix_schema.py
+│   ├── gunicorn.conf.py
+│   ├── manage.py
+│   ├── organize_and_clean.py
+│   ├── read_models.py
+│   ├── rename_sched_col.py
+│   ├── requirements.txt
+│   ├── seed_data.py
+│   ├── seed_real_school_data.py
+│   ├── seed_schedules.py
+│   ├── seed_students.py
+│   ├── send_test_telemetry.py
+│   ├── show_faculty_gps.py
+│   ├── show_models.py
+│   ├── show_tree.py
+│   ├── stress_test.py
+│   ├── sync_db.py
+│   ├── test_faculty_live.py
+│   ├── test_hardware_pipeline.py
+│   └── test_live_db.py
+├── deploy/
+│   ├── nginx.conf
+│   ├── switch.ps1
+│   └── switch.sh
+├── frontend/
+│   ├── src/
+│   │   ├── api/
+│   │   │   ├── client.js
+│   │   │   └── client.ts
+│   │   ├── components/
+│   │   │   ├── auth/
+│   │   │   │   ├── AuthPage.tsx
+│   │   │   │   └── LoginView.tsx
+│   │   │   ├── common/
+│   │   │   │   ├── ErrorBoundary.tsx
+│   │   │   │   ├── PageSetupModal.tsx
+│   │   │   │   └── Pagination.tsx
+│   │   │   ├── dashboard/
+│   │   │   │   └── DashboardView.tsx
+│   │   │   ├── layout/
+│   │   │   │   ├── AdminHeader.tsx
+│   │   │   │   ├── AdminSidebar.tsx
+│   │   │   │   ├── Footer.tsx
+│   │   │   │   ├── Header.tsx
+│   │   │   │   ├── Navbar.tsx
+│   │   │   │   ├── ProfileDropdown.tsx
+│   │   │   │   └── Sidebar.tsx
+│   │   │   ├── modals/
+│   │   │   │   ├── AcademicSetupModal.tsx
+│   │   │   │   └── AcademicSetupModals.tsx
+│   │   │   ├── profile/
+│   │   │   │   └── ProfileModal.tsx
+│   │   │   ├── reports/
+│   │   │   │   ├── DepEdLetterhead.tsx
+│   │   │   │   ├── ReportHeader.tsx
+│   │   │   │   └── ReportNavBar.tsx
+│   │   │   ├── tabs/
+│   │   │   │   ├── DTRTab.tsx
+│   │   │   │   ├── FacultyTab.tsx
+│   │   │   │   ├── fix.txt
+│   │   │   │   ├── GateLogsTab.tsx
+│   │   │   │   ├── GatePassesTab.tsx
+│   │   │   │   ├── GeofenceTab.tsx
+│   │   │   │   ├── index.ts
+│   │   │   │   ├── ModuleTableLayout.tsx
+│   │   │   │   ├── ReportsTab.txt
+│   │   │   │   ├── ScannersTab.tsx
+│   │   │   │   ├── SchedulesTab.tsx
+│   │   │   │   ├── SettingsTab.tsx
+│   │   │   │   ├── SF1ReportTab.tsx
+│   │   │   │   ├── SF2ReportTab.tsx
+│   │   │   │   ├── SF4ReportTab.tsx
+│   │   │   │   ├── SmsTab.tsx
+│   │   │   │   ├── StudentsTab.tsx
+│   │   │   │   ├── TeachersTab.tsx
+│   │   │   │   └── UsersTab.tsx
+│   │   │   ├── ui/
+│   │   │   │   ├── AlertDialog.tsx
+│   │   │   │   ├── AppLogo.tsx
+│   │   │   │   ├── Button.tsx
+│   │   │   │   ├── DepEdLogo.tsx
+│   │   │   │   ├── FormControls.tsx
+│   │   │   │   ├── KagawaranNgEdukasyonLogo.tsx
+│   │   │   │   ├── logos.ts
+│   │   │   │   └── Modal.tsx
+│   │   │   └── SF1Viewer.tsx
+│   │   ├── constants/
+│   │   │   └── uiCopy.ts
+│   │   ├── context/
+│   │   │   ├── AlertContext.tsx
+│   │   │   └── SchoolContext.tsx
+│   │   ├── hooks/
+│   │   │   └── usePageSetup.ts
+│   │   ├── theme/
+│   │   │   └── tokens.ts
+│   │   ├── types/
+│   │   │   ├── auth.ts
+│   │   │   ├── pageSetup.ts
+│   │   │   ├── section.ts
+│   │   │   └── sf1.ts
+│   │   ├── App.tsx
+│   │   ├── index.css
+│   │   └── main.tsx
+│   ├── .env.development
+│   ├── .env.production
+│   ├── index.html
+│   └── vite.config.ts
+├── mobile/
+│   ├── assets/
+│   │   ├── adaptive-icon.png
+│   │   ├── adaptive-icon.svg
+│   │   ├── attendsure-logo.svg
+│   │   ├── icon.png
+│   │   ├── icon.svg
+│   │   ├── splash.png
+│   │   ├── splash.svg
+│   │   └── techblazer.svg
+│   ├── src/
+│   │   ├── api/
+│   │   │   ├── client.ts
+│   │   │   └── endpoints.ts
+│   │   ├── branding/
+│   │   │   ├── AttendSureBadge.tsx
+│   │   │   ├── AttendSureLogo.tsx
+│   │   │   └── TechBlazerSignature.tsx
+│   │   ├── components/
+│   │   │   ├── common/
+│   │   │   │   ├── Badge.tsx
+│   │   │   │   ├── Button.tsx
+│   │   │   │   ├── Card.tsx
+│   │   │   │   └── Input.tsx
+│   │   │   ├── reports/
+│   │   │   │   ├── DepEdReportHeaderFooter.tsx
+│   │   │   │   ├── DTRReportView.tsx
+│   │   │   │   ├── SF1ReportView.tsx
+│   │   │   │   ├── SF2ReportView.tsx
+│   │   │   │   └── SF4ReportView.tsx
+│   │   │   ├── AttendSureLogo.tsx
+│   │   │   ├── ScreenWrapper.tsx
+│   │   │   ├── ServerConfigModal.tsx
+│   │   │   └── SplashScreen.tsx
+│   │   ├── constants/
+│   │   │   └── theme.ts
+│   │   ├── context/
+│   │   │   └── AuthContext.tsx
+│   │   ├── navigation/
+│   │   │   ├── AppNavigator.tsx
+│   │   │   └── MainTabNavigator.tsx
+│   │   ├── screens/
+│   │   │   ├── CalendarScreen.tsx
+│   │   │   ├── DTRScreen.tsx
+│   │   │   ├── HomeScreen.tsx
+│   │   │   ├── LoginScreen.tsx
+│   │   │   ├── MenuScreen.tsx
+│   │   │   ├── ProfileSettingsScreen.tsx
+│   │   │   ├── ReportsScreen.tsx
+│   │   │   ├── ScannerScreen.tsx
+│   │   │   ├── SettingsScreen.tsx
+│   │   │   └── SmsLogsScreen.tsx
+│   │   ├── services/
+│   │   │   ├── authService.ts
+│   │   │   ├── backgroundLocation.ts
+│   │   │   ├── configService.ts
+│   │   │   ├── deviceService.ts
+│   │   │   ├── facultyService.ts
+│   │   │   ├── offlineQueue.ts
+│   │   │   ├── pushService.ts
+│   │   │   ├── soundService.ts
+│   │   │   └── telemetryService.ts
+│   │   ├── shims/
+│   │   │   ├── buffer.js
+│   │   │   ├── splash-screen.web.js
+│   │   │   └── unstable-internals.js
+│   │   ├── types/
+│   │   │   ├── declarations.d.ts
+│   │   │   └── index.ts
+│   │   └── utils/
+│   │       └── formatters.ts
+│   ├── .env
+│   ├── .env.example
+│   ├── .gitignore
+│   ├── AGENTS.md
+│   ├── app.json
+│   ├── App.tsx
+│   ├── CLAUDE.md
+│   ├── count_clean.ps1
+│   ├── fast_count_mobile.ps1
+│   ├── index.ts
+│   ├── LICENSE
+│   ├── metro.config.js
+│   ├── package.json
+│   └── tsconfig.json
+├── scripts/
+│   ├── audit_system.py
+│   ├── check_database.py
+│   ├── check_gps.py
+│   ├── clean_cache.py
+│   ├── clean_project.py
+│   ├── export_backend.bat
+│   ├── export_mobile.bat
+│   ├── export_web.bat
+│   ├── git_push.bat
+│   ├── inspect_models.py
+│   ├── inspect_scripts.py
+│   ├── inspect_tree.py
+│   ├── ping_hardware_kiosks.py
+│   ├── run_all.py
+│   ├── run_all_scripts_to_results.py
+│   ├── show_scripts_codebase.py
+│   ├── sync_profiles.py
+│   ├── test_auth.py
+│   ├── test_classroom.py
+│   ├── test_cruds.py
+│   ├── test_geofence.py
+│   └── test_reports.py
+├── web/
+│   ├── public/
+│   │   ├── splash.svg
+│   │   └── techblazer.svg
+│   ├── src/
+│   │   ├── api/
+│   │   │   └── client.ts
+│   │   ├── assets/
+│   │   │   ├── attendsure-logo.svg
+│   │   │   └── techblazer.svg
+│   │   ├── components/
+│   │   │   ├── auth/
+│   │   │   │   ├── AuthPage.tsx
+│   │   │   │   └── LoginView.tsx
+│   │   │   ├── branding/
+│   │   │   │   ├── AttendSureBadge.tsx
+│   │   │   │   ├── SchoolTenantBadge.tsx
+│   │   │   │   └── TechBlazerSignature.tsx
+│   │   │   ├── common/
+│   │   │   │   ├── ErrorBoundary.tsx
+│   │   │   │   ├── PageSetupModal.tsx
+│   │   │   │   ├── Pagination.tsx
+│   │   │   │   ├── ProfileAvatar.tsx
+│   │   │   │   ├── StatsCard.tsx
+│   │   │   │   └── StatusBadge.tsx
+│   │   │   ├── dashboard/
+│   │   │   │   └── DashboardView.tsx
+│   │   │   ├── layout/
+│   │   │   │   ├── AppLayout.tsx
+│   │   │   │   ├── Footer.tsx
+│   │   │   │   ├── Header.tsx
+│   │   │   │   ├── Navbar.tsx
+│   │   │   │   ├── ProfileDropdown.tsx
+│   │   │   │   └── Sidebar.tsx
+│   │   │   ├── modals/
+│   │   │   │   ├── AcademicSetupModal.tsx
+│   │   │   │   ├── CompleteProfileModal.tsx
+│   │   │   │   ├── GateLogInspectionModal.tsx
+│   │   │   │   ├── index.ts
+│   │   │   │   ├── PageSetupModal.tsx
+│   │   │   │   ├── ProfileModal.tsx
+│   │   │   │   ├── StudentIdPassModal.tsx
+│   │   │   │   ├── SystemHealthModal.tsx
+│   │   │   │   ├── UserDeleteModal.tsx
+│   │   │   │   └── UserFormModal.tsx
+│   │   │   ├── profile/
+│   │   │   │   ├── CompleteProfileModal.tsx
+│   │   │   │   └── ProfileModal.tsx
+│   │   │   ├── reports/
+│   │   │   │   ├── DepEdLetterhead.tsx
+│   │   │   │   ├── DepEdReportHeaderFooter.tsx
+│   │   │   │   ├── ReportHeader.tsx
+│   │   │   │   └── ReportNavBar.tsx
+│   │   │   ├── splash/
+│   │   │   │   └── SplashScreen.tsx
+│   │   │   ├── tabs/
+│   │   │   │   ├── DTRTab.tsx
+│   │   │   │   ├── FacultyTab.tsx
+│   │   │   │   ├── GateLogsTab.tsx
+│   │   │   │   ├── GatePassesTab.tsx
+│   │   │   │   ├── GeofenceTab.tsx
+│   │   │   │   ├── index.ts
+│   │   │   │   ├── ModuleTableLayout.tsx
+│   │   │   │   ├── MyAssignedClassesTab.tsx
+│   │   │   │   ├── ScannersTab.tsx
+│   │   │   │   ├── SchedulesTab.tsx
+│   │   │   │   ├── SettingsTab.tsx
+│   │   │   │   ├── SF1ReportTab.tsx
+│   │   │   │   ├── SF2ReportTab.tsx
+│   │   │   │   ├── SF4ReportTab.tsx
+│   │   │   │   ├── SmsTab.tsx
+│   │   │   │   ├── StudentsTab.tsx
+│   │   │   │   └── UsersTab.tsx
+│   │   │   └── ui/
+│   │   │       ├── AlertDialog.tsx
+│   │   │       ├── Button.tsx
+│   │   │       ├── FormControls.tsx
+│   │   │       └── Modal.tsx
+│   │   ├── constants/
+│   │   │   └── uiCopy.ts
+│   │   ├── context/
+│   │   │   ├── AlertContext.tsx
+│   │   │   ├── SchoolContext.tsx
+│   │   │   └── ThemeContext.tsx
+│   │   ├── hooks/
+│   │   │   └── usePageSetup.ts
+│   │   ├── theme/
+│   │   │   └── tokens.ts
+│   │   ├── types/
+│   │   │   ├── auth.ts
+│   │   │   ├── pageSetup.ts
+│   │   │   ├── section.ts
+│   │   │   └── sf1.ts
+│   │   ├── App.css
+│   │   ├── App.tsx
+│   │   ├── index.css
+│   │   └── main.tsx
+│   ├── .env.development
+│   ├── .env.production
+│   ├── .gitignore
+│   ├── .npmrc
+│   ├── eslint.config.js
+│   ├── index.html
+│   ├── package.json
+│   ├── README.md
+│   ├── tsconfig.app.json
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
+│   └── vite.config.ts
+├── .gitignore
+├── backend_codebase_export.txt
+├── docker-compose.yml
+├── endpoints.json
+├── export_all_codes.bat
+├── export_all_codes.py
+├── export_backend.bat
+├── export_mobile.bat
+├── export_web.bat
+├── find_terms.py
+├── generate_structure.bat
+├── generate_structure.py
+├── generate_tree.py
+├── project_tree.txt
+├── push_to_github.bat
+├── push_to_github.ps1
+├── push_to_github.py
+├── reorganize_backend.py
+├── replace_terms.py
+├── restore_115am.py
+├── restore_1232am.py
+├── save_codebase.py
+├── search_results.txt
+├── start.bat
+├── start.ps1
+├── update_project.bat
+├── update_project.py
+└── upgrade_backend_clean.py

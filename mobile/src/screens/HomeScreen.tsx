@@ -24,6 +24,8 @@ import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
 import { getServerBaseUrl } from '../services/configService';
 import { getUnsyncedCount } from '../services/offlineQueue';
+import { sendLiveHeartbeat } from '../services/telemetryService';
+import { startPassivePresenceTracking } from '../services/backgroundLocation';
 import { COLORS } from '../constants/theme';
 
 const fallbackLogo = require('../../assets/attendsure-logo.svg');
@@ -44,7 +46,7 @@ function calculateDistanceMeters(
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(radLat1) * Math.cos(radLat2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return Math.round(R * c * 100) / 100;
 }
 
 function formatDistance(meters: number): string {
@@ -148,6 +150,26 @@ const getLocalTodayStr = (): string => {
   return `${y}-${m}-${d}`;
 };
 
+const getMindfulGreeting = (): { greeting: string; thought: string } => {
+  const hour = new Date().getHours();
+  if (hour < 12) {
+    return {
+      greeting: 'Good morning',
+      thought: 'Presence is the highest form of dedication to your learners.',
+    };
+  }
+  if (hour < 17) {
+    return {
+      greeting: 'Good afternoon',
+      thought: 'Excellence in service through daily consistency and care.',
+    };
+  }
+  return {
+    greeting: 'Good evening',
+    thought: 'Reflecting on a day of purpose, integrity, and mentorship.',
+  };
+};
+
 export const HomeScreen: React.FC = () => {
   const { user, refreshUser } = useAuth();
 
@@ -164,13 +186,14 @@ export const HomeScreen: React.FC = () => {
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [serverBase, setServerBase] = useState<string>('');
   const [logoFailed, setLogoFailed] = useState<boolean>(false);
+  const [avatarFailed, setAvatarFailed] = useState<boolean>(false);
 
   const [liveCoords, setLiveCoords] = useState<LiveGpsCoords | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  const [showBreachAlarm, setShowBreachAlarm] = useState<boolean>(false);
-  const [alarmAcknowledged, setAlarmAcknowledged] = useState<boolean>(false);
-  const lastBreachAlertTime = useRef<number>(0);
+  const [showAdvisoryModal, setShowAdvisoryModal] = useState<boolean>(false);
+  const [advisoryAcknowledged, setAdvisoryAcknowledged] = useState<boolean>(false);
+  const lastAdvisoryTimestamp = useRef<number>(0);
 
   const isMounted = useRef(true);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -181,7 +204,7 @@ export const HomeScreen: React.FC = () => {
     `${currentUser?.first_name || ''} ${currentUser?.last_name || ''}`.trim() ||
     currentUser?.faculty_name ||
     currentUser?.username ||
-    'Faculty User';
+    'Faculty Educator';
 
   const employeeId =
     currentUser?.employee_id ||
@@ -199,11 +222,13 @@ export const HomeScreen: React.FC = () => {
     'Lapasan National High School';
 
   const schoolSubHeader = [
-    schoolProfile?.school_id ? `ID: ${schoolProfile.school_id}` : '',
+    schoolProfile?.school_id ? `School ID: ${schoolProfile.school_id}` : '',
     schoolProfile?.division || '',
   ]
     .filter(Boolean)
     .join(' • ');
+
+  const mindfulQuote = useMemo(() => getMindfulGreeting(), []);
 
   const resolvePhotoUrl = useCallback((path: string | null | undefined, base: string) => {
     if (!path) return null;
@@ -215,21 +240,39 @@ export const HomeScreen: React.FC = () => {
     return `${cleanBase}${cleanPath}`;
   }, []);
 
+  const rawUserPhoto =
+    currentUser?.photo_url ||
+    currentUser?.photo ||
+    currentUser?.avatar_url ||
+    currentUser?.avatar ||
+    null;
+  const resolvedUserPhoto = resolvePhotoUrl(rawUserPhoto, serverBase);
+
+  // Initialize Continuous Background Tracking (Sleep Mode Support)
+  useEffect(() => {
+    startPassivePresenceTracking().catch((err) =>
+      console.log('[BackgroundGPS] Startup notice:', err?.message || err)
+    );
+  }, [currentUser?.username, currentUser?.id]);
+
+  // Foreground Satellite GPS Tracking
   useEffect(() => {
     let watcherSubscription: Location.LocationSubscription | null = null;
     let isSubscribed = true;
 
     const startLiveGpsTracking = async () => {
+      let lastHeartbeatSent = 0;
+
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          if (isSubscribed) setGpsError('Location permission required.');
+          if (isSubscribed) setGpsError('Location permission required for attendance verification.');
           return;
         }
 
         const isGpsActive = await Location.hasServicesEnabledAsync();
         if (!isGpsActive) {
-          if (isSubscribed) setGpsError('Phone GPS is disabled.');
+          if (isSubscribed) setGpsError('Device GPS is turned off.');
           return;
         }
 
@@ -240,36 +283,53 @@ export const HomeScreen: React.FC = () => {
         });
 
         if (isSubscribed && initial) {
-          setLiveCoords({
+          const coordsData: LiveGpsCoords = {
             latitude: initial.coords.latitude,
             longitude: initial.coords.longitude,
             accuracy: initial.coords.accuracy,
             mocked: Boolean(initial.mocked),
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          };
+          setLiveCoords(coordsData);
+
+          lastHeartbeatSent = Date.now();
+          sendLiveHeartbeat(coordsData).catch((err: any) => {
+            console.log('[Telemetry] Initial sync notice:', err?.message || err);
           });
         }
 
         watcherSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,
-            timeInterval: 4000,
-            distanceInterval: 4,
+            timeInterval: 10000,
+            distanceInterval: 5,
           },
           (position) => {
             if (!isSubscribed) return;
-            setLiveCoords({
+
+            const coordsData: LiveGpsCoords = {
               latitude: position.coords.latitude,
               longitude: position.coords.longitude,
               accuracy: position.coords.accuracy,
               mocked: Boolean(position.mocked),
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-            });
+            };
+
+            setLiveCoords(coordsData);
             setGpsError(null);
+
+            const now = Date.now();
+            if (now - lastHeartbeatSent >= 10000) {
+              lastHeartbeatSent = now;
+              sendLiveHeartbeat(coordsData).catch((err: any) => {
+                console.log('[Telemetry] Heartbeat sync notice:', err?.message || err);
+              });
+            }
           }
         );
       } catch (err: any) {
         if (isSubscribed) {
-          setGpsError(err?.message || 'Searching for GPS signal...');
+          setGpsError(err?.message || 'Searching for real satellite signal...');
         }
       }
     };
@@ -282,12 +342,12 @@ export const HomeScreen: React.FC = () => {
         watcherSubscription.remove();
       }
     };
-  }, []);
+  }, [currentUser?.username, currentUser?.id]);
 
   const campusCenter = useMemo(() => {
-    const lat = geofenceConfig?.latitude ?? schoolProfile?.latitude ?? 8.4858;
-    const lng = geofenceConfig?.longitude ?? schoolProfile?.longitude ?? 124.6567;
-    const radius = geofenceConfig?.radius_meters ?? schoolProfile?.geofence_radius_meters ?? 150;
+    const lat = geofenceConfig?.latitude ?? schoolProfile?.latitude ?? 8.480241;
+    const lng = geofenceConfig?.longitude ?? schoolProfile?.longitude ?? 124.650152;
+    const radius = geofenceConfig?.radius_meters ?? schoolProfile?.geofence_radius_meters ?? 200;
     return { lat, lng, radius };
   }, [geofenceConfig, schoolProfile]);
 
@@ -318,13 +378,13 @@ export const HomeScreen: React.FC = () => {
       (todayDtrRow?.am_departure && !todayDtrRow?.pm_arrival)
   );
 
-  const isOfficiallyOnCampus = hasTappedInToday && !hasTappedOutToday;
+  const isOfficiallyOnDuty = hasTappedInToday && !hasTappedOutToday;
 
   const dutyStatusLabel = hasTappedInToday
     ? hasTappedOutToday
-      ? 'GATE: OUT'
-      : 'GATE: IN'
-    : 'GATE: NO SCAN';
+      ? 'DUTY COMPLETED'
+      : 'ACTIVE ON DUTY'
+    : 'NO GATE SCAN';
 
   const dutyStatusColor = hasTappedInToday
     ? hasTappedOutToday
@@ -335,35 +395,33 @@ export const HomeScreen: React.FC = () => {
   const dutyStatusBg = hasTappedInToday
     ? hasTappedOutToday
       ? '#fef3c7'
-      : '#dcfce7'
+      : '#ecfdf5'
     : '#f1f5f9';
 
   useEffect(() => {
-    if (isInsideCampusPerimeter === false && isOfficiallyOnCampus) {
+    if (isInsideCampusPerimeter === false && isOfficiallyOnDuty) {
       const accuracyMargin = liveCoords?.accuracy || 0;
-      const trueExcess = (liveDistanceMeters || 0) - campusCenter.radius;
+      const excessDistance = (liveDistanceMeters || 0) - campusCenter.radius;
 
-      if (trueExcess <= accuracyMargin) {
+      if (excessDistance <= accuracyMargin) {
         return;
       }
 
       const now = Date.now();
-      if (!alarmAcknowledged || now - lastBreachAlertTime.current > 300000) {
-        setShowBreachAlarm(true);
-        lastBreachAlertTime.current = now;
-        Vibration.vibrate([0, 500, 200, 500]);
+      if (!advisoryAcknowledged || now - lastAdvisoryTimestamp.current > 300000) {
+        setShowAdvisoryModal(true);
+        lastAdvisoryTimestamp.current = now;
+        Vibration.vibrate([0, 150, 100, 150]);
       }
     } else if (isInsideCampusPerimeter === true) {
-      setShowBreachAlarm(false);
-      setAlarmAcknowledged(false);
-      Vibration.cancel();
+      setShowAdvisoryModal(false);
+      setAdvisoryAcknowledged(false);
     }
-  }, [isInsideCampusPerimeter, isOfficiallyOnCampus, liveDistanceMeters, liveCoords, campusCenter.radius, alarmAcknowledged]);
+  }, [isInsideCampusPerimeter, isOfficiallyOnDuty, liveDistanceMeters, liveCoords, campusCenter.radius, advisoryAcknowledged]);
 
-  const handleDismissAlarm = () => {
-    setShowBreachAlarm(false);
-    setAlarmAcknowledged(true);
-    Vibration.cancel();
+  const handleDismissAdvisory = () => {
+    setShowAdvisoryModal(false);
+    setAdvisoryAcknowledged(true);
   };
 
   const loadCachedData = useCallback(async () => {
@@ -381,12 +439,9 @@ export const HomeScreen: React.FC = () => {
       if (cachedDtr) setDtrData(JSON.parse(cachedDtr));
       if (cachedGeo) setGeofenceConfig(JSON.parse(cachedGeo));
       if (activeBase) setServerBase(activeBase);
-    } catch {
-      // Ignore cache read errors
-    }
+    } catch {}
   }, []);
 
-  // Normalization logic: maps Garnet & Amethyst fields accurately from backend timetable
   const normalizeClasses = (rawList: any[]): SectionItem[] => {
     return rawList.map((item: any, idx: number) => ({
       schedule_id: item.schedule_id || item.id || idx + 1,
@@ -394,7 +449,7 @@ export const HomeScreen: React.FC = () => {
       section_name: item.section_name || item.section?.name || item.name || 'Class Section',
       subject_name: item.subject_name || item.subject?.name || item.subject_title || 'Subject',
       subject_code: item.subject_code || item.subject?.code || 'SUBJ',
-      room: item.room || item.room_number || item.room?.name || 'Rm-293',
+      room: item.room || item.room_number || item.room?.name || 'Classroom',
       start_time: typeof item.start_time === 'string' ? item.start_time : '07:00',
       end_time: typeof item.end_time === 'string' ? item.end_time : '09:00',
       total_students: Array.isArray(item.students) ? item.students.length : Number(item.total_students) || 0,
@@ -412,7 +467,6 @@ export const HomeScreen: React.FC = () => {
     const todayDate = getLocalTodayStr();
     const now = new Date();
 
-    // Query classroom/class_list/ first (the verified working endpoint from ReportsScreen)
     const [
       classListRes,
       schoolRes,
@@ -482,9 +536,7 @@ export const HomeScreen: React.FC = () => {
     try {
       const count = await getUnsyncedCount();
       if (isMounted.current) setOfflineCount(count);
-    } catch {
-      // Ignore storage check issues
-    }
+    } catch {}
   }, []);
 
   const onRefresh = useCallback(async () => {
@@ -516,8 +568,7 @@ export const HomeScreen: React.FC = () => {
   let totalPresent = 0;
   let totalLate = 0;
   let totalAbsent = 0;
-  let totalCutting = 0;
-  let totalUnverified = 0;
+  let totalNeedsReview = 0;
   let totalUnscanned = 0;
 
   let totalMaleEnrolled = 0;
@@ -548,10 +599,8 @@ export const HomeScreen: React.FC = () => {
         if (isFemale) totalFemalePresent += 1;
       } else if (status === 'ABSENT') {
         totalAbsent += 1;
-      } else if (status === 'CUTTING') {
-        totalCutting += 1;
-      } else if (status === 'UNVERIFIED') {
-        totalUnverified += 1;
+      } else if (status === 'CUTTING' || status === 'UNVERIFIED') {
+        totalNeedsReview += 1;
       } else {
         totalUnscanned += 1;
       }
@@ -559,7 +608,6 @@ export const HomeScreen: React.FC = () => {
   });
 
   const totalAttended = totalPresent + totalLate;
-  const totalAnomalies = totalCutting + totalUnverified;
   const overallRate =
     totalStudentsEnrolled > 0
       ? Math.round((totalAttended / totalStudentsEnrolled) * 100)
@@ -575,49 +623,49 @@ export const HomeScreen: React.FC = () => {
     <SafeAreaView style={styles.safeContainer} edges={['top', 'left', 'right']}>
       <StatusBar style="dark" />
 
-      {/* Emergency Perimeter Alert Modal */}
+      {/* Respectful Presence Advisory Modal */}
       <Modal
-        visible={showBreachAlarm}
+        visible={showAdvisoryModal}
         transparent={true}
         animationType="fade"
-        onRequestClose={handleDismissAlarm}
+        onRequestClose={handleDismissAdvisory}
       >
-        <View style={styles.alarmModalOverlay}>
-          <View style={styles.alarmModalCard}>
-            <View style={styles.alarmIconCircle}>
-              <Ionicons name="warning" size={36} color="#ffffff" />
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalIconWrap}>
+              <Ionicons name="location-outline" size={32} color="#004b87" />
             </View>
 
-            <Text style={styles.alarmModalTitle}>PERIMETER ALERT</Text>
-            <Text style={styles.alarmModalSubtitle}>
-              You are currently outside the school boundary while logged in on duty.
+            <Text style={styles.modalTitle}>Campus Boundary Notice</Text>
+            <Text style={styles.modalSubtitle}>
+              You are currently registered on duty, but your device is located outside the official school perimeter.
             </Text>
 
-            <View style={styles.alarmMetricsBox}>
-              <View style={styles.alarmMetricItem}>
-                <Text style={styles.alarmMetricLabel}>CURRENT</Text>
-                <Text style={styles.alarmMetricValue}>
-                  {liveDistanceMeters !== null ? formatDistance(liveDistanceMeters) : '--'}
+            <View style={styles.modalMetricsBox}>
+              <View style={styles.modalMetricCol}>
+                <Text style={styles.modalMetricLabel}>CURRENT DISTANCE</Text>
+                <Text style={styles.modalMetricVal}>
+                  {liveDistanceMeters !== null ? formatDistance(liveDistanceMeters) : '—'}
                 </Text>
               </View>
-              <View style={styles.alarmDividerVertical} />
-              <View style={styles.alarmMetricItem}>
-                <Text style={styles.alarmMetricLabel}>ALLOWED</Text>
-                <Text style={styles.alarmMetricValue}>{campusCenter.radius}m</Text>
+              <View style={styles.modalMetricDivider} />
+              <View style={styles.modalMetricCol}>
+                <Text style={styles.modalMetricLabel}>ALLOWED PERIMETER</Text>
+                <Text style={styles.modalMetricVal}>{campusCenter.radius}m</Text>
               </View>
             </View>
 
-            <Text style={styles.alarmWarningNotice}>
-              Please return to campus grounds or submit an excuse if on official travel.
+            <Text style={styles.modalExplanation}>
+              If on official travel or school errands, coordinate with your department head. Otherwise, please return to campus grounds to verify your on-site presence.
             </Text>
 
             <TouchableOpacity
-              style={styles.alarmAcknowledgeBtn}
-              onPress={handleDismissAlarm}
+              style={styles.modalConfirmBtn}
+              onPress={handleDismissAdvisory}
               activeOpacity={0.85}
             >
-              <Ionicons name="volume-mute-outline" size={17} color="#ffffff" />
-              <Text style={styles.alarmAcknowledgeBtnText}>Silence Alert</Text>
+              <Ionicons name="checkmark-outline" size={16} color="#ffffff" />
+              <Text style={styles.modalConfirmBtnText}>Acknowledge Notice</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -639,14 +687,19 @@ export const HomeScreen: React.FC = () => {
             <View style={styles.subBrandRow}>
               <View style={[styles.activeDot, { backgroundColor: dutyStatusColor }]} />
               <Text style={styles.protocolText} numberOfLines={1}>
-                {schoolSubHeader || `${userRole} PORTAL`}
+                {schoolSubHeader || `${userRole} • ATTENDSURE CORE`}
               </Text>
             </View>
           </View>
         </View>
 
-        <TouchableOpacity style={styles.refreshButton} onPress={onRefresh} activeOpacity={0.7}>
-          <Ionicons name="refresh" size={16} color="#004b87" />
+        <TouchableOpacity
+          style={styles.refreshButton}
+          onPress={onRefresh}
+          activeOpacity={0.7}
+          accessibilityLabel="Synchronize records"
+        >
+          <Ionicons name="sync-outline" size={16} color="#004b87" />
         </TouchableOpacity>
       </View>
 
@@ -658,23 +711,65 @@ export const HomeScreen: React.FC = () => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
         }
       >
-        {/* Anti-Cheat Mock GPS Warning */}
+        {/* Anti-Cheat: Simulated GPS Alert */}
         {liveCoords?.mocked && (
-          <View style={styles.mockAlertCard}>
-            <Ionicons name="alert-circle" size={18} color="#dc2626" />
+          <View style={styles.securityAlertCard}>
+            <Ionicons name="alert-circle-outline" size={18} color="#dc2626" />
             <View style={{ flex: 1 }}>
-              <Text style={styles.mockAlertTitle}>Mock GPS Detected</Text>
-              <Text style={styles.mockAlertSub}>
-                Disable fake location apps. Telemetry has been flagged.
+              <Text style={styles.securityAlertTitle}>Simulated GPS Detected</Text>
+              <Text style={styles.securityAlertBody}>
+                Mock location applications are active. To safeguard the integrity of official school records, please turn off simulated locations in device settings.
               </Text>
             </View>
           </View>
         )}
 
-        {/* 1. Geofence Status Card */}
-        <View style={styles.liveTelemetryCard}>
-          <View style={styles.telemetryCardHeader}>
-            <View style={styles.telemetryHeaderLeft}>
+        {/* 1. Mindful Greeting & Educator Identity Card with Authentic Avatar */}
+        <View style={styles.educatorDignityCard}>
+          <View style={styles.educatorHeaderRow}>
+            <View style={styles.avatarWrap}>
+              {resolvedUserPhoto && !avatarFailed ? (
+                <Image
+                  source={{ uri: resolvedUserPhoto }}
+                  style={styles.educatorAvatar}
+                  contentFit="cover"
+                  onError={() => setAvatarFailed(true)}
+                />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Ionicons name="person" size={20} color="#004b87" />
+                </View>
+              )}
+            </View>
+
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.greetingGreeting}>{mindfulQuote.greeting},</Text>
+              <Text style={styles.educatorFullName} numberOfLines={1}>
+                {displayName}
+              </Text>
+              <Text style={styles.educatorDesignation}>
+                {dtrData?.department ? `${dtrData.department} • ` : ''}ID: {employeeId || 'Verified Educator'}
+              </Text>
+            </View>
+
+            <View style={[styles.dutyStatusPill, { backgroundColor: dutyStatusBg }]}>
+              <View style={[styles.activeDot, { backgroundColor: dutyStatusColor }]} />
+              <Text style={[styles.dutyStatusPillText, { color: dutyStatusColor }]}>
+                {dutyStatusLabel}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.quoteSeparator} />
+          <Text style={styles.mindfulQuoteText}>
+            "{mindfulQuote.thought}"
+          </Text>
+        </View>
+
+        {/* 2. Campus Presence & Geofence Shield Card */}
+        <View style={styles.presenceShieldCard}>
+          <View style={styles.presenceCardHeader}>
+            <View style={styles.presenceHeaderLeft}>
               <View
                 style={[
                   styles.pulseDot,
@@ -683,306 +778,280 @@ export const HomeScreen: React.FC = () => {
                       isInsideCampusPerimeter === true
                         ? '#16a34a'
                         : isInsideCampusPerimeter === false
-                        ? '#dc2626'
+                        ? '#d97706'
                         : '#94a3b8',
                   },
                 ]}
               />
-              <Text style={styles.telemetryHeaderLabel}>GEOFENCE STATUS</Text>
+              <Text style={styles.presenceHeaderLabel}>CAMPUS PRESENCE STATUS</Text>
             </View>
 
             {liveCoords?.timestamp ? (
-              <View style={styles.liveTimestampBadge}>
+              <View style={styles.timestampBadge}>
                 <Ionicons name="time-outline" size={11} color="#64748b" />
-                <Text style={styles.liveTimestampText}>{liveCoords.timestamp}</Text>
+                <Text style={styles.timestampBadgeText}>{liveCoords.timestamp}</Text>
               </View>
             ) : null}
           </View>
 
-          <View style={styles.telemetryMainRow}>
-            <View style={{ flex: 1 }}>
-              {liveDistanceMeters !== null ? (
-                <>
-                  <View style={styles.distanceMetricRow}>
-                    <Text style={styles.distanceBigText}>
-                      {formatDistance(liveDistanceMeters)}
-                    </Text>
-                    <Text style={styles.distanceSubUnit}>from campus</Text>
-                  </View>
+          <View style={styles.presenceMainContent}>
+            {liveDistanceMeters !== null ? (
+              <>
+                <View style={styles.distanceValueRow}>
+                  <Text style={styles.distanceMetricBig}>
+                    {formatDistance(liveDistanceMeters)}
+                  </Text>
+                  <Text style={styles.distanceMetricSub}>from school boundary</Text>
+                </View>
 
-                  <View style={styles.perimeterNoticeRow}>
-                    <View
+                <View style={styles.perimeterBadgeRow}>
+                  <View
+                    style={[
+                      styles.perimeterBadge,
+                      {
+                        backgroundColor: isInsideCampusPerimeter ? '#ecfdf5' : '#fffbeb',
+                        borderColor: isInsideCampusPerimeter ? '#a7f3d0' : '#fde68a',
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={isInsideCampusPerimeter ? 'checkmark-circle' : 'navigate-circle-outline'}
+                      size={13}
+                      color={isInsideCampusPerimeter ? '#059669' : '#d97706'}
+                    />
+                    <Text
                       style={[
-                        styles.perimeterStatusBadge,
-                        {
-                          backgroundColor: isInsideCampusPerimeter ? '#ecfdf5' : '#fef2f2',
-                          borderColor: isInsideCampusPerimeter ? '#a7f3d0' : '#fecaca',
-                        },
+                        styles.perimeterBadgeText,
+                        { color: isInsideCampusPerimeter ? '#047857' : '#b45309' },
                       ]}
                     >
-                      <Ionicons
-                        name={isInsideCampusPerimeter ? 'checkmark-circle' : 'alert-circle'}
-                        size={12}
-                        color={isInsideCampusPerimeter ? '#059669' : '#dc2626'}
-                      />
-                      <Text
-                        style={[
-                          styles.perimeterStatusText,
-                          { color: isInsideCampusPerimeter ? '#047857' : '#b91c1c' },
-                        ]}
-                      >
-                        {isInsideCampusPerimeter ? 'INSIDE BOUNDARY' : 'OUTSIDE BOUNDARY'}
-                      </Text>
-                    </View>
-
-                    <Text style={styles.allowedRadiusText}>
-                      Radius: {campusCenter.radius}m
+                      {isInsideCampusPerimeter ? 'ON CAMPUS GROUNDS' : 'OUTSIDE PERIMETER'}
                     </Text>
                   </View>
-                </>
-              ) : (
-                <View style={styles.acquiringGpsBox}>
-                  <ActivityIndicator size="small" color="#0284c7" />
-                  <Text style={styles.acquiringGpsText}>
-                    {gpsError || 'Acquiring GPS fix...'}
+
+                  <Text style={styles.perimeterRadiusMeta}>
+                    Allowed zone: {campusCenter.radius}m
                   </Text>
                 </View>
-              )}
-            </View>
+              </>
+            ) : (
+              <View style={styles.acquiringFixBox}>
+                <ActivityIndicator size="small" color="#004b87" />
+                <Text style={styles.acquiringFixText}>
+                  {gpsError || 'Connecting to device satellite sensors...'}
+                </Text>
+              </View>
+            )}
           </View>
 
-          <View style={styles.telemetryFooter}>
-            <View style={styles.telemetryFooterItem}>
-              <Ionicons name="radio-outline" size={11} color="#64748b" />
-              <Text style={styles.telemetryFooterLabel}>
-                Accuracy: {liveCoords?.accuracy ? `±${Math.round(liveCoords.accuracy)}m` : 'Measuring...'}
+          <View style={styles.presenceFooterRow}>
+            <View style={styles.presenceFooterCol}>
+              <Ionicons name="shield-checkmark-outline" size={12} color="#004b87" />
+              <Text style={styles.presenceFooterText}>
+                Identity Shield Locked
               </Text>
             </View>
 
-            <View style={styles.telemetryFooterItem}>
-              <Ionicons name="navigate-outline" size={11} color="#64748b" />
-              <Text style={styles.telemetryFooterLabel}>
-                {liveCoords ? `${liveCoords.latitude.toFixed(4)}°N, ${liveCoords.longitude.toFixed(4)}°E` : 'GPS Inactive'}
+            <View style={styles.presenceFooterCol}>
+              <Ionicons name="radio-outline" size={12} color="#64748b" />
+              <Text style={styles.presenceFooterText}>
+                Precision: {liveCoords?.accuracy ? `±${Math.round(liveCoords.accuracy)}m` : 'Measuring...'}
               </Text>
             </View>
           </View>
         </View>
 
+        {/* 3. Offline Safety Buffer Notice */}
+        {offlineCount > 0 && (
+          <View style={styles.offlineBufferBanner}>
+            <Ionicons name="cloud-offline-outline" size={15} color="#b45309" />
+            <Text style={styles.offlineBufferText}>
+              {offlineCount} record(s) protected offline. Will securely synchronize upon network connection.
+            </Text>
+          </View>
+        )}
+
         {/* Calendar Override or Weekend Notice */}
         {todayOverride ? (
-          <View style={styles.calendarAlertBanner}>
-            <Ionicons name="calendar" size={16} color="#b91c1c" />
+          <View style={styles.calendarBanner}>
+            <Ionicons name="calendar-outline" size={16} color="#004b87" />
             <View style={{ flex: 1 }}>
-              <Text style={styles.calendarAlertTitle}>
+              <Text style={styles.calendarBannerTitle}>
                 {todayOverride.type}: {todayOverride.date}
               </Text>
-              <Text style={styles.calendarAlertReason}>{todayOverride.reason}</Text>
+              <Text style={styles.calendarBannerReason}>{todayOverride.reason}</Text>
             </View>
           </View>
         ) : isWeekendToday && weekendRestEnabled ? (
-          <View style={[styles.calendarAlertBanner, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
-            <Ionicons name="sunny-outline" size={16} color="#1d4ed8" />
+          <View style={[styles.calendarBanner, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
+            <Ionicons name="partly-sunny-outline" size={16} color="#16a34a" />
             <View style={{ flex: 1 }}>
-              <Text style={[styles.calendarAlertTitle, { color: '#1e40af' }]}>
-                Weekend Rest Day
+              <Text style={[styles.calendarBannerTitle, { color: '#15803d' }]}>
+                Rest & Renewal Day
               </Text>
-              <Text style={[styles.calendarAlertReason, { color: '#1e3a8a' }]}>
-                Attendance logging is optional today.
+              <Text style={[styles.calendarBannerReason, { color: '#166534' }]}>
+                Official duty logging is optional during scheduled rest days.
               </Text>
             </View>
           </View>
         ) : null}
 
-        {/* 2. Faculty Identity Card */}
-        <View style={styles.dutyCard}>
-          <View style={styles.dutyTopRow}>
-            <View style={styles.dutyUserMeta}>
-              <Text style={styles.welcomeGreeting}>
-                {dtrData?.department ? dtrData.department : userRole}
-              </Text>
-              <Text style={styles.facultyDisplayName} numberOfLines={1}>
-                {displayName}
-              </Text>
-              {employeeId ? (
-                <Text style={styles.empIdBadgeText}>ID: {employeeId}</Text>
-              ) : null}
-            </View>
-
-            <View style={[styles.dutyBadge, { backgroundColor: dutyStatusBg }]}>
-              <View style={[styles.activeDot, { backgroundColor: dutyStatusColor }]} />
-              <Text style={[styles.dutyBadgeText, { color: dutyStatusColor }]}>
-                {dutyStatusLabel}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* 3. Offline Storage Notice */}
-        {offlineCount > 0 && (
-          <View style={styles.offlineWarningBanner}>
-            <Ionicons name="cloud-offline" size={15} color="#b45309" />
-            <Text style={styles.offlineWarningText}>
-              {offlineCount} offline record(s) queued. Will sync automatically.
-            </Text>
-          </View>
-        )}
-
-        {/* 4. DTR Punches */}
+        {/* 4. Daily Time Record (DTR) Integrity Summary */}
         {dtrData && (
           <>
-            <View style={styles.sectionHeadingRow}>
-              <Text style={styles.sectionHeadingTitle}>
-                DTR Summary ({dtrData.month} {dtrData.year})
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionHeaderTitle}>
+                Daily Time Record ({dtrData.month} {dtrData.year})
               </Text>
-              <Text style={styles.syncTimestampText}>
-                {dtrData.days_present} Day(s) Present
+              <Text style={styles.sectionHeaderSub}>
+                {dtrData.days_present} Day(s) Logged
               </Text>
             </View>
 
-            <View style={styles.dtrCard}>
-              <View style={styles.dtrPunchesRow}>
-                <View style={styles.dtrPunchBox}>
-                  <Text style={styles.dtrPunchLabel}>AM IN</Text>
-                  <Text style={styles.dtrPunchTime}>{todayDtrRow?.am_arrival || '--:--'}</Text>
+            <View style={styles.dtrIntegrityCard}>
+              <View style={styles.dtrGrid}>
+                <View style={styles.dtrSlot}>
+                  <Text style={styles.dtrSlotLabel}>AM IN</Text>
+                  <Text style={styles.dtrSlotTime}>{todayDtrRow?.am_arrival || '--:--'}</Text>
                 </View>
-                <View style={styles.dtrPunchBox}>
-                  <Text style={styles.dtrPunchLabel}>AM OUT</Text>
-                  <Text style={styles.dtrPunchTime}>{todayDtrRow?.am_departure || '--:--'}</Text>
+                <View style={styles.dtrSlot}>
+                  <Text style={styles.dtrSlotLabel}>AM OUT</Text>
+                  <Text style={styles.dtrSlotTime}>{todayDtrRow?.am_departure || '--:--'}</Text>
                 </View>
-                <View style={styles.dtrPunchBox}>
-                  <Text style={styles.dtrPunchLabel}>PM IN</Text>
-                  <Text style={styles.dtrPunchTime}>{todayDtrRow?.pm_arrival || '--:--'}</Text>
+                <View style={styles.dtrSlot}>
+                  <Text style={styles.dtrSlotLabel}>PM IN</Text>
+                  <Text style={styles.dtrSlotTime}>{todayDtrRow?.pm_arrival || '--:--'}</Text>
                 </View>
-                <View style={styles.dtrPunchBox}>
-                  <Text style={styles.dtrPunchLabel}>PM OUT</Text>
-                  <Text style={styles.dtrPunchTime}>{todayDtrRow?.pm_departure || '--:--'}</Text>
+                <View style={styles.dtrSlot}>
+                  <Text style={styles.dtrSlotLabel}>PM OUT</Text>
+                  <Text style={styles.dtrSlotTime}>{todayDtrRow?.pm_departure || '--:--'}</Text>
                 </View>
               </View>
 
-              <View style={styles.dtrFooterRow}>
-                <Text style={styles.dtrFooterText}>
+              <View style={styles.dtrCardFooter}>
+                <Text style={styles.dtrFooterMeta}>
                   Undertime: {dtrData.total_undertime_hours}h {dtrData.total_undertime_minutes}m
                 </Text>
                 <Text
                   style={[
-                    styles.dtrStatusTag,
+                    styles.dtrApprovalBadge,
                     {
                       color: dtrData.dept_head_approved
                         ? '#16a34a'
                         : dtrData.dtr_submitted
-                        ? '#0284c7'
+                        ? '#004b87'
                         : '#64748b',
                     },
                   ]}
                 >
                   {dtrData.dept_head_approved
-                    ? 'APPROVED'
+                    ? 'CERTIFIED BY DEPT HEAD'
                     : dtrData.dtr_submitted
-                    ? 'SUBMITTED'
-                    : 'IN PROGRESS'}
+                    ? 'TRANSMITTED FOR REVIEW'
+                    : 'RECORD IN PROGRESS'}
                 </Text>
               </View>
             </View>
           </>
         )}
 
-        {/* 5. Classroom Attendance Summary */}
-        <View style={styles.sectionHeadingRow}>
-          <Text style={styles.sectionHeadingTitle}>Classroom Attendance</Text>
+        {/* 5. Classroom Attendance Analytics */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeaderTitle}>Student Welfare & Attendance</Text>
           {lastSyncTime ? (
-            <Text style={styles.syncTimestampText}>Synced {lastSyncTime}</Text>
+            <Text style={styles.sectionHeaderSub}>Synced {lastSyncTime}</Text>
           ) : null}
         </View>
 
-        <View style={styles.overallRateCard}>
-          <View style={styles.rateHeaderRow}>
+        <View style={styles.analyticsCard}>
+          <View style={styles.analyticsHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rateCardTitle}>Student Attendance Rate</Text>
-              <Text style={styles.rateCardSub}>
-                {totalAttended} of {totalStudentsEnrolled} present across {totalClasses} class(es)
+              <Text style={styles.analyticsTitle}>Engagement Rate</Text>
+              <Text style={styles.analyticsSub}>
+                {totalAttended} of {totalStudentsEnrolled} students present across {totalClasses} section(s)
               </Text>
             </View>
-            <Text style={styles.rateBigText}>{overallRate}%</Text>
+            <Text style={styles.analyticsRateLarge}>{overallRate}%</Text>
           </View>
 
-          <View style={styles.overallProgressTrack}>
-            <View style={[styles.overallProgressFill, { width: `${Math.min(overallRate, 100)}%` }]} />
+          <View style={styles.analyticsProgressBarTrack}>
+            <View style={[styles.analyticsProgressBarFill, { width: `${Math.min(overallRate, 100)}%` }]} />
           </View>
 
           {totalStudentsEnrolled > 0 && (
-            <View style={styles.genderBreakdownRow}>
-              <View style={styles.genderStatChip}>
-                <Ionicons name="male" size={12} color="#0284c7" />
-                <Text style={styles.genderStatText}>
+            <View style={styles.genderMetricsRow}>
+              <View style={styles.genderMetricChip}>
+                <Ionicons name="male" size={12} color="#004b87" />
+                <Text style={styles.genderMetricText}>
                   Male: {totalMalePresent}/{totalMaleEnrolled}
                 </Text>
               </View>
-              <View style={styles.genderStatChip}>
+              <View style={styles.genderMetricChip}>
                 <Ionicons name="female" size={12} color="#db2777" />
-                <Text style={styles.genderStatText}>
+                <Text style={styles.genderMetricText}>
                   Female: {totalFemalePresent}/{totalFemaleEnrolled}
                 </Text>
               </View>
-              <View style={styles.genderStatChip}>
-                <Ionicons name="hourglass-outline" size={12} color="#64748b" />
-                <Text style={styles.genderStatText}>Unscanned: {totalUnscanned}</Text>
+              <View style={styles.genderMetricChip}>
+                <Ionicons name="time-outline" size={12} color="#64748b" />
+                <Text style={styles.genderMetricText}>Unscanned: {totalUnscanned}</Text>
               </View>
             </View>
           )}
         </View>
 
-        {/* Attendance Metrics Grid */}
-        <View style={styles.kpiGrid}>
+        {/* Attendance Breakdown Tiles */}
+        <View style={styles.kpiTileGrid}>
           <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: '#dcfce7' }]}>
-              <Ionicons name="checkmark-circle-outline" size={15} color="#16a34a" />
+            <View style={[styles.kpiIconWrap, { backgroundColor: '#ecfdf5' }]}>
+              <Ionicons name="checkmark-circle-outline" size={15} color="#059669" />
             </View>
-            <Text style={[styles.kpiValue, { color: '#16a34a' }]}>{totalPresent}</Text>
-            <Text style={styles.kpiLabel}>Present</Text>
+            <Text style={[styles.kpiValueText, { color: '#059669' }]}>{totalPresent}</Text>
+            <Text style={styles.kpiLabelText}>Present</Text>
           </View>
 
           <View style={styles.kpiTile}>
             <View style={[styles.kpiIconWrap, { backgroundColor: '#fef3c7' }]}>
               <Ionicons name="time-outline" size={15} color="#d97706" />
             </View>
-            <Text style={[styles.kpiValue, { color: '#d97706' }]}>{totalLate}</Text>
-            <Text style={styles.kpiLabel}>Late</Text>
+            <Text style={[styles.kpiValueText, { color: '#d97706' }]}>{totalLate}</Text>
+            <Text style={styles.kpiLabelText}>Tardy</Text>
           </View>
 
           <View style={styles.kpiTile}>
             <View style={[styles.kpiIconWrap, { backgroundColor: '#fee2e2' }]}>
               <Ionicons name="close-circle-outline" size={15} color="#dc2626" />
             </View>
-            <Text style={[styles.kpiValue, { color: '#dc2626' }]}>{totalAbsent}</Text>
-            <Text style={styles.kpiLabel}>Absent</Text>
+            <Text style={[styles.kpiValueText, { color: '#dc2626' }]}>{totalAbsent}</Text>
+            <Text style={styles.kpiLabelText}>Absent</Text>
           </View>
 
           <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: '#fae8ff' }]}>
-              <Ionicons name="shield-half-outline" size={15} color="#9333ea" />
+            <View style={[styles.kpiIconWrap, { backgroundColor: '#f1f5f9' }]}>
+              <Ionicons name="eye-outline" size={15} color="#475569" />
             </View>
-            <Text style={[styles.kpiValue, { color: '#9333ea' }]}>{totalAnomalies}</Text>
-            <Text style={styles.kpiLabel}>Flagged</Text>
+            <Text style={[styles.kpiValueText, { color: '#334155' }]}>{totalNeedsReview}</Text>
+            <Text style={styles.kpiLabelText}>Review</Text>
           </View>
         </View>
 
-        {/* 6. Scheduled Classes (Garnet & Amethyst rendered here) */}
-        <View style={styles.sectionHeadingRow}>
-          <Text style={styles.sectionHeadingTitle}>Class Sessions</Text>
-          <Text style={styles.classCountText}>{sections.length} Scheduled</Text>
+        {/* 6. Today's Educational Timetable */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeaderTitle}>Teaching Sessions</Text>
+          <Text style={styles.sectionCountText}>{sections.length} Assigned</Text>
         </View>
 
         {loading && sections.length === 0 ? (
-          <View style={styles.loadingCard}>
+          <View style={styles.emptyStateCard}>
             <ActivityIndicator size="small" color="#004b87" />
-            <Text style={styles.loadingCardText}>Loading schedule...</Text>
+            <Text style={styles.emptyStateText}>Loading timetable...</Text>
           </View>
         ) : sections.length === 0 ? (
-          <View style={styles.emptyClassCard}>
-            <Ionicons name="school-outline" size={34} color="#94a3b8" />
-            <Text style={styles.emptyClassTitle}>No Classes Scheduled</Text>
-            <Text style={styles.emptyClassSub}>
-              No teaching assignments are linked to your profile today.
+          <View style={styles.emptyStateCard}>
+            <Ionicons name="school-outline" size={32} color="#94a3b8" />
+            <Text style={styles.emptyStateTitle}>No Teaching Sessions Scheduled</Text>
+            <Text style={styles.emptyStateText}>
+              No classroom teaching schedules are linked to your profile today.
             </Text>
           </View>
         ) : (
@@ -1008,50 +1077,50 @@ export const HomeScreen: React.FC = () => {
             const roomAndTime = [sec.room, timeRange].filter(Boolean).join(' • ');
 
             return (
-              <View key={String(sec.schedule_id)} style={styles.classScheduleCard}>
-                <View style={styles.classCardHeader}>
+              <View key={String(sec.schedule_id)} style={styles.sessionCard}>
+                <View style={styles.sessionCardHeader}>
                   <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={styles.classSubjectTitle}>
+                    <Text style={styles.sessionSubjectTitle}>
                       {[sec.subject_name, sec.section_name].filter(Boolean).join(' • ')}
                     </Text>
                     {roomAndTime ? (
-                      <Text style={styles.classTimeRoomSub}>{roomAndTime}</Text>
+                      <Text style={styles.sessionRoomMeta}>{roomAndTime}</Text>
                     ) : null}
                   </View>
 
-                  <View style={styles.ratePill}>
-                    <Text style={styles.ratePillText}>{classRate}%</Text>
+                  <View style={styles.sessionRatePill}>
+                    <Text style={styles.sessionRatePillText}>{classRate}% verified</Text>
                   </View>
                 </View>
 
-                <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${Math.min(classRate, 100)}%` }]} />
+                <View style={styles.sessionProgressTrack}>
+                  <View style={[styles.sessionProgressFill, { width: `${Math.min(classRate, 100)}%` }]} />
                 </View>
 
-                <View style={styles.classMetricsRow}>
-                  <View style={styles.classMetricItem}>
-                    <Text style={styles.classMetricLabel}>ENROLLED</Text>
-                    <Text style={styles.classMetricVal}>{enrolledCount}</Text>
+                <View style={styles.sessionMetricsRow}>
+                  <View style={styles.sessionMetricCol}>
+                    <Text style={styles.sessionMetricLabel}>ENROLLED</Text>
+                    <Text style={styles.sessionMetricVal}>{enrolledCount}</Text>
                   </View>
 
-                  <View style={styles.classMetricItem}>
-                    <Text style={[styles.classMetricLabel, { color: '#059669' }]}>PRESENT</Text>
-                    <Text style={[styles.classMetricVal, { color: '#059669' }]}>{classPresent}</Text>
+                  <View style={styles.sessionMetricCol}>
+                    <Text style={[styles.sessionMetricLabel, { color: '#059669' }]}>PRESENT</Text>
+                    <Text style={[styles.sessionMetricVal, { color: '#059669' }]}>{classPresent}</Text>
                   </View>
 
-                  <View style={styles.classMetricItem}>
-                    <Text style={[styles.classMetricLabel, { color: '#d97706' }]}>LATE</Text>
-                    <Text style={[styles.classMetricVal, { color: '#d97706' }]}>{classLate}</Text>
+                  <View style={styles.sessionMetricCol}>
+                    <Text style={[styles.sessionMetricLabel, { color: '#d97706' }]}>TARDY</Text>
+                    <Text style={[styles.sessionMetricVal, { color: '#d97706' }]}>{classLate}</Text>
                   </View>
 
-                  <View style={styles.classMetricItem}>
-                    <Text style={[styles.classMetricLabel, { color: '#9333ea' }]}>FLAGGED</Text>
-                    <Text style={[styles.classMetricVal, { color: '#9333ea' }]}>{classFlagged}</Text>
+                  <View style={styles.sessionMetricCol}>
+                    <Text style={[styles.sessionMetricLabel, { color: '#64748b' }]}>REVIEW</Text>
+                    <Text style={[styles.sessionMetricVal, { color: '#475569' }]}>{classFlagged}</Text>
                   </View>
 
-                  <View style={styles.classMetricItem}>
-                    <Text style={[styles.classMetricLabel, { color: '#dc2626' }]}>PENDING</Text>
-                    <Text style={[styles.classMetricVal, { color: '#dc2626' }]}>
+                  <View style={styles.sessionMetricCol}>
+                    <Text style={[styles.sessionMetricLabel, { color: '#dc2626' }]}>PENDING</Text>
+                    <Text style={[styles.sessionMetricVal, { color: '#dc2626' }]}>
                       {classUnscanned}
                     </Text>
                   </View>
@@ -1083,7 +1152,7 @@ const styles = StyleSheet.create({
   schoolTitle: { fontSize: 13, fontWeight: '800', color: '#003460' },
   subBrandRow: { flexDirection: 'row', alignItems: 'center', marginTop: 1, gap: 5 },
   activeDot: { width: 6, height: 6, borderRadius: 3 },
-  protocolText: { fontSize: 9, fontWeight: '700', color: '#004b87', letterSpacing: 0.3 },
+  protocolText: { fontSize: 9.5, fontWeight: '700', color: '#004b87', letterSpacing: 0.3 },
   refreshButton: {
     width: 32,
     height: 32,
@@ -1096,151 +1165,204 @@ const styles = StyleSheet.create({
   },
   scrollArea: { flex: 1 },
   scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 },
-  alarmModalOverlay: {
+  modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
-  alarmModalCard: {
+  modalCard: {
     width: '100%',
     backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 22,
+    borderRadius: 16,
+    padding: 20,
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#f87171',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
     ...Platform.select({
-      ios: { shadowColor: '#dc2626', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 16 },
-      android: { elevation: 8 },
+      ios: { shadowColor: '#003460', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 },
+      android: { elevation: 6 },
     }),
   },
-  alarmIconCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#dc2626',
+  modalIconWrap: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#e0f2fe',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: 12,
   },
-  alarmModalTitle: {
-    fontSize: 15,
-    fontWeight: '900',
-    color: '#991b1b',
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#003460',
     textAlign: 'center',
-    letterSpacing: 0.5,
   },
-  alarmModalSubtitle: {
-    fontSize: 11.5,
+  modalSubtitle: {
+    fontSize: 12,
     color: '#475569',
     textAlign: 'center',
-    marginTop: 5,
-    lineHeight: 16,
+    marginTop: 4,
+    lineHeight: 17,
   },
-  alarmMetricsBox: {
+  modalMetricsBox: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    backgroundColor: '#fef2f2',
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#fecaca',
+    borderColor: '#e2e8f0',
     borderRadius: 10,
     width: '100%',
     paddingVertical: 10,
-    marginVertical: 14,
+    marginVertical: 12,
   },
-  alarmMetricItem: { alignItems: 'center', flex: 1 },
-  alarmDividerVertical: { width: 1, height: 24, backgroundColor: '#fca5a5' },
-  alarmMetricLabel: { fontSize: 8.5, fontWeight: '800', color: '#991b1b', letterSpacing: 0.4 },
-  alarmMetricValue: { fontSize: 15, fontWeight: '900', color: '#7f1d1d', marginTop: 1 },
-  alarmWarningNotice: {
-    fontSize: 10.5,
+  modalMetricCol: { alignItems: 'center', flex: 1 },
+  modalMetricDivider: { width: 1, height: 24, backgroundColor: '#cbd5e1' },
+  modalMetricLabel: { fontSize: 8.5, fontWeight: '800', color: '#64748b', letterSpacing: 0.3 },
+  modalMetricVal: { fontSize: 15, fontWeight: '800', color: '#003460', marginTop: 1 },
+  modalExplanation: {
+    fontSize: 11,
     color: '#64748b',
     textAlign: 'center',
-    lineHeight: 15,
+    lineHeight: 16,
     marginBottom: 16,
   },
-  alarmAcknowledgeBtn: {
+  modalConfirmBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: '#dc2626',
+    backgroundColor: '#004b87',
     width: '100%',
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingVertical: 11,
+    borderRadius: 8,
   },
-  alarmAcknowledgeBtnText: { color: '#ffffff', fontSize: 12.5, fontWeight: '800' },
-  mockAlertCard: {
+  modalConfirmBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
+  securityAlertCard: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     backgroundColor: '#fef2f2',
     borderWidth: 1,
     borderColor: '#fca5a5',
-    borderRadius: 12,
+    borderRadius: 10,
     padding: 10,
     marginBottom: 10,
     gap: 8,
   },
-  mockAlertTitle: { fontSize: 11, fontWeight: '800', color: '#991b1b' },
-  mockAlertSub: { fontSize: 10, color: '#b91c1c', marginTop: 1 },
-  liveTelemetryCard: {
+  securityAlertTitle: { fontSize: 11.5, fontWeight: '800', color: '#991b1b' },
+  securityAlertBody: { fontSize: 10.5, color: '#b91c1c', marginTop: 2, lineHeight: 14 },
+  educatorDignityCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 10,
+  },
+  educatorHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  avatarWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1.5,
+    borderColor: '#004b87',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  educatorAvatar: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarFallback: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#e0f2fe',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  greetingGreeting: { fontSize: 11, color: '#64748b', fontWeight: '600' },
+  educatorFullName: { fontSize: 15, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  educatorDesignation: { fontSize: 10.5, color: '#004b87', fontWeight: '700', marginTop: 1 },
+  dutyStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    marginLeft: 6,
+  },
+  dutyStatusPillText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 },
+  quoteSeparator: {
+    height: 1,
+    backgroundColor: '#f1f5f9',
+    marginVertical: 10,
+  },
+  mindfulQuoteText: {
+    fontSize: 11,
+    fontStyle: 'italic',
+    color: '#475569',
+    lineHeight: 15,
+  },
+  presenceShieldCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
     padding: 14,
     borderWidth: 1.5,
     borderColor: '#e0f2fe',
     marginBottom: 10,
-    ...Platform.select({
-      ios: { shadowColor: '#0284c7', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8 },
-      android: { elevation: 2 },
-    }),
   },
-  telemetryCardHeader: {
+  presenceCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    marginBottom: 8,
   },
-  telemetryHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  presenceHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   pulseDot: { width: 8, height: 8, borderRadius: 4 },
-  telemetryHeaderLabel: { fontSize: 9.5, fontWeight: '800', color: '#0369a1', letterSpacing: 0.5 },
-  liveTimestampBadge: {
+  presenceHeaderLabel: { fontSize: 10, fontWeight: '800', color: '#0369a1', letterSpacing: 0.4 },
+  timestampBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     backgroundColor: '#f1f5f9',
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 6,
+    borderRadius: 4,
   },
-  liveTimestampText: { fontSize: 9.5, color: '#475569', fontWeight: '600' },
-  telemetryMainRow: { marginVertical: 3 },
-  distanceMetricRow: { flexDirection: 'row', alignItems: 'baseline', gap: 5 },
-  distanceBigText: { fontSize: 26, fontWeight: '900', color: '#003460', letterSpacing: -0.5 },
-  distanceSubUnit: { fontSize: 11.5, fontWeight: '600', color: '#64748b' },
-  perimeterNoticeRow: {
+  timestampBadgeText: { fontSize: 9.5, color: '#475569', fontWeight: '600' },
+  presenceMainContent: { marginVertical: 4 },
+  distanceValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  distanceMetricBig: { fontSize: 26, fontWeight: '900', color: '#003460', letterSpacing: -0.5 },
+  distanceMetricSub: { fontSize: 11.5, fontWeight: '600', color: '#64748b' },
+  perimeterBadgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 5,
+    marginTop: 6,
   },
-  perimeterStatusBadge: {
+  perimeterBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingVertical: 3,
-    paddingHorizontal: 7,
+    paddingVertical: 3.5,
+    paddingHorizontal: 8,
     borderRadius: 6,
     borderWidth: 1,
   },
-  perimeterStatusText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 },
-  allowedRadiusText: { fontSize: 10, color: '#64748b', fontWeight: '600' },
-  acquiringGpsBox: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 },
-  acquiringGpsText: { fontSize: 11.5, color: '#64748b', fontWeight: '600' },
-  telemetryFooter: {
+  perimeterBadgeText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.2 },
+  perimeterRadiusMeta: { fontSize: 10.5, color: '#64748b', fontWeight: '600' },
+  acquiringFixBox: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+  acquiringFixText: { fontSize: 11.5, color: '#64748b', fontWeight: '600' },
+  presenceFooterRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1249,44 +1371,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#f1f5f9',
   },
-  telemetryFooterItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  telemetryFooterLabel: { fontSize: 9, color: '#64748b', fontWeight: '600' },
-  dutyCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 10,
-  },
-  dutyTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dutyUserMeta: { flex: 1, marginRight: 8 },
-  welcomeGreeting: { fontSize: 9.5, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' },
-  facultyDisplayName: { fontSize: 14.5, fontWeight: '800', color: '#0f172a', marginTop: 1 },
-  empIdBadgeText: { fontSize: 10, color: '#004b87', fontWeight: '700', marginTop: 1 },
-  dutyBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 7,
-  },
-  dutyBadgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
-  calendarAlertBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fef2f2',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    gap: 8,
-  },
-  calendarAlertTitle: { fontSize: 11, fontWeight: '800', color: '#991b1b' },
-  calendarAlertReason: { fontSize: 10.5, color: '#b91c1c', marginTop: 1 },
-  offlineWarningBanner: {
+  presenceFooterCol: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  presenceFooterText: { fontSize: 9.5, color: '#475569', fontWeight: '600' },
+  offlineBufferBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fffbeb',
@@ -1297,24 +1384,38 @@ const styles = StyleSheet.create({
     borderColor: '#fde68a',
     gap: 6,
   },
-  offlineWarningText: { flex: 1, fontSize: 10, color: '#92400e', fontWeight: '600' },
-  sectionHeadingRow: {
+  offlineBufferText: { flex: 1, fontSize: 10.5, color: '#92400e', fontWeight: '600' },
+  calendarBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    gap: 8,
+  },
+  calendarBannerTitle: { fontSize: 11.5, fontWeight: '800', color: '#004b87' },
+  calendarBannerReason: { fontSize: 10.5, color: '#1e3a8a', marginTop: 1 },
+  sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 12,
     marginBottom: 6,
   },
-  sectionHeadingTitle: { fontSize: 12, fontWeight: '800', color: '#334155', letterSpacing: 0.2 },
-  syncTimestampText: { fontSize: 9.5, fontWeight: '600', color: '#64748b' },
-  dtrCard: {
+  sectionHeaderTitle: { fontSize: 12.5, fontWeight: '800', color: '#334155' },
+  sectionHeaderSub: { fontSize: 10, fontWeight: '600', color: '#64748b' },
+  sectionCountText: { fontSize: 10.5, fontWeight: '700', color: '#004b87' },
+  dtrIntegrityCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
     padding: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  dtrPunchesRow: {
+  dtrGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     backgroundColor: '#f8fafc',
@@ -1322,19 +1423,19 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 8,
   },
-  dtrPunchBox: { alignItems: 'center', flex: 1 },
-  dtrPunchLabel: { fontSize: 8, fontWeight: '800', color: '#64748b' },
-  dtrPunchTime: { fontSize: 11.5, fontWeight: '800', color: '#0f172a', marginTop: 1 },
-  dtrFooterRow: {
+  dtrSlot: { alignItems: 'center', flex: 1 },
+  dtrSlotLabel: { fontSize: 8.5, fontWeight: '800', color: '#64748b' },
+  dtrSlotTime: { fontSize: 12, fontWeight: '800', color: '#0f172a', marginTop: 2 },
+  dtrCardFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 8,
     paddingHorizontal: 2,
   },
-  dtrFooterText: { fontSize: 10, color: '#475569', fontWeight: '600' },
-  dtrStatusTag: { fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
-  overallRateCard: {
+  dtrFooterMeta: { fontSize: 10.5, color: '#475569', fontWeight: '600' },
+  dtrApprovalBadge: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.2 },
+  analyticsCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
     padding: 12,
@@ -1342,19 +1443,19 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     marginBottom: 10,
   },
-  rateHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  rateCardTitle: { fontSize: 12.5, fontWeight: '700', color: '#0f172a' },
-  rateCardSub: { fontSize: 10, color: '#64748b', marginTop: 1 },
-  rateBigText: { fontSize: 24, fontWeight: '900', color: '#004b87', marginLeft: 8 },
-  overallProgressTrack: {
+  analyticsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  analyticsTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
+  analyticsSub: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
+  analyticsRateLarge: { fontSize: 24, fontWeight: '900', color: '#004b87', marginLeft: 8 },
+  analyticsProgressBarTrack: {
     height: 5,
     backgroundColor: '#f1f5f9',
     borderRadius: 2.5,
     overflow: 'hidden',
     marginTop: 8,
   },
-  overallProgressFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2.5 },
-  genderBreakdownRow: {
+  analyticsProgressBarFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2.5 },
+  genderMetricsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1363,9 +1464,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#f1f5f9',
   },
-  genderStatChip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  genderStatText: { fontSize: 10, fontWeight: '700', color: '#334155' },
-  kpiGrid: { flexDirection: 'row', gap: 6 },
+  genderMetricChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  genderMetricText: { fontSize: 10.5, fontWeight: '700', color: '#334155' },
+  kpiTileGrid: { flexDirection: 'row', gap: 6, marginBottom: 4 },
   kpiTile: {
     flex: 1,
     backgroundColor: '#ffffff',
@@ -1383,23 +1484,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 4,
   },
-  kpiValue: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
-  kpiLabel: { fontSize: 8, fontWeight: '700', color: '#64748b', marginTop: 1, textAlign: 'center' },
-  anomalyBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#faf5ff',
-    borderRadius: 10,
-    padding: 10,
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: '#e9d5ff',
-    gap: 6,
-  },
-  anomalyBannerTitle: { fontSize: 10.5, fontWeight: '800', color: '#6b21a8' },
-  anomalyBannerSub: { fontSize: 9.5, color: '#7e22ce', marginTop: 1 },
-  classCountText: { fontSize: 10.5, fontWeight: '700', color: '#004b87' },
-  classScheduleCard: {
+  kpiValueText: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  kpiLabelText: { fontSize: 8.5, fontWeight: '700', color: '#64748b', marginTop: 1, textAlign: 'center' },
+  sessionCard: {
     backgroundColor: '#ffffff',
     borderRadius: 12,
     padding: 12,
@@ -1407,27 +1494,27 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     marginBottom: 8,
   },
-  classCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  classSubjectTitle: { fontSize: 12.5, fontWeight: '800', color: '#0f172a' },
-  classTimeRoomSub: { fontSize: 10, color: '#64748b', marginTop: 1 },
-  ratePill: {
+  sessionCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sessionSubjectTitle: { fontSize: 12.5, fontWeight: '800', color: '#0f172a' },
+  sessionRoomMeta: { fontSize: 10, color: '#64748b', marginTop: 1 },
+  sessionRatePill: {
     backgroundColor: '#ecfdf5',
     paddingVertical: 2.5,
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     borderRadius: 5,
     borderWidth: 1,
     borderColor: '#a7f3d0',
   },
-  ratePillText: { fontSize: 9, fontWeight: '800', color: '#047857' },
-  progressTrack: {
+  sessionRatePillText: { fontSize: 9.5, fontWeight: '800', color: '#047857' },
+  sessionProgressTrack: {
     height: 4,
     backgroundColor: '#f1f5f9',
     borderRadius: 2,
     overflow: 'hidden',
     marginVertical: 8,
   },
-  progressFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2 },
-  classMetricsRow: {
+  sessionProgressFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2 },
+  sessionMetricsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1435,33 +1522,24 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     padding: 6,
   },
-  classMetricItem: { alignItems: 'center' },
-  classMetricLabel: { fontSize: 7, fontWeight: '800', color: '#64748b' },
-  classMetricVal: { fontSize: 11, fontWeight: '800', color: '#0f172a', marginTop: 1 },
-  loadingCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    padding: 20,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  loadingCardText: { fontSize: 11, color: '#64748b', marginTop: 6 },
-  emptyClassCard: {
+  sessionMetricCol: { alignItems: 'center' },
+  sessionMetricLabel: { fontSize: 7.5, fontWeight: '800', color: '#64748b' },
+  sessionMetricVal: { fontSize: 11.5, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  emptyStateCard: {
     backgroundColor: '#ffffff',
     borderRadius: 12,
-    padding: 22,
+    padding: 24,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  emptyClassTitle: { fontSize: 12.5, fontWeight: '700', color: '#0f172a', marginTop: 6 },
-  emptyClassSub: {
-    fontSize: 10.5,
+  emptyStateTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginTop: 6 },
+  emptyStateText: {
+    fontSize: 11,
     color: '#64748b',
     textAlign: 'center',
     marginTop: 2,
-    lineHeight: 14,
+    lineHeight: 15,
   },
 });
 

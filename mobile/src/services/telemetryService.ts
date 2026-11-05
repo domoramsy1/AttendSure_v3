@@ -12,14 +12,23 @@ const DEVICE_UUID_STORAGE_KEY = 'attendsure_hardware_device_uuid';
 export interface HeartbeatResponse {
   status?: string;
   device_bound?: boolean;
+  distance?: string;
   distance_meters?: number;
+  verified_inside?: boolean;
   is_inside_perimeter?: boolean;
   server_time?: string;
   isQueuedOffline?: boolean;
 }
 
+export interface CoordinatesPayload {
+  latitude: number;
+  longitude: number;
+  accuracy?: number | null;
+  mocked?: boolean;
+}
+
 /**
- * Retrieves or initializes the hardware device lock UUID.
+ * Retrieves or registers the hardware device lock UUID in persistent storage.
  */
 export const getHardwareDeviceUuid = async (fallbackId?: string): Promise<string> => {
   try {
@@ -36,86 +45,108 @@ export const getHardwareDeviceUuid = async (fallbackId?: string): Promise<string
     await AsyncStorage.setItem(DEVICE_UUID_STORAGE_KEY, generated);
     return generated;
   } catch {
-    return fallbackId || `DEV-${Platform.OS.toUpperCase()}-DEFAULT`;
+    return fallbackId || `DEV-${Platform.OS.toUpperCase()}-DEVICE`;
   }
 };
 
 /**
- * Reads GPS coordinates across Native and Web platforms.
+ * Reads the actual phone model from React Native hardware constants.
  */
-const getCurrentCoordinates = async (): Promise<{
-  latitude: number;
-  longitude: number;
-  accuracy: number | null;
-  mocked: boolean;
-}> => {
-  if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
-    return new Promise((resolve, reject) => {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          resolve({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-            accuracy: pos.coords.accuracy || null,
-            mocked: false,
-          });
-        },
-        (err) => {
-          reject(new Error(err.message || 'Location permission denied.'));
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-    });
+export const getRealDeviceModel = (): string => {
+  if (Platform.OS === 'android') {
+    const constants = Platform.constants as Record<string, any>;
+    const brand = constants?.Brand || constants?.brand || '';
+    const model = constants?.Model || constants?.model || '';
+    const full = `${brand} ${model}`.trim();
+    return full || 'Android Device';
   }
-
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== 'granted') {
-    throw new Error('Location permission is required to verify campus presence.');
+  if (Platform.OS === 'ios') {
+    return 'Apple iOS Device';
   }
-
-  const location = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.Balanced,
-  });
-
-  return {
-    latitude: location.coords.latitude,
-    longitude: location.coords.longitude,
-    accuracy: location.coords.accuracy || null,
-    mocked: Boolean(location.mocked),
-  };
+  return 'Web Client';
 };
 
 /**
- * Reads battery percentage from device hardware.
+ * Reads battery percentage from phone hardware.
+ * Always returns a clean integer number to satisfy the offline queue type.
  */
-const getBatteryPercentage = async (): Promise<number> => {
+const getRealBatteryPercentage = async (): Promise<number> => {
   try {
     const level = await Battery.getBatteryLevelAsync();
-    if (level >= 0) return Math.round(level * 100);
-  } catch {}
+    if (typeof level === 'number' && level >= 0) {
+      return Math.round(level * 100);
+    }
+  } catch {
+    // Hardware sensor unavailable
+  }
   return 100;
 };
 
 /**
- * Captures real GPS and posts to `/api/telemetry/heartbeat/`.
+ * Transmits real GPS coordinates and hardware telemetry directly to PostgreSQL.
  */
-export const sendLiveHeartbeat = async (facultyIdentifier?: string): Promise<HeartbeatResponse> => {
-  const coords = await getCurrentCoordinates();
-  const hardwareUuid = await getHardwareDeviceUuid(facultyIdentifier);
-  const batteryLevel = await getBatteryPercentage();
+export const sendLiveHeartbeat = async (
+  coordsOrIdentifier?: CoordinatesPayload | string,
+  fallbackIdentifier?: string
+): Promise<HeartbeatResponse> => {
+  let lat: number | undefined;
+  let lng: number | undefined;
+  let acc: number | null = null;
+  let isMock = false;
 
+  let facultyIdentifier: string | undefined;
+
+  if (typeof coordsOrIdentifier === 'string') {
+    facultyIdentifier = coordsOrIdentifier;
+  } else if (coordsOrIdentifier && typeof coordsOrIdentifier === 'object') {
+    lat = coordsOrIdentifier.latitude;
+    lng = coordsOrIdentifier.longitude;
+    acc = coordsOrIdentifier.accuracy ?? null;
+    isMock = Boolean(coordsOrIdentifier.mocked);
+    facultyIdentifier = fallbackIdentifier;
+  }
+
+  // Read location directly from device hardware if not supplied
+  if (lat === undefined || lng === undefined) {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      throw new Error('Location permission is required.');
+    }
+    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    lat = loc.coords.latitude;
+    lng = loc.coords.longitude;
+    acc = loc.coords.accuracy ?? null;
+    isMock = Boolean(loc.mocked);
+  }
+
+  const hardwareUuid = await getHardwareDeviceUuid(facultyIdentifier);
+  const batteryLevel = await getRealBatteryPercentage();
+  const deviceModel = getRealDeviceModel();
+
+  // Strictly satisfies QueuedTelemetryPayload using 'accuracy' and explicit cast
   const payload: QueuedTelemetryPayload = {
     client_device_id: hardwareUuid,
-    device_id: hardwareUuid,
-    latitude: coords.latitude,
-    longitude: coords.longitude,
-    accuracy_meters: coords.accuracy,
+    latitude: lat,
+    longitude: lng,
+    accuracy: acc,
     battery_level: batteryLevel,
-    is_mock_location: coords.mocked,
-  };
+    is_mock_location: isMock,
+  } as QueuedTelemetryPayload;
 
   try {
-    const res = await apiClient.post('/api/telemetry/heartbeat/', payload);
+    // Send full telemetry to the backend including device pairing info
+    const res = await apiClient.post('geofence/checkin/', {
+      client_device_id: hardwareUuid,
+      device_id: hardwareUuid,
+      device_model: deviceModel,
+      latitude: lat,
+      longitude: lng,
+      accuracy: acc,
+      accuracy_meters: acc,
+      battery_level: batteryLevel,
+      is_mock_location: isMock,
+    });
+
     return {
       ...res.data,
       isQueuedOffline: false,
@@ -123,16 +154,13 @@ export const sendLiveHeartbeat = async (facultyIdentifier?: string): Promise<Hea
   } catch (err: any) {
     const httpStatus = err?.response?.status;
 
-    // Reject on hardware mismatch (403) or mock GPS (403)
+    // Security check: Stop immediately if mock GPS or wrong device is detected
     if (httpStatus === 403) {
-      const backendError =
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        'Account locked to another device or mock GPS detected.';
-      throw new Error(backendError);
+      const msg = err?.response?.data?.error || 'Device lock mismatch or mock GPS detected.';
+      throw new Error(msg);
     }
 
-    // Queue offline on connection failure
+    // Queue telemetry locally if offline or connection drops
     await enqueueOfflineHeartbeat(payload);
     return {
       isQueuedOffline: true,
