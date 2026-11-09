@@ -22,7 +22,7 @@ from apps.academics.models import (
 )
 from apps.common.utils import (
     get_user_role,
-    is_regular_teacher,
+    is_regular_faculty,
     format_full_student_name,
     format_deduped_section_label,
     safe_photo_url,
@@ -30,7 +30,7 @@ from apps.common.utils import (
 )
 from .common import (
     resolve_faculty_for_user,
-    get_teacher_student_ids,
+    get_faculty_student_ids,
 )
 
 
@@ -40,11 +40,11 @@ class GateLogsAPIView(APIView):
     def get(self, request):
         user_role = get_user_role(request.user)
         faculty = resolve_faculty_for_user(request.user)
-        is_teacher = is_regular_teacher(user_role) and not request.user.is_superuser
+        is_faculty = is_regular_faculty(user_role) and not request.user.is_superuser
 
         stu_qs = StudentGateLog.objects.select_related('student', 'kiosk').order_by('-scan_time')
-        if is_teacher:
-            stu_qs = stu_qs.filter(student_id__in=get_teacher_student_ids(faculty))[:100]
+        if is_faculty:
+            stu_qs = stu_qs.filter(student_id__in=get_faculty_student_ids(faculty))[:100]
         else:
             stu_qs = stu_qs[:100]
 
@@ -65,7 +65,7 @@ class GateLogsAPIView(APIView):
             for l in stu_qs
         ]
 
-        if not is_teacher:
+        if not is_faculty:
             fac_qs = FacultyGateLog.objects.select_related('faculty', 'kiosk').order_by('-scan_time')[:50]
             for f_log in fac_qs:
                 logs.append({
@@ -226,7 +226,7 @@ class KioskScanAPIView(APIView):
                     'direction': direction,
                     'timestamp': timezone.localtime(recent_fac_duplicate.scan_time).strftime('%I:%M:%S %p'),
                     'is_duplicate': True,
-                    'message': 'Teacher ID card already tapped.'
+                    'message': 'Faculty ID card already tapped.'
                 }, status=status.HTTP_200_OK)
 
             log = FacultyGateLog.objects.create(

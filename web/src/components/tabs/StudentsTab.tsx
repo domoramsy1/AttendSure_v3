@@ -532,7 +532,7 @@ export const StudentsTab: React.FC = () => {
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>ACTIVE ON ROSTER</div>
+          <div style={statLabel}>ACTIVE ON CLASS LIST</div>
           <div style={{ ...statVal, color: '#16a34a' }}>{metrics.active.toLocaleString()}</div>
           <div style={statSub}>Eligible for gate scan tracking</div>
         </div>
@@ -548,7 +548,7 @@ export const StudentsTab: React.FC = () => {
         <div style={statCard}>
           <div style={statLabel}>CLASS SECTIONS</div>
           <div style={{ ...statVal, color: '#d97706' }}>{metrics.total_sections}</div>
-          <div style={statSub}>Active academic class rosters</div>
+          <div style={statSub}>Active academic class lists</div>
         </div>
       </div>
 
@@ -689,7 +689,7 @@ export const StudentsTab: React.FC = () => {
                           <span>{row.current_section || 'Unassigned'}</span>
                         </div>
                         <div style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 20, marginTop: 1 }}>
-                          Regular Roster
+                          Regular Class List
                         </div>
                       </td>
 

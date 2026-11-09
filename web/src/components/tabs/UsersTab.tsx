@@ -63,7 +63,7 @@ export interface SystemUser {
 }
 
 const RBAC_ROLES = [
-  { value: 'FACULTY', label: 'Classroom Teacher', color: '#004b87', bg: '#e0f2fe' },
+  { value: 'FACULTY', label: 'Classroom Faculty', color: '#004b87', bg: '#e0f2fe' },
   { value: 'FACULTY_ADMIN', label: 'Faculty / Admin (Dual Role)', color: '#4f46e5', bg: '#eef2ff' },
   { value: 'ADMIN', label: 'System Administrator', color: '#0f172a', bg: '#f1f5f9' },
   { value: 'PRINCIPAL', label: 'School Principal', color: '#059669', bg: '#d1fae5' },
@@ -443,7 +443,7 @@ export const UsersTab: React.FC = () => {
 
     showConfirm({
       title: 'Delete User Account',
-      message: `Permanently delete account "@${user.username}"? Associated teaching and roster profiles will also be unlinked.`,
+      message: `Permanently delete account "@${user.username}"? Associated teaching and class list profiles will also be unlinked.`,
       confirmLabel: 'Delete Account',
       isDestructive: true,
       onConfirm: async () => {
@@ -634,7 +634,7 @@ export const UsersTab: React.FC = () => {
                 render: (u) => (
                   <div>
                     <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.80rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Briefcase size={12} color="#004b87" /> {u.position || 'Classroom Teacher'}
+                      <Briefcase size={12} color="#004b87" /> {u.position || 'Classroom Faculty'}
                     </div>
                     <div style={{ fontSize: '0.72rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
                       <Building size={12} color="#94a3b8" /> {u.department || 'Junior High School'}

@@ -23,8 +23,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
 import { getServerBaseUrl } from '../services/configService';
-import { getUnsyncedCount } from '../services/offlineQueue';
-import { sendLiveHeartbeat } from '../services/telemetryService';
+import { getUnsyncedCount, syncOfflineQueue } from '../services/offlineQueue';
+import { sendLiveHeartbeat, format12HourTime } from '../services/telemetryService';
 import { startPassivePresenceTracking } from '../services/backgroundLocation';
 import { COLORS } from '../constants/theme';
 
@@ -46,7 +46,7 @@ function calculateDistanceMeters(
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(radLat1) * Math.cos(radLat2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return Math.round(R * c * 100) / 100;
+  return Math.round(R * c);
 }
 
 function formatDistance(meters: number): string {
@@ -120,10 +120,10 @@ interface DtrSummaryData {
 }
 
 interface GeofenceConfigData {
-  name: string;
+  name: string | null;
   latitude: number | null;
   longitude: number | null;
-  radius_meters: number;
+  radius_meters: number | null;
   is_configured: boolean;
 }
 
@@ -182,6 +182,8 @@ export const HomeScreen: React.FC = () => {
 
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [isOnline, setIsOnline] = useState<boolean>(true);
+  const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
   const [offlineCount, setOfflineCount] = useState<number>(0);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [serverBase, setServerBase] = useState<string>('');
@@ -198,13 +200,17 @@ export const HomeScreen: React.FC = () => {
   const isMounted = useRef(true);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Stationary Deadband Anchor: locks coordinates when phone is still (<6m drift)
+  const anchorCoordsRef = useRef<LiveGpsCoords | null>(null);
+  const lastHeartbeatSent = useRef<number>(0);
+
   const currentUser = user as Record<string, any> | null;
   const displayName =
     currentUser?.full_name ||
     `${currentUser?.first_name || ''} ${currentUser?.last_name || ''}`.trim() ||
     currentUser?.faculty_name ||
     currentUser?.username ||
-    'Faculty Educator';
+    '';
 
   const employeeId =
     currentUser?.employee_id ||
@@ -213,13 +219,11 @@ export const HomeScreen: React.FC = () => {
     currentUser?.username ||
     '';
 
-  const userRole = String(currentUser?.role || currentUser?.system_role || 'FACULTY').trim().toUpperCase();
-
   const schoolName =
     schoolProfile?.school_name ||
     currentUser?.school_name ||
     geofenceConfig?.name ||
-    'Lapasan National High School';
+    '';
 
   const schoolSubHeader = [
     schoolProfile?.school_id ? `School ID: ${schoolProfile.school_id}` : '',
@@ -248,88 +252,160 @@ export const HomeScreen: React.FC = () => {
     null;
   const resolvedUserPhoto = resolvePhotoUrl(rawUserPhoto, serverBase);
 
-  // Initialize Continuous Background Tracking (Sleep Mode Support)
   useEffect(() => {
     startPassivePresenceTracking().catch((err) =>
       console.log('[BackgroundGPS] Startup notice:', err?.message || err)
     );
   }, [currentUser?.username, currentUser?.id]);
 
-  // Foreground Satellite GPS Tracking
+  const applyStationaryFilter = useCallback((raw: LiveGpsCoords): LiveGpsCoords => {
+    const anchor = anchorCoordsRef.current;
+    if (!anchor) {
+      anchorCoordsRef.current = raw;
+      return raw;
+    }
+
+    const displacement = calculateDistanceMeters(
+      anchor.latitude,
+      anchor.longitude,
+      raw.latitude,
+      raw.longitude
+    );
+
+    // If movement is under 6 meters, lock coordinate to eliminate jitter
+    if (displacement < 6) {
+      return {
+        latitude: anchor.latitude,
+        longitude: anchor.longitude,
+        accuracy: raw.accuracy ?? anchor.accuracy,
+        mocked: raw.mocked,
+        timestamp: raw.timestamp,
+      };
+    }
+
+    anchorCoordsRef.current = raw;
+    return raw;
+  }, []);
+
   useEffect(() => {
     let watcherSubscription: Location.LocationSubscription | null = null;
+    let heartbeatIntervalTimer: ReturnType<typeof setInterval> | null = null;
     let isSubscribed = true;
 
-    const startLiveGpsTracking = async () => {
-      let lastHeartbeatSent = 0;
+    const transmitHeartbeat = async (coords: LiveGpsCoords) => {
+      try {
+        await sendLiveHeartbeat(coords);
+        if (isSubscribed) {
+          setIsOnline(true);
+          setGpsError(null);
+        }
+      } catch (err: any) {
+        if (isSubscribed) {
+          const msg = err?.message || '';
+          if (msg.includes('locked') || msg.includes('mismatch') || msg.includes('403')) {
+            setGpsError(msg);
+            setIsOnline(false);
+          }
+        }
+      }
+    };
 
+    const startLiveGpsTracking = async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          if (isSubscribed) setGpsError('Location permission required for attendance verification.');
+          if (isSubscribed) setGpsError('Location permission needed for attendance.');
           return;
         }
 
         const isGpsActive = await Location.hasServicesEnabledAsync();
         if (!isGpsActive) {
-          if (isSubscribed) setGpsError('Device GPS is turned off.');
+          if (isSubscribed) setGpsError('Phone GPS is turned off.');
           return;
         }
 
         if (isSubscribed) setGpsError(null);
 
         const initial = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
+          accuracy: Location.Accuracy.High,
         });
 
         if (isSubscribed && initial) {
-          const coordsData: LiveGpsCoords = {
+          const rawCoords: LiveGpsCoords = {
             latitude: initial.coords.latitude,
             longitude: initial.coords.longitude,
             accuracy: initial.coords.accuracy,
             mocked: Boolean(initial.mocked),
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            timestamp: format12HourTime(new Date()),
           };
-          setLiveCoords(coordsData);
 
-          lastHeartbeatSent = Date.now();
-          sendLiveHeartbeat(coordsData).catch((err: any) => {
-            console.log('[Telemetry] Initial sync notice:', err?.message || err);
-          });
+          const stabilized = applyStationaryFilter(rawCoords);
+          setLiveCoords(stabilized);
+
+          lastHeartbeatSent.current = Date.now();
+          transmitHeartbeat(stabilized);
         }
 
         watcherSubscription = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy.Balanced,
-            timeInterval: 10000,
-            distanceInterval: 5,
+            accuracy: Location.Accuracy.High,
+            timeInterval: 5000,
+            distanceInterval: 3,
           },
           (position) => {
             if (!isSubscribed) return;
 
-            const coordsData: LiveGpsCoords = {
+            const rawCoords: LiveGpsCoords = {
               latitude: position.coords.latitude,
               longitude: position.coords.longitude,
               accuracy: position.coords.accuracy,
               mocked: Boolean(position.mocked),
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              timestamp: format12HourTime(new Date()),
             };
 
-            setLiveCoords(coordsData);
+            const stabilized = applyStationaryFilter(rawCoords);
+            setLiveCoords(stabilized);
             setGpsError(null);
 
             const now = Date.now();
-            if (now - lastHeartbeatSent >= 10000) {
-              lastHeartbeatSent = now;
-              sendLiveHeartbeat(coordsData).catch((err: any) => {
-                console.log('[Telemetry] Heartbeat sync notice:', err?.message || err);
-              });
+            if (now - lastHeartbeatSent.current >= 60000) {
+              lastHeartbeatSent.current = now;
+              transmitHeartbeat(stabilized);
             }
           }
         );
+
+        heartbeatIntervalTimer = setInterval(async () => {
+          if (!isSubscribed) return;
+          const now = Date.now();
+          if (now - lastHeartbeatSent.current >= 60000) {
+            try {
+              const freshLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+              const rawCoords: LiveGpsCoords = {
+                latitude: freshLoc.coords.latitude,
+                longitude: freshLoc.coords.longitude,
+                accuracy: freshLoc.coords.accuracy,
+                mocked: Boolean(freshLoc.mocked),
+                timestamp: format12HourTime(new Date()),
+              };
+              const stabilized = applyStationaryFilter(rawCoords);
+              setLiveCoords(stabilized);
+              lastHeartbeatSent.current = now;
+              transmitHeartbeat(stabilized);
+            } catch {
+              if (anchorCoordsRef.current) {
+                lastHeartbeatSent.current = now;
+                const updated = { ...anchorCoordsRef.current, timestamp: format12HourTime(new Date()) };
+                setLiveCoords(updated);
+                transmitHeartbeat(updated);
+              }
+            }
+          }
+        }, 30000);
+
       } catch (err: any) {
         if (isSubscribed) {
-          setGpsError(err?.message || 'Searching for real satellite signal...');
+          setGpsError(err?.message || 'Searching for GPS satellite signal...');
         }
       }
     };
@@ -341,13 +417,16 @@ export const HomeScreen: React.FC = () => {
       if (watcherSubscription) {
         watcherSubscription.remove();
       }
+      if (heartbeatIntervalTimer) {
+        clearInterval(heartbeatIntervalTimer);
+      }
     };
-  }, [currentUser?.username, currentUser?.id]);
+  }, [currentUser?.username, currentUser?.id, applyStationaryFilter]);
 
   const campusCenter = useMemo(() => {
-    const lat = geofenceConfig?.latitude ?? schoolProfile?.latitude ?? 8.480241;
-    const lng = geofenceConfig?.longitude ?? schoolProfile?.longitude ?? 124.650152;
-    const radius = geofenceConfig?.radius_meters ?? schoolProfile?.geofence_radius_meters ?? 200;
+    const lat = geofenceConfig?.latitude ?? schoolProfile?.latitude ?? null;
+    const lng = geofenceConfig?.longitude ?? schoolProfile?.longitude ?? null;
+    const radius = geofenceConfig?.radius_meters ?? schoolProfile?.geofence_radius_meters ?? null;
     return { lat, lng, radius };
   }, [geofenceConfig, schoolProfile]);
 
@@ -364,7 +443,7 @@ export const HomeScreen: React.FC = () => {
   }, [liveCoords, campusCenter]);
 
   const isInsideCampusPerimeter = useMemo(() => {
-    if (liveDistanceMeters === null) return null;
+    if (liveDistanceMeters === null || campusCenter.radius === null) return null;
     return liveDistanceMeters <= campusCenter.radius;
   }, [liveDistanceMeters, campusCenter.radius]);
 
@@ -382,7 +461,7 @@ export const HomeScreen: React.FC = () => {
 
   const dutyStatusLabel = hasTappedInToday
     ? hasTappedOutToday
-      ? 'DUTY COMPLETED'
+      ? 'DONE FOR TODAY'
       : 'ACTIVE ON DUTY'
     : 'NO GATE SCAN';
 
@@ -399,7 +478,7 @@ export const HomeScreen: React.FC = () => {
     : '#f1f5f9';
 
   useEffect(() => {
-    if (isInsideCampusPerimeter === false && isOfficiallyOnDuty) {
+    if (isInsideCampusPerimeter === false && isOfficiallyOnDuty && campusCenter.radius !== null) {
       const accuracyMargin = liveCoords?.accuracy || 0;
       const excessDistance = (liveDistanceMeters || 0) - campusCenter.radius;
 
@@ -446,16 +525,34 @@ export const HomeScreen: React.FC = () => {
     return rawList.map((item: any, idx: number) => ({
       schedule_id: item.schedule_id || item.id || idx + 1,
       section_id: item.section_id || item.section?.id || item.id || 0,
-      section_name: item.section_name || item.section?.name || item.name || 'Class Section',
-      subject_name: item.subject_name || item.subject?.name || item.subject_title || 'Subject',
-      subject_code: item.subject_code || item.subject?.code || 'SUBJ',
-      room: item.room || item.room_number || item.room?.name || 'Classroom',
-      start_time: typeof item.start_time === 'string' ? item.start_time : '07:00',
-      end_time: typeof item.end_time === 'string' ? item.end_time : '09:00',
+      section_name: item.section_name || item.section?.name || item.name || '',
+      subject_name: item.subject_name || item.subject?.name || item.subject_title || '',
+      subject_code: item.subject_code || item.subject?.code || '',
+      room: item.room || item.room_number || item.room?.name || '',
+      start_time: typeof item.start_time === 'string' ? item.start_time : '',
+      end_time: typeof item.end_time === 'string' ? item.end_time : '',
       total_students: Array.isArray(item.students) ? item.students.length : Number(item.total_students) || 0,
       students: Array.isArray(item.students) ? item.students : [],
     }));
   };
+
+  const flushOfflineRecords = useCallback(async () => {
+    try {
+      setIsSyncingQueue(true);
+      const res = await syncOfflineQueue();
+      const updatedCount = await getUnsyncedCount();
+      if (isMounted.current) {
+        setOfflineCount(updatedCount);
+        if (res.synced > 0) {
+          setIsOnline(true);
+        }
+      }
+    } catch (err) {
+      console.log('[SyncQueue] Error:', err);
+    } finally {
+      if (isMounted.current) setIsSyncingQueue(false);
+    }
+  }, []);
 
   const loadAllDynamicData = useCallback(async () => {
     if (abortControllerRef.current) {
@@ -474,13 +571,13 @@ export const HomeScreen: React.FC = () => {
       geofenceRes,
       calendarRes,
     ] = await Promise.allSettled([
-      apiClient.get('classroom/class_list/', { signal: controller.signal })
-        .catch(() => apiClient.get('classroom/student_list/', { signal: controller.signal }))
-        .catch(() => apiClient.get('sections/', { signal: controller.signal })),
-      apiClient.get('settings/school/', { signal: controller.signal }),
-      apiClient.get(`dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal }),
-      apiClient.get('geofence/', { signal: controller.signal }),
-      apiClient.get('calendar/exceptions/', { signal: controller.signal }),
+      apiClient.get('classroom/class_list/', { signal: controller.signal, timeout: 5000 })
+        .catch(() => apiClient.get('classroom/student_list/', { signal: controller.signal, timeout: 5000 }))
+        .catch(() => apiClient.get('sections/', { signal: controller.signal, timeout: 5000 })),
+      apiClient.get('settings/school/', { signal: controller.signal, timeout: 5000 }),
+      apiClient.get(`dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal, timeout: 5000 }),
+      apiClient.get('geofence/', { signal: controller.signal, timeout: 5000 }),
+      apiClient.get('calendar/exceptions/', { signal: controller.signal, timeout: 5000 }),
     ]);
 
     if (!isMounted.current) return;
@@ -526,31 +623,27 @@ export const HomeScreen: React.FC = () => {
       setTodayOverride(matched);
     }
 
-    setLastSyncTime(
-      new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    );
-    setLoading(false);
-  }, []);
+    const count = await getUnsyncedCount();
+    setOfflineCount(count);
+    if (count > 0) {
+      flushOfflineRecords();
+    }
 
-  const checkOfflineStorage = useCallback(async () => {
-    try {
-      const count = await getUnsyncedCount();
-      if (isMounted.current) setOfflineCount(count);
-    } catch {}
-  }, []);
+    setLastSyncTime(format12HourTime(new Date()));
+    setLoading(false);
+  }, [flushOfflineRecords]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadAllDynamicData(), checkOfflineStorage(), refreshUser()]);
+    await Promise.all([loadAllDynamicData(), flushOfflineRecords(), refreshUser()]);
     if (isMounted.current) setRefreshing(false);
-  }, [loadAllDynamicData, checkOfflineStorage, refreshUser]);
+  }, [loadAllDynamicData, flushOfflineRecords, refreshUser]);
 
   useEffect(() => {
     isMounted.current = true;
     loadCachedData().then(() => {
       loadAllDynamicData();
     });
-    checkOfflineStorage();
     refreshUser();
 
     return () => {
@@ -559,7 +652,7 @@ export const HomeScreen: React.FC = () => {
         abortControllerRef.current.abort();
       }
     };
-  }, [loadCachedData, loadAllDynamicData, checkOfflineStorage, refreshUser]);
+  }, [loadCachedData, loadAllDynamicData, refreshUser]);
 
   const safeSections = Array.isArray(sections) ? sections : [];
   const totalClasses = safeSections.length;
@@ -623,7 +716,7 @@ export const HomeScreen: React.FC = () => {
     <SafeAreaView style={styles.safeContainer} edges={['top', 'left', 'right']}>
       <StatusBar style="dark" />
 
-      {/* Respectful Presence Advisory Modal */}
+      {/* Campus Boundary Advisory Modal */}
       <Modal
         visible={showAdvisoryModal}
         transparent={true}
@@ -636,9 +729,9 @@ export const HomeScreen: React.FC = () => {
               <Ionicons name="location-outline" size={32} color="#004b87" />
             </View>
 
-            <Text style={styles.modalTitle}>Campus Boundary Notice</Text>
+            <Text style={styles.modalTitle}>Outside School Area</Text>
             <Text style={styles.modalSubtitle}>
-              You are currently registered on duty, but your device is located outside the official school perimeter.
+              You are signed in on duty, but your phone is currently outside the school boundary.
             </Text>
 
             <View style={styles.modalMetricsBox}>
@@ -650,13 +743,15 @@ export const HomeScreen: React.FC = () => {
               </View>
               <View style={styles.modalMetricDivider} />
               <View style={styles.modalMetricCol}>
-                <Text style={styles.modalMetricLabel}>ALLOWED PERIMETER</Text>
-                <Text style={styles.modalMetricVal}>{campusCenter.radius}m</Text>
+                <Text style={styles.modalMetricLabel}>ALLOWED BOUNDARY</Text>
+                <Text style={styles.modalMetricVal}>
+                  {campusCenter.radius !== null ? `${campusCenter.radius}m` : '—'}
+                </Text>
               </View>
             </View>
 
             <Text style={styles.modalExplanation}>
-              If on official travel or school errands, coordinate with your department head. Otherwise, please return to campus grounds to verify your on-site presence.
+              If you are on official school business, notify your department head. Otherwise, please return to campus grounds to verify your attendance.
             </Text>
 
             <TouchableOpacity
@@ -665,7 +760,7 @@ export const HomeScreen: React.FC = () => {
               activeOpacity={0.85}
             >
               <Ionicons name="checkmark-outline" size={16} color="#ffffff" />
-              <Text style={styles.modalConfirmBtnText}>Acknowledge Notice</Text>
+              <Text style={styles.modalConfirmBtnText}>I Understand</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -682,14 +777,16 @@ export const HomeScreen: React.FC = () => {
           />
           <View style={styles.brandTextGroup}>
             <Text style={styles.schoolTitle} numberOfLines={1}>
-              {schoolName}
+              {schoolName || 'AttendSure'}
             </Text>
-            <View style={styles.subBrandRow}>
-              <View style={[styles.activeDot, { backgroundColor: dutyStatusColor }]} />
-              <Text style={styles.protocolText} numberOfLines={1}>
-                {schoolSubHeader || `${userRole} • ATTENDSURE CORE`}
-              </Text>
-            </View>
+            {schoolSubHeader ? (
+              <View style={styles.subBrandRow}>
+                <View style={[styles.activeDot, { backgroundColor: isOnline ? '#16a34a' : '#94a3b8' }]} />
+                <Text style={styles.protocolText} numberOfLines={1}>
+                  {schoolSubHeader}
+                </Text>
+              </View>
+            ) : null}
           </View>
         </View>
 
@@ -697,7 +794,7 @@ export const HomeScreen: React.FC = () => {
           style={styles.refreshButton}
           onPress={onRefresh}
           activeOpacity={0.7}
-          accessibilityLabel="Synchronize records"
+          accessibilityLabel="Refresh records"
         >
           <Ionicons name="sync-outline" size={16} color="#004b87" />
         </TouchableOpacity>
@@ -711,35 +808,44 @@ export const HomeScreen: React.FC = () => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
         }
       >
-        {/* Anti-Cheat: Simulated GPS Alert */}
+        {/* Fake GPS Security Alert */}
         {liveCoords?.mocked && (
           <View style={styles.securityAlertCard}>
             <Ionicons name="alert-circle-outline" size={18} color="#dc2626" />
             <View style={{ flex: 1 }}>
-              <Text style={styles.securityAlertTitle}>Simulated GPS Detected</Text>
+              <Text style={styles.securityAlertTitle}>Fake GPS Detected</Text>
               <Text style={styles.securityAlertBody}>
-                Mock location applications are active. To safeguard the integrity of official school records, please turn off simulated locations in device settings.
+                Mock location apps are running. Please turn off fake GPS in phone settings to keep official school logs valid.
               </Text>
             </View>
           </View>
         )}
 
-        {/* 1. Mindful Greeting & Educator Identity Card with Authentic Avatar */}
+        {/* 1. Educator Identity Card */}
         <View style={styles.educatorDignityCard}>
           <View style={styles.educatorHeaderRow}>
-            <View style={styles.avatarWrap}>
-              {resolvedUserPhoto && !avatarFailed ? (
-                <Image
-                  source={{ uri: resolvedUserPhoto }}
-                  style={styles.educatorAvatar}
-                  contentFit="cover"
-                  onError={() => setAvatarFailed(true)}
-                />
-              ) : (
-                <View style={styles.avatarFallback}>
-                  <Ionicons name="person" size={20} color="#004b87" />
-                </View>
-              )}
+            <View style={styles.avatarContainer}>
+              <View style={styles.avatarWrap}>
+                {resolvedUserPhoto && !avatarFailed ? (
+                  <Image
+                    source={{ uri: resolvedUserPhoto }}
+                    style={styles.educatorAvatar}
+                    contentFit="cover"
+                    onError={() => setAvatarFailed(true)}
+                  />
+                ) : (
+                  <View style={styles.avatarFallback}>
+                    <Ionicons name="person" size={20} color="#004b87" />
+                  </View>
+                )}
+              </View>
+
+              <View
+                style={[
+                  styles.onlineStatusDot,
+                  { backgroundColor: isOnline ? '#16a34a' : '#94a3b8' },
+                ]}
+              />
             </View>
 
             <View style={{ flex: 1, marginLeft: 12 }}>
@@ -748,7 +854,7 @@ export const HomeScreen: React.FC = () => {
                 {displayName}
               </Text>
               <Text style={styles.educatorDesignation}>
-                {dtrData?.department ? `${dtrData.department} • ` : ''}ID: {employeeId || 'Verified Educator'}
+                {employeeId ? `ID: ${employeeId}` : 'Faculty'} • <Text style={{ color: isOnline ? '#16a34a' : '#64748b', fontWeight: '800' }}>{isOnline ? 'Online' : 'Offline'}</Text>
               </Text>
             </View>
 
@@ -766,7 +872,7 @@ export const HomeScreen: React.FC = () => {
           </Text>
         </View>
 
-        {/* 2. Campus Presence & Geofence Shield Card */}
+        {/* 2. School Campus Location Card in 12-Hour AM/PM Format */}
         <View style={styles.presenceShieldCard}>
           <View style={styles.presenceCardHeader}>
             <View style={styles.presenceHeaderLeft}>
@@ -783,7 +889,7 @@ export const HomeScreen: React.FC = () => {
                   },
                 ]}
               />
-              <Text style={styles.presenceHeaderLabel}>CAMPUS PRESENCE STATUS</Text>
+              <Text style={styles.presenceHeaderLabel}>SCHOOL CAMPUS LOCATION</Text>
             </View>
 
             {liveCoords?.timestamp ? (
@@ -801,7 +907,7 @@ export const HomeScreen: React.FC = () => {
                   <Text style={styles.distanceMetricBig}>
                     {formatDistance(liveDistanceMeters)}
                   </Text>
-                  <Text style={styles.distanceMetricSub}>from school boundary</Text>
+                  <Text style={styles.distanceMetricSub}>from school grounds</Text>
                 </View>
 
                 <View style={styles.perimeterBadgeRow}>
@@ -825,12 +931,12 @@ export const HomeScreen: React.FC = () => {
                         { color: isInsideCampusPerimeter ? '#047857' : '#b45309' },
                       ]}
                     >
-                      {isInsideCampusPerimeter ? 'ON CAMPUS GROUNDS' : 'OUTSIDE PERIMETER'}
+                      {isInsideCampusPerimeter ? 'INSIDE SCHOOL GROUNDS' : 'OUTSIDE SCHOOL GROUNDS'}
                     </Text>
                   </View>
 
                   <Text style={styles.perimeterRadiusMeta}>
-                    Allowed zone: {campusCenter.radius}m
+                    {campusCenter.radius !== null ? `Allowed area: ${campusCenter.radius}m` : 'Boundary unconfigured'}
                   </Text>
                 </View>
               </>
@@ -838,7 +944,7 @@ export const HomeScreen: React.FC = () => {
               <View style={styles.acquiringFixBox}>
                 <ActivityIndicator size="small" color="#004b87" />
                 <Text style={styles.acquiringFixText}>
-                  {gpsError || 'Connecting to device satellite sensors...'}
+                  {gpsError || 'Finding satellite location...'}
                 </Text>
               </View>
             )}
@@ -847,31 +953,56 @@ export const HomeScreen: React.FC = () => {
           <View style={styles.presenceFooterRow}>
             <View style={styles.presenceFooterCol}>
               <Ionicons name="shield-checkmark-outline" size={12} color="#004b87" />
-              <Text style={styles.presenceFooterText}>
-                Identity Shield Locked
-              </Text>
+              <Text style={styles.presenceFooterText}>Account Protected</Text>
             </View>
 
             <View style={styles.presenceFooterCol}>
               <Ionicons name="radio-outline" size={12} color="#64748b" />
               <Text style={styles.presenceFooterText}>
-                Precision: {liveCoords?.accuracy ? `±${Math.round(liveCoords.accuracy)}m` : 'Measuring...'}
+                GPS Accuracy: {liveCoords?.accuracy ? `±${Math.round(liveCoords.accuracy)}m` : 'Measuring...'}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* 3. Offline Safety Buffer Notice */}
+        {/* 3. Offline Buffer Banner */}
         {offlineCount > 0 && (
-          <View style={styles.offlineBufferBanner}>
-            <Ionicons name="cloud-offline-outline" size={15} color="#b45309" />
-            <Text style={styles.offlineBufferText}>
-              {offlineCount} record(s) protected offline. Will securely synchronize upon network connection.
-            </Text>
-          </View>
+          <TouchableOpacity
+            style={styles.offlineBufferBanner}
+            onPress={flushOfflineRecords}
+            disabled={isSyncingQueue}
+            activeOpacity={0.8}
+          >
+            <View style={styles.offlineBannerLeft}>
+              <Ionicons
+                name={isSyncingQueue ? 'sync-outline' : 'cloud-upload-outline'}
+                size={18}
+                color="#b45309"
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.offlineBufferTitle}>
+                  {offlineCount} {offlineCount === 1 ? 'record' : 'records'} saved on phone
+                </Text>
+                <Text style={styles.offlineBufferSubtitle}>
+                  {isSyncingQueue
+                    ? 'Uploading to school server now...'
+                    : isOnline
+                    ? 'Tap here to upload now'
+                    : 'Will upload when internet connects'}
+                </Text>
+              </View>
+            </View>
+            {isSyncingQueue ? (
+              <ActivityIndicator size="small" color="#b45309" />
+            ) : (
+              <View style={styles.syncNowBtn}>
+                <Text style={styles.syncNowBtnText}>Upload Now</Text>
+              </View>
+            )}
+          </TouchableOpacity>
         )}
 
-        {/* Calendar Override or Weekend Notice */}
+        {/* Calendar Holiday Banner */}
         {todayOverride ? (
           <View style={styles.calendarBanner}>
             <Ionicons name="calendar-outline" size={16} color="#004b87" />
@@ -887,16 +1018,16 @@ export const HomeScreen: React.FC = () => {
             <Ionicons name="partly-sunny-outline" size={16} color="#16a34a" />
             <View style={{ flex: 1 }}>
               <Text style={[styles.calendarBannerTitle, { color: '#15803d' }]}>
-                Rest & Renewal Day
+                Weekend Rest Day
               </Text>
               <Text style={[styles.calendarBannerReason, { color: '#166534' }]}>
-                Official duty logging is optional during scheduled rest days.
+                Duty logging is optional during scheduled rest days.
               </Text>
             </View>
           </View>
         ) : null}
 
-        {/* 4. Daily Time Record (DTR) Integrity Summary */}
+        {/* 4. DTR Card */}
         {dtrData && (
           <>
             <View style={styles.sectionHeaderRow}>
@@ -904,7 +1035,7 @@ export const HomeScreen: React.FC = () => {
                 Daily Time Record ({dtrData.month} {dtrData.year})
               </Text>
               <Text style={styles.sectionHeaderSub}>
-                {dtrData.days_present} Day(s) Logged
+                {dtrData.days_present} Days Logged
               </Text>
             </View>
 
@@ -945,30 +1076,30 @@ export const HomeScreen: React.FC = () => {
                   ]}
                 >
                   {dtrData.dept_head_approved
-                    ? 'CERTIFIED BY DEPT HEAD'
+                    ? 'APPROVED BY DEPT HEAD'
                     : dtrData.dtr_submitted
-                    ? 'TRANSMITTED FOR REVIEW'
-                    : 'RECORD IN PROGRESS'}
+                    ? 'SENT FOR REVIEW'
+                    : 'LOGGING TODAY'}
                 </Text>
               </View>
             </View>
           </>
         )}
 
-        {/* 5. Classroom Attendance Analytics */}
+        {/* 5. Student Attendance Today */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionHeaderTitle}>Student Welfare & Attendance</Text>
+          <Text style={styles.sectionHeaderTitle}>Student Attendance Today</Text>
           {lastSyncTime ? (
-            <Text style={styles.sectionHeaderSub}>Synced {lastSyncTime}</Text>
+            <Text style={styles.sectionHeaderSub}>Updated {lastSyncTime}</Text>
           ) : null}
         </View>
 
         <View style={styles.analyticsCard}>
           <View style={styles.analyticsHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.analyticsTitle}>Engagement Rate</Text>
+              <Text style={styles.analyticsTitle}>Class Attendance Rate</Text>
               <Text style={styles.analyticsSub}>
-                {totalAttended} of {totalStudentsEnrolled} students present across {totalClasses} section(s)
+                {totalAttended} of {totalStudentsEnrolled} students present across {totalClasses} class{totalClasses === 1 ? '' : 'es'}
               </Text>
             </View>
             <Text style={styles.analyticsRateLarge}>{overallRate}%</Text>
@@ -994,7 +1125,7 @@ export const HomeScreen: React.FC = () => {
               </View>
               <View style={styles.genderMetricChip}>
                 <Ionicons name="time-outline" size={12} color="#64748b" />
-                <Text style={styles.genderMetricText}>Unscanned: {totalUnscanned}</Text>
+                <Text style={styles.genderMetricText}>Not Scanned: {totalUnscanned}</Text>
               </View>
             </View>
           )}
@@ -1015,7 +1146,7 @@ export const HomeScreen: React.FC = () => {
               <Ionicons name="time-outline" size={15} color="#d97706" />
             </View>
             <Text style={[styles.kpiValueText, { color: '#d97706' }]}>{totalLate}</Text>
-            <Text style={styles.kpiLabelText}>Tardy</Text>
+            <Text style={styles.kpiLabelText}>Late</Text>
           </View>
 
           <View style={styles.kpiTile}>
@@ -1035,23 +1166,23 @@ export const HomeScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* 6. Today's Educational Timetable */}
+        {/* 6. Today's Classes List */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionHeaderTitle}>Teaching Sessions</Text>
+          <Text style={styles.sectionHeaderTitle}>My Classes Today</Text>
           <Text style={styles.sectionCountText}>{sections.length} Assigned</Text>
         </View>
 
         {loading && sections.length === 0 ? (
           <View style={styles.emptyStateCard}>
             <ActivityIndicator size="small" color="#004b87" />
-            <Text style={styles.emptyStateText}>Loading timetable...</Text>
+            <Text style={styles.emptyStateText}>Loading class schedule...</Text>
           </View>
         ) : sections.length === 0 ? (
           <View style={styles.emptyStateCard}>
             <Ionicons name="school-outline" size={32} color="#94a3b8" />
-            <Text style={styles.emptyStateTitle}>No Teaching Sessions Scheduled</Text>
+            <Text style={styles.emptyStateTitle}>No Classes Scheduled</Text>
             <Text style={styles.emptyStateText}>
-              No classroom teaching schedules are linked to your profile today.
+              There are no classroom teaching schedules assigned to your account today.
             </Text>
           </View>
         ) : (
@@ -1089,7 +1220,7 @@ export const HomeScreen: React.FC = () => {
                   </View>
 
                   <View style={styles.sessionRatePill}>
-                    <Text style={styles.sessionRatePillText}>{classRate}% verified</Text>
+                    <Text style={styles.sessionRatePillText}>{classRate}% checked</Text>
                   </View>
                 </View>
 
@@ -1109,7 +1240,7 @@ export const HomeScreen: React.FC = () => {
                   </View>
 
                   <View style={styles.sessionMetricCol}>
-                    <Text style={[styles.sessionMetricLabel, { color: '#d97706' }]}>TARDY</Text>
+                    <Text style={[styles.sessionMetricLabel, { color: '#d97706' }]}>LATE</Text>
                     <Text style={[styles.sessionMetricVal, { color: '#d97706' }]}>{classLate}</Text>
                   </View>
 
@@ -1152,7 +1283,7 @@ const styles = StyleSheet.create({
   schoolTitle: { fontSize: 13, fontWeight: '800', color: '#003460' },
   subBrandRow: { flexDirection: 'row', alignItems: 'center', marginTop: 1, gap: 5 },
   activeDot: { width: 6, height: 6, borderRadius: 3 },
-  protocolText: { fontSize: 9.5, fontWeight: '700', color: '#004b87', letterSpacing: 0.3 },
+  protocolText: { fontSize: 10, fontWeight: '700', color: '#004b87' },
   refreshButton: {
     width: 32,
     height: 32,
@@ -1194,19 +1325,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#003460',
-    textAlign: 'center',
-  },
-  modalSubtitle: {
-    fontSize: 12,
-    color: '#475569',
-    textAlign: 'center',
-    marginTop: 4,
-    lineHeight: 17,
-  },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#003460', textAlign: 'center' },
+  modalSubtitle: { fontSize: 12, color: '#475569', textAlign: 'center', marginTop: 4, lineHeight: 17 },
   modalMetricsBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1221,15 +1341,9 @@ const styles = StyleSheet.create({
   },
   modalMetricCol: { alignItems: 'center', flex: 1 },
   modalMetricDivider: { width: 1, height: 24, backgroundColor: '#cbd5e1' },
-  modalMetricLabel: { fontSize: 8.5, fontWeight: '800', color: '#64748b', letterSpacing: 0.3 },
+  modalMetricLabel: { fontSize: 8.5, fontWeight: '800', color: '#64748b' },
   modalMetricVal: { fontSize: 15, fontWeight: '800', color: '#003460', marginTop: 1 },
-  modalExplanation: {
-    fontSize: 11,
-    color: '#64748b',
-    textAlign: 'center',
-    lineHeight: 16,
-    marginBottom: 16,
-  },
+  modalExplanation: { fontSize: 11, color: '#64748b', textAlign: 'center', lineHeight: 16, marginBottom: 16 },
   modalConfirmBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1266,6 +1380,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  avatarContainer: {
+    position: 'relative',
+    width: 44,
+    height: 44,
+  },
   avatarWrap: {
     width: 44,
     height: 44,
@@ -1288,9 +1407,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  onlineStatusDot: {
+    position: 'absolute',
+    bottom: -1,
+    right: -1,
+    width: 13,
+    height: 13,
+    borderRadius: 6.5,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    zIndex: 10,
+    elevation: 3,
+  },
   greetingGreeting: { fontSize: 11, color: '#64748b', fontWeight: '600' },
   educatorFullName: { fontSize: 15, fontWeight: '800', color: '#0f172a', marginTop: 1 },
-  educatorDesignation: { fontSize: 10.5, color: '#004b87', fontWeight: '700', marginTop: 1 },
+  educatorDesignation: { fontSize: 11, color: '#475569', fontWeight: '600', marginTop: 1 },
   dutyStatusPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1376,15 +1507,24 @@ const styles = StyleSheet.create({
   offlineBufferBanner: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: '#fffbeb',
     borderRadius: 10,
-    padding: 9,
+    padding: 10,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#fde68a',
-    gap: 6,
   },
-  offlineBufferText: { flex: 1, fontSize: 10.5, color: '#92400e', fontWeight: '600' },
+  offlineBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, marginRight: 8 },
+  offlineBufferTitle: { fontSize: 11.5, fontWeight: '800', color: '#92400e' },
+  offlineBufferSubtitle: { fontSize: 10, color: '#b45309', marginTop: 1 },
+  syncNowBtn: {
+    backgroundColor: '#d97706',
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 6,
+  },
+  syncNowBtnText: { color: '#ffffff', fontSize: 10.5, fontWeight: '800' },
   calendarBanner: {
     flexDirection: 'row',
     alignItems: 'center',

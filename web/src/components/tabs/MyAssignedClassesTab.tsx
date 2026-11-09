@@ -243,11 +243,11 @@ export const MyAssignedClassesTab: React.FC = () => {
   // 4 Top Metrics matching the screenshot design
   const stats = useMemo(() => {
     const totalClasses = classes.length;
-    const currentRosterCount = selectedClass?.students.length || 0;
+    const currentClassListCount = selectedClass?.students.length || 0;
     const presentToday = (selectedClass?.students || []).filter((s) => s.attendance_status === 'PRESENT').length;
     const cardsPaired = (selectedClass?.students || []).filter((s) => Boolean(s.rfid_uid)).length;
 
-    return { totalClasses, currentRosterCount, presentToday, cardsPaired };
+    return { totalClasses, currentClassListCount, presentToday, cardsPaired };
   }, [classes, selectedClass]);
 
   const handleExportCsv = () => {
@@ -279,15 +279,15 @@ export const MyAssignedClassesTab: React.FC = () => {
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>CLASS ROSTER</div>
-          <div style={{ ...statVal, color: '#16a34a' }}>{stats.currentRosterCount}</div>
+          <div style={statLabel}>CLASS LIST</div>
+          <div style={{ ...statVal, color: '#16a34a' }}>{stats.currentClassListCount}</div>
           <div style={statSub}>Enrolled learners in selected class</div>
         </div>
 
         <div style={statCard}>
           <div style={statLabel}>PRESENT TODAY</div>
           <div style={{ ...statVal, color: '#004b87' }}>
-            {stats.presentToday} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentRosterCount}</span>
+            {stats.presentToday} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentClassListCount}</span>
           </div>
           <div style={statSub}>Verified classroom attendance scans</div>
         </div>
@@ -295,7 +295,7 @@ export const MyAssignedClassesTab: React.FC = () => {
         <div style={statCard}>
           <div style={statLabel}>RFID CARDS PAIRED</div>
           <div style={{ ...statVal, color: '#d97706' }}>
-            {stats.cardsPaired} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentRosterCount}</span>
+            {stats.cardsPaired} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentClassListCount}</span>
           </div>
           <div style={statSub}>Learners with linked gate cards</div>
         </div>
@@ -367,7 +367,7 @@ export const MyAssignedClassesTab: React.FC = () => {
 
           <button type="button" onClick={() => fetchClasses(false)} style={primaryBtnStyle}>
             <RefreshCw size={14} />
-            <span>Refresh Roster</span>
+            <span>Refresh Class List</span>
           </button>
         </div>
       </div>
@@ -387,7 +387,7 @@ export const MyAssignedClassesTab: React.FC = () => {
             <p style={subtitleText}>
               {selectedClass
                 ? `${selectedClass.grade_level || 'Grade 7'} • Room: ${selectedClass.room_number || 'Room —'} • Time: ${selectedClass.start_time} - ${selectedClass.end_time}`
-                : 'Manage verified student attendance, check gate scan entries, and inspect class rosters.'}
+                : 'Manage verified student attendance, check gate scan entries, and inspect class lists.'}
             </p>
           </div>
 
@@ -413,7 +413,7 @@ export const MyAssignedClassesTab: React.FC = () => {
         {loading ? (
           <div style={loadingContainer}>
             <RefreshCw size={28} className="animate-spin" color="#004b87" />
-            <span style={{ fontSize: '0.84rem', color: '#64748b' }}>Loading class roster...</span>
+            <span style={{ fontSize: '0.84rem', color: '#64748b' }}>Loading class list...</span>
           </div>
         ) : classes.length === 0 ? (
           <div style={emptyContainer}>
@@ -598,7 +598,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                 </div>
 
                 <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b', marginTop: 3 }}>
-                  Section: {selectedClass?.section_name || 'Class Roster'}
+                  Section: {selectedClass?.section_name || 'Class List'}
                 </div>
 
                 <div

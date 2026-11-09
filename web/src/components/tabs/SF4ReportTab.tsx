@@ -570,13 +570,13 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
             GUIDELINES:
           </div>
           <div style={ruleTextStyle}>
-            1. This form shall be accomplished every end of the month using the summary box of SF2 submitted by the teachers/advisers.
+            1. This form shall be accomplished every end of the month using the summary box of SF2 submitted by the faculty/advisers.
           </div>
           <div style={ruleTextStyle}>
             2. Furnish copy to Division Office: a week after June 30, October 30 &amp; March 31.
           </div>
           <div style={ruleTextStyle}>
-            3. Only teachers who are handling advisory classes shall be reported.
+            3. Only faculty who are handling advisory classes shall be reported.
           </div>
         </div>
 

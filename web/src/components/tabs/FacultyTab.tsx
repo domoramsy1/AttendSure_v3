@@ -51,7 +51,7 @@ interface PaginatedResponse<T> {
 
 const FACULTY_POSITIONS = [
   {
-    category: 'Classroom Teachers',
+    category: 'Classroom Faculty',
     ranks: [
       'Faculty I',
       'Faculty II',

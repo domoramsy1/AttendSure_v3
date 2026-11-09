@@ -76,7 +76,7 @@ interface NotificationItem {
   message: string;
   type: 'GATE' | 'CLASS' | 'SMS' | 'KIOSK' | 'GATE_PASS';
   time: string;
-  targetRole?: 'ADMIN' | 'TEACHER' | 'ALL';
+  targetRole?: 'ADMIN'  | 'ALL';
 }
 
 const isSafeImageUrl = (url?: string | null): boolean => {
@@ -182,7 +182,7 @@ export const Header: React.FC<HeaderProps> = ({
         if (offlineList.length > 0) {
           generatedAlerts.push({
             id: 'gate-offline-alert',
-            title: 'Turnstile Disconnected',
+            title: 'Kiosk Disconnected',
             message: `${offlineList.length} gate scanner device(s) are currently unreachable.`,
             type: 'KIOSK',
             time: 'Live',
@@ -238,15 +238,15 @@ export const Header: React.FC<HeaderProps> = ({
 
   const role = currentUser.role;
   const isAdminOrPrincipal = role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL';
-  const isTeacher = role === 'FACULTY' || role === 'TEACHER';
+  const isFaculty = role === 'FACULTY';
 
   const visibleNotifications = useMemo(() => {
     return liveNotifications.filter((n) => {
       if (n.targetRole === 'ADMIN') return isAdminOrPrincipal;
-      if (n.targetRole === 'TEACHER') return isTeacher || isAdminOrPrincipal;
+if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincipal;
       return true;
     });
-  }, [liveNotifications, isAdminOrPrincipal, isTeacher]);
+  }, [liveNotifications, isAdminOrPrincipal, isFaculty]);
 
   const unreadCount = useMemo(() => {
     return visibleNotifications.filter((n) => !readIds.includes(n.id)).length;

@@ -4,7 +4,7 @@ File: backend/apps/api/views.py
 
 Cybersecurity & Row-Level Data Isolation Applied:
 1. OWASP BOLA / IDOR Defense: Every queryset is filtered by user role and ownership.
-2. Teacher Scope Isolation: Regular teachers only see students, sections, schedules,
+2. Faculty Scope Isolation: Regular faculty only see students, sections, schedules,
    gate logs, and gate passes tied to classes they teach or advise.
 3. Self-Only DTR & Profile Lock: Regular faculty can only view and submit their own Form 48 DTR.
 4. Guard Checkpoint Scope: Security guards can only access gate logs and gate pass clearances.
@@ -333,7 +333,7 @@ def get_user_role(user):
 
 
 def is_regular_teacher(role):
-    return str(role or '').upper() in ['TEACHER', 'FACULTY']
+    return str(role or '').upper() in ['FACULTY', 'FACULTY']
 
 
 def is_leadership_role(user):
@@ -382,7 +382,7 @@ def resolve_faculty_for_user(user):
                 'first_name': user.first_name or user.username.capitalize(),
                 'last_name': user.last_name or 'Faculty',
                 'email': user.email or '',
-                'position': 'Teacher',
+                'position': 'Faculty',
                 'department': 'Academic Department',
                 'qr_token': f"STF-{uuid.uuid4().hex[:12].upper()}",
                 'is_active': True,
@@ -417,7 +417,7 @@ def resolve_faculty_for_user(user):
 def get_teacher_section_ids(faculty) -> set:
     """
     Returns the exact set of Section IDs that a faculty member advises or teaches.
-    Used to enforce Row-Level Data Isolation for regular teachers.
+    Used to enforce Row-Level Data Isolation for regular faculty.
     """
     if not faculty:
         return set()
@@ -580,10 +580,10 @@ def verify_modem_gateway_request(request) -> bool:
 
 
 # ============================================================================
-# CLASSROOM ROSTER & BATCH SCAN
+# CLASSROOM CLASS LIST & BATCH SCAN
 # ============================================================================
 
-class FacultyClassroomRosterAPIView(APIView):
+class FacultyClassroomClassListAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -604,7 +604,7 @@ class FacultyClassroomRosterAPIView(APIView):
         else:
             return Response([], status=status.HTTP_200_OK)
 
-        roster_data = []
+        class_list_data = []
         for sched in schedules_qs:
             sec = sched.section
             if not sec:
@@ -648,7 +648,7 @@ class FacultyClassroomRosterAPIView(APIView):
                     'attendance_status': existing_logs.get(st.id, 'UNSCANNED'),
                 })
 
-            roster_data.append({
+            class_list_data.append({
                 'schedule_id': sched.id,
                 'section_id': sec.id,
                 'section_name': sec.name,
@@ -664,7 +664,7 @@ class FacultyClassroomRosterAPIView(APIView):
                 'students': student_items,
             })
 
-        return Response(roster_data, status=status.HTTP_200_OK)
+        return Response(class_list_data, status=status.HTTP_200_OK)
 
 
 class ClassroomBatchScanAPIView(APIView):
@@ -772,8 +772,8 @@ class ClassroomBatchScanAPIView(APIView):
             }
             if 'faculty' in model_field_names and effective_faculty:
                 log_defaults['faculty'] = effective_faculty
-            if 'teacher' in model_field_names and effective_faculty:
-                log_defaults['teacher'] = effective_faculty
+            if 'faculty' in model_field_names and effective_faculty:
+                log_defaults['faculty'] = effective_faculty
 
             SubjectAttendanceLog.objects.update_or_create(
                 student=student,
@@ -1002,7 +1002,7 @@ CurrentUserProfileView = CurrentUserView
 
 
 # ============================================================================
-# MY ASSIGNED CLASSES VIEW (TEACHER LOAD)
+# MY ASSIGNED CLASSES VIEW (FACULTY LOAD)
 # ============================================================================
 
 class MyAssignedClassesAPIView(APIView):
@@ -1091,7 +1091,7 @@ class SectionListAPIView(APIView):
                 'grade_level', 'academic_year', 'adviser'
             ).all().order_by('grade_level__level_order', 'name')
 
-        # Row-Level Isolation: Regular teachers only see sections they advise or teach
+        # Row-Level Isolation: Regular faculty only see sections they advise or teach
         if is_regular_teacher(user_role) and not request.user.is_superuser:
             user_faculty = resolve_faculty_for_user(request.user)
             allowed_sec_ids = get_teacher_section_ids(user_faculty)
@@ -1589,7 +1589,7 @@ class GateLogsAPIView(APIView):
 
         if person_type in ('ALL', 'STUDENT'):
             student_qs = StudentGateLog.objects.select_related('student', 'kiosk').order_by('-scan_time')
-            # Row-Level Isolation: Teachers only see gate logs of their own students
+            # Row-Level Isolation: Faculty only see gate logs of their own students
             if is_teacher_only:
                 allowed_student_ids = get_teacher_student_ids(user_faculty)
                 student_qs = student_qs.filter(student_id__in=allowed_student_ids)[:150]
@@ -1619,7 +1619,7 @@ class GateLogsAPIView(APIView):
 
         if person_type in ('ALL', 'STAFF'):
             faculty_qs = FacultyGateLog.objects.select_related('faculty', 'kiosk').order_by('-scan_time')
-            # Row-Level Isolation: Teachers only see their own staff gate logs
+            # Row-Level Isolation: Faculty only see their own staff gate logs
             if is_teacher_only:
                 faculty_qs = faculty_qs.filter(faculty=user_faculty)[:150] if user_faculty else faculty_qs.none()
             else:
@@ -2089,7 +2089,7 @@ class DTRListAPIView(APIView):
         user_role = get_user_role(request.user) or 'FACULTY'
         user_faculty = resolve_faculty_for_user(request.user)
 
-        # Strict Self-Only Lock: Regular teachers can NEVER view another faculty member's DTR
+        # Strict Self-Only Lock: Regular faculty can NEVER view another faculty member's DTR
         if is_regular_teacher(user_role) and not request.user.is_superuser:
             if not user_faculty:
                 return Response({'error': 'Your user account is not linked to a faculty profile.'}, status=status.HTTP_404_NOT_FOUND)
@@ -2819,10 +2819,10 @@ class StudentViewSet(viewsets.ModelViewSet):
 
 class FacultyViewSet(viewsets.ModelViewSet):
     """
-    Manages school faculty and classroom teachers.
+    Manages school faculty and classroom faculty.
     Row-Level Isolation:
     - Leadership (Admin, Principal, Dept Head): Views all faculty members.
-    - Regular Teachers: Views ONLY their own FacultyProfile.
+    - Regular Faculty: Views ONLY their own FacultyProfile.
     """
     queryset = FacultyProfile.objects.all().order_by('last_name', 'first_name')
     serializer_class = FacultyProfileSerializer
@@ -2854,7 +2854,7 @@ class FacultyViewSet(viewsets.ModelViewSet):
     def dropdown(self, request):
         """
         Lists active, teaching-cleared faculty for scheduling assignments.
-        For regular teachers, strictly returns only their own profile.
+        For regular faculty, strictly returns only their own profile.
         """
         user = request.user
         role = get_user_role(user)
@@ -2893,7 +2893,7 @@ class ScannerViewSet(viewsets.ModelViewSet):
             faculty_obj = serializer.validated_data.get('faculty')
 
             if faculty_obj and (not user_faculty or faculty_obj.id != user_faculty.id):
-                raise PermissionDenied("Teachers cannot issue gate passes for other faculty members.")
+                raise PermissionDenied("Faculty cannot issue gate passes for other faculty members.")
 
             if student_obj:
                 allowed_student_ids = get_teacher_student_ids(user_faculty)
@@ -2916,7 +2916,7 @@ class GatePassViewSet(viewsets.ModelViewSet):
     Manages Gate Passes & Exit Clearances.
     Row-Level Isolation:
     - Leadership & Guards: View all passes (Guards verify at the gate).
-    - Regular Teachers: View ONLY passes they issued, passes for themselves, or passes for their assigned students.
+    - Regular Faculty: View ONLY passes they issued, passes for themselves, or passes for their assigned students.
     """
     queryset = GatePass.objects.all().order_by('-created_at')
     serializer_class = GatePassSerializer
@@ -2956,12 +2956,12 @@ class GatePassViewSet(viewsets.ModelViewSet):
         user_faculty = resolve_faculty_for_user(user)
 
         if is_regular_teacher(role) and not user.is_superuser:
-            # Regular teachers can only issue passes for their own assigned students
+            # Regular faculty can only issue passes for their own assigned students
             student_obj = serializer.validated_data.get('student')
             faculty_obj = serializer.validated_data.get('faculty')
 
             if faculty_obj and (not user_faculty or faculty_obj.id != user_faculty.id):
-                raise PermissionDenied("Teachers cannot issue gate passes for other faculty members.")
+                raise PermissionDenied("Faculty cannot issue gate passes for other faculty members.")
 
             if student_obj:
                 allowed_student_ids = get_teacher_student_ids(user_faculty)
@@ -2976,7 +2976,7 @@ class ScheduleViewSet(viewsets.ModelViewSet):
     Manages Class Schedules.
     Row-Level Isolation:
     - Leadership: Views and manages all schedules.
-    - Regular Teachers: Views ONLY schedules assigned to them or their advisory section.
+    - Regular Faculty: Views ONLY schedules assigned to them or their advisory section.
     """
     queryset = Schedule.objects.select_related('section', 'subject', 'faculty').all().order_by('start_time')
     serializer_class = ScheduleSerializer

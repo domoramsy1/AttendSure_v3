@@ -130,8 +130,8 @@ def get_user_role(user) -> str:
     return 'FACULTY'
 
 
-def is_regular_teacher(role: str) -> bool:
-    return str(role or '').upper() in {'TEACHER', 'FACULTY', 'EMPLOYEE'}
+def is_regular_faculty(role: str) -> bool:
+    return str(role or '').upper() in {'FACULTY', 'FACULTY', 'EMPLOYEE'}
 
 
 def is_leadership_role(user) -> bool:
@@ -183,7 +183,7 @@ def resolve_faculty_for_user(user):
     return None
 
 
-def get_teacher_section_ids(faculty) -> set:
+def get_faculty_section_ids(faculty) -> set:
     if not faculty:
         return set()
     from apps.academics.models import Section, Schedule
@@ -192,8 +192,8 @@ def get_teacher_section_ids(faculty) -> set:
     return advised_ids | teaching_ids
 
 
-def get_teacher_student_ids(faculty) -> set:
-    section_ids = get_teacher_section_ids(faculty)
+def get_faculty_student_ids(faculty) -> set:
+    section_ids = get_faculty_section_ids(faculty)
     if not section_ids:
         return set()
     from apps.academics.models import Enrollment
@@ -320,3 +320,7 @@ class IsSystemAdminRole(permissions.BasePermission):
         if not (request.user and request.user.is_authenticated):
             return False
         return getattr(request.user, 'is_superuser', False) or get_user_role(request.user) == 'ADMIN'
+# Backward-compatibility aliases for legacy imports
+is_regular_teacher = is_regular_faculty
+get_teacher_section_ids = get_faculty_section_ids
+get_teacher_student_ids = get_faculty_student_ids

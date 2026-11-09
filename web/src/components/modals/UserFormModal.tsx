@@ -125,7 +125,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
               onChange={(e) => onChange('role', e.target.value)}
               style={inputStyle}
             >
-              <option value="FACULTY">Faculty / Teacher</option>
+              <option value="FACULTY">Faculty / Faculty</option>
               <option value="ADMIN">System Administrator</option>
               <option value="PRINCIPAL">School Principal</option>
               <option value="DEPT_HEAD">Department Head</option>

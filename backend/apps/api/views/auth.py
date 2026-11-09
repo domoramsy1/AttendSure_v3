@@ -19,7 +19,7 @@ from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from apps.academics.models import FacultyProfile, Schedule, SchoolProfile, UserProfile
-from apps.common.utils import get_user_role, is_regular_teacher, safe_photo_url
+from apps.common.utils import get_user_role, is_regular_faculty, safe_photo_url
 from .common import resolve_faculty_for_user
 
 User = get_user_model()
@@ -113,7 +113,7 @@ def build_authenticated_user_payload(user, request=None):
         'system_role': assigned_role,
         'is_profile_completed': bool(profile and getattr(profile, 'is_profile_completed', True)),
         'can_teach': can_teach,
-        'is_teaching': can_teach or (teaching_class_count > 0) or is_regular_teacher(assigned_role),
+        'is_teaching': can_teach or (teaching_class_count > 0) or is_regular_faculty(assigned_role),
         'assigned_class_count': teaching_class_count,
         'is_superuser': user.is_superuser,
     }

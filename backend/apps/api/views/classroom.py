@@ -46,7 +46,7 @@ def sanitize_qr_token(raw_token: str) -> str:
 
 class ClassListAPIView(APIView):
     """
-    Returns teaching classes for the authenticated teacher with enrolled student lists
+    Returns teaching classes for the authenticated faculty with enrolled student lists
     and today's real attendance status pre-calculated in fast batch queries.
     """
     permission_classes = [permissions.IsAuthenticated]
@@ -238,12 +238,12 @@ class FacultyClassroomListAPIView(APIView):
 
 
 StudentListAPIView = FacultyClassroomListAPIView
-FacultyClassroomRosterAPIView = FacultyClassroomListAPIView
+FacultyClassroomClassListAPIView = FacultyClassroomListAPIView
 
 
 class ClassroomBatchScanAPIView(APIView):
     """
-    Records student attendance verified by a teacher inside the classroom.
+    Records student attendance verified by a faculty inside the classroom.
     Validates Gate Attendance:
     - If the student has NO gate scan today: Flagged as UNVERIFIED (fence-jumping / bypassed gate).
     - If the student's last gate scan was OUT: Flagged as CUTTING.

@@ -32,7 +32,7 @@ export const DTRScreen: React.FC = () => {
 
   const currentUser = user as Record<string, any> | null;
   const userRole = String(currentUser?.role || currentUser?.system_role || 'FACULTY').trim().toUpperCase();
-  const isTeacher = userRole === 'FACULTY';
+  const isFaculty = userRole === 'FACULTY';
 
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth() + 1);
@@ -55,7 +55,7 @@ export const DTRScreen: React.FC = () => {
       if (!silent) abortControllerRef.current = controller;
 
       const endpoint =
-        isTeacher && !selectedFacultyId
+        isFaculty && !selectedFacultyId
           ? '/reports/dtr/'
           : selectedFacultyId
           ? `/reports/dtr/${selectedFacultyId}/`
@@ -94,7 +94,7 @@ export const DTRScreen: React.FC = () => {
         }
       }
     },
-    [isTeacher, selectedFacultyId, selectedMonth, selectedYear]
+    [isFaculty, selectedFacultyId, selectedMonth, selectedYear]
   );
 
   useEffect(() => {

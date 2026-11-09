@@ -460,7 +460,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
         <Text style={styles.instQuoteText}>
           "Each chief of a Bureau or Office shall require a daily record of
           attendance of all the officers and employees under him entitled to leave or
-          absence or vacation (including teachers) to be kept on the proper form and
+          absence or vacation (including faculty) to be kept on the proper form and
           also a systematic office record showing for each day all absences from
           duty from any cause whatever. At the beginning of each month he shall
           report to the Commissioner on the proper form of all absences from any cause

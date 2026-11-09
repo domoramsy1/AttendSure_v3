@@ -250,7 +250,7 @@ class IoTKiosk(models.Model):
 
 
 # ==============================================================================
-# 2. TEACHERS, STUDENTS, AND ACCOUNTS (ZERO TRUST)
+# 2. FACULTY, STUDENTS, AND ACCOUNTS (ZERO TRUST)
 # ==============================================================================
 
 class FacultyProfile(models.Model):
@@ -440,7 +440,7 @@ class Student(models.Model):
 
     @property
     def full_name(self) -> str:
-        """Returns standard DepEd roster name: Last, First M. Suffix."""
+        """Returns standard DepEd class list name: Last, First M. Suffix."""
         mid = f" {self.middle_name[:1]}." if self.middle_name else ""
         suf = f" {self.suffix}" if self.suffix else ""
         return f"{self.last_name}, {self.first_name}{mid}{suf}".strip()

@@ -216,7 +216,7 @@ def get_user_role(user) -> str:
 
 
 def is_regular_teacher(role: str) -> bool:
-    return str(role or '').upper() in {'TEACHER', 'FACULTY'}
+    return str(role or '').upper() in {'FACULTY', 'FACULTY'}
 
 
 def is_leadership_role(user) -> bool:
@@ -257,7 +257,7 @@ def resolve_faculty_for_user(user):
                 'first_name': user.first_name or user.username.capitalize(),
                 'last_name': user.last_name or 'Faculty',
                 'email': user.email or '',
-                'position': 'Teacher',
+                'position': 'Faculty',
                 'department': 'Academic Department',
                 'is_active': True,
                 'can_teach': True,
@@ -1200,7 +1200,7 @@ class GeofenceStatusAPIView(APIView):
         allowed_radius = int(school.geofence_radius_meters) if school and school.geofence_radius_meters else 150
 
         faculty_members = FacultyProfile.objects.filter(is_active=True).order_by('last_name', 'first_name')
-        faculty_roster = []
+        faculty_class_list = []
         inside_count = 0
 
         for f in faculty_members:
@@ -1220,7 +1220,7 @@ class GeofenceStatusAPIView(APIView):
                 battery_label = 'N/A'
                 last_seen_label = 'No Ping Yet'
 
-            faculty_roster.append({
+            faculty_class_list.append({
                 'id': f.id,
                 'faculty_name': f.full_name,
                 'employee_id': f.employee_id,
@@ -1238,7 +1238,7 @@ class GeofenceStatusAPIView(APIView):
             'radius_meters': allowed_radius,
             'is_configured': bool(school),
             'verified_inside': inside_count,
-            'faculty_roster': faculty_roster,
+            'faculty_class_list': faculty_class_list,
         }, status=status.HTTP_200_OK)
 
 

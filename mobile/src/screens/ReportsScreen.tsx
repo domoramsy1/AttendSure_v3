@@ -95,7 +95,7 @@ export const ReportsScreen: React.FC = () => {
   ).trim().toUpperCase();
 
   const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR'].includes(userRole) || Boolean(currentUser?.is_superuser);
-  const isTeacher = ['TEACHER', 'FACULTY'].includes(userRole);
+  const isFaculty = ['FACULTY', 'FACULTY'].includes(userRole);
   const isStaffOnly = ['STAFF', 'GUARD', 'SECURITY'].includes(userRole);
 
   const availableTabs = useMemo(() => {
@@ -105,7 +105,7 @@ export const ReportsScreen: React.FC = () => {
     tabs.push({ key: 'DTR', label: 'DTR', icon: 'time-outline' });
 
     // Classroom Registers (SF1 & SF2)
-    if (isAdmin || isTeacher) {
+    if (isAdmin || isFaculty) {
       tabs.push({ key: 'SF1', label: 'SF1', icon: 'people-outline' });
       tabs.push({ key: 'SF2', label: 'SF2', icon: 'calendar-outline' });
     }
@@ -116,10 +116,10 @@ export const ReportsScreen: React.FC = () => {
     }
 
     return tabs;
-  }, [isAdmin, isTeacher]);
+  }, [isAdmin, isFaculty]);
 
   const [selectedTab, setSelectedTab] = useState<ReportType>(() => {
-    if (isAdmin || isTeacher) return 'SF1';
+    if (isAdmin || isFaculty) return 'SF1';
     return 'DTR';
   });
 
@@ -228,12 +228,12 @@ export const ReportsScreen: React.FC = () => {
           signal: controller.signal,
         }));
         if (isMounted.current) setDtrData(res.data || null);
-      } else if (selectedTab === 'SF1' && selectedSectionId && (isAdmin || isTeacher)) {
+      } else if (selectedTab === 'SF1' && selectedSectionId && (isAdmin || isFaculty)) {
         const res = await apiClient.get(`reports/sf1/${selectedSectionId}/`, {
           signal: controller.signal,
         });
         if (isMounted.current) setSf1Data(res.data || null);
-      } else if (selectedTab === 'SF2' && selectedSectionId && (isAdmin || isTeacher)) {
+      } else if (selectedTab === 'SF2' && selectedSectionId && (isAdmin || isFaculty)) {
         const res = await apiClient.get(`reports/sf2/${selectedSectionId}/`, {
           params: { month: monthName, year: selectedYear },
           signal: controller.signal,
@@ -254,7 +254,7 @@ export const ReportsScreen: React.FC = () => {
         setRefreshing(false);
       }
     }
-  }, [selectedTab, selectedMonth, selectedYear, selectedSectionId, isAdmin, isTeacher]);
+  }, [selectedTab, selectedMonth, selectedYear, selectedSectionId, isAdmin, isFaculty]);
 
   useEffect(() => {
     isMounted.current = true;

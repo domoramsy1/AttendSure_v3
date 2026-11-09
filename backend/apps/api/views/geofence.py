@@ -1,14 +1,15 @@
 """
-AttendSure V3 - Live Database Geofence & Telemetry Audit Engine
+AttendSure V3 - Zero-Mock Live Database Geofence & Telemetry Audit Engine
 File: backend/apps/api/views/geofence.py
 """
 
 import math
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from django.utils import timezone
 from django.db.models import Q
+from django.core.cache import cache
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
@@ -24,23 +25,61 @@ from apps.academics.models import (
 
 logger = logging.getLogger(__name__)
 
+# 1-minute (60s) cadence + 30s network transmission allowance = 90 seconds
+ONLINE_THRESHOLD_SECONDS = 90
+MIN_HEARTBEAT_CADENCE_SECONDS = 55
 
-def calculate_haversine_distance(lat1, lon1, lat2, lon2):
-    """Calculates ground distance in meters between two GPS coordinates."""
-    r = 6371000.0  # Earth radius in meters
+
+def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculates ground distance in meters between two GPS coordinates using the Haversine formula."""
+    r = 6371000.0
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
     delta_lambda = math.radians(lon2 - lon1)
 
-    a = (math.sin(delta_phi / 2.0) ** 2 +
-         math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2)
+    a = (
+        math.sin(delta_phi / 2.0) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
+    )
     c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
     return round(r * c, 2)
 
 
+def get_client_ip(request):
+    """Extracts authentic client IP address from network connection socket headers."""
+    cf_ip = request.META.get('HTTP_CF_CONNECTING_IP')
+    if cf_ip:
+        return cf_ip.strip()
+    x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded:
+        return x_forwarded.split(',')[0].strip()
+    remote_addr = request.META.get('REMOTE_ADDR')
+    return remote_addr.strip() if remote_addr else None
+
+
+def evaluate_real_signal(accuracy_meters):
+    """Evaluates signal quality strictly against real GPS horizontal accuracy."""
+    if accuracy_meters is None:
+        return (None, None)
+
+    try:
+        acc = float(accuracy_meters)
+    except (ValueError, TypeError):
+        return (None, None)
+
+    if acc <= 15:
+        return ("Strong", 95)
+    elif acc <= 30:
+        return ("Good", 75)
+    elif acc <= 60:
+        return ("Fair", 50)
+    else:
+        return ("Weak", 25)
+
+
 def safe_photo_url(photo_field, request=None):
-    """Builds a real web URL for images stored in the database."""
+    """Builds a verified web URL for stored images without fallback avatars."""
     if not photo_field:
         return None
     try:
@@ -94,17 +133,13 @@ def get_real_user_photo(faculty, request=None):
 
 
 def format_online_offline_status(recorded_at, now):
-    """
-    Computes whether a user is online or offline with elapsed minutes, hours, or days.
-    - Online: Heartbeat received within the last 15 minutes.
-    - Offline: No heartbeat for > 15 minutes, or never connected.
-    """
+    """Computes online/offline status based strictly on active database timestamps."""
     if not recorded_at:
         return {
             'is_online': False,
             'status': 'OFFLINE',
-            'duration_label': 'Never connected',
-            'full_label': 'Offline (Never connected)'
+            'duration_label': None,
+            'full_label': None,
         }
 
     delta_seconds = max(0, int((now - recorded_at).total_seconds()))
@@ -112,23 +147,17 @@ def format_online_offline_status(recorded_at, now):
     delta_hours = delta_minutes // 60
     delta_days = delta_hours // 24
 
-    if delta_minutes <= 15:
-        # ONLINE
-        if delta_seconds < 60:
-            time_str = "Active just now"
-        else:
-            time_str = f"Active {delta_minutes}m ago"
-
+    if delta_seconds <= ONLINE_THRESHOLD_SECONDS:
+        time_str = "Active just now" if delta_seconds < 60 else "Active 1m ago"
         return {
             'is_online': True,
             'status': 'ONLINE',
             'duration_label': time_str,
-            'full_label': f"Online • {time_str}"
+            'full_label': f"Online • {time_str}",
         }
     else:
-        # OFFLINE
         if delta_minutes < 60:
-            time_str = f"Offline for {delta_minutes}m"
+            time_str = f"Offline for {max(1, delta_minutes)}m"
         elif delta_hours < 24:
             time_str = f"Offline for {delta_hours}h"
         else:
@@ -138,12 +167,12 @@ def format_online_offline_status(recorded_at, now):
             'is_online': False,
             'status': 'OFFLINE',
             'duration_label': time_str,
-            'full_label': f"Offline • {time_str}"
+            'full_label': f"Offline • {time_str}",
         }
 
 
 def get_real_school_config():
-    """Reads official school boundary settings from SchoolProfile table."""
+    """Reads official school boundary settings. Returns None if unconfigured."""
     school_obj = SchoolProfile.objects.first()
 
     has_coords = bool(
@@ -152,13 +181,10 @@ def get_real_school_config():
         and school_obj.longitude is not None
     )
 
-    school_name = (
-        getattr(school_obj, 'school_name', None)
-        or getattr(school_obj, 'name', None)
-        or "School Campus"
-    )
+    school_name = getattr(school_obj, 'school_name', None) or getattr(school_obj, 'name', None)
+    school_id = getattr(school_obj, 'school_id', None)
 
-    radius = 200
+    radius = None
     if school_obj:
         for attr in ['geofence_radius', 'geofence_radius_meters', 'radius_meters']:
             val = getattr(school_obj, attr, None)
@@ -173,18 +199,18 @@ def get_real_school_config():
 
     return {
         'school_name': school_name,
-        'school_id': getattr(school_obj, 'school_id', '') or '',
-        'latitude': float(school_obj.latitude) if has_coords else 8.480241,
-        'longitude': float(school_obj.longitude) if has_coords else 124.650152,
+        'school_id': school_id,
+        'latitude': float(school_obj.latitude) if has_coords else None,
+        'longitude': float(school_obj.longitude) if has_coords else None,
         'radius_meters': radius,
-        'is_configured': has_coords,
+        'is_configured': has_coords and radius is not None,
     }
 
 
-def save_campus_geofence_config(lat, lng, radius):
+def save_campus_geofence_config(lat: float, lng: float, radius: int):
     school_obj = SchoolProfile.objects.first()
     if not school_obj:
-        school_obj = SchoolProfile.objects.create(school_name="School Campus")
+        school_obj = SchoolProfile.objects.create()
 
     school_obj.latitude = lat
     school_obj.longitude = lng
@@ -197,7 +223,6 @@ def save_campus_geofence_config(lat, lng, radius):
 
 
 def resolve_faculty_from_user(user, data=None):
-    """Matches the logged-in user to their real FacultyProfile row."""
     if not user:
         return None
 
@@ -228,10 +253,6 @@ def resolve_faculty_from_user(user, data=None):
 
 
 class GeofenceStatusAPIView(APIView):
-    """
-    Returns authentic live geofence status directly from database records.
-    Provides online/offline status with exact elapsed time.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -264,25 +285,32 @@ class GeofenceStatusAPIView(APIView):
         )
 
         for faculty in faculties:
-            # Query latest heartbeat from PostgreSQL
             latest_hb = (
                 FacultyHeartbeat.objects.filter(faculty=faculty)
                 .order_by('-recorded_at')
                 .first()
             )
 
-            # Calculate online/offline status with elapsed time
             conn_status = format_online_offline_status(latest_hb.recorded_at if latest_hb else None, now)
             if conn_status['is_online']:
                 online_users_count += 1
 
-            distance_display = "No GPS Signal"
+            distance_display = None
             presence_status = "NOT_ON_DUTY"
-            battery_display = "—"
+            battery_display = None
             gps_accuracy = None
             is_mock_location = False
             user_lat = None
             user_lng = None
+
+            ip_val = getattr(latest_hb, 'ip_address', None) or cache.get(f"faculty_last_ip_{faculty.id}")
+            mac_val = (
+                getattr(latest_hb, 'mac_address', None)
+                or getattr(faculty, 'bound_device_id', None)
+                or cache.get(f"faculty_last_mac_{faculty.id}")
+            )
+
+            sig_label, sig_pct = None, None
 
             if latest_hb and latest_hb.latitude is not None and latest_hb.longitude is not None:
                 user_lat = float(latest_hb.latitude)
@@ -290,16 +318,22 @@ class GeofenceStatusAPIView(APIView):
                 is_mock_location = bool(getattr(latest_hb, 'is_mock_location', False))
                 gps_accuracy = getattr(latest_hb, 'accuracy', None) or getattr(latest_hb, 'accuracy_meters', None)
 
+                sig_label, sig_pct = evaluate_real_signal(gps_accuracy)
+
                 if latest_hb.battery_level is not None:
                     battery_display = f"{latest_hb.battery_level}%"
 
-                # Calculate real distance from campus
-                dist = calculate_haversine_distance(campus_lat, campus_lng, user_lat, user_lng)
-                distance_display = f"{int(dist)}m" if dist < 1000 else f"{(dist / 1000.0):.2f} km"
+                if is_configured and campus_lat is not None and campus_lng is not None and allowed_radius is not None:
+                    dist = calculate_haversine_distance(campus_lat, campus_lng, user_lat, user_lng)
+                    distance_display = f"{round(dist)}m" if dist < 1000 else f"{(dist / 1000.0):.2f} km"
+                    is_inside = dist <= allowed_radius
+                else:
+                    dist = None
+                    is_inside = False
 
-                delta_minutes = (now - latest_hb.recorded_at).total_seconds() / 60.0
+                delta_seconds = (now - latest_hb.recorded_at).total_seconds()
+                local_time_str = timezone.localtime(latest_hb.recorded_at).strftime('%I:%M:%S %p')
 
-                # Presence classification based on real database records
                 if is_mock_location:
                     presence_status = "SPOOF_ATTEMPT"
                     spoof_attempts_count += 1
@@ -307,16 +341,16 @@ class GeofenceStatusAPIView(APIView):
                     recent_breaches.append({
                         'id': faculty.id,
                         'faculty_name': faculty.full_name,
-                        'reason': 'Fake GPS app blocked by security shield',
+                        'reason': 'Mock location application detected',
                         'status': 'BLOCKED',
-                        'time': conn_status['duration_label'],
+                        'time': local_time_str,
                     })
-                elif delta_minutes > 15:
+                elif delta_seconds > ONLINE_THRESHOLD_SECONDS:
                     presence_status = "HEARTBEAT_LOST"
                     missing_heartbeats_count += 1
                 elif faculty.id in active_gate_passes:
                     presence_status = "AUTHORIZED_LEAVE"
-                elif dist <= allowed_radius:
+                elif is_inside:
                     presence_status = "VERIFIED_INSIDE"
                     verified_inside_count += 1
                 else:
@@ -325,20 +359,20 @@ class GeofenceStatusAPIView(APIView):
                     recent_breaches.append({
                         'id': faculty.id,
                         'faculty_name': faculty.full_name,
-                        'reason': f'Outside campus boundary ({distance_display} away)',
+                        'reason': f'Outside campus boundary ({distance_display or "Unknown distance"})',
                         'status': 'OUT OF BOUNDS',
-                        'time': conn_status['duration_label'],
+                        'time': local_time_str,
                     })
             else:
                 missing_heartbeats_count += 1
 
             user_photo_url = get_real_user_photo(faculty, request)
 
-            faculty_list.append({
+            faculty_entry = {
                 'id': faculty.id,
                 'faculty_name': faculty.full_name,
                 'employee_id': faculty.employee_id,
-                'position': faculty.position or 'Faculty I',
+                'position': faculty.position,
                 'status': presence_status,
                 'is_online': conn_status['is_online'],
                 'online_status': conn_status['status'],
@@ -347,9 +381,13 @@ class GeofenceStatusAPIView(APIView):
                 'distance': distance_display,
                 'battery': battery_display,
                 'last_seen': conn_status['duration_label'],
-                'device_model': getattr(faculty, 'device_model', None) or 'No device paired',
+                'device_model': getattr(faculty, 'device_model', None),
                 'bound_device_id': getattr(faculty, 'bound_device_id', None),
                 'device_bound_at': getattr(faculty, 'device_bound_at', None),
+                'ip_address': ip_val,
+                'mac_address': mac_val,
+                'signal_strength': sig_label if conn_status['is_online'] else None,
+                'signal_percentage': sig_pct if conn_status['is_online'] else None,
                 'photo': user_photo_url,
                 'photo_url': user_photo_url,
                 'is_mock_location': is_mock_location,
@@ -357,7 +395,8 @@ class GeofenceStatusAPIView(APIView):
                 'gate_tap_verified': False,
                 'latitude': user_lat,
                 'longitude': user_lng,
-            })
+            }
+            faculty_list.append(faculty_entry)
 
         return Response({
             'zone_id': config['school_id'],
@@ -373,6 +412,7 @@ class GeofenceStatusAPIView(APIView):
             'spoof_attempts_blocked': spoof_attempts_count,
             'incidents_today': incidents_today_count,
             'faculty_list': faculty_list,
+            'faculty_class_list': faculty_list,
             'recent_breaches': recent_breaches[:10],
         }, status=status.HTTP_200_OK)
 
@@ -385,9 +425,15 @@ class GeofenceStatusAPIView(APIView):
         try:
             new_lat = float(data.get('latitude'))
             new_lng = float(data.get('longitude'))
-            new_radius = int(data.get('radius_meters') or data.get('geofence_radius') or 200)
+            new_radius = int(data.get('radius_meters') or data.get('geofence_radius'))
         except (ValueError, TypeError):
             return Response({'error': 'Invalid numeric coordinates or radius.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not (-90.0 <= new_lat <= 90.0) or not (-180.0 <= new_lng <= 180.0):
+            return Response({'error': 'Coordinates out of valid global range.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not (25 <= new_radius <= 1500):
+            return Response({'error': 'Radius must be between 25m and 1,500m.'}, status=status.HTTP_400_BAD_REQUEST)
 
         save_campus_geofence_config(new_lat, new_lng, new_radius)
         return Response({
@@ -400,9 +446,7 @@ class GeofenceStatusAPIView(APIView):
 
 
 class GeofenceCheckInAPIView(APIView):
-    """
-    Receives real telemetry from mobile phones and saves directly to PostgreSQL.
-    """
+    """Receives live telemetry and records heartbeats without mock data."""
     permission_classes = [permissions.IsAuthenticated]
     throttle_classes = [UserRateThrottle]
 
@@ -434,88 +478,138 @@ class GeofenceCheckInAPIView(APIView):
         accuracy = round(float(raw_acc), 1) if raw_acc is not None else None
 
         raw_batt = data.get('battery_level') or data.get('battery')
-        battery_level = (
-            int(str(raw_batt).replace('%', '').strip())
-            if raw_batt is not None and str(raw_batt).replace('%', '').strip().isdigit()
-            else None
-        )
+        battery_level = None
+        if raw_batt is not None:
+            batt_clean = str(raw_batt).replace('%', '').strip()
+            if batt_clean.isdigit():
+                battery_level = int(batt_clean)
 
         is_mock_location = bool(data.get('is_mock_location') or data.get('mocked') or coords.get('mocked') or False)
-        device_id = str(data.get('device_id') or data.get('client_device_id') or data.get('device_uuid') or '').strip()
-        device_model = str(data.get('device_model') or data.get('model') or '').strip()
 
-        # Reject fake GPS
+        device_id = str(
+            data.get('mac_address') or
+            data.get('device_id') or
+            data.get('client_device_id') or
+            data.get('device_uuid') or
+            ''
+        ).strip() or None
+
+        device_model = str(data.get('device_model') or data.get('model') or '').strip() or None
+        client_ip = get_client_ip(request)
+
         if is_mock_location:
             return Response({'error': 'Mock location blocked by security shield.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Hardware Device Binding in database
         if device_id:
             bound_id = getattr(faculty, 'bound_device_id', None)
-
-            # Prevent a different device from checking in if account is locked to another phone
-            if bound_id and bound_id != device_id:
-                return Response({
-                    'error': f'Device mismatch: Account is locked to {faculty.device_model or "another phone"}.'
-                }, status=status.HTTP_403_FORBIDDEN)
-
-            # Rebind device safely if testing with the same physical phone across accounts
-            FacultyProfile.objects.filter(bound_device_id=device_id).exclude(id=faculty.id).update(
-                bound_device_id=None,
-                device_model=None,
-                device_bound_at=None
-            )
-
-            faculty.bound_device_id = device_id
-            if device_model:
-                faculty.device_model = device_model
-            faculty.device_bound_at = timezone.now()
-            faculty.save(update_fields=['bound_device_id', 'device_model', 'device_bound_at'])
+            if not bound_id or bound_id != device_id:
+                FacultyProfile.objects.filter(bound_device_id=device_id).exclude(id=faculty.id).update(
+                    bound_device_id=None,
+                    device_model=None,
+                    device_bound_at=None
+                )
+                faculty.bound_device_id = device_id
+                if device_model:
+                    faculty.device_model = device_model
+                faculty.device_bound_at = timezone.now()
+                faculty.save(update_fields=['bound_device_id', 'device_model', 'device_bound_at'])
 
         config = get_real_school_config()
-        distance = calculate_haversine_distance(config['latitude'], config['longitude'], latitude, longitude)
-        is_inside = distance <= config['radius_meters']
-        distance_display = f"{int(distance)}m" if distance < 1000 else f"{(distance / 1000.0):.2f} km"
-        status_result = 'VERIFIED_INSIDE' if is_inside else 'PERIMETER_BREACH'
+        if config['is_configured'] and config['latitude'] is not None and config['longitude'] is not None and config['radius_meters'] is not None:
+            distance = calculate_haversine_distance(config['latitude'], config['longitude'], latitude, longitude)
+            is_inside = distance <= config['radius_meters']
+            distance_display = f"{round(distance)}m" if distance < 1000 else f"{(distance / 1000.0):.2f} km"
+            status_result = 'VERIFIED_INSIDE' if is_inside else 'PERIMETER_BREACH'
+        else:
+            distance = None
+            is_inside = False
+            distance_display = None
+            status_result = 'UNCONFIGURED'
+
         now = timezone.now()
+        local_now = timezone.localtime(now)
 
-        # Check model fields dynamically before saving to PostgreSQL
+        latest_existing_hb = FacultyHeartbeat.objects.filter(faculty=faculty).order_by('-recorded_at').first()
         model_fields = {f.name for f in FacultyHeartbeat._meta.fields}
-        hb_kwargs = {
-            'faculty': faculty,
-            'latitude': latitude,
-            'longitude': longitude,
-            'recorded_at': now,
-        }
+        sig_label, sig_pct = evaluate_real_signal(accuracy)
 
-        if 'battery_level' in model_fields:
-            hb_kwargs['battery_level'] = battery_level if battery_level is not None else 0
-        if 'is_inside_geofence' in model_fields:
-            hb_kwargs['is_inside_geofence'] = is_inside
-        if 'accuracy' in model_fields and accuracy is not None:
-            hb_kwargs['accuracy'] = accuracy
-        elif 'accuracy_meters' in model_fields and accuracy is not None:
-            hb_kwargs['accuracy_meters'] = accuracy
-        if 'is_mock_location' in model_fields:
-            hb_kwargs['is_mock_location'] = False
+        # 1-minute cadence: update current heartbeat record within 55s to prevent database flooding
+        if latest_existing_hb and (now - latest_existing_hb.recorded_at).total_seconds() < MIN_HEARTBEAT_CADENCE_SECONDS:
+            target_hb = latest_existing_hb
+            target_hb.latitude = latitude
+            target_hb.longitude = longitude
+            if 'battery_level' in model_fields:
+                target_hb.battery_level = battery_level
+            if 'accuracy' in model_fields:
+                target_hb.accuracy = accuracy
+            elif 'accuracy_meters' in model_fields:
+                target_hb.accuracy_meters = accuracy
+            if 'ip_address' in model_fields and client_ip:
+                target_hb.ip_address = client_ip
+            if 'mac_address' in model_fields and device_id:
+                target_hb.mac_address = device_id
+            if 'signal_strength' in model_fields:
+                target_hb.signal_strength = sig_label
+            if 'signal_percentage' in model_fields:
+                target_hb.signal_percentage = sig_pct
+            target_hb.save()
+        else:
+            hb_kwargs = {
+                'latitude': latitude,
+                'longitude': longitude,
+                'recorded_at': now,
+            }
+            if 'faculty' in model_fields:
+                hb_kwargs['faculty'] = faculty
+            elif 'staff' in model_fields:
+                hb_kwargs['staff'] = faculty
 
-        FacultyHeartbeat.objects.create(**hb_kwargs)
+            if 'battery_level' in model_fields and battery_level is not None:
+                hb_kwargs['battery_level'] = battery_level
+            if 'is_inside_geofence' in model_fields:
+                hb_kwargs['is_inside_geofence'] = is_inside
+            if 'accuracy' in model_fields and accuracy is not None:
+                hb_kwargs['accuracy'] = accuracy
+            elif 'accuracy_meters' in model_fields and accuracy is not None:
+                hb_kwargs['accuracy_meters'] = accuracy
+            if 'is_mock_location' in model_fields:
+                hb_kwargs['is_mock_location'] = False
+            if 'ip_address' in model_fields and client_ip:
+                hb_kwargs['ip_address'] = client_ip
+            if 'mac_address' in model_fields and device_id:
+                hb_kwargs['mac_address'] = device_id
+            if 'signal_strength' in model_fields and sig_label:
+                hb_kwargs['signal_strength'] = sig_label
+            if 'signal_percentage' in model_fields and sig_pct is not None:
+                hb_kwargs['signal_percentage'] = sig_pct
+
+            target_hb = FacultyHeartbeat.objects.create(**hb_kwargs)
+
+        if client_ip:
+            cache.set(f"faculty_last_ip_{faculty.id}", client_ip, 86400)
+        if device_id:
+            cache.set(f"faculty_last_mac_{faculty.id}", device_id, 86400)
+
+        cache.set(f"hb_meta_{target_hb.id}", {
+            'ip': client_ip,
+            'mac': device_id,
+            'sig_label': sig_label,
+            'sig_pct': sig_pct,
+        }, 86400)
 
         return Response({
             'success': True,
             'status': status_result,
             'distance': distance_display,
             'verified_inside': is_inside,
-            'device_paired': faculty.device_model or device_model or 'Paired Device',
-            'recorded_at': now.strftime('%I:%M:%S %p'),
+            'device_paired': faculty.device_model or device_model,
+            'recorded_at': local_now.strftime('%I:%M:%S %p'),
+            'ip_recorded': client_ip,
         }, status=status.HTTP_200_OK)
 
 
 class GeofenceAuditHistoryAPIView(APIView):
-    """
-    Permanent database audit trail of all recorded GPS heartbeats.
-    - System Admins can search and inspect all users.
-    - Non-admin faculty can view and search their own permanent geofence history.
-    """
+    """Permanent database audit trail of GPS heartbeats with local 12-hour format."""
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -524,8 +618,8 @@ class GeofenceAuditHistoryAPIView(APIView):
         campus_lat = config['latitude']
         campus_lng = config['longitude']
         radius = config['radius_meters']
+        is_configured = config['is_configured']
 
-        # Determine user authorization level
         user_role = 'FACULTY'
         if hasattr(user, 'profile') and getattr(user.profile, 'role', None):
             user_role = str(user.profile.role).upper()
@@ -534,17 +628,14 @@ class GeofenceAuditHistoryAPIView(APIView):
 
         is_admin = user_role in ['ADMIN', 'PRINCIPAL', 'SUPERUSER'] or user.is_superuser
 
-        # Filter parameters
         search_query = request.query_params.get('search', '').strip()
         faculty_id_param = request.query_params.get('faculty_id')
-        date_from_param = request.query_params.get('date_from')
-        date_to_param = request.query_params.get('date_to')
+        date_from_param = request.query_params.get('date_from', '').strip()
+        date_to_param = request.query_params.get('date_to', '').strip()
         status_filter = request.query_params.get('status', 'ALL').upper()
 
-        # Query heartbeats ordered chronologically
         heartbeats = FacultyHeartbeat.objects.select_related('faculty').order_by('-recorded_at')
 
-        # Cybersecurity: Non-admins are locked to their own logs
         if not is_admin:
             faculty_obj = resolve_faculty_from_user(user)
             if faculty_obj:
@@ -554,7 +645,6 @@ class GeofenceAuditHistoryAPIView(APIView):
         elif faculty_id_param and faculty_id_param != 'ALL' and faculty_id_param.isdigit():
             heartbeats = heartbeats.filter(faculty_id=int(faculty_id_param))
 
-        # Search filter (Faculty Name or Employee ID)
         if search_query:
             heartbeats = heartbeats.filter(
                 Q(faculty__first_name__icontains=search_query) |
@@ -562,35 +652,39 @@ class GeofenceAuditHistoryAPIView(APIView):
                 Q(faculty__employee_id__icontains=search_query)
             )
 
-        # Date range filters
-        if date_from_param:
+        if date_from_param and date_from_param.upper() != 'ALL':
             try:
                 d_from = datetime.strptime(date_from_param, '%Y-%m-%d').date()
-                heartbeats = heartbeats.filter(recorded_at__date__gte=d_from)
+                if date_to_param:
+                    d_to = datetime.strptime(date_to_param, '%Y-%m-%d').date()
+                    heartbeats = heartbeats.filter(recorded_at__date__gte=d_from, recorded_at__date__lte=d_to)
+                else:
+                    heartbeats = heartbeats.filter(recorded_at__date=d_from)
             except ValueError:
                 pass
 
-        if date_to_param:
-            try:
-                d_to = datetime.strptime(date_to_param, '%Y-%m-%d').date()
-                heartbeats = heartbeats.filter(recorded_at__date__lte=d_to)
-            except ValueError:
-                pass
+        # 1. Total records count in database before slicing
+        total_records_count = heartbeats.count()
 
-        # Fast pagination limit (keeps initial load under 200ms)
-        heartbeats_subset = list(heartbeats[:300])
+        # 2. Slice to latest 1000 records for responsive UI rendering
+        heartbeats_subset = list(heartbeats[:1000])
 
         audit_records = []
         loafing_count = 0
         inside_count = 0
 
-        now = timezone.now()
-
         for hb in heartbeats_subset:
             lat = float(hb.latitude)
             lng = float(hb.longitude)
-            dist = calculate_haversine_distance(campus_lat, campus_lng, lat, lng)
-            is_inside = dist <= radius
+
+            if is_configured and campus_lat is not None and campus_lng is not None and radius is not None:
+                dist = calculate_haversine_distance(campus_lat, campus_lng, lat, lng)
+                is_inside = dist <= radius
+                dist_str = f"{round(dist)}m" if dist < 1000 else f"{(dist / 1000.0):.2f} km"
+            else:
+                dist = None
+                is_inside = False
+                dist_str = None
 
             if is_inside:
                 inside_count += 1
@@ -604,37 +698,53 @@ class GeofenceAuditHistoryAPIView(APIView):
             if status_filter == 'LOAFING' and is_inside:
                 continue
 
-            dist_str = f"{int(dist)}m" if dist < 1000 else f"{(dist / 1000.0):.2f} km"
+            hb_cached = cache.get(f"hb_meta_{hb.id}") or {}
+            ip_val = getattr(hb, 'ip_address', None) or hb_cached.get('ip') or cache.get(f"faculty_last_ip_{hb.faculty_id}")
+            mac_val = (
+                getattr(hb, 'mac_address', None)
+                or getattr(hb.faculty, 'bound_device_id', None)
+                or hb_cached.get('mac')
+                or cache.get(f"faculty_last_mac_{hb.faculty_id}")
+            )
+
+            acc = getattr(hb, 'accuracy', None) or getattr(hb, 'accuracy_meters', None)
+            sig_label, sig_pct = evaluate_real_signal(acc)
+
+            local_dt = timezone.localtime(hb.recorded_at)
 
             audit_records.append({
                 'id': hb.id,
                 'faculty_id': hb.faculty.id,
                 'faculty_name': hb.faculty.full_name,
                 'employee_id': hb.faculty.employee_id,
-                'timestamp': hb.recorded_at.strftime('%Y-%m-%d %I:%M:%S %p'),
-                'time_only': hb.recorded_at.strftime('%I:%M:%S %p'),
-                'date_only': hb.recorded_at.strftime('%Y-%m-%d'),
+                'timestamp': local_dt.strftime('%Y-%m-%d %I:%M:%S %p'),
+                'time_only': local_dt.strftime('%I:%M:%S %p'),
+                'date_only': local_dt.strftime('%Y-%m-%d'),
                 'latitude': lat,
                 'longitude': lng,
                 'distance': dist_str,
                 'distance_meters': dist,
                 'verdict': verdict,
                 'is_inside': is_inside,
-                'battery': f"{hb.battery_level}%" if hb.battery_level is not None else "—",
-                'device_model': getattr(hb.faculty, 'device_model', 'Registered Phone') or 'Registered Phone',
+                'signal_strength': getattr(hb, 'signal_strength', None) or hb_cached.get('sig_label') or (sig_label if (timezone.now() - hb.recorded_at).total_seconds() <= ONLINE_THRESHOLD_SECONDS else None),
+                'signal_percentage': getattr(hb, 'signal_percentage', None) or hb_cached.get('sig_pct') or (sig_pct if (timezone.now() - hb.recorded_at).total_seconds() <= ONLINE_THRESHOLD_SECONDS else None),
+                'ip_address': ip_val,
+                'mac_address': mac_val,
+                'battery': f"{hb.battery_level}%" if hb.battery_level is not None else None,
+                'device_model': getattr(hb.faculty, 'device_model', None),
                 'bound_device_id': getattr(hb.faculty, 'bound_device_id', None),
             })
 
         return Response({
-            'total_heartbeats': len(audit_records),
+            'total_heartbeats': total_records_count,
             'loafing_incidents': loafing_count,
             'inside_verifications': inside_count,
             'is_admin': is_admin,
             'records': audit_records,
         }, status=status.HTTP_200_OK)
 
+
 class FacultyDeviceResetAPIView(APIView):
-    """Allows administrators to unlock a paired phone device."""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk=None):
@@ -647,6 +757,8 @@ class FacultyDeviceResetAPIView(APIView):
         faculty.device_model = None
         faculty.device_bound_at = None
         faculty.save(update_fields=['bound_device_id', 'device_model', 'device_bound_at'])
+
+        cache.delete(f"faculty_last_mac_{faculty.id}")
 
         return Response({
             'success': True,

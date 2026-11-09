@@ -1,5 +1,5 @@
 /**
- * AttendSure - Unified Digital ID & Gate Turnstile Pass Modal
+ * AttendSure - Unified Digital ID & Gate Kiosk Pass Modal
  * Supports both Student and Faculty identification credentials.
  * File: web/src/components/modals/StudentIdPassModal.tsx
  */
@@ -52,7 +52,7 @@ export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({
   };
 
   return (
-    <Modal isOpen={Boolean(student)} onClose={onClose} title="Digital Pass & Gate Turnstile QR">
+    <Modal isOpen={Boolean(student)} onClose={onClose} title="Digital Pass & Gate Kiosk QR">
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '6px 0' }}>
         <div
           id="printable-id-card"

@@ -154,8 +154,8 @@ def get_user_role(user) -> str:
     return "FACULTY"
 
 
-def is_regular_teacher(role: str) -> bool:
-    return str(role or "").upper() in {"TEACHER", "FACULTY", "EMPLOYEE", "INSTRUCTOR"}
+def is_regular_faculty(role: str) -> bool:
+    return str(role or "").upper() in {"FACULTY", "FACULTY", "EMPLOYEE", "INSTRUCTOR"}
 
 
 def is_leadership_role(user) -> bool:

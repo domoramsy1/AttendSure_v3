@@ -52,13 +52,13 @@ from apps.api.serializers import (
 )
 from apps.common.utils import (
     get_user_role,
-    is_regular_teacher,
+    is_regular_faculty,
     is_leadership_role,
 )
 from .common import (
     resolve_faculty_for_user,
-    get_teacher_student_ids,
-    get_teacher_section_ids,
+    get_faculty_student_ids,
+    get_faculty_section_ids,
 )
 
 User = get_user_model()
@@ -240,7 +240,7 @@ class SectionViewSet(viewsets.ModelViewSet):
             'grade_level', 'academic_year', 'adviser', 'room'
         ).order_by('grade_level__level_order', 'name')
 
-        if is_regular_teacher(role) and not user.is_superuser:
+        if is_regular_faculty(role) and not user.is_superuser:
             faculty = resolve_faculty_for_user(user)
             if faculty:
                 return qs.filter(Q(adviser=faculty) | Q(schedules__faculty=faculty)).distinct()
@@ -295,10 +295,10 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 
         user = self.request.user
         role = get_user_role(user)
-        if is_regular_teacher(role) and not user.is_superuser:
+        if is_regular_faculty(role) and not user.is_superuser:
             faculty = resolve_faculty_for_user(user)
             if faculty:
-                sec_ids = get_teacher_section_ids(faculty)
+                sec_ids = get_faculty_section_ids(faculty)
                 qs = qs.filter(Q(faculty=faculty) | Q(section_id__in=sec_ids))
             else:
                 return Schedule.objects.none()
@@ -310,7 +310,7 @@ class ScheduleViewSet(viewsets.ModelViewSet):
         return Response({
             'total_periods': qs.count(),
             'scheduled_sections': qs.values('section').distinct().count(),
-            'assigned_teachers': qs.exclude(faculty__isnull=True).values('faculty').distinct().count(),
+            'assigned_faculty': qs.exclude(faculty__isnull=True).values('faculty').distinct().count(),
             'occupied_rooms': qs.exclude(Q(room__isnull=True) & Q(room_number='')).values('room', 'room_number').distinct().count(),
         }, status=status.HTTP_200_OK)
 
@@ -353,9 +353,9 @@ class StudentViewSet(viewsets.ModelViewSet):
             active_enrollments_query
         ).order_by('last_name', 'first_name')
 
-        if is_regular_teacher(role) and not user.is_superuser:
+        if is_regular_faculty(role) and not user.is_superuser:
             faculty = resolve_faculty_for_user(user)
-            student_ids = get_teacher_student_ids(faculty)
+            student_ids = get_faculty_student_ids(faculty)
             qs = qs.filter(id__in=student_ids)
 
         section_id = self.request.query_params.get('section_id') or self.request.query_params.get('section')
@@ -426,10 +426,10 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
             'student', 'section', 'section__grade_level', 'academic_year'
         ).filter(student__is_active=True).order_by('section__name', 'student__last_name')
 
-        if is_regular_teacher(role) and not user.is_superuser:
+        if is_regular_faculty(role) and not user.is_superuser:
             faculty = resolve_faculty_for_user(user)
             if faculty:
-                sec_ids = get_teacher_section_ids(faculty)
+                sec_ids = get_faculty_section_ids(faculty)
                 return qs.filter(section_id__in=sec_ids)
             return Enrollment.objects.none()
         return qs
@@ -578,9 +578,9 @@ class GatePassViewSet(viewsets.ModelViewSet):
         role = get_user_role(user)
         qs = GatePass.objects.select_related('student', 'faculty', 'issued_by').order_by('-valid_from')
 
-        if is_regular_teacher(role) and not user.is_superuser:
+        if is_regular_faculty(role) and not user.is_superuser:
             faculty = resolve_faculty_for_user(user)
-            student_ids = get_teacher_student_ids(faculty)
+            student_ids = get_faculty_student_ids(faculty)
             qs = qs.filter(Q(issued_by=faculty) | Q(student_id__in=student_ids))
 
         status_param = self.request.query_params.get('status')

@@ -144,7 +144,7 @@ def get_or_create_faculty_user(first, last, TargetAdviserModel):
         defaults={'email': email, 'first_name': first, 'last_name': last, 'is_staff': True}
     )
     if not user.password:
-        user.set_password('Teacher@123')
+        user.set_password('Faculty@123')
         user.save()
 
     if TargetAdviserModel and TargetAdviserModel != User:

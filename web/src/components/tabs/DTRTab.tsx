@@ -145,7 +145,7 @@ export const DTRTab: React.FC = () => {
   const schoolProfile = schoolContext?.profile;
 
   const currentUserRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
-  const isTeacher = currentUserRole === 'FACULTY';
+  const isFaculty = currentUserRole === 'FACULTY';
 
   const [facultyList, setFacultyList] = useState<FacultyMember[]>([]);
   const [selectedFacultyId, setSelectedFacultyId] = useState<string>('');
@@ -173,7 +173,7 @@ export const DTRTab: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    if (isTeacher) return;
+    if (isFaculty) return;
 
     const loadFaculty = async () => {
       try {
@@ -182,7 +182,7 @@ export const DTRTab: React.FC = () => {
           res = await apiClient.get<any>('/faculty/?page_size=100');
         } catch (firstErr: any) {
           if (firstErr?.response?.status === 404) {
-            res = await apiClient.get<any>('/teachers/?page_size=100');
+            res = await apiClient.get<any>('/faculty/?page_size=100');
           } else {
             throw firstErr;
           }
@@ -216,11 +216,11 @@ export const DTRTab: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [isTeacher, selectedFacultyId]);
+  }, [isFaculty, selectedFacultyId]);
 
   const fetchDTR = useCallback(
     async (silent = false) => {
-      const endpoint = isTeacher && !selectedFacultyId
+      const endpoint = isFaculty && !selectedFacultyId
         ? '/reports/dtr/'
         : selectedFacultyId
         ? `/reports/dtr/${selectedFacultyId}/`
@@ -291,7 +291,7 @@ export const DTRTab: React.FC = () => {
         if (!silent) setLoading(false);
       }
     },
-    [isTeacher, selectedFacultyId, selectedMonth, selectedYear]
+    [isFaculty, selectedFacultyId, selectedMonth, selectedYear]
   );
 
   useEffect(() => {
@@ -752,7 +752,7 @@ export const DTRTab: React.FC = () => {
         </p>
 
         <blockquote style={{ margin: '0 0 0 8px', borderLeft: '1.5px solid #000', paddingLeft: 6, fontStyle: 'italic' }}>
-          &ldquo;Each chief of a Bureau or Office shall require a daily record of attendance of all the officers and employees under him entitled to leave or absence or vacation (including teachers) to be kept on the proper form and also a systematic office record showing for each day all absences from duty from any cause whatever. At the beginning of each month he shall report to the Commissioner on the proper form of all absences from any cause whatever, including the exact amount of undertime of each person for each day. Officers or employees serving in the field or on the water need not be required to keep a daily record, but all absences of such employees must be included in the monthly report of changes and absences. Falsification of time records will render the offending officers or employee liable to summary removal from the service and criminal prosecution.&rdquo;
+          &ldquo;Each chief of a Bureau or Office shall require a daily record of attendance of all the officers and employees under him entitled to leave or absence or vacation (including faculty) to be kept on the proper form and also a systematic office record showing for each day all absences from duty from any cause whatever. At the beginning of each month he shall report to the Commissioner on the proper form of all absences from any cause whatever, including the exact amount of undertime of each person for each day. Officers or employees serving in the field or on the water need not be required to keep a daily record, but all absences of such employees must be included in the monthly report of changes and absences. Falsification of time records will render the offending officers or employee liable to summary removal from the service and criminal prosecution.&rdquo;
         </blockquote>
 
         <p style={{ margin: '4px 0 0 0', fontSize: '5.7pt' }}>
@@ -776,7 +776,7 @@ export const DTRTab: React.FC = () => {
               iconSize={18}
             />
 
-            {isTeacher ? (
+            {isFaculty ? (
               <div
                 style={{
                   display: 'flex',
@@ -859,7 +859,7 @@ export const DTRTab: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {isTeacher && dtrData && !dtrData.dtr_submitted && !dtrData.dept_head_approved && (
+          {isFaculty && dtrData && !dtrData.dtr_submitted && !dtrData.dept_head_approved && (
             <Button
               variant="primary"
               size="md"

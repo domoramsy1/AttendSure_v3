@@ -836,7 +836,7 @@ export const SettingsTab: React.FC = () => {
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
-                  If rosters appear outdated or the portal feels slow, click to clear temporary server memory and refresh data immediately without restarting the computer.
+                  If class lists appear outdated or the portal feels slow, click to clear temporary server memory and refresh data immediately without restarting the computer.
                 </p>
                 <button
                   type="button"
@@ -904,7 +904,7 @@ export const SettingsTab: React.FC = () => {
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
-                  If a teacher or registrar is locked out after entering the wrong password 5 times, click here to clear failed attempts so they can sign in immediately.
+                  If a faculty or registrar is locked out after entering the wrong password 5 times, click here to clear failed attempts so they can sign in immediately.
                 </p>
                 <button
                   type="button"

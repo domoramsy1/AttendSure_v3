@@ -1435,7 +1435,7 @@ def get_user_role(user):
     return 'FACULTY'
 
 def is_regular_teacher(role):
-    return str(role or '').upper() in ['TEACHER', 'FACULTY']
+    return str(role or '').upper() in ['FACULTY', 'FACULTY']
 
 def is_leadership_role(user):
     if not user or not user.is_authenticated:
@@ -1458,7 +1458,7 @@ def resolve_faculty_for_user(user):
     if not faculty:
         faculty, _ = FacultyProfile.objects.get_or_create(
             employee_id=str(user.username).strip().upper(),
-            defaults={'first_name': user.first_name or user.username.capitalize(), 'last_name': user.last_name or 'Faculty', 'email': user.email or '', 'position': 'Teacher', 'department': 'Academic Department', 'is_active': True, 'can_teach': True}
+            defaults={'first_name': user.first_name or user.username.capitalize(), 'last_name': user.last_name or 'Faculty', 'email': user.email or '', 'position': 'Faculty', 'department': 'Academic Department', 'is_active': True, 'can_teach': True}
         )
     return faculty
 
@@ -2100,9 +2100,9 @@ class GeofenceStatusAPIView(APIView):
         allowed_radius = int(school.geofence_radius_meters) if school and hasattr(school, 'geofence_radius_meters') and school.geofence_radius_meters else 150
 
         faculty_members = FacultyProfile.objects.filter(is_active=True)
-        faculty_roster = []
+        faculty_class_list = []
         for f in faculty_members:
-            faculty_roster.append({
+            faculty_class_list.append({
                 'id': f.id,
                 'faculty_name': f.full_name,
                 'employee_id': f.employee_id,
@@ -2119,8 +2119,8 @@ class GeofenceStatusAPIView(APIView):
             'longitude': campus_lng,
             'radius_meters': allowed_radius,
             'is_configured': True,
-            'verified_inside': len(faculty_roster),
-            'faculty_roster': faculty_roster,
+            'verified_inside': len(faculty_class_list),
+            'faculty_class_list': faculty_class_list,
         }, status=status.HTTP_200_OK)
 
 class GeofenceCheckInAPIView(APIView):
@@ -2170,7 +2170,7 @@ from apps.academics.models import Schedule, Student, SubjectAttendanceLog
 from .common import resolve_faculty_for_user, is_leadership_role, format_full_student_name, safe_photo_url
 from apps.api.serializers import ClassroomBatchScanSerializer
 
-class FacultyClassroomRosterAPIView(APIView):
+class FacultyClassroomClassListAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -2423,7 +2423,7 @@ from .auth import DatabaseLoginView, LoginAPIView, CurrentUserView, CurrentUserP
 from .dashboard import DashboardOverviewAPIView
 from .sections import SectionListAPIView, SectionDetailAPIView
 from .gate import GateScanAPIView, GateLogsAPIView
-from .classroom import FacultyClassroomRosterAPIView, ClassroomBatchScanAPIView, MyAssignedClassesAPIView
+from .classroom import FacultyClassroomClassListAPIView, ClassroomBatchScanAPIView, MyAssignedClassesAPIView
 from .reports import (
     DepEdSF1DataAPIView, DepEdSF2DataAPIView, DepEdSF4DataAPIView, DTRListAPIView,
     UnifiedReportExportAPIView, UnifiedReportPrintAPIView, ReportAuditLogAPIView
@@ -2440,7 +2440,7 @@ __all__ = [
     'DatabaseLoginView', 'LoginAPIView', 'CurrentUserView', 'CurrentUserProfileView',
     'LiveFieldValidationAPIView', 'RegisterPushTokenAPIView', 'DashboardOverviewAPIView',
     'SectionListAPIView', 'SectionDetailAPIView', 'GateScanAPIView', 'GateLogsAPIView',
-    'FacultyClassroomRosterAPIView', 'ClassroomBatchScanAPIView', 'MyAssignedClassesAPIView',
+    'FacultyClassroomClassListAPIView', 'ClassroomBatchScanAPIView', 'MyAssignedClassesAPIView',
     'DepEdSF1DataAPIView', 'DepEdSF2DataAPIView', 'DepEdSF4DataAPIView', 'DTRListAPIView',
     'UnifiedReportExportAPIView', 'UnifiedReportPrintAPIView', 'ReportAuditLogAPIView',
     'PendingSmsDispatchAPIView', 'BulkSmsStatusAPIView', 'MarkSmsStatusAPIView',

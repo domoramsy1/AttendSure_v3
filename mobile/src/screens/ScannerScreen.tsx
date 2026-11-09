@@ -280,7 +280,7 @@ export const ScannerScreen: React.FC = () => {
         if (vibrateEnabled) Vibration.vibrate([0, 150, 100, 150]);
       }
 
-      // Update student in local roster
+      // Update student in local class list
       setSections((prev) =>
         prev.map((sec, idx) => {
           if (idx !== activeSectionIndex) return sec;
@@ -604,7 +604,7 @@ export const ScannerScreen: React.FC = () => {
         )}
       </View>
 
-      {/* 6. Recent Scans Live Stream (Innovation: Instant Visual Roster) */}
+      {/* 6. Recent Scans Live Stream (Innovation: Instant Visual Class List) */}
       {recentScans.length > 0 && (
         <View style={styles.recentScansSection}>
           <Text style={styles.recentScansHeaderTitle}>Recently Scanned in this Session:</Text>
@@ -630,7 +630,7 @@ export const ScannerScreen: React.FC = () => {
         </View>
       )}
 
-      {/* 7. Class Roster & Manual LRN Buttons */}
+      {/* 7. Class List & Manual LRN Buttons */}
       <View style={styles.utilityRow}>
         <TouchableOpacity
           style={[styles.studentListBtn, !activeSection && styles.btnDisabled]}
@@ -639,7 +639,7 @@ export const ScannerScreen: React.FC = () => {
         >
           <Ionicons name="people-outline" size={16} color={COLORS.primary} />
           <Text style={styles.studentListBtnText}>
-            Class Roster ({activeSection?.total_students || 0})
+            Class List ({activeSection?.total_students || 0})
           </Text>
         </TouchableOpacity>
 
@@ -691,12 +691,12 @@ export const ScannerScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* 9. Class Roster Modal */}
+      {/* 9. Class List Modal */}
       <Modal visible={showStudentListModal} animationType="slide">
         <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
           <View style={styles.studentListModalHeader}>
             <View>
-              <Text style={styles.studentListModalTitle}>{activeSection?.section_name} Class Roster</Text>
+              <Text style={styles.studentListModalTitle}>{activeSection?.section_name} Class List</Text>
               <Text style={styles.studentListModalSub}>Tap any student to record attendance manually</Text>
             </View>
             <TouchableOpacity onPress={() => setShowStudentListModal(false)} style={styles.closeBtn}>

@@ -114,8 +114,8 @@ def main():
     else:
         print("    [FAIL] No valid latitude/longitude set in database.")
 
-    # 3. Class Advisers & Subject Teachers Audit
-    print("\n[3] AUDITING CLASS ADVISERS & SUBJECT TEACHERS...")
+    # 3. Class Advisers & Subject Faculty Audit
+    print("\n[3] AUDITING CLASS ADVISERS & SUBJECT FACULTY...")
     try:
         Section = apps.get_model('academics', 'Section')
         Schedule = apps.get_model('academics', 'Schedule')
@@ -160,7 +160,7 @@ def main():
                 if s1.faculty_id and s2.faculty_id and s1.faculty_id == s2.faculty_id:
                     conflicts_found += 1
                     fac_name = getattr(s1.faculty, 'full_name', f"Faculty #{s1.faculty_id}")
-                    print(f"    [CONFLICT] Teacher '{fac_name}' double-booked on schedules {s1.id} & {s2.id} ({t1_start}-{t1_end})")
+                    print(f"    [CONFLICT] Faculty '{fac_name}' double-booked on schedules {s1.id} & {s2.id} ({t1_start}-{t1_end})")
 
                 # Section double-booking check
                 if s1.section_id and s2.section_id and s1.section_id == s2.section_id:
@@ -169,7 +169,7 @@ def main():
                     print(f"    [CONFLICT] Section '{sec_name}' has 2 classes at once on schedules {s1.id} & {s2.id} ({t1_start}-{t1_end})")
 
         if conflicts_found == 0:
-            print(f"    [CLEAN] All {total_scheds} timetable slots have zero teacher or section conflicts.")
+            print(f"    [CLEAN] All {total_scheds} timetable slots have zero faculty or section conflicts.")
         else:
             print(f"    [WARNING] Found {conflicts_found} total timetable conflict(s) in database.")
     except Exception as e:

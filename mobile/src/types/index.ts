@@ -18,7 +18,7 @@ export interface DeviceIdentity {
 }
 
 // ==============================================================================
-// 2. TURNSTILE GATE LOGS & CAMPUS PROFILE
+// 2. KIOSK GATE LOGS & CAMPUS PROFILE
 // ==============================================================================
 
 export interface GateLog {

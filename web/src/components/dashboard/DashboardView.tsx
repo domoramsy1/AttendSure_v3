@@ -351,7 +351,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
                   <Radio size={13} color={brand.primary} />
-                  <span>Turnstiles: {data.kiosks_online} of {data.total_kiosks} Online</span>
+                  <span>Kiosks: {data.kiosks_online} of {data.total_kiosks} Online</span>
                 </span>
               </>
             )}
@@ -425,7 +425,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div style={kpiCardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <span style={kpiLabelStyle}>TEACHERS ON DUTY</span>
+                <span style={kpiLabelStyle}>FACULTY ON DUTY</span>
                 <div style={kpiValueStyle}>
                   {isOnline ? `${data.faculty_on_duty}/${data.total_faculty}` : '—'}
                 </div>
@@ -501,7 +501,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
               <div>
                 <div style={actionTileTitle}>Issue Gate Pass</div>
-                <div style={actionTileDesc}>Authorize student or teacher exit</div>
+                <div style={actionTileDesc}>Authorize student or faculty exit</div>
               </div>
             </button>
 
@@ -580,7 +580,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <Users size={20} />
               </div>
               <div>
-                <div style={actionTileTitle}>Class Rosters</div>
+                <div style={actionTileTitle}>Class Lists</div>
                 <div style={actionTileDesc}>Verify enrolled students by section</div>
               </div>
             </button>

@@ -34,10 +34,10 @@ MONTH_NAMES = [
 ]
 
 
-class IsLeadershipOrAssignedTeacher(permissions.BasePermission):
+class IsLeadershipOrAssignedFaculty(permissions.BasePermission):
     """
     Grants access if the user is a superuser, leadership role,
-    or verified teacher/faculty member.
+    or verified faculty/faculty member.
     """
     def has_permission(self, request, view):
         user = request.user
@@ -55,7 +55,7 @@ class IsLeadershipOnly(permissions.BasePermission):
 
 
 class DepEdSF1DataAPIView(APIView):
-    permission_classes = [IsLeadershipOrAssignedTeacher]
+    permission_classes = [IsLeadershipOrAssignedFaculty]
 
     def get(self, request, section_id):
         try:
@@ -64,7 +64,7 @@ class DepEdSF1DataAPIView(APIView):
 
             user_full_name = request.user.get_full_name().strip()
             role = str(getattr(request.user, 'role', '') or '').upper()
-            if role in ['TEACHER', 'FACULTY'] and user_full_name:
+            if role in ['FACULTY', 'FACULTY'] and user_full_name:
                 data['adviser_name'] = user_full_name
             elif not data.get('adviser_name'):
                 data['adviser_name'] = user_full_name or 'Class Adviser'
@@ -76,7 +76,7 @@ class DepEdSF1DataAPIView(APIView):
 
 
 class DepEdSF2DataAPIView(APIView):
-    permission_classes = [IsLeadershipOrAssignedTeacher]
+    permission_classes = [IsLeadershipOrAssignedFaculty]
 
     def get(self, request, section_id):
         m = request.query_params.get('month', 'October')
@@ -86,7 +86,7 @@ class DepEdSF2DataAPIView(APIView):
 
             user_full_name = request.user.get_full_name().strip()
             role = str(getattr(request.user, 'role', '') or '').upper()
-            if role in ['TEACHER', 'FACULTY'] and user_full_name:
+            if role in ['FACULTY', 'FACULTY'] and user_full_name:
                 data['adviser_name'] = user_full_name
             elif not data.get('adviser_name'):
                 data['adviser_name'] = user_full_name or 'Class Adviser'
@@ -264,7 +264,7 @@ class UnifiedReportExportAPIView(APIView):
     """
     Renders official DMOS-compliant HTML templates for SF1, SF2, and SF4 forms.
     """
-    permission_classes = [IsLeadershipOrAssignedTeacher]
+    permission_classes = [IsLeadershipOrAssignedFaculty]
 
     def post(self, request):
         return self._handle(request, request.data)
@@ -282,7 +282,7 @@ class UnifiedReportExportAPIView(APIView):
             return Response({'error': 'Permission denied. SF4 is restricted to administrators.'}, status=status.HTTP_403_FORBIDDEN)
 
         meta = get_school_metadata(request)
-        teacher_name = escape(request.user.get_full_name() or request.user.username)
+        faculty_name = escape(request.user.get_full_name() or request.user.username)
         title = f"AttendSure_{rep}_Report_{m}_{y}"
 
         html_content = f"""<!DOCTYPE html>
@@ -406,8 +406,8 @@ class UnifiedReportExportAPIView(APIView):
   <table class="sign-table">
     <tr>
       <td style="width: 50%;">
-        <div class="sign-line"><strong>{teacher_name.upper()}</strong></div>
-        <div>(Signature of Teacher / Adviser over Printed Name)</div>
+        <div class="sign-line"><strong>{faculty_name.upper()}</strong></div>
+        <div>(Signature of Faculty / Adviser over Printed Name)</div>
       </td>
       <td style="width: 50%;">
         <div class="sign-line"><strong>{meta['school_head']}</strong></div>

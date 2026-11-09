@@ -48,7 +48,7 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
   const [groupingMode, setGroupingMode] = useState<'COMBINED' | 'SEPARATED'>('COMBINED');
 
   // Dynamic Adviser Resolution:
-  // If the active logged-in employee is an assigned Teacher/Faculty, prioritize their verified name
+  // If the active logged-in employee is an assigned Faculty/Faculty, prioritize their verified name
   // to avoid showing placeholder/mock database seeds.
   const currentUser = user as Record<string, any> | null;
   const activeUserFullName =
@@ -62,7 +62,7 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners }) 
     currentUser?.role || currentUser?.system_role || 'EMPLOYEE'
   ).trim().toUpperCase();
 
-  const isTeachingRole = ['TEACHER', 'FACULTY', 'EMPLOYEE'].includes(userRole);
+  const isTeachingRole = ['FACULTY', 'FACULTY', 'EMPLOYEE'].includes(userRole);
 
   const resolvedAdviserName =
     (isTeachingRole && activeUserFullName.length > 0

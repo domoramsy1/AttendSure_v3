@@ -9,7 +9,7 @@ from apps.academics.models import GradeLevel, Section, Subject, StaffProfile, Sc
 
 def seed():
     sy = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.first()
-    teacher = StaffProfile.objects.first()
+    faculty = StaffProfile.objects.first()
 
     # 1. Ensure Grade 7 exists
     grade7, _ = GradeLevel.objects.get_or_create(
@@ -21,12 +21,12 @@ def seed():
     sec_diamond, _ = Section.objects.get_or_create(
         name='Diamond',
         academic_year=sy,
-        defaults={'grade_level': grade7, 'adviser': teacher, 'room_number': 'Bldg A - Rm 101'}
+        defaults={'grade_level': grade7, 'adviser': faculty, 'room_number': 'Bldg A - Rm 101'}
     )
     sec_emerald, _ = Section.objects.get_or_create(
         name='Emerald',
         academic_year=sy,
-        defaults={'grade_level': grade7, 'adviser': teacher, 'room_number': 'Bldg A - Rm 102'}
+        defaults={'grade_level': grade7, 'adviser': faculty, 'room_number': 'Bldg A - Rm 102'}
     )
 
     # 3. Ensure DepEd Core Subjects exist
@@ -64,7 +64,7 @@ def seed():
             section=sec_diamond,
             subject=subj_objs[subj_code],
             defaults={
-                'teacher': teacher,
+                'faculty': faculty,
                 'start_time': start_t,
                 'end_time': end_t,
                 'room_number': room,

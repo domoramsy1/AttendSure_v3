@@ -92,14 +92,6 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'gate-passes',
     'reports',
   ],
-  TEACHER: [
-    'dashboard',
-    'my-classes',
-    'students',
-    'dtr',
-    'gate-passes',
-    'reports',
-  ],
   GUARD: [
     'dashboard',
     'gate-logs',
@@ -256,8 +248,7 @@ const AppContent: React.FC = () => {
           res.data.can_teach ||
           res.data.is_teaching ||
           res.data.assigned_class_count > 0 ||
-          role === 'FACULTY' ||
-          role === 'TEACHER'
+          role === 'FACULTY'
         );
 
         if (photo) {

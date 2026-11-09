@@ -58,7 +58,7 @@ export const MainTabNavigator: React.FC = () => {
   ).trim().toUpperCase();
 
   const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR'].includes(userRole);
-  const isEmployee = ['EMPLOYEE', 'FACULTY', 'TEACHER', 'STAFF'].includes(userRole);
+  const isEmployee = ['EMPLOYEE', 'FACULTY', 'FACULTY', 'STAFF'].includes(userRole);
 
   // Direct DTR State
   const [dtrMonth, setDtrMonth] = useState<number>(new Date().getMonth() + 1);

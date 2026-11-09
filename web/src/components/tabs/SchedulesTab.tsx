@@ -40,10 +40,9 @@ interface ScheduleItem {
   subject_code?: string;
   subject_name?: string; 
   subject_title?: string;
-  faculty_name?: string;
   faculty_id?: number;
   faculty?: number | { id: number; full_name?: string; name?: string; photo_url?: string; photo?: string } | null;
-  teacher_name?: string;
+  faculty_name?: string;
   room?: number | string | { id?: number; name?: string; room_number?: string } | null;
   room_name?: string;
   room_number?: string;
@@ -112,7 +111,7 @@ interface ProfileAvatarProps {
 
 const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   photoUrl,
-  name = 'Teacher',
+  name = 'Faculty',
   size = 30,
   iconSize = 15,
 }) => {
@@ -249,7 +248,7 @@ export const SchedulesTab: React.FC = () => {
 
     showConfirm({
       title: 'Delete Class Schedule',
-      message: `Are you sure you want to delete class period "${code}"? The assigned subject teacher will be unassigned.`,
+      message: `Are you sure you want to delete class period "${code}"? The assigned subject faculty will be unassigned.`,
       confirmLabel: 'Delete Schedule',
       isDestructive: true,
       onConfirm: async () => {
@@ -309,8 +308,8 @@ export const SchedulesTab: React.FC = () => {
 
     if (item.faculty_name && item.faculty_name.trim() !== '') {
       name = item.faculty_name.trim();
-    } else if (item.teacher_name && item.teacher_name.trim() !== '') {
-      name = item.teacher_name.trim();
+    } else if (item.faculty_name && item.faculty_name.trim() !== '') {
+      name = item.faculty_name.trim();
     } else if (typeof item.faculty === 'object' && item.faculty) {
       name = item.faculty.full_name || item.faculty.name || name;
       photo = item.faculty.photo_url || item.faculty.photo || null;
@@ -421,7 +420,7 @@ export const SchedulesTab: React.FC = () => {
       const match = facultyList.find((f) => f.id === adviserId);
       if (match) {
         return {
-          name: match.full_name || match.name || 'Teacher',
+          name: match.full_name || match.name || 'Faculty',
           photo: match.photo_url || match.photo || null,
           employee_id: match.employee_id || '',
         };
@@ -439,7 +438,7 @@ export const SchedulesTab: React.FC = () => {
     return new Set(schedules.map((s) => getSectionName(s)).filter((n) => n !== 'Unassigned')).size;
   }, [schedules]);
 
-  const uniqueTeachersCount = useMemo(() => {
+  const uniqueFacultyCount = useMemo(() => {
     return new Set(schedules.map((s) => getFacultyInfo(s).name).filter((n) => n !== 'Unassigned')).size;
   }, [schedules, getFacultyInfo]);
 
@@ -449,7 +448,7 @@ export const SchedulesTab: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
-      {/* 1. Class and Teacher Summary Cards */}
+      {/* 1. Class and Faculty Summary Cards */}
       <div style={statsGrid}>
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -471,11 +470,11 @@ export const SchedulesTab: React.FC = () => {
 
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>SUBJECT TEACHERS</span>
+            <span style={statLabel}>SUBJECT FACULTY</span>
             <GraduationCap size={18} color="#004b87" />
           </div>
-          <div style={{ ...statVal, color: '#004b87' }}>{uniqueTeachersCount}</div>
-          <div style={statSub}>Teachers with class loads</div>
+          <div style={{ ...statVal, color: '#004b87' }}>{uniqueFacultyCount}</div>
+          <div style={statSub}>Faculty with class loads</div>
         </div>
 
         <div style={statCard}>
@@ -541,9 +540,9 @@ export const SchedulesTab: React.FC = () => {
               type="button"
               onClick={() => handleOpenModal('SCHEDULE')}
               style={primaryBtnStyle}
-              title="Assign a Subject Teacher to this Section"
+              title="Assign a Subject Faculty to this Section"
             >
-              <Plus size={15} /> Add Subject Teacher Slot
+              <Plus size={15} /> Add Subject Faculty Slot
             </button>
           </div>
         )}
@@ -599,7 +598,7 @@ export const SchedulesTab: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <div style={{ textAlign: 'right' }}>
               <span style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', display: 'block' }}>
-                SUBJECT TEACHERS
+                SUBJECT FACULTY
               </span>
               <strong style={{ fontSize: '1.05rem', color: '#004b87' }}>
                 {filteredSchedules.length} classes scheduled
@@ -627,7 +626,7 @@ export const SchedulesTab: React.FC = () => {
             <Search size={15} color="#94a3b8" />
             <input
               type="text"
-              placeholder="Search by section, subject, teacher, room..."
+              placeholder="Search by section, subject, faculty, room..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={searchInputStyle}
@@ -664,7 +663,7 @@ export const SchedulesTab: React.FC = () => {
               No timetable records found
             </p>
             <p style={{ margin: 0, fontSize: '0.76rem', color: '#94a3b8' }}>
-              Click <strong>&quot;+ Add Subject Teacher Slot&quot;</strong> above to schedule a class for this section.
+              Click <strong>&quot;+ Add Subject Faculty Slot&quot;</strong> above to schedule a class for this section.
             </p>
           </div>
         ) : (
@@ -675,7 +674,7 @@ export const SchedulesTab: React.FC = () => {
                   <th style={thStyle}>Code</th>
                   <th style={thStyle}>Class Section</th>
                   <th style={thStyle}>Subject</th>
-                  <th style={thStyle}>Subject Teacher</th>
+                  <th style={thStyle}>Subject Faculty</th>
                   <th style={thStyle}>Time Period</th>
                   <th style={thStyle}>Room</th>
                   {canManageSchedule && <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>}

@@ -24,9 +24,9 @@ from apps.academics.models import (
 )
 from .common import (
     get_user_role,
-    is_regular_teacher,
+    is_regular_faculty,
     resolve_faculty_for_user,
-    get_teacher_student_ids,
+    get_faculty_student_ids,
     format_full_student_name,
     format_deduped_section_label,
     safe_photo_url,
@@ -39,10 +39,10 @@ class DashboardOverviewAPIView(APIView):
     def get(self, request):
         query_start = time_module.perf_counter()
         user_role = get_user_role(request.user)
-        is_teacher_only = is_regular_teacher(user_role) and not request.user.is_superuser
+        is_faculty_only = is_regular_faculty(user_role) and not request.user.is_superuser
 
         # 1. User cache key isolation
-        cache_key = f"dashboard_overview_teacher_{request.user.id}" if is_teacher_only else "dashboard_overview_admin"
+        cache_key = f"dashboard_overview_teacher_{request.user.id}" if is_faculty_only else "dashboard_overview_admin"
 
         cached_data = cache.get(cache_key)
         if cached_data is not None:
@@ -54,9 +54,9 @@ class DashboardOverviewAPIView(APIView):
         today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
         today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
 
-        if is_teacher_only:
+        if is_faculty_only:
             user_faculty = resolve_faculty_for_user(request.user)
-            assigned_student_ids = get_teacher_student_ids(user_faculty)
+            assigned_student_ids = get_faculty_student_ids(user_faculty)
             total_students = len(assigned_student_ids)
 
             gate_logs_today = StudentGateLog.objects.filter(
