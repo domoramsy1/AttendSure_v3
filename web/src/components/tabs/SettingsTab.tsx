@@ -209,6 +209,7 @@ export const SettingsTab: React.FC = () => {
     } catch {}
   };
 
+  // Safe and clean activity logs fetcher (prevents 500 error /? trailing syntax)
   const fetchUserActivities = useCallback(async () => {
     setLogsLoading(true);
     try {
@@ -217,13 +218,18 @@ export const SettingsTab: React.FC = () => {
       if (logActionFilter !== 'ALL') params.append('action', logActionFilter);
       if (logDateFilter) params.append('date', logDateFilter);
 
-      const res = await apiClient.get(`/activity-logs/?${params.toString()}`);
+      const qs = params.toString();
+      const endpoint = qs ? `/activity-logs/?${qs}` : '/activity-logs/';
+
+      const res = await apiClient.get(endpoint, { timeout: 8000 });
       if (res.data) {
-        setActivityLogs(res.data.records || []);
+        const rawList = res.data.records || res.data.results || (Array.isArray(res.data) ? res.data : []);
+        setActivityLogs(rawList);
         setIsSuperAdmin(Boolean(res.data.is_admin));
       }
     } catch (err) {
-      console.log('[ActivityLogs] Fetch error:', err);
+      console.log('[ActivityLogs] Fetch error handled gracefully:', err);
+      setActivityLogs([]);
     } finally {
       setLogsLoading(false);
     }
@@ -705,12 +711,9 @@ export const SettingsTab: React.FC = () => {
           </div>
         </div>
 
-        {/* =========================================================================
-            SECTION 1: SELF-SERVICE MAINTENANCE CENTER
-           ========================================================================= */}
+        {/* SECTION 1: SELF-SERVICE MAINTENANCE CENTER */}
         {(activeSubTab === 'MAINTENANCE' || activeSubTab === 'ALL') && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {/* Live Health Overview Bar */}
             <div style={{ ...cardStyle, borderLeft: `4px solid ${health.database === 'ONLINE' ? brand.success : brand.danger}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
                 <div>
@@ -745,7 +748,6 @@ export const SettingsTab: React.FC = () => {
                 </Button>
               </div>
 
-              {/* 4 Health Counter Cards */}
               <div
                 style={{
                   display: 'grid',
@@ -786,9 +788,7 @@ export const SettingsTab: React.FC = () => {
               </div>
             </div>
 
-            {/* Self-Service Action Cards */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 14 }}>
-              {/* Fix 1: SMS Modem / Failed Texts */}
               <div style={maintenanceActionCard(tokens)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: 'rgba(2, 132, 199, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -822,7 +822,6 @@ export const SettingsTab: React.FC = () => {
                 </button>
               </div>
 
-              {/* Fix 2: Screen Slow or Blank / Clear Cache */}
               <div style={maintenanceActionCard(tokens)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: tokens.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -856,7 +855,6 @@ export const SettingsTab: React.FC = () => {
                 </button>
               </div>
 
-              {/* Fix 3: Gate Scanners Ping & Verification */}
               <div style={maintenanceActionCard(tokens)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: 'rgba(16, 185, 129, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -890,7 +888,6 @@ export const SettingsTab: React.FC = () => {
                 </button>
               </div>
 
-              {/* Fix 4: Unlock Staff Accounts */}
               <div style={maintenanceActionCard(tokens)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: 'rgba(2, 132, 199, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -927,9 +924,7 @@ export const SettingsTab: React.FC = () => {
           </div>
         )}
 
-        {/* =========================================================================
-            SECTION 2: USER ACTIVITY & AUDIT LOGS (SETTINGS TAB)
-           ========================================================================= */}
+        {/* SECTION 2: USER ACTIVITY & AUDIT LOGS (SETTINGS TAB) */}
         {(activeSubTab === 'LOGS' || activeSubTab === 'ALL') && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={cardStyle}>
@@ -1108,9 +1103,7 @@ export const SettingsTab: React.FC = () => {
           </div>
         )}
 
-        {/* =========================================================================
-            SECTION 3: OFFICIAL SCHOOL SETTINGS
-           ========================================================================= */}
+        {/* SECTION 3: OFFICIAL SCHOOL SETTINGS */}
         {(activeSubTab === 'SETTINGS' || activeSubTab === 'ALL') && (
           <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Subsection A: School Head / Principal Information */}
@@ -1180,7 +1173,6 @@ export const SettingsTab: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Profile Card Preview */}
                 <div style={previewBoxStyle}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                     <span style={{ fontSize: '0.74rem', fontWeight: 800, color: tokens.textPrimary }}>
@@ -1502,7 +1494,6 @@ export const SettingsTab: React.FC = () => {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 16 }}>
-                {/* 1. Main Emblem */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
                     1. Main School Profile Emblem
@@ -1582,7 +1573,6 @@ export const SettingsTab: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 2. Left Seal */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
                     2. Left Seal (DepEd Official Seal)
@@ -1662,7 +1652,6 @@ export const SettingsTab: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 3. Right Seal */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
                     3. Right Seal (Division / School Seal)
@@ -1769,7 +1758,6 @@ export const SettingsTab: React.FC = () => {
   );
 };
 
-// Component Styles
 const telemetryStatBox = (tokens: any): React.CSSProperties => ({
   backgroundColor: tokens.bgSurfaceSubtle,
   borderRadius: 8,

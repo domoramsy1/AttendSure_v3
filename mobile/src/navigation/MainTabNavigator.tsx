@@ -20,22 +20,24 @@ import { useAuth } from '../context/AuthContext';
 import { COLORS } from '../constants/theme';
 
 // Standalone Screens
-import HomeScreen from '../screens/HomeScreen';
+import DashboardScreen from '../screens/DashboardScreen';
 import CalendarScreen from '../screens/CalendarScreen';
 import ScannerScreen from '../screens/ScannerScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import MenuScreen from '../screens/MenuScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import SmsLogsScreen from '../screens/SmsLogsScreen';
+import GatePassScreen from '../screens/GatePassScreen';
 
 // Reports
 import DTRReportView, { DTRReportData } from '../components/reports/DTRReportView';
 
 export type TabType =
   | 'home'
-  | 'calendar'
+  | 'gate_pass'
   | 'scanner'
   | 'reports'
+  | 'calendar'
   | 'menu'
   | 'settings'
   | 'sms'
@@ -50,15 +52,6 @@ export const MainTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('home');
-
-  // Role-Based Authorization
-  const currentUser = user as Record<string, any> | null;
-  const userRole = String(
-    currentUser?.role || currentUser?.system_role || 'EMPLOYEE'
-  ).trim().toUpperCase();
-
-  const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR'].includes(userRole);
-  const isEmployee = ['EMPLOYEE', 'FACULTY', 'FACULTY', 'STAFF'].includes(userRole);
 
   // Direct DTR State
   const [dtrMonth, setDtrMonth] = useState<number>(new Date().getMonth() + 1);
@@ -127,37 +120,64 @@ export const MainTabNavigator: React.FC = () => {
     }
   };
 
-  const renderSubHeader = (title: string) => (
+  // Reusable sub-header with Back Arrow Button for all Menu tabs
+  const renderSubHeader = (title: string, onBackAction?: () => void) => (
     <View style={[styles.subScreenHeader, { paddingTop: Math.max(insets.top, 12) }]}>
       <TouchableOpacity
         style={styles.backBtn}
-        onPress={() => setActiveTab('menu')}
+        onPress={onBackAction || (() => setActiveTab('menu'))}
         activeOpacity={0.7}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
       >
-        <Ionicons name="arrow-back" size={20} color="#004b87" />
+        <Ionicons name="arrow-back" size={22} color="#004b87" />
         <Text style={styles.backBtnText}>Menu</Text>
       </TouchableOpacity>
-      <Text style={styles.subScreenTitle}>{title}</Text>
-      <View style={{ width: 60 }} />
+      <Text style={styles.subScreenTitle} numberOfLines={1}>
+        {title}
+      </Text>
+      <View style={{ width: 68 }} />
     </View>
   );
 
   return (
     <View style={styles.container}>
       <View style={styles.screenContainer}>
-        {activeTab === 'home' && <HomeScreen />}
-        {activeTab === 'calendar' && <CalendarScreen />}
+        {/* Core Screen: Dashboard */}
+        {activeTab === 'home' && <DashboardScreen />}
+
+        {/* Menu Tab 1: Gate Passes & Exit Clearance */}
+        {activeTab === 'gate_pass' && (
+          <View style={{ flex: 1 }}>
+            <GatePassScreen onBack={() => setActiveTab('menu')} />
+          </View>
+        )}
+
+        {/* Core Screen: Scanner */}
         {activeTab === 'scanner' && <ScannerScreen />}
+
+        {/* Core Screen: Reports */}
         {activeTab === 'reports' && <ReportsScreen />}
+
+        {/* Menu Screen */}
         {activeTab === 'menu' && <MenuScreen onSelectScreen={setActiveTab} />}
 
+        {/* Menu Tab 2: Academic Calendar */}
+        {activeTab === 'calendar' && (
+          <View style={{ flex: 1 }}>
+            {renderSubHeader('Academic Calendar')}
+            <CalendarScreen />
+          </View>
+        )}
+
+        {/* Menu Tab 3: Profile Settings */}
         {activeTab === 'settings' && (
           <View style={{ flex: 1 }}>
-            {renderSubHeader('Settings')}
+            {renderSubHeader('Profile Settings')}
             <SettingsScreen />
           </View>
         )}
 
+        {/* Menu Tab 4: Civil Service Form No. 48 (DTR) */}
         {activeTab === 'dtr' && (
           <View style={{ flex: 1 }}>
             {renderSubHeader('Civil Service Form No. 48')}
@@ -195,14 +215,16 @@ export const MainTabNavigator: React.FC = () => {
           </View>
         )}
 
+        {/* Menu Tab 5: SMS Delivery Logs */}
         {activeTab === 'sms' && (
           <View style={{ flex: 1 }}>
-            {renderSubHeader('SMS Logs')}
+            {renderSubHeader('SMS Delivery Logs')}
             <SmsLogsScreen />
           </View>
         )}
 
-        {/* {activeTab === 'class_list' && (
+        {/* Menu Tab 6: Class List */}
+        {activeTab === 'class_list' && (
           <View style={styles.placeholderContainer}>
             {renderSubHeader('Class List')}
             <View style={styles.placeholderBody}>
@@ -213,8 +235,9 @@ export const MainTabNavigator: React.FC = () => {
               </Text>
             </View>
           </View>
-        )} */}
+        )}
 
+        {/* Menu Tab 7: Department Employee Attendance */}
         {activeTab === 'dept_monitor' && (
           <View style={styles.placeholderContainer}>
             {renderSubHeader('Employee Attendance')}
@@ -228,6 +251,7 @@ export const MainTabNavigator: React.FC = () => {
           </View>
         )}
 
+        {/* Menu Tab 8: Gate Scanner Feed */}
         {activeTab === 'gate_feed' && (
           <View style={styles.placeholderContainer}>
             {renderSubHeader('Gate Scanner Feed')}
@@ -241,6 +265,7 @@ export const MainTabNavigator: React.FC = () => {
           </View>
         )}
 
+        {/* Menu Tab 9: Device Approvals */}
         {activeTab === 'device_approval' && (
           <View style={styles.placeholderContainer}>
             {renderSubHeader('Device Approvals')}
@@ -254,6 +279,7 @@ export const MainTabNavigator: React.FC = () => {
           </View>
         )}
 
+        {/* Menu Tab 10: Gate Kiosk Health */}
         {activeTab === 'kiosk_health' && (
           <View style={styles.placeholderContainer}>
             {renderSubHeader('Gate Kiosk Health')}
@@ -268,7 +294,7 @@ export const MainTabNavigator: React.FC = () => {
         )}
       </View>
 
-      {/* Role-Filtered Bottom Navigation Bar */}
+      {/* Bottom Navigation Bar */}
       <View
         style={[
           styles.bottomBar,
@@ -298,33 +324,31 @@ export const MainTabNavigator: React.FC = () => {
 
         <TouchableOpacity
           style={styles.tabItem}
-          onPress={() => setActiveTab('calendar')}
+          onPress={() => setActiveTab('gate_pass')}
           activeOpacity={0.7}
         >
           <Ionicons
-            name={activeTab === 'calendar' ? 'calendar' : 'calendar-outline'}
+            name={activeTab === 'gate_pass' ? 'ticket' : 'ticket-outline'}
             size={20}
-            color={activeTab === 'calendar' ? COLORS.primary : COLORS.textMuted}
+            color={activeTab === 'gate_pass' ? COLORS.primary : COLORS.textMuted}
           />
           <Text
-            style={[styles.tabLabel, activeTab === 'calendar' && styles.tabLabelActive]}
+            style={[styles.tabLabel, activeTab === 'gate_pass' && styles.tabLabelActive]}
             numberOfLines={1}
           >
-            Calendar
+            Gate Pass
           </Text>
         </TouchableOpacity>
 
-        {(isAdmin || isEmployee) && (
-          <TouchableOpacity
-            style={styles.centerFab}
-            onPress={() => setActiveTab('scanner')}
-            activeOpacity={0.85}
-          >
-            <View style={[styles.fabBox, activeTab === 'scanner' && styles.fabBoxActive]}>
-              <Ionicons name="qr-code" size={24} color="#ffffff" />
-            </View>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          style={styles.centerFab}
+          onPress={() => setActiveTab('scanner')}
+          activeOpacity={0.85}
+        >
+          <View style={[styles.fabBox, activeTab === 'scanner' && styles.fabBoxActive]}>
+            <Ionicons name="qr-code" size={24} color="#ffffff" />
+          </View>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.tabItem}
@@ -355,6 +379,7 @@ export const MainTabNavigator: React.FC = () => {
                 'menu',
                 'settings',
                 'sms',
+                'calendar',
                 'class_list',
                 'dtr',
                 'dept_monitor',
@@ -371,6 +396,7 @@ export const MainTabNavigator: React.FC = () => {
                 'menu',
                 'settings',
                 'sms',
+                'calendar',
                 'class_list',
                 'dtr',
                 'dept_monitor',
@@ -389,6 +415,7 @@ export const MainTabNavigator: React.FC = () => {
                 'menu',
                 'settings',
                 'sms',
+                'calendar',
                 'class_list',
                 'dtr',
                 'dept_monitor',
@@ -485,12 +512,14 @@ const styles = StyleSheet.create({
   backBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 6,
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    backgroundColor: '#f1f5f9',
   },
   backBtnText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
     color: '#004b87',
   },
@@ -498,6 +527,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: '#0f172a',
+    flex: 1,
+    textAlign: 'center',
   },
   subScreenScroll: {
     padding: 12,

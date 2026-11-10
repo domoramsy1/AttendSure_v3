@@ -1,10 +1,10 @@
 @echo off
 setlocal enabledelayedexpansion
-title AttendSure - Auto-Tag & Git Push
+title AttendSure - Auto-Tag and Git Push
 cd /d "%~dp0"
 
 echo ====================================================
-echo        AttendSure V3 - Code & Tag Publisher
+echo        AttendSure V3 - Code and Tag Publisher
 echo ====================================================
 echo.
 

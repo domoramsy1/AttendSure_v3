@@ -1,6 +1,6 @@
 // D:\AttendSure_V3\mobile\src\screens\MenuScreen.tsx
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -18,13 +18,37 @@ interface MenuScreenProps {
   onSelectScreen: (screen: TabType) => void;
 }
 
+// Cybersecurity: Validate avatar URL against injection and unsafe URI protocols
+const isSafeImageUrl = (url?: string | null): url is string => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.trim().toLowerCase();
+  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') {
+    return false;
+  }
+  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) {
+    return false;
+  }
+  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) {
+    return false;
+  }
+  return (
+    clean.startsWith('http://') ||
+    clean.startsWith('https://') ||
+    clean.startsWith('/') ||
+    clean.startsWith('data:image/') ||
+    clean.startsWith('blob:')
+  );
+};
+
 export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
+  const [photoError, setPhotoError] = useState(false);
 
-  const userRole = (user?.role || 'EMPLOYEE').toUpperCase();
-  const isAdmin = userRole === 'ADMIN' || Boolean(user?.is_superuser);
+  const userRole = String(user?.role || user?.system_role || 'EMPLOYEE').toUpperCase();
+  const isAdmin = userRole === 'ADMIN' || userRole === 'SUPERADMIN' || Boolean(user?.is_superuser);
   const isDeptHead = userRole === 'DEPT_HEAD' || isAdmin;
+  const isGuard = userRole === 'GUARD' || userRole === 'SECURITY';
 
   const displayName =
     user?.full_name ||
@@ -33,6 +57,12 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
     'Employee';
 
   const employeeId = user?.employee_id || user?.faculty_id || user?.username || 'ID Pending';
+
+  // Strict string type narrowing: prevents null assignment to Image source.uri
+  const photoUri: string | null =
+    typeof user?.photo === 'string' && isSafeImageUrl(user.photo) && !photoError
+      ? user.photo
+      : null;
 
   return (
     <ScrollView
@@ -43,18 +73,24 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Employee Profile Card */}
+      {/* Employee Profile Header Card */}
       <View style={styles.userCard}>
         <View style={styles.userRow}>
-          {user?.photo ? (
-            <Image source={{ uri: user.photo }} style={styles.avatarImage} />
+          {photoUri ? (
+            <Image
+              source={{ uri: photoUri }}
+              style={styles.avatarImage}
+              onError={() => setPhotoError(true)}
+            />
           ) : (
             <View style={styles.avatarFallback}>
               <Ionicons name="person" size={26} color="#ffffff" />
             </View>
           )}
           <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.userName}>{displayName}</Text>
+            <Text style={styles.userName} numberOfLines={1}>
+              {displayName}
+            </Text>
             <Text style={styles.userMeta}>
               {userRole} &bull; Employee ID: {employeeId}
             </Text>
@@ -62,50 +98,87 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
         </View>
       </View>
 
-      {/* Section 1: Academics & Classroom */}
-      <Text style={styles.sectionHeader}>ACADEMICS</Text>
+      {/* Section 1: Academics, Clearances & Attendance */}
+      <Text style={styles.sectionHeader}>ACADEMICS &amp; CLEARANCES</Text>
       <View style={styles.menuGroup}>
+        {/* Gate Passes & Exit Clearance */}
+        <TouchableOpacity
+          style={styles.menuItem}
+          onPress={() => onSelectScreen('gate_pass')}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.iconWrap, { backgroundColor: '#e0f2fe' }]}>
+            <Ionicons name="ticket-outline" size={19} color="#004b87" />
+          </View>
+          <View style={styles.itemBody}>
+            <Text style={styles.itemTitle}>Gate Passes &amp; Exit Slips</Text>
+            <Text style={styles.itemSub}>Issue, view, and verify student exit clearances</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+        </TouchableOpacity>
+
+        {/* Civil Service Form No. 48 (DTR) */}
+        {!isGuard && (
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => onSelectScreen('dtr')}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, { backgroundColor: '#dcfce7' }]}>
+              <Ionicons name="time-outline" size={19} color="#16a34a" />
+            </View>
+            <View style={styles.itemBody}>
+              <Text style={styles.itemTitle}>Daily Time Record (Form 48)</Text>
+              <Text style={styles.itemSub}>Monthly hours summary and submission</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+          </TouchableOpacity>
+        )}
+
+        {/* Academic Calendar */}
+        <TouchableOpacity
+          style={styles.menuItem}
+          onPress={() => onSelectScreen('calendar')}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.iconWrap, { backgroundColor: '#fef3c7' }]}>
+            <Ionicons name="calendar-outline" size={19} color="#d97706" />
+          </View>
+          <View style={styles.itemBody}>
+            <Text style={styles.itemTitle}>Academic Calendar</Text>
+            <Text style={styles.itemSub}>Quarter schedules, exam dates, and holidays</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+        </TouchableOpacity>
+
+        {/* Profile Settings */}
         <TouchableOpacity
           style={styles.menuItem}
           onPress={() => onSelectScreen('settings')}
           activeOpacity={0.7}
         >
-          <View style={[styles.iconWrap, { backgroundColor: '#e0f2fe' }]}>
-            <Ionicons name="person-outline" size={18} color="#0284c7" />
+          <View style={[styles.iconWrap, { backgroundColor: '#ede9fe' }]}>
+            <Ionicons name="person-outline" size={19} color="#7c3aed" />
           </View>
           <View style={styles.itemBody}>
             <Text style={styles.itemTitle}>Profile Settings</Text>
-            <Text style={styles.itemSub}>Profile details and security</Text>
+            <Text style={styles.itemSub}>Profile details and account security</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
         </TouchableOpacity>
 
-        {/* <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() => onSelectScreen('class_list')}
-          activeOpacity={0.7}
-        >
-          <View style={[styles.iconWrap, { backgroundColor: '#ede9fe' }]}>
-            <Ionicons name="people-outline" size={18} color="#7c3aed" />
-          </View>
-          <View style={styles.itemBody}>
-            <Text style={styles.itemTitle}>Class List</Text>
-            <Text style={styles.itemSub}>Active learners and emergency contacts</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-        </TouchableOpacity> */}
-
+        {/* Parent SMS Logs */}
         <TouchableOpacity
           style={styles.menuItem}
           onPress={() => onSelectScreen('sms')}
           activeOpacity={0.7}
         >
-          <View style={[styles.iconWrap, { backgroundColor: '#dcfce7' }]}>
-            <Ionicons name="chatbubble-ellipses-outline" size={18} color="#16a34a" />
+          <View style={[styles.iconWrap, { backgroundColor: '#f1f5f9' }]}>
+            <Ionicons name="chatbubble-ellipses-outline" size={19} color="#475569" />
           </View>
           <View style={styles.itemBody}>
-            <Text style={styles.itemTitle}>SMS Logs</Text>
-            <Text style={styles.itemSub}>Outbox queue and parent notifications</Text>
+            <Text style={styles.itemTitle}>SMS Delivery Logs</Text>
+            <Text style={styles.itemSub}>Outbox queue and parent tap alerts</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
         </TouchableOpacity>
@@ -114,7 +187,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
       {/* Section 2: Department Head Oversight */}
       {isDeptHead && (
         <>
-          <Text style={styles.sectionHeader}>DEPARTMENT</Text>
+          <Text style={styles.sectionHeader}>DEPARTMENT SUPERVISION</Text>
           <View style={styles.menuGroup}>
             <TouchableOpacity
               style={styles.menuItem}
@@ -134,8 +207,8 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
         </>
       )}
 
-      {/* Section 3: Administration */}
-      {isAdmin && (
+      {/* Section 3: Campus Hardware & Security */}
+      {(isAdmin || isGuard) && (
         <>
           <Text style={styles.sectionHeader}>CAMPUS HARDWARE &amp; SECURITY</Text>
           <View style={styles.menuGroup}>
@@ -154,20 +227,22 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
               <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => onSelectScreen('device_approval')}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.iconWrap, { backgroundColor: '#e0e7ff' }]}>
-                <Ionicons name="phone-portrait-outline" size={18} color="#4338ca" />
-              </View>
-              <View style={styles.itemBody}>
-                <Text style={styles.itemTitle}>Device Approvals</Text>
-                <Text style={styles.itemSub}>Manage authorized mobile phones</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-            </TouchableOpacity>
+            {isAdmin && (
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => onSelectScreen('device_approval')}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.iconWrap, { backgroundColor: '#e0e7ff' }]}>
+                  <Ionicons name="phone-portrait-outline" size={18} color="#4338ca" />
+                </View>
+                <View style={styles.itemBody}>
+                  <Text style={styles.itemTitle}>Device Approvals</Text>
+                  <Text style={styles.itemSub}>Manage authorized mobile phones</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={styles.menuItem}
@@ -244,8 +319,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f1f5f9',
   },
   iconWrap: {
-    width: 34,
-    height: 34,
+    width: 36,
+    height: 36,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
@@ -269,4 +344,4 @@ const styles = StyleSheet.create({
   logoutText: { color: '#dc2626', fontSize: 13, fontWeight: '800' },
 });
 
-export default MenuScreen;
+export default MenuScreen; 

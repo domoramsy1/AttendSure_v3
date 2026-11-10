@@ -1,6 +1,7 @@
 /**
- * AttendSure V3 - Minimalist Floating Rail Navigation
- * Displays compact icons by default and reveals the tab name on hover.
+ * AttendSure V3 - Collapsible Sidebar Navigation
+ * Supports icons-only mode and expanded mode with tab names.
+ * Displays school abbreviation and School ID directly above the logo.
  * File: web/src/components/layout/Sidebar.tsx
  */
 
@@ -23,10 +24,14 @@ import {
   Cpu,
   UserCheck,
   BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  QrCode,
 } from 'lucide-react';
 
 export type NavItemKey =
   | 'dashboard'
+  | 'classroom-scanner'
   | 'my-classes'
   | 'gate-logs'
   | 'students'
@@ -74,7 +79,7 @@ interface HoverTooltipState {
   left: number;
 }
 
-// Cybersecurity: Block malicious URI schemes (XSS protection)
+// Cybersecurity: Block unsafe URI schemes (XSS prevention)
 const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
@@ -90,6 +95,18 @@ const isSafeImageUrl = (url?: string | null): boolean => {
   );
 };
 
+// Generates school initials abbreviation (e.g., "Lapasan National High School" -> "LNHS")
+const getSchoolAbbreviation = (name?: string): string => {
+  if (!name || !name.trim()) return 'AS';
+  const clean = name.trim();
+  const ignoreWords = new Set(['of', 'the', 'and', 'in', 'at', 'for', 'to', 'ng', 'mga', 'sa']);
+  const words = clean.split(/\s+/).filter((w) => !ignoreWords.has(w.toLowerCase()));
+  if (words.length === 1) {
+    return words[0].slice(0, 4).toUpperCase();
+  }
+  return words.map((w) => w[0]).join('').toUpperCase().slice(0, 6);
+};
+
 const formatBadge = (count?: number): string => {
   if (!count || count <= 0) return '';
   return count > 99 ? '99+' : String(count);
@@ -100,6 +117,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   session,
   userPhoto,
+  isCollapsed: controlledCollapsed,
+  onToggleCollapse,
   schoolName = 'Lapasan National High School',
   schoolId = '55555',
   schoolLogo,
@@ -110,6 +129,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { tokens, brand } = useTheme();
   const [liveBadges, setLiveBadges] = useState<TabBadgeCounts>({});
   const [tooltip, setTooltip] = useState<HoverTooltipState | null>(null);
+
+  // Persistent sidebar collapse state (icons-only vs tab names)
+  const [internalCollapsed, setInternalCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('attendsure_sidebar_collapsed') === 'true';
+  });
+
+  const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
+
+  const handleToggle = () => {
+    const nextState = !isCollapsed;
+    setInternalCollapsed(nextState);
+    localStorage.setItem('attendsure_sidebar_collapsed', String(nextState));
+    if (onToggleCollapse) {
+      onToggleCollapse();
+    }
+  };
 
   const role = (session?.role || 'ADMIN').toUpperCase();
   const isLeadership = role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL' || role === 'DEPT_HEAD';
@@ -126,6 +161,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, []);
 
   const mergedBadges: TabBadgeCounts = { ...liveBadges, ...propBadgeCounts };
+  const schoolAbbreviation = useMemo(() => getSchoolAbbreviation(schoolName), [schoolName]);
 
   const allMenuGroups: NavGroup[] = useMemo(
     () => [
@@ -137,26 +173,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ],
       },
       {
-        groupTitle: 'ACADEMICS & CLASS LIST',
+        groupTitle: 'ACADEMICS',
         items: [
+          { key: 'classroom-scanner', label: 'Attendance Scanner', icon: <QrCode size={20} /> },
           { key: 'my-classes', label: 'Classes', icon: <BookOpen size={20} /> },
           { key: 'students', label: 'Students', icon: <GraduationCap size={20} /> },
           { key: 'facultys', label: 'Faculties', icon: <Users size={20} /> },
-          { key: 'schedules', label: 'Schedules & Sections', icon: <CalendarDays size={20} /> },
+          { key: 'schedules', label: 'Schedules', icon: <CalendarDays size={20} /> },
         ],
       },
       {
-        groupTitle: 'GATE & SECURITY',
+        groupTitle: 'GATE & TELEMETRY',
         items: [
-          { key: 'sms', label: 'SMS', icon: <Send size={20} /> },
+          { key: 'sms', label: 'SMS Alerts', icon: <Send size={20} /> },
           { key: 'gate-passes', label: 'Gate Passes', icon: <Ticket size={20} /> },
-          { key: 'scanners', label: 'Scanners', icon: <Cpu size={20} /> },
+          { key: 'scanners', label: 'Gate Kiosks', icon: <Cpu size={20} /> },
           { key: 'dtr', label: 'DTR', icon: <Clock size={20} /> },
           { key: 'geofence', label: 'Geofence', icon: <MapPin size={20} /> },
         ],
       },
       {
-        groupTitle: 'GOVERNANCE & REPORTS',
+        groupTitle: 'GOVERNANCE',
         items: [
           { key: 'reports', label: 'Reports', icon: <FileSpreadsheet size={20} /> },
           { key: 'users', label: 'Users', icon: <UserCheck size={20} /> },
@@ -175,6 +212,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           if (allowedTabs && allowedTabs.length > 0) {
             return allowedTabs.includes(item.key);
           }
+          if (item.key === 'classroom-scanner') return canTeach || isLeadership;
           if (item.key === 'my-classes') return canTeach;
           if (item.key === 'users') return role === 'ADMIN' || role === 'SUPERADMIN';
           if (['settings', 'sms', 'scanners', 'geofence'].includes(item.key)) {
@@ -195,8 +233,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <>
       <aside
         style={{
-          width: 74,
-          minWidth: 74,
+          width: isCollapsed ? 76 : 224,
+          minWidth: isCollapsed ? 76 : 224,
           height: '100%',
           backgroundColor: tokens.bgSurface,
           border: `1px solid ${tokens.borderSubtle}`,
@@ -210,77 +248,179 @@ export const Sidebar: React.FC<SidebarProps> = ({
           overflow: 'hidden',
           zIndex: 40,
           flexShrink: 0,
-          transition: 'background-color 0.2s ease, border-color 0.2s ease',
+          transition: 'width 0.22s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.2s ease, border-color 0.2s ease',
         }}
       >
-        {/* 1. School Logo */}
+        {/* Top Header: School Abbreviation & School ID ABOVE the School Logo */}
         <div
           style={{
-            padding: '16px 0',
+            padding: isCollapsed ? '12px 6px 10px 6px' : '14px 12px 10px 12px',
             borderBottom: `1px solid ${tokens.borderSubtle}`,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
-            justifyContent: 'center',
             width: '100%',
             boxSizing: 'border-box',
+            position: 'relative',
           }}
-          onMouseEnter={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            setTooltip({
-              label: `${schoolName} (ID: ${schoolId})`,
-              top: rect.top + rect.height / 2,
-              left: rect.right + 12,
-            });
-          }}
-          onMouseLeave={() => setTooltip(null)}
         >
-          {safeLogo ? (
-            <img
-              src={safeLogo}
-              alt="School Logo"
-              style={{
-                width: 40,
-                height: 40,
-                borderRadius: '50%',
-                objectFit: 'cover',
-                border: `2px solid ${brand.primary}`,
-                cursor: 'pointer',
-              }}
-            />
-          ) : (
+          {/* Collapse/Expand Toggle Button */}
+          <button
+            type="button"
+            onClick={handleToggle}
+            title={isCollapsed ? 'Show tab names' : 'Icons only'}
+            style={{
+              position: isCollapsed ? 'static' : 'absolute',
+              top: isCollapsed ? undefined : 12,
+              right: isCollapsed ? undefined : 10,
+              marginBottom: isCollapsed ? 6 : 0,
+              width: 24,
+              height: 24,
+              borderRadius: 6,
+              border: `1px solid ${tokens.borderSubtle}`,
+              backgroundColor: tokens.bgSurfaceSubtle,
+              color: brand.primary,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              padding: 0,
+              transition: 'background-color 0.15s ease',
+            }}
+          >
+            {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+          </button>
+
+          {/* School Abbreviation & School ID */}
+          <div
+            style={{
+              textAlign: 'center',
+              marginBottom: 6,
+              width: '100%',
+              paddingLeft: 2,
+              paddingRight: 2,
+            }}
+          >
             <div
               style={{
-                width: 40,
-                height: 40,
-                borderRadius: '50%',
-                backgroundColor: brand.primary,
-                color: '#ffffff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 800,
-                fontSize: '0.85rem',
-                cursor: 'pointer',
+                fontSize: isCollapsed ? '0.78rem' : '0.86rem',
+                fontWeight: 900,
+                color: brand.primary,
+                letterSpacing: '0.6px',
+                lineHeight: 1.15,
+                textTransform: 'uppercase',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={schoolName}
+            >
+              {schoolAbbreviation}
+            </div>
+
+            <div
+              style={{
+                fontSize: '0.64rem',
+                fontWeight: 700,
+                color: tokens.textMuted,
+                fontFamily: 'monospace',
+                lineHeight: 1.2,
+                marginTop: 2,
               }}
             >
-              AS
+              ID: {schoolId || '—'}
+            </div>
+          </div>
+
+          {/* School Logo */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+            }}
+            onClick={handleToggle}
+            onMouseEnter={(e) => {
+              if (isCollapsed) {
+                const rect = e.currentTarget.getBoundingClientRect();
+                setTooltip({
+                  label: `${schoolName} (ID: ${schoolId})`,
+                  top: rect.top + rect.height / 2,
+                  left: rect.right + 12,
+                });
+              }
+            }}
+            onMouseLeave={() => setTooltip(null)}
+          >
+            {safeLogo ? (
+              <img
+                src={safeLogo}
+                alt="School Logo"
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: '50%',
+                  objectFit: 'cover',
+                  border: `2px solid ${brand.primary}`,
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: '50%',
+                  backgroundColor: brand.primary,
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 800,
+                  fontSize: '0.82rem',
+                }}
+              >
+                {schoolAbbreviation.slice(0, 2)}
+              </div>
+            )}
+          </div>
+
+          {!isCollapsed && (
+            <div
+              style={{
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                color: tokens.textSecondary,
+                textAlign: 'center',
+                marginTop: 6,
+                padding: '0 4px',
+                lineHeight: 1.25,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+              }}
+            >
+              {schoolName}
             </div>
           )}
         </div>
 
-        {/* 2. Navigation Icons Rail */}
+        {/* Navigation Items Rail */}
         <nav
           style={{
             flex: 1,
             overflowY: 'auto',
             overflowX: 'hidden',
-            padding: '14px 0',
+            padding: isCollapsed ? '12px 0' : '12px 8px',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             gap: 12,
             width: '100%',
             scrollbarWidth: 'none',
+            boxSizing: 'border-box',
           }}
         >
           {filteredMenuGroups.map((group, gIdx) => (
@@ -289,11 +429,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                alignItems: 'center',
-                gap: 8,
+                alignItems: isCollapsed ? 'center' : 'stretch',
+                gap: 4,
                 width: '100%',
               }}
             >
+              {!isCollapsed && (
+                <div
+                  style={{
+                    fontSize: '0.62rem',
+                    fontWeight: 800,
+                    color: tokens.textMuted,
+                    letterSpacing: '0.5px',
+                    padding: '6px 8px 2px 8px',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {group.groupTitle}
+                </div>
+              )}
+
               {group.items.map((item) => {
                 const isActive = activeTab === item.key;
                 const rawCount = mergedBadges[item.key as keyof TabBadgeCounts] || 0;
@@ -307,13 +462,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onSelectTab(item.key);
                     }}
                     onMouseEnter={(e) => {
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      setTooltip({
-                        label: item.label,
-                        badge: badgeText,
-                        top: rect.top + rect.height / 2,
-                        left: rect.right + 12,
-                      });
+                      if (isCollapsed) {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setTooltip({
+                          label: item.label,
+                          badge: badgeText,
+                          top: rect.top + rect.height / 2,
+                          left: rect.right + 12,
+                        });
+                      }
                     }}
                     onMouseLeave={() => setTooltip(null)}
                     type="button"
@@ -321,16 +478,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       position: 'relative',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      width: 46,
-                      height: 46,
-                      borderRadius: 12,
+                      justifyContent: isCollapsed ? 'center' : 'flex-start',
+                      width: isCollapsed ? 46 : '100%',
+                      height: 42,
+                      padding: isCollapsed ? 0 : '0 12px',
+                      borderRadius: 10,
                       border: 'none',
                       backgroundColor: isActive ? brand.primary : 'transparent',
                       color: isActive ? '#FFFFFF' : tokens.textSecondary,
                       cursor: 'pointer',
                       transition: 'background-color 0.15s ease, color 0.15s ease',
                       boxSizing: 'border-box',
+                      gap: 10,
                     }}
                   >
                     <div
@@ -339,36 +498,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         alignItems: 'center',
                         justifyContent: 'center',
                         color: isActive ? '#FFFFFF' : tokens.textMuted,
+                        flexShrink: 0,
                       }}
                     >
                       {item.icon}
-
-                      {/* Small badge dot on icon */}
-                      {badgeText && (
-                        <span
-                          style={{
-                            position: 'absolute',
-                            top: 4,
-                            right: 4,
-                            minWidth: 16,
-                            height: 16,
-                            padding: '0 4px',
-                            borderRadius: 9999,
-                            backgroundColor: brand.danger,
-                            color: '#FFFFFF',
-                            fontSize: '0.60rem',
-                            fontWeight: 800,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            border: `2px solid ${tokens.bgSurface}`,
-                            lineHeight: 1,
-                          }}
-                        >
-                          {badgeText}
-                        </span>
-                      )}
                     </div>
+
+                    {!isCollapsed && (
+                      <span
+                        style={{
+                          fontSize: '0.80rem',
+                          fontWeight: isActive ? 800 : 600,
+                          color: isActive ? '#FFFFFF' : tokens.textPrimary,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          flex: 1,
+                          textAlign: 'left',
+                        }}
+                      >
+                        {item.label}
+                      </span>
+                    )}
+
+                    {badgeText && (
+                      <span
+                        style={{
+                          position: isCollapsed ? 'absolute' : 'static',
+                          top: isCollapsed ? 4 : undefined,
+                          right: isCollapsed ? 4 : undefined,
+                          minWidth: 16,
+                          height: 16,
+                          padding: '0 4px',
+                          borderRadius: 9999,
+                          backgroundColor: brand.danger,
+                          color: '#FFFFFF',
+                          fontSize: '0.60rem',
+                          fontWeight: 800,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          border: isCollapsed ? `2px solid ${tokens.bgSurface}` : 'none',
+                          lineHeight: 1,
+                          marginLeft: isCollapsed ? 0 : 'auto',
+                        }}
+                      >
+                        {badgeText}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -376,24 +553,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
           ))}
         </nav>
 
-        {/* 3. User Avatar Footer */}
+        {/* User Avatar Footer */}
         <div
           style={{
-            padding: '14px 0',
+            padding: isCollapsed ? '12px 0' : '12px 14px',
             borderTop: `1px solid ${tokens.borderSubtle}`,
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
+            justifyContent: isCollapsed ? 'center' : 'flex-start',
             width: '100%',
             boxSizing: 'border-box',
+            gap: 10,
           }}
           onMouseEnter={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            setTooltip({
-              label: `${session?.faculty_name || session?.username || 'User'} (${role})`,
-              top: rect.top + rect.height / 2,
-              left: rect.right + 12,
-            });
+            if (isCollapsed) {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setTooltip({
+                label: `${session?.faculty_name || session?.username || 'User'} (${role})`,
+                top: rect.top + rect.height / 2,
+                left: rect.right + 12,
+              });
+            }
           }}
           onMouseLeave={() => setTooltip(null)}
         >
@@ -442,11 +622,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }}
             />
           </div>
+
+          {!isCollapsed && (
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  fontSize: '0.78rem',
+                  fontWeight: 800,
+                  color: tokens.textPrimary,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {session?.faculty_name || session?.username || 'User'}
+              </div>
+              <div
+                style={{
+                  fontSize: '0.64rem',
+                  fontWeight: 600,
+                  color: tokens.textMuted,
+                  textTransform: 'uppercase',
+                }}
+              >
+                {role}
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 
-      {/* Floating Hover Label (Immune to overflow clipping) */}
-      {tooltip && (
+      {/* Floating Hover Tooltip (Icons-only mode) */}
+      {tooltip && isCollapsed && (
         <div
           style={{
             position: 'fixed',

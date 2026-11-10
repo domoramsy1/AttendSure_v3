@@ -16,9 +16,16 @@ from apps.api.views.classroom import (
     ClassListAPIView,
     FacultyClassroomListAPIView,
     ClassroomBatchScanAPIView,
+    ClassroomStudentScanAPIView,
+    UserDeviceRegisterAPIView,
+    AdviserSectionMatrixAPIView,
 )
 from apps.api.views.dashboard import DashboardOverviewAPIView
-from apps.api.views.gate import GateLogsAPIView, KioskScanAPIView
+from apps.api.views.gate import (
+    GateLogsAPIView,
+    KioskScanAPIView,
+    GatePassViewSet,
+)
 from apps.api.views.geofence import (
     GeofenceStatusAPIView,
     GeofenceCheckInAPIView,
@@ -56,14 +63,16 @@ from apps.api.views.viewsets import (
     StudentViewSet,
     FacultyProfileViewSet,
     IoTKioskViewSet,
-    GatePassViewSet,
     SmsOutboxViewSet,
     UserManagementViewSet,
     AcademicYearViewSet,
     EnrollmentViewSet,
 )
-from apps.api.views.monitoring import LoafingMonitoringAPIView
-
+from apps.api.views.monitoring import (
+    LoafingMonitoringAPIView,
+    DTRLockCheckAPIView,
+    LoafingReconciliationAPIView,
+)
 from apps.api.views.activity import UserActivityLogsAPIView
 
 router = DefaultRouter()
@@ -121,11 +130,18 @@ urlpatterns = [
     path('auth/validate-field/', LiveFieldValidationAPIView.as_view(), name='auth-validate-field'),
     path('auth/push-token/', RegisterPushTokenAPIView.as_view(), name='auth-push-token'),
 
-    # Classroom Attendance
+    # Classroom Attendance & Scanner (Web Laptop / Mobile OTG Barcode Gun & Camera)
     path('classroom/class_list/', ClassListAPIView.as_view(), name='classroom-class-list'),
     path('classroom/my-classes/', ClassListAPIView.as_view(), name='classroom-my-classes'),
     path('classroom/student_list/', FacultyClassroomListAPIView.as_view(), name='classroom-student-list'),
     path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='classroom-batch-scan'),
+    path('classroom/scan/', ClassroomStudentScanAPIView.as_view(), name='classroom-single-scan'),
+    path('academics/classroom-scan/', ClassroomStudentScanAPIView.as_view(), name='academics-classroom-scan'),
+    path('classroom/adviser-matrix/', AdviserSectionMatrixAPIView.as_view(), name='adviser-section-matrix'),
+
+    # Hardware & Mobile Device Registration (For Geofencing Compliance)
+    path('devices/register/', UserDeviceRegisterAPIView.as_view(), name='devices-register'),
+    path('hardware/register-device/', UserDeviceRegisterAPIView.as_view(), name='hardware-register-device'),
 
     # Dashboard Overview
     path('dashboard/overview/', DashboardOverviewAPIView.as_view(), name='dashboard-overview'),
@@ -135,7 +151,7 @@ urlpatterns = [
     path('gate/scan/', KioskScanAPIView.as_view(), name='gate-scan'),
     path('kiosk/scan/', KioskScanAPIView.as_view(), name='kiosk-scan'),
 
-    # Geofence, Hardware Telemetry & Loafing Audit
+    # Geofence, Hardware Telemetry & Device Protection
     path('geofence/', GeofenceStatusAPIView.as_view(), name='geofence-status'),
     path('geofence/checkin/', GeofenceCheckInAPIView.as_view(), name='geofence-checkin'),
     path('geofence/audit/', GeofenceAuditHistoryAPIView.as_view(), name='geofence-audit-history'),
@@ -143,7 +159,7 @@ urlpatterns = [
     path('faculty/<int:pk>/reset-device/', FacultyDeviceResetAPIView.as_view(), name='faculty-reset-device-alias'),
     path('telemetry/heartbeat/', GeofenceCheckInAPIView.as_view(), name='telemetry-heartbeat'),
 
-    # DepEd Reports & DTR
+    # DepEd Reports & Civil Service Form 48 (DTR)
     path('reports/sf1/<int:section_id>/', DepEdSF1DataAPIView.as_view(), name='reports-sf1'),
     path('reports/sf2/<int:section_id>/', DepEdSF2DataAPIView.as_view(), name='reports-sf2'),
     path('reports/sf4/', DepEdSF4DataAPIView.as_view(), name='reports-sf4'),
@@ -153,6 +169,13 @@ urlpatterns = [
     path('dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='dtr-faculty'),
     path('reports/dtr/', DTRListAPIView.as_view(), name='reports-dtr-list'),
     path('reports/dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='reports-dtr-detail'),
+
+    # Loafing Monitoring, DTR Print/Download Lock & Defense Reconciliation
+    path('monitoring/loafing/', LoafingMonitoringAPIView.as_view(), name='monitoring-loafing'),
+    path('monitoring/dtr-lock-check/', DTRLockCheckAPIView.as_view(), name='monitoring-dtr-lock-check'),
+    path('dtr/lock-check/', DTRLockCheckAPIView.as_view(), name='dtr-lock-check'),
+    path('monitoring/reconciliation/', LoafingReconciliationAPIView.as_view(), name='monitoring-reconciliation'),
+    path('monitoring/loafing/reconcile/', LoafingReconciliationAPIView.as_view(), name='monitoring-loafing-reconcile'),
 
     # Hardware SMS Daemon
     path('sms/pending/', PendingSmsDispatchAPIView.as_view(), name='sms-pending'),
@@ -167,10 +190,8 @@ urlpatterns = [
     path('core/maintenance/db-check/', db_check, name='core-maintenance-db-check'),
     path('core/maintenance/flush-cache/', flush_cache, name='core-maintenance-flush-cache'),
 
-    # Settings & Monitoring
+    # Settings & Audit Trails
     path('settings/school/', SchoolSettingsAPIView.as_view(), name='settings-school'),
     path('calendar/exceptions/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions'),
-    path('monitoring/loafing/', LoafingMonitoringAPIView.as_view(), name='monitoring-loafing'),
-
     path('activity-logs/', UserActivityLogsAPIView.as_view(), name='user-activity-logs'),
 ]

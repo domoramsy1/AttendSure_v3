@@ -33,6 +33,7 @@ from apps.academics.models import (
     GatePass,
     SmsOutbox,
     Enrollment,
+    DailyAttendanceSummary,
 )
 from apps.api.serializers import (
     RoomSerializer,
@@ -54,6 +55,7 @@ from apps.common.utils import (
     get_user_role,
     is_regular_faculty,
     is_leadership_role,
+    format_full_student_name,
 )
 from .common import (
     resolve_faculty_for_user,
@@ -119,13 +121,14 @@ def check_academic_admin_permission(user):
 
 
 def check_student_manager_permission(user):
+    """Allows administrators, school leaders, and faculty to update student profiles."""
     if not user or not user.is_authenticated:
         raise PermissionDenied("You must log in first.")
     if user.is_superuser:
         return True
     role = get_user_role(user)
-    if role not in ('ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR'):
-        raise PermissionDenied("Only authorized staff can manage students.")
+    if role not in ('ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR', 'FACULTY'):
+        raise PermissionDenied("Only authorized staff or faculty can manage students.")
     return True
 
 
@@ -378,6 +381,8 @@ class StudentViewSet(viewsets.ModelViewSet):
         save_kwargs = {}
         if hasattr(Student, 'updated_by'):
             save_kwargs['updated_by'] = self.request.user
+        if hasattr(Student, 'updated_at'):
+            save_kwargs['updated_at'] = timezone.now()
         serializer.save(**save_kwargs)
 
     def perform_destroy(self, instance):
@@ -386,12 +391,42 @@ class StudentViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def metrics(self, request):
-        qs = self.get_queryset()
+        user = request.user
+        role = get_user_role(user)
+        today = timezone.localdate()
+
+        if is_leadership_role(user):
+            total_students = Student.objects.filter(is_active=True).count()
+            enrolled_students = Enrollment.objects.filter(
+                status__in=['ENROLLED', 'ACTIVE'],
+                student__is_active=True
+            ).count()
+            present_today = DailyAttendanceSummary.objects.filter(
+                attendance_date=today,
+                status='PRESENT'
+            ).values('student_id').distinct().count()
+        elif is_regular_faculty(role):
+            faculty = resolve_faculty_for_user(user)
+            allowed_ids = get_faculty_student_ids(faculty)
+            total_students = len(allowed_ids)
+            enrolled_students = total_students
+            present_today = DailyAttendanceSummary.objects.filter(
+                student_id__in=allowed_ids,
+                attendance_date=today,
+                status='PRESENT'
+            ).values('student_id').distinct().count()
+        else:
+            total_students = 0
+            enrolled_students = 0
+            present_today = 0
+
+        absent_today = max(0, total_students - present_today)
+
         return Response({
-            'total': qs.count(),
-            'active': qs.filter(is_active=True).count(),
-            'paired': qs.exclude(Q(rfid_uid__isnull=True) | Q(rfid_uid='')).count(),
-            'total_sections': Section.objects.count(),
+            'total_students': total_students,
+            'enrolled_students': enrolled_students,
+            'present_today': present_today,
+            'absent_today': absent_today,
         }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'])

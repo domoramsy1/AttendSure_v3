@@ -3,7 +3,7 @@
  * File: web/src/components/tabs/GatePassesTab.tsx
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../api/client';
 import { useSchool } from '../../context/SchoolContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -12,161 +12,50 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { useAlert } from '../../context/AlertContext';
 import {
-  ShieldCheck,
   CheckCircle2,
-  XCircle,
   Printer,
   QrCode,
-  Loader2,
-  User,
   FileText,
-  Ban,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-  Building2,
   Plus,
+  FileCheck,
+  FileX,
+  ExternalLink,
 } from 'lucide-react';
 
 interface GatePass {
   id: number;
-  pass_number?: string;
-  pass_id?: string;
-  bearer_name?: string;
-  student_name?: string;
-  faculty_name?: string;
-  bearer_type?: 'STUDENT' | 'FACULTY' | 'VISITOR';
+  pass_number: string;
+  bearer_type: 'STUDENT' | 'FACULTY';
   student?: number | null;
-  student_id?: number | null;
+  student_name?: string;
+  student_lrn?: string;
   faculty?: number | null;
-  faculty_id?: number | null;
-  pass_type?: string;
+  faculty_name?: string;
+  faculty_emp_id?: string;
+  pass_type: string;
   reason: string;
   valid_from: string;
   valid_to: string;
-  status: 'ACTIVE' | 'USED' | 'EXPIRED' | 'REVOKED';
-  issued_by?: number | null;
-  issued_by_name?: string;
+  status: 'PENDING' | 'ACTIVE' | 'USED' | 'DECLINED' | 'EXPIRED' | 'REVOKED';
+  attachment_url?: string | null;
+  adviser_name?: string;
   approved_by?: string;
-  remarks?: string;
-  created_at?: string;
-  photo?: string | null;
 }
 
-interface LearnerOption {
+interface StudentOption {
   id: number;
   lrn: string;
   full_name: string;
 }
 
-interface FacultyOption {
-  id: number;
-  full_name: string;
-  department?: string;
-}
-
-interface PaginatedResponse<T> {
-  count: number;
-  total_pages?: number;
-  current_page?: number;
-  results: T[];
-}
-
-const isSafeImageUrl = (url?: string | null): boolean => {
-  if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
-  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') {
-    return false;
-  }
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) {
-    return false;
-  }
-  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) {
-    return false;
-  }
-  return (
-    clean.startsWith('http://') ||
-    clean.startsWith('https://') ||
-    clean.startsWith('/') ||
-    clean.startsWith('data:image/') ||
-    clean.startsWith('blob:')
-  );
-};
-
-interface ProfileAvatarProps {
-  photoUrl?: string | null;
-  name?: string;
-  size?: number;
-  iconSize?: number;
-}
-
-const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
-  photoUrl,
-  name = 'Bearer',
-  size = 38,
-  iconSize = 19,
-}) => {
-  const [imageFailed, setImageFailed] = useState(false);
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [photoUrl]);
-
-  const safePhoto = isSafeImageUrl(photoUrl) ? photoUrl : null;
-
-  return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        backgroundColor: 'var(--bg-surface-subtle, #f1f5f9)',
-        border: '1px solid var(--border-subtle, #e2e8f0)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-        flexShrink: 0,
-      }}
-      title={name}
-    >
-      {safePhoto && !imageFailed ? (
-        <img
-          src={safePhoto}
-          alt={name}
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          onError={() => setImageFailed(true)}
-          loading="lazy"
-        />
-      ) : (
-        <User size={iconSize} color="var(--text-muted, #94a3b8)" />
-      )}
-    </div>
-  );
-};
-
 export const GatePassesTab: React.FC = () => {
   const { school } = useSchool();
-  const { showAlert, showConfirm } = useAlert();
+  const { showAlert } = useAlert();
   const { tokens, brand } = useTheme();
 
   const userRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
-  const currentUserName =
-    localStorage.getItem('attendsure_faculty_name') ||
-    localStorage.getItem('attendsure_username') ||
-    '';
-
-  const isAdmin = userRole === 'ADMIN' || userRole === 'SUPERADMIN';
-  const isPrincipal = userRole === 'PRINCIPAL';
-  const isDeptHead = userRole === 'DEPT_HEAD';
+  const isPrincipalOrAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
   const isGuard = userRole === 'GUARD';
-  const isLeadership = isAdmin || isPrincipal || isDeptHead;
-
-  const canIssuePass = !isGuard;
-  const canIssueForFaculty = isLeadership;
-  const canMarkUsed = isGuard || isAdmin || isPrincipal;
-  const canRevoke = !isGuard;
 
   const [passes, setPasses] = useState<GatePass[]>([]);
   const [loading, setLoading] = useState(true);
@@ -174,1233 +63,540 @@ export const GatePassesTab: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(25);
-  const [totalPages, setTotalPages] = useState<number>(1);
-  const [totalCount, setTotalCount] = useState<number>(0);
-
   const [selectedPass, setSelectedPass] = useState<GatePass | null>(null);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [reviewingPass, setReviewingPass] = useState<GatePass | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const [learners, setLearners] = useState<LearnerOption[]>([]);
-  const [facultyMembers, setFacultyMembers] = useState<FacultyOption[]>([]);
-  const [loadingOptions, setLoadingOptions] = useState(false);
+  const [students, setStudents] = useState<StudentOption[]>([]);
+  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [passFormType, setPassFormType] = useState<'STUDENT' | 'FACULTY'>('STUDENT');
 
   const [formData, setFormData] = useState({
-    bearer_type: 'STUDENT' as 'STUDENT' | 'FACULTY',
     student_id: '',
-    faculty_id: '',
-    reason_preset: 'Medical / Health Emergency',
-    custom_reason: '',
+    pass_type: 'Medical / Health Emergency',
+    reason: '',
     valid_from: '',
     valid_to: '',
-    approved_by: '',
-    remarks: '',
   });
 
-  const isInteracting = useRef(false);
-  isInteracting.current = isCreateModalOpen || Boolean(selectedPass) || saving;
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [declineReason, setDeclineReason] = useState('');
+  const [showDeclineModal, setShowDeclineModal] = useState(false);
 
-  const isMounted = useRef(true);
-  useEffect(() => {
-    isMounted.current = true;
-    return () => {
-      isMounted.current = false;
-    };
-  }, []);
-
-  const fetchPasses = useCallback(
-    async (page = 1, size = 25, query = '', status = 'ALL', silent = false) => {
-      try {
-        if (!silent) setLoading(true);
-        setError(null);
-        const res = await apiClient.get<PaginatedResponse<GatePass> | GatePass[]>('/gate-passes/', {
-          params: {
-            page,
-            page_size: size,
-            search: query.trim() || undefined,
-            status: status !== 'ALL' ? status : undefined,
-          },
-        });
-
-        if (!isMounted.current) return;
-
-        if (res.data && 'results' in res.data) {
-          setPasses(res.data.results);
-          setTotalCount(res.data.count);
-          setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size) || 1);
-          setCurrentPage(res.data.current_page || page);
-        } else if (Array.isArray(res.data)) {
-          setPasses(res.data);
-          setTotalCount(res.data.length);
-          setTotalPages(1);
-          setCurrentPage(1);
-        }
-      } catch (err: any) {
-        if (!silent && isMounted.current) {
-          setError(
-            err?.response?.data?.error ||
-              err?.response?.data?.detail ||
-              'Failed to fetch gate pass records from database.'
-          );
-        }
-      } finally {
-        if (!silent && isMounted.current) {
-          setLoading(false);
-        }
-      }
-    },
-    []
-  );
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setCurrentPage(1);
-      fetchPasses(1, pageSize, search, statusFilter, false);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [search, statusFilter, pageSize, fetchPasses]);
-
-  useEffect(() => {
-    const liveInterval = setInterval(() => {
-      if (!isInteracting.current && isMounted.current) {
-        fetchPasses(currentPage, pageSize, search, statusFilter, true);
-      }
-    }, 5000);
-
-    return () => clearInterval(liveInterval);
-  }, [currentPage, pageSize, search, statusFilter, fetchPasses]);
-
-  const fetchBearerOptions = async () => {
-    setLoadingOptions(true);
+  const fetchPasses = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const requests: [Promise<any>, Promise<any>?] = [
-        apiClient.get<any>('/students/?page_size=ALL'),
-      ];
-
-      if (canIssueForFaculty) {
-        requests.push(
-          apiClient
-            .get<any>('/faculty/dropdown/')
-            .catch(() => apiClient.get<any>('/facultys/?page_size=ALL'))
-        );
-      }
-
-      const [studentsRes, facultyRes] = await Promise.all(requests);
-
-      if (!isMounted.current) return;
-
-      const studentList = Array.isArray(studentsRes.data)
-        ? studentsRes.data
-        : studentsRes.data?.results || [];
-
-      const sortedStudents = [...studentList].sort((a: any, b: any) => {
-        const nameA = (a.full_name || `${a.last_name}, ${a.first_name}`).toLowerCase();
-        const nameB = (b.full_name || `${b.last_name}, ${b.first_name}`).toLowerCase();
-        return nameA.localeCompare(nameB);
+      const res = await apiClient.get<any>('/gate-passes/', {
+        params: {
+          search: search.trim() || undefined,
+          status: statusFilter !== 'ALL' ? statusFilter : undefined,
+        },
       });
-
-      setLearners(
-        sortedStudents.map((s: any) => ({
-          id: s.id,
-          lrn: s.lrn,
-          full_name: s.full_name || `${s.last_name}, ${s.first_name}`,
-        }))
-      );
-
-      if (facultyRes) {
-        const facultyList = Array.isArray(facultyRes.data)
-          ? facultyRes.data
-          : facultyRes.data?.results || [];
-
-        const sortedFaculty = [...facultyList].sort((a: any, b: any) => {
-          const nameA = (a.full_name || `${a.last_name}, ${a.first_name}`).toLowerCase();
-          const nameB = (b.full_name || `${b.last_name}, ${b.first_name}`).toLowerCase();
-          return nameA.localeCompare(nameB);
-        });
-
-        setFacultyMembers(
-          sortedFaculty.map((f: any) => ({
-            id: f.id,
-            full_name: f.full_name || `${f.last_name}, ${f.first_name}`,
-            department: f.department || f.position,
-          }))
-        );
-      }
-    } catch {
-      // Keep state intact
+      const list = res.data?.results ?? (Array.isArray(res.data) ? res.data : []);
+      setPasses(list);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to fetch gate passes.');
     } finally {
-      if (isMounted.current) {
-        setLoadingOptions(false);
-      }
+      setLoading(false);
+    }
+  }, [search, statusFilter]);
+
+  useEffect(() => {
+    fetchPasses();
+  }, [fetchPasses]);
+
+  const fetchStudents = async () => {
+    setLoadingStudents(true);
+    try {
+      const res = await apiClient.get<any>('/students/?page_size=200');
+      const list = res.data?.results ?? (Array.isArray(res.data) ? res.data : []);
+      setStudents(list);
+    } catch {
+      setStudents([]);
+    } finally {
+      setLoadingStudents(false);
     }
   };
 
-  const handlePageChange = (newPage: number) => {
-    if (newPage < 1 || newPage > totalPages) return;
-    setCurrentPage(newPage);
-    fetchPasses(newPage, pageSize, search, statusFilter, false);
-  };
-
-  const handlePageSizeChange = (newSize: number) => {
-    setPageSize(newSize);
-    setCurrentPage(1);
-    fetchPasses(1, newSize, search, statusFilter, false);
-  };
-
-  const metrics = useMemo(() => {
-    const safePasses = Array.isArray(passes) ? passes : [];
-    const active = safePasses.filter((p) => p.status === 'ACTIVE').length;
-    const used = safePasses.filter((p) => p.status === 'USED').length;
-    const expiredOrRevoked = safePasses.filter(
-      (p) => p.status === 'EXPIRED' || p.status === 'REVOKED'
-    ).length;
-    return { active, used, expiredOrRevoked };
-  }, [passes]);
-
-  const handleOpenCreate = () => {
-    if (!canIssuePass) {
-      showAlert({
-        title: 'Access Restricted',
-        message:
-          'Security personnel verify exits at gate checkpoints. Gate passes must be authorized by teaching staff or administration.',
-        type: 'error',
-      });
-      return;
-    }
-
+  const handleOpenCreateModal = (type: 'STUDENT' | 'FACULTY') => {
+    setPassFormType(type);
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const toInputDate = (d: Date) =>
       `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
-    const defaultStart = new Date(now);
-    const defaultEnd = new Date(now.getTime() + 4 * 60 * 60 * 1000);
-
-    const defaultApprover = isLeadership
-      ? school.principal_name || 'Administration Office'
-      : currentUserName;
-
     setFormData({
-      bearer_type: 'STUDENT',
       student_id: '',
-      faculty_id: '',
-      reason_preset: 'Medical / Health Emergency',
-      custom_reason: '',
-      valid_from: toInputDate(defaultStart),
-      valid_to: toInputDate(defaultEnd),
-      approved_by: defaultApprover,
-      remarks: '',
+      pass_type: type === 'STUDENT' ? 'Clinic / Medical Clearance' : 'Official DepEd Travel Order',
+      reason: '',
+      valid_from: toInputDate(now),
+      valid_to: toInputDate(new Date(now.getTime() + 4 * 3600000)),
     });
+    setAttachedFile(null);
 
-    fetchBearerOptions();
-    setIsCreateModalOpen(true);
+    if (type === 'STUDENT') {
+      fetchStudents();
+    }
+    setIsModalOpen(true);
   };
 
-  const handleCreateSubmit = async (e: React.FormEvent) => {
+  const handleSubmitPass = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaving(true);
 
-    try {
-      const finalReason = formData.custom_reason.trim()
-        ? `${formData.reason_preset}: ${formData.custom_reason.trim()}`
-        : formData.reason_preset;
-
-      const dateNow = new Date();
-      const pad = (n: number) => String(n).padStart(2, '0');
-      const todayStr = `${dateNow.getFullYear()}${pad(dateNow.getMonth() + 1)}${pad(dateNow.getDate())}`;
-      const uniqueHex = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const generatedPassNum = `GP-${todayStr}-${uniqueHex}`;
-
-      const effectiveBearerType = canIssueForFaculty ? formData.bearer_type : 'STUDENT';
-      const studentIdNum =
-        effectiveBearerType === 'STUDENT' && formData.student_id
-          ? Number(formData.student_id)
-          : null;
-      const facultyIdNum =
-        effectiveBearerType === 'FACULTY' && formData.faculty_id
-          ? Number(formData.faculty_id)
-          : null;
-
-      if (effectiveBearerType === 'STUDENT' && !studentIdNum) {
-        showAlert({
-          title: 'Student Required',
-          message: 'Please select a student from the list.',
-          type: 'warning',
-        });
-        setSaving(false);
-        return;
-      }
-
-      if (effectiveBearerType === 'FACULTY' && !facultyIdNum) {
-        showAlert({
-          title: 'Faculty Required',
-          message: 'Please select a faculty member from the list.',
-          type: 'warning',
-        });
-        setSaving(false);
-        return;
-      }
-
-      const payload: Record<string, any> = {
-        pass_number: generatedPassNum,
-        pass_type: formData.reason_preset,
-        reason: finalReason,
-        valid_from: formData.valid_from ? new Date(formData.valid_from).toISOString() : new Date().toISOString(),
-        valid_to: formData.valid_to ? new Date(formData.valid_to).toISOString() : new Date(Date.now() + 4 * 3600000).toISOString(),
-        status: 'ACTIVE',
-      };
-
-      if (studentIdNum) {
-        payload.student = studentIdNum;
-        payload.student_id = studentIdNum;
-      }
-
-      if (facultyIdNum) {
-        payload.faculty = facultyIdNum;
-        payload.faculty_id = facultyIdNum;
-      }
-
-      if (formData.approved_by.trim()) {
-        payload.approved_by = formData.approved_by.trim();
-      }
-
-      if (formData.remarks.trim()) {
-        payload.remarks = formData.remarks.trim();
-      }
-
-      await apiClient.post('/gate-passes/', payload);
-      setIsCreateModalOpen(false);
+    if (!attachedFile) {
       showAlert({
-        title: 'Gate Pass Issued',
-        message: `Clearance pass ${generatedPassNum} successfully created and registered.`,
+        title: 'Proof Document Required',
+        message: 'A proof document (medical referral, parent letter, or travel order) must be attached.',
+        type: 'warning',
+      });
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const payload = new FormData();
+      payload.append('bearer_type', passFormType);
+      payload.append('pass_type', formData.pass_type);
+      payload.append('reason', formData.reason.trim());
+      payload.append('valid_from', new Date(formData.valid_from).toISOString());
+      payload.append('valid_to', new Date(formData.valid_to).toISOString());
+      payload.append('attachment', attachedFile);
+
+      if (passFormType === 'STUDENT') {
+        if (!formData.student_id) {
+          showAlert({ title: 'Student Required', message: 'Please select a student.', type: 'warning' });
+          setSubmitting(false);
+          return;
+        }
+        payload.append('student', formData.student_id);
+      }
+
+      await apiClient.post('/gate-passes/', payload, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      showAlert({
+        title: passFormType === 'FACULTY' ? 'Travel Pass Submitted' : 'Student Exit Permit Issued',
+        message:
+          passFormType === 'FACULTY'
+            ? 'Travel order submitted to Principal/Admin for document review.'
+            : 'Adviser exit permit generated. Administration has been notified.',
         type: 'success',
       });
-      fetchPasses(1, pageSize, search, statusFilter, true);
-    } catch (err: any) {
-      const fieldError =
-        err?.response?.data?.student?.[0] ||
-        err?.response?.data?.faculty?.[0] ||
-        err?.response?.data?.reason?.[0] ||
-        err?.response?.data?.valid_from?.[0] ||
-        err?.response?.data?.valid_to?.[0] ||
-        err?.response?.data?.detail ||
-        'Failed to issue gate pass. Please verify details.';
 
+      setIsModalOpen(false);
+      fetchPasses();
+    } catch (err: any) {
       showAlert({
-        title: 'Issuance Error',
-        message: fieldError,
+        title: 'Submission Error',
+        message: err?.response?.data?.attachment?.[0] || 'Unable to submit gate pass.',
         type: 'error',
       });
     } finally {
-      setSaving(false);
+      setSubmitting(false);
     }
   };
 
-  const handleRevoke = (pass: GatePass) => {
-    if (!canRevoke) return;
-    const passCode = pass.pass_number || pass.pass_id || `ID #${pass.id}`;
-    const bearer = pass.bearer_name || pass.student_name || pass.faculty_name || 'bearer';
-
-    showConfirm({
-      title: 'Revoke Gate Clearance',
-      message: `Cancel Gate Pass "${passCode}" for ${bearer}? It will be invalidated at all gate terminals immediately.`,
-      confirmLabel: 'Revoke Pass',
-      isDestructive: true,
-      onConfirm: async () => {
-        try {
-          await apiClient.patch(`/gate-passes/${pass.id}/`, { status: 'REVOKED' });
-          showAlert({
-            title: 'Pass Revoked',
-            message: `Gate pass ${passCode} has been canceled.`,
-            type: 'info',
-          });
-          fetchPasses(currentPage, pageSize, search, statusFilter, true);
-        } catch {
-          showAlert({
-            title: 'Revoke Failed',
-            message: 'Failed to revoke the selected gate pass.',
-            type: 'error',
-          });
-        }
-      },
-    });
-  };
-
-  const handleMarkUsed = async (pass: GatePass) => {
-    if (!canMarkUsed) return;
+  const handleApprove = async (passId: number) => {
     try {
-      await apiClient.patch(`/gate-passes/${pass.id}/`, { status: 'USED' });
-      showAlert({
-        title: 'Status Updated',
-        message: 'Pass marked as used (bearer cleared through gate).',
-        type: 'success',
-      });
-      fetchPasses(currentPage, pageSize, search, statusFilter, true);
+      await apiClient.post(`/gate-passes/${passId}/approve/`);
+      showAlert({ title: 'Pass Approved', message: 'Travel pass approved and active for gate departure.', type: 'success' });
+      setReviewingPass(null);
+      fetchPasses();
     } catch {
-      showAlert({
-        title: 'Update Error',
-        message: 'Failed to update gate pass status.',
-        type: 'error',
-      });
+      showAlert({ title: 'Error', message: 'Failed to approve pass.', type: 'error' });
     }
   };
 
-  const getPassNumber = (p: GatePass) => p.pass_number || p.pass_id || `GP-${p.id}`;
-  const getBearerName = (p: GatePass) =>
-    p.bearer_name ||
-    p.student_name ||
-    p.faculty_name ||
-    (p.student ? 'Student' : p.faculty ? 'Faculty' : 'Authorized Bearer');
+  const handleDecline = async () => {
+    if (!reviewingPass) return;
+    try {
+      await apiClient.post(`/gate-passes/${reviewingPass.id}/decline/`, {
+        reason: declineReason.trim() || 'Declined upon document authenticity review.',
+      });
+      showAlert({ title: 'Pass Declined', message: 'Gate pass has been declined.', type: 'info' });
+      setShowDeclineModal(false);
+      setReviewingPass(null);
+      fetchPasses();
+    } catch {
+      showAlert({ title: 'Error', message: 'Failed to decline pass.', type: 'error' });
+    }
+  };
 
-  const startRecord = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
-  const endRecord = Math.min(currentPage * pageSize, totalCount);
+  const handleMarkUsed = async (passId: number) => {
+    try {
+      await apiClient.post(`/gate-passes/${passId}/mark-used/`);
+      showAlert({ title: 'Exit Confirmed', message: 'Bearer departure confirmed.', type: 'success' });
+      fetchPasses();
+    } catch (err: any) {
+      showAlert({ title: 'Notice', message: err?.response?.data?.error || 'Failed to update.', type: 'warning' });
+    }
+  };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(14px, 2.5vw, 24px)', boxSizing: 'border-box', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-      <style>{`
-        @media print {
-          body * {
-            visibility: hidden;
-          }
-          #printable-gate-pass, #printable-gate-pass * {
-            visibility: visible;
-          }
-          #printable-gate-pass {
-            position: fixed;
-            left: 50%;
-            top: 20px;
-            transform: translateX(-50%);
-            width: 320px !important;
-            box-shadow: none !important;
-            border: 2px solid #000000 !important;
-          }
-        }
-      `}</style>
-
-      {/* 1. Metric Overview Cards */}
-      <div style={statsGrid}>
-        <div style={{ backgroundColor: tokens.bgSurface, borderRadius: 12, border: `1px solid ${tokens.borderSubtle}`, padding: '16px 18px', boxShadow: tokens.cardShadow, boxSizing: 'border-box' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.66rem', fontWeight: 800, color: tokens.textSecondary, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
-              TOTAL DATABASE PASSES
-            </span>
-            <FileText size={18} color={brand.primary} />
-          </div>
-          <div style={{ fontSize: '1.50rem', fontWeight: 900, color: tokens.textPrimary, marginTop: 6, lineHeight: 1.1 }}>
-            {totalCount}
-          </div>
-          <div style={{ fontSize: '0.70rem', color: tokens.textMuted, marginTop: 4 }}>
-            All recorded exit authorizations
-          </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(14px, 2.5vw, 24px)', boxSizing: 'border-box', width: '100%' }}>
+      {/* Control Bar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, backgroundColor: tokens.bgSurface, padding: 14, borderRadius: 12, border: `1px solid ${tokens.borderSubtle}` }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {['ALL', 'PENDING', 'ACTIVE', 'USED', 'DECLINED'].map((st) => (
+            <button
+              key={st}
+              onClick={() => setStatusFilter(st)}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 20,
+                fontSize: '0.74rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: `1px solid ${statusFilter === st ? brand.primary : tokens.borderStrong}`,
+                backgroundColor: statusFilter === st ? brand.primary : tokens.bgSurfaceSubtle,
+                color: statusFilter === st ? '#ffffff' : tokens.textSecondary,
+              }}
+            >
+              {st === 'PENDING' ? 'Pending Review' : st}
+            </button>
+          ))}
         </div>
 
-        <div style={{ backgroundColor: tokens.bgSurface, borderRadius: 12, border: `1px solid ${tokens.borderSubtle}`, padding: '16px 18px', boxShadow: tokens.cardShadow, boxSizing: 'border-box' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.66rem', fontWeight: 800, color: tokens.textSecondary, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
-              ACTIVE CLEARANCES
-            </span>
-            <ShieldCheck size={18} color={brand.success} />
-          </div>
-          <div style={{ fontSize: '1.50rem', fontWeight: 900, color: brand.success, marginTop: 6, lineHeight: 1.1 }}>
-            {metrics.active}
-          </div>
-          <div style={{ fontSize: '0.70rem', color: tokens.textMuted, marginTop: 4 }}>
-            Valid for gate exit today
-          </div>
-        </div>
-
-        <div style={{ backgroundColor: tokens.bgSurface, borderRadius: 12, border: `1px solid ${tokens.borderSubtle}`, padding: '16px 18px', boxShadow: tokens.cardShadow, boxSizing: 'border-box' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.66rem', fontWeight: 800, color: tokens.textSecondary, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
-              USED / EXITED
-            </span>
-            <CheckCircle2 size={18} color={brand.primary} />
-          </div>
-          <div style={{ fontSize: '1.50rem', fontWeight: 900, color: brand.primary, marginTop: 6, lineHeight: 1.1 }}>
-            {metrics.used}
-          </div>
-          <div style={{ fontSize: '0.70rem', color: tokens.textMuted, marginTop: 4 }}>
-            Bearer already passed the gate
-          </div>
-        </div>
-
-        <div style={{ backgroundColor: tokens.bgSurface, borderRadius: 12, border: `1px solid ${tokens.borderSubtle}`, padding: '16px 18px', boxShadow: tokens.cardShadow, boxSizing: 'border-box' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.66rem', fontWeight: 800, color: tokens.textSecondary, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
-              EXPIRED / REVOKED
-            </span>
-            <XCircle size={18} color={metrics.expiredOrRevoked > 0 ? brand.warning : tokens.textMuted} />
-          </div>
-          <div style={{ fontSize: '1.50rem', fontWeight: 900, color: metrics.expiredOrRevoked > 0 ? brand.warning : tokens.textPrimary, marginTop: 6, lineHeight: 1.1 }}>
-            {metrics.expiredOrRevoked}
-          </div>
-          <div style={{ fontSize: '0.70rem', color: tokens.textMuted, marginTop: 4 }}>
-            No longer valid for campus exit
-          </div>
-        </div>
-      </div>
-
-      {/* 2. Control & Filter Bar */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '12px 16px',
-          backgroundColor: tokens.bgSurface,
-          borderRadius: 12,
-          border: `1px solid ${tokens.borderSubtle}`,
-          boxShadow: tokens.cardShadow,
-          flexWrap: 'wrap',
-          gap: 12,
-          boxSizing: 'border-box',
-        }}
-      >
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          {['ALL', 'ACTIVE', 'USED', 'EXPIRED', 'REVOKED'].map((st) => {
-            const isActive = statusFilter === st;
-            return (
-              <button
-                key={st}
-                type="button"
-                onClick={() => setStatusFilter(st)}
-                style={{
-                  padding: '6px 14px',
-                  borderRadius: 20,
-                  fontSize: '0.74rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  border: `1px solid ${isActive ? brand.primary : tokens.borderStrong}`,
-                  backgroundColor: isActive ? brand.primary : tokens.bgSurfaceSubtle,
-                  color: isActive ? '#ffffff' : tokens.textSecondary,
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                {st}
-              </button>
-            );
-          })}
-        </div>
-
-        {canIssuePass && (
-          <Button
-            variant="primary"
-            size="md"
-            type="button"
-            onClick={handleOpenCreate}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, backgroundColor: brand.primary, borderColor: brand.primary }}
-          >
-            <Plus size={16} />
-            Issue Gate Pass
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button variant="secondary" size="md" type="button" onClick={() => handleOpenCreateModal('FACULTY')}>
+            <FileText size={15} style={{ marginRight: 6 }} /> Request Official Travel Pass
           </Button>
-        )}
-      </div>
-
-      {/* 3. Main Data Table Container with Spaced Pagination */}
-      <div style={{ backgroundColor: tokens.bgSurface, borderRadius: 12, border: `1px solid ${tokens.borderSubtle}`, boxShadow: tokens.cardShadow, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <ModuleTableLayout
-            title="Campus Gate Passes & Exit Clearances"
-            subtitle="Authorized student leaves, clinic checkouts, parent pickups, and official school business."
-            searchPlaceholder="Search pass number, bearer name, reason..."
-            searchValue={search}
-            onSearchChange={setSearch}
-            loading={loading}
-            error={error}
-            data={passes}
-            keyExtractor={(p) => p.id || getPassNumber(p)}
-            columns={[
-              {
-                header: 'Pass Reference #',
-                render: (p) => (
-                  <div>
-                    <div style={{ fontFamily: 'monospace', fontWeight: 800, color: tokens.textPrimary, fontSize: '0.86rem' }}>
-                      {getPassNumber(p)}
-                    </div>
-                    <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>
-                      Institutional Exit Clearance
-                    </div>
-                  </div>
-                ),
-              },
-              {
-                header: 'Bearer Name',
-                render: (p) => (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <ProfileAvatar photoUrl={p.photo} name={getBearerName(p)} size={36} iconSize={18} />
-                    <div>
-                      <div style={{ fontWeight: 800, color: tokens.textPrimary, fontSize: '0.84rem' }}>
-                        {getBearerName(p)}
-                      </div>
-                      <span
-                        style={{
-                          fontSize: '0.65rem',
-                          fontWeight: 700,
-                          color: tokens.textSecondary,
-                          backgroundColor: tokens.bgSurfaceSubtle,
-                          padding: '1px 5px',
-                          borderRadius: 4,
-                        }}
-                      >
-                        {p.bearer_type || (p.student ? 'STUDENT' : p.faculty ? 'FACULTY' : 'BEARER')}
-                      </span>
-                    </div>
-                  </div>
-                ),
-              },
-              {
-                header: 'Clearance Reason',
-                render: (p) => (
-                  <div style={{ maxWidth: 220, fontSize: '0.80rem', color: tokens.textSecondary, lineHeight: 1.3 }}>
-                    {p.reason}
-                  </div>
-                ),
-              },
-              {
-                header: 'Validity Period',
-                render: (p) => (
-                  <div style={{ fontSize: '0.74rem', color: tokens.textSecondary }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{ fontWeight: 600, color: brand.success }}>From:</span>
-                      <span>
-                        {new Date(p.valid_from).toLocaleString([], {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                      <span style={{ fontWeight: 600, color: brand.danger }}>Until:</span>
-                      <span>
-                        {new Date(p.valid_to).toLocaleString([], {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
-                    </div>
-                  </div>
-                ),
-              },
-              {
-                header: 'Status',
-                render: (p) => {
-                  let bg = 'rgba(100, 116, 139, 0.12)';
-                  let col = tokens.textSecondary;
-                  if (p.status === 'ACTIVE') {
-                    bg = 'rgba(16, 185, 129, 0.12)';
-                    col = brand.success;
-                  } else if (p.status === 'USED') {
-                    bg = tokens.primaryLight;
-                    col = brand.primary;
-                  } else if (p.status === 'EXPIRED' || p.status === 'REVOKED') {
-                    bg = 'rgba(239, 68, 68, 0.12)';
-                    col = brand.danger;
-                  }
-                  return (
-                    <span
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: 12,
-                        fontSize: '0.70rem',
-                        fontWeight: 800,
-                        backgroundColor: bg,
-                        color: col,
-                      }}
-                    >
-                      {p.status}
-                    </span>
-                  );
-                },
-              },
-              {
-                header: 'Actions',
-                align: 'right',
-                render: (p) => (
-                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPass(p)}
-                      title="View & Print Official Gate Slip"
-                      style={{
-                        backgroundColor: tokens.bgSurfaceSubtle,
-                        border: `1px solid ${tokens.borderStrong}`,
-                        borderRadius: 6,
-                        padding: '6px 8px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <QrCode size={13} color={brand.primary} />
-                    </button>
-
-                    {p.status === 'ACTIVE' && (
-                      <>
-                        {canMarkUsed && (
-                          <button
-                            type="button"
-                            onClick={() => handleMarkUsed(p)}
-                            title="Mark As Used (Exited Gate)"
-                            style={{
-                              backgroundColor: 'rgba(16, 185, 129, 0.12)',
-                              border: '1px solid rgba(16, 185, 129, 0.3)',
-                              borderRadius: 6,
-                              padding: '6px 8px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            <CheckCircle2 size={13} color={brand.success} />
-                          </button>
-                        )}
-
-                        {canRevoke && (
-                          <button
-                            type="button"
-                            onClick={() => handleRevoke(p)}
-                            title="Revoke / Cancel Pass"
-                            style={{
-                              backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                              border: '1px solid rgba(239, 68, 68, 0.3)',
-                              borderRadius: 6,
-                              padding: '6px 8px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            <Ban size={13} color={brand.danger} />
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                ),
-              },
-            ]}
-          />
-        </div>
-
-        {/* Server Pagination Bar with Proper Spacing & Padding */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '16px 20px',
-            borderTop: `1px solid ${tokens.borderSubtle}`,
-            backgroundColor: tokens.bgSurface,
-            flexWrap: 'wrap',
-            gap: 12,
-            boxSizing: 'border-box',
-            width: '100%',
-          }}
-        >
-          <div style={{ fontSize: '0.80rem', color: tokens.textSecondary }}>
-            {totalCount > 0 ? (
-              <>
-                Showing <strong>{startRecord}</strong> to <strong>{endRecord}</strong> of{' '}
-                <strong>{totalCount}</strong> gate passes
-              </>
-            ) : (
-              'No gate passes found'
-            )}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 8 }}>
-              <span style={{ fontSize: '0.78rem', color: tokens.textMuted }}>Per page:</span>
-              <select
-                value={pageSize}
-                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                  border: `1px solid ${tokens.borderStrong}`,
-                  fontSize: '0.78rem',
-                  color: tokens.textPrimary,
-                  backgroundColor: tokens.bgSurfaceSubtle,
-                  outline: 'none',
-                  cursor: 'pointer',
-                }}
-              >
-                <option value={15}>15</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-            </div>
-
-            <button
-              onClick={() => handlePageChange(1)}
-              disabled={currentPage <= 1 || loading}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '6px',
-                border: `1px solid ${tokens.borderStrong}`,
-                borderRadius: 6,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                color: tokens.textPrimary,
-                opacity: currentPage <= 1 || loading ? 0.35 : 1,
-                cursor: currentPage <= 1 || loading ? 'not-allowed' : 'pointer',
-              }}
-              title="First Page"
-              type="button"
-            >
-              <ChevronsLeft size={16} />
-            </button>
-
-            <button
-              onClick={() => handlePageChange(currentPage - 1)}
-              disabled={currentPage <= 1 || loading}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '6px',
-                border: `1px solid ${tokens.borderStrong}`,
-                borderRadius: 6,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                color: tokens.textPrimary,
-                opacity: currentPage <= 1 || loading ? 0.35 : 1,
-                cursor: currentPage <= 1 || loading ? 'not-allowed' : 'pointer',
-              }}
-              title="Previous Page"
-              type="button"
-            >
-              <ChevronLeft size={16} />
-            </button>
-
-            <span style={{ fontSize: '0.80rem', fontWeight: 600, padding: '0 8px', color: tokens.textPrimary }}>
-              Page {currentPage} of {Math.max(1, totalPages)}
-            </span>
-
-            <button
-              onClick={() => handlePageChange(currentPage + 1)}
-              disabled={currentPage >= totalPages || loading}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '6px',
-                border: `1px solid ${tokens.borderStrong}`,
-                borderRadius: 6,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                color: tokens.textPrimary,
-                opacity: currentPage >= totalPages || loading ? 0.35 : 1,
-                cursor: currentPage >= totalPages || loading ? 'not-allowed' : 'pointer',
-              }}
-              title="Next Page"
-              type="button"
-            >
-              <ChevronRight size={16} />
-            </button>
-
-            <button
-              onClick={() => handlePageChange(totalPages)}
-              disabled={currentPage >= totalPages || loading}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '6px',
-                border: `1px solid ${tokens.borderStrong}`,
-                borderRadius: 6,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                color: tokens.textPrimary,
-                opacity: currentPage >= totalPages || loading ? 0.35 : 1,
-                cursor: currentPage >= totalPages || loading ? 'not-allowed' : 'pointer',
-              }}
-              title="Last Page"
-              type="button"
-            >
-              <ChevronsRight size={16} />
-            </button>
-          </div>
+          {!isGuard && (
+            <Button variant="primary" size="md" type="button" onClick={() => handleOpenCreateModal('STUDENT')} style={{ backgroundColor: brand.primary, borderColor: brand.primary }}>
+              <Plus size={15} style={{ marginRight: 6 }} /> Issue Student Exit Pass
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* 4. Issue Gate Pass Modal */}
-      {canIssuePass && (
-        <Modal
-          isOpen={isCreateModalOpen}
-          onClose={() => setIsCreateModalOpen(false)}
-          title="Issue Campus Gate Clearance Pass"
-        >
-          <form onSubmit={handleCreateSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                Bearer Type *
-              </label>
-              {canIssueForFaculty ? (
-                <div style={{ display: 'flex', gap: 12 }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', cursor: 'pointer', color: tokens.textPrimary }}>
-                    <input
-                      type="radio"
-                      name="bearer_type"
-                      value="STUDENT"
-                      checked={formData.bearer_type === 'STUDENT'}
-                      onChange={() => setFormData({ ...formData, bearer_type: 'STUDENT' })}
-                    />
-                    <span>Student</span>
-                  </label>
-
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', cursor: 'pointer', color: tokens.textPrimary }}>
-                    <input
-                      type="radio"
-                      name="bearer_type"
-                      value="FACULTY"
-                      checked={formData.bearer_type === 'FACULTY'}
-                      onChange={() => setFormData({ ...formData, bearer_type: 'FACULTY' })}
-                    />
-                    <span>Faculty / Staff</span>
-                  </label>
+      {/* Main Table */}
+      <ModuleTableLayout
+        title="Campus Gate Passes & Exit Clearances"
+        subtitle="Adviser student permits and official faculty travel authorizations."
+        searchPlaceholder="Search pass #, student, faculty, reason..."
+        searchValue={search}
+        onSearchChange={setSearch}
+        loading={loading}
+        error={error}
+        data={passes}
+        keyExtractor={(p) => p.id}
+        columns={[
+          {
+            header: 'Pass Reference #',
+            render: (p) => (
+              <div>
+                <strong style={{ fontFamily: 'monospace', color: brand.primary }}>{p.pass_number}</strong>
+                <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>{p.bearer_type} CLEARANCE</div>
+              </div>
+            ),
+          },
+          {
+            header: 'Authorized Bearer',
+            render: (p) => (
+              <div>
+                <strong style={{ color: tokens.textPrimary, fontSize: '0.86rem' }}>
+                  {p.bearer_type === 'STUDENT' ? p.student_name : p.faculty_name}
+                </strong>
+                <div style={{ fontSize: '0.68rem', color: tokens.textSecondary }}>
+                  {p.bearer_type === 'STUDENT' ? `LRN: ${p.student_lrn || '—'}` : `Emp ID: ${p.faculty_emp_id || '—'}`}
                 </div>
-              ) : (
-                <div
-                  style={{
-                    fontSize: '0.82rem',
-                    fontWeight: 700,
-                    color: brand.primary,
-                    backgroundColor: tokens.primaryLight,
-                    padding: '6px 12px',
-                    borderRadius: 6,
-                    border: `1px solid ${tokens.borderStrong}`,
-                    display: 'inline-block',
-                  }}
+              </div>
+            ),
+          },
+          {
+            header: 'Class Adviser / Issuer',
+            render: (p) => (
+              <div style={{ fontSize: '0.78rem', color: tokens.textPrimary }}>
+                <strong>{p.adviser_name || 'Staff User'}</strong>
+                <div style={{ fontSize: '0.66rem', color: tokens.textMuted }}>Issuing Authority</div>
+              </div>
+            ),
+          },
+          {
+            header: 'Reason & Proof File',
+            render: (p) => (
+              <div style={{ maxWidth: 220 }}>
+                <span style={{ fontWeight: 700, fontSize: '0.76rem', color: tokens.textPrimary }}>{p.pass_type}</span>
+                <p style={{ margin: '2px 0 0 0', fontSize: '0.72rem', color: tokens.textSecondary }}>{p.reason}</p>
+                {p.attachment_url ? (
+                  <a
+                    href={p.attachment_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: '0.70rem', color: brand.primary, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 4 }}
+                  >
+                    <ExternalLink size={11} /> View Attached Proof
+                  </a>
+                ) : (
+                  <span style={{ fontSize: '0.68rem', color: brand.danger }}>No file attached</span>
+                )}
+              </div>
+            ),
+          },
+          {
+            header: 'Status',
+            render: (p) => {
+              const colorMap: Record<string, string> = {
+                PENDING: '#f59e0b',
+                ACTIVE: '#10b981',
+                USED: '#0284c7',
+                DECLINED: '#ef4444',
+                EXPIRED: '#64748b',
+              };
+              return (
+                <span style={{ padding: '3px 8px', borderRadius: 10, fontSize: '0.68rem', fontWeight: 800, backgroundColor: `${colorMap[p.status] || '#64748b'}20`, color: colorMap[p.status] || '#64748b' }}>
+                  {p.status}
+                </span>
+              );
+            },
+          },
+          {
+            header: 'Actions',
+            align: 'right',
+            render: (p) => (
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPass(p)}
+                  title="View Slip"
+                  style={{ backgroundColor: tokens.bgSurfaceSubtle, border: `1px solid ${tokens.borderStrong}`, borderRadius: 6, padding: '6px 8px', cursor: 'pointer' }}
                 >
-                  Student Learner Exit Slip
-                </div>
-              )}
-            </div>
+                  <QrCode size={14} color={brand.primary} />
+                </button>
 
+                {isPrincipalOrAdmin && p.status === 'PENDING' && (
+                  <button
+                    type="button"
+                    onClick={() => setReviewingPass(p)}
+                    style={{ backgroundColor: brand.primary, color: '#ffffff', border: 'none', borderRadius: 6, padding: '6px 10px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    Review Authenticity
+                  </button>
+                )}
+
+                {p.status === 'ACTIVE' && (
+                  <button
+                    type="button"
+                    onClick={() => handleMarkUsed(p.id)}
+                    title="Confirm Exit"
+                    style={{ backgroundColor: 'rgba(16, 185, 129, 0.12)', border: '1px solid #10b981', borderRadius: 6, padding: '6px 8px', cursor: 'pointer' }}
+                  >
+                    <CheckCircle2 size={14} color="#10b981" />
+                  </button>
+                )}
+              </div>
+            ),
+          },
+        ]}
+      />
+
+      {/* MODAL 1: Create Pass with Mandatory Attachment */}
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={passFormType === 'FACULTY' ? 'Request Official Travel Pass' : 'Issue Student Gate Exit Permit'}>
+        <form onSubmit={handleSubmitPass} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {passFormType === 'STUDENT' ? (
             <div>
-              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                {formData.bearer_type === 'STUDENT' ? 'Select Student Learner *' : 'Select Faculty Member *'}
-              </label>
-              {loadingOptions ? (
-                <div style={{ fontSize: '0.76rem', color: tokens.textMuted, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Loader2 className="animate-spin" size={14} />
-                  <span>Loading records...</span>
-                </div>
-              ) : formData.bearer_type === 'STUDENT' ? (
+              <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 700, marginBottom: 4 }}>Select Student Learner *</label>
+              {loadingStudents ? (
+                <div style={{ fontSize: '0.74rem', color: tokens.textMuted, padding: '8px 0' }}>Loading student list...</div>
+              ) : (
                 <select
                   required
                   value={formData.student_id}
                   onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: `1px solid ${tokens.borderStrong}`,
-                    backgroundColor: tokens.bgSurfaceSubtle,
-                    fontSize: '0.84rem',
-                    color: tokens.textPrimary,
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                  }}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurfaceSubtle }}
                 >
-                  <option value="">-- Choose Learner ({learners.length} available) --</option>
-                  {learners.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.full_name} (LRN: {l.lrn})
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <select
-                  required
-                  value={formData.faculty_id}
-                  onChange={(e) => setFormData({ ...formData, faculty_id: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: `1px solid ${tokens.borderStrong}`,
-                    backgroundColor: tokens.bgSurfaceSubtle,
-                    fontSize: '0.84rem',
-                    color: tokens.textPrimary,
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                  }}
-                >
-                  <option value="">-- Choose Faculty Member ({facultyMembers.length} available) --</option>
-                  {facultyMembers.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.full_name} {f.department ? `(${f.department})` : ''}
+                  <option value="">-- Choose Student --</option>
+                  {students.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.full_name} (LRN: {s.lrn})
                     </option>
                   ))}
                 </select>
               )}
             </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                Clearance Category *
-              </label>
-              <select
-                value={formData.reason_preset}
-                onChange={(e) => setFormData({ ...formData, reason_preset: e.target.value })}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  borderRadius: 6,
-                  border: `1px solid ${tokens.borderStrong}`,
-                  backgroundColor: tokens.bgSurfaceSubtle,
-                  fontSize: '0.84rem',
-                  color: tokens.textPrimary,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              >
-                <option value="Medical / Health Emergency">Medical / Clinic Referral / Health Emergency</option>
-                <option value="Official Institutional Business">Official Institutional / School Business</option>
-                <option value="Parent / Guardian Fetching">Authorized Parent / Guardian Fetching</option>
-                <option value="Early Dismissal Approval">Authorized Early Dismissal</option>
-                <option value="Family Urgent Matter">Family Urgent Matter</option>
-                <option value="Other Official Reason">Other Official Reason</option>
-              </select>
+          ) : (
+            <div style={{ padding: 10, backgroundColor: tokens.bgSurfaceSubtle, borderRadius: 8, fontSize: '0.74rem', color: tokens.textSecondary }}>
+              <strong>Notice:</strong> Your official travel pass will be submitted to the School Principal or Administrator for file review.
             </div>
+          )}
 
+          <div>
+            <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 700, marginBottom: 4 }}>Clearance Category *</label>
+            <input
+              type="text"
+              required
+              value={formData.pass_type}
+              onChange={(e) => setFormData({ ...formData, pass_type: e.target.value })}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurfaceSubtle }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 700, marginBottom: 4 }}>Valid Reason &amp; Destination Details *</label>
+            <textarea
+              required
+              rows={3}
+              value={formData.reason}
+              onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
+              placeholder="State purpose of travel or valid exit reason..."
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurfaceSubtle }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 700, marginBottom: 4 }}>
+              Upload Supporting Document (Travel Order / Medical Certificate / Parent Letter) *
+            </label>
+            <input
+              type="file"
+              required
+              accept=".pdf,image/*"
+              onChange={(e) => setAttachedFile(e.target.files?.[0] || null)}
+              style={{ fontSize: '0.76rem' }}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
-              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                Specific Details / Remarks
-              </label>
+              <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 700, marginBottom: 4 }}>Departure Time</label>
               <input
-                type="text"
-                placeholder="e.g. Clinic checkup, Quiz Bee Competition, Parent pickup"
-                value={formData.custom_reason}
-                onChange={(e) => setFormData({ ...formData, custom_reason: e.target.value })}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  borderRadius: 6,
-                  border: `1px solid ${tokens.borderStrong}`,
-                  backgroundColor: tokens.bgSurfaceSubtle,
-                  fontSize: '0.84rem',
-                  color: tokens.textPrimary,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
+                type="datetime-local"
+                required
+                value={formData.valid_from}
+                onChange={(e) => setFormData({ ...formData, valid_from: e.target.value })}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}` }}
               />
             </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 700, marginBottom: 4 }}>Expected Return</label>
+              <input
+                type="datetime-local"
+                required
+                value={formData.valid_to}
+                onChange={(e) => setFormData({ ...formData, valid_to: e.target.value })}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}` }}
+              />
+            </div>
+          </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                  Valid From *
-                </label>
-                <input
-                  type="datetime-local"
-                  required
-                  value={formData.valid_from}
-                  onChange={(e) => setFormData({ ...formData, valid_from: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: `1px solid ${tokens.borderStrong}`,
-                    backgroundColor: tokens.bgSurfaceSubtle,
-                    fontSize: '0.84rem',
-                    color: tokens.textPrimary,
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                  }}
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                  Valid Until *
-                </label>
-                <input
-                  type="datetime-local"
-                  required
-                  value={formData.valid_to}
-                  onChange={(e) => setFormData({ ...formData, valid_to: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: `1px solid ${tokens.borderStrong}`,
-                    backgroundColor: tokens.bgSurfaceSubtle,
-                    fontSize: '0.84rem',
-                    color: tokens.textPrimary,
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                  }}
-                />
-              </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+            <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>Cancel</Button>
+            <Button variant="primary" size="md" type="submit" disabled={submitting} style={{ backgroundColor: brand.primary }}>
+              {submitting ? 'Uploading...' : 'Submit Gate Pass'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MODAL 2: Administrator / Principal Document Review */}
+      {reviewingPass && (
+        <Modal isOpen={Boolean(reviewingPass)} onClose={() => setReviewingPass(null)} title="Inspect Proof Document Authenticity">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>FACULTY APPLICANT</span>
+              <div style={{ fontSize: '1rem', fontWeight: 800, color: tokens.textPrimary }}>{reviewingPass.faculty_name}</div>
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                Approving Authority
-              </label>
-              <input
-                type="text"
-                value={formData.approved_by}
-                onChange={(e) => setFormData({ ...formData, approved_by: e.target.value })}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  borderRadius: 6,
-                  border: `1px solid ${tokens.borderStrong}`,
-                  backgroundColor: !isLeadership ? tokens.bgSurfaceSubtle : tokens.bgSurface,
-                  fontSize: '0.84rem',
-                  color: tokens.textPrimary,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                  cursor: !isLeadership ? 'not-allowed' : 'text',
-                }}
-                disabled={!isLeadership}
-                placeholder={school.principal_name || 'Principal / Admin Office'}
-              />
+              <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>PURPOSE OF TRAVEL</span>
+              <p style={{ margin: '3px 0 0 0', fontSize: '0.84rem', color: tokens.textPrimary }}>{reviewingPass.reason}</p>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-              <Button variant="secondary" size="md" type="button" onClick={() => setIsCreateModalOpen(false)}>
-                Cancel
+            <div style={{ padding: 12, backgroundColor: tokens.bgSurfaceSubtle, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: tokens.textMuted }}>ATTACHED PROOF FILE</span>
+              {reviewingPass.attachment_url ? (
+                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '0.76rem', color: tokens.textPrimary }}>Uploaded file on record</span>
+                  <a
+                    href={reviewingPass.attachment_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ backgroundColor: brand.primary, color: '#ffffff', padding: '6px 12px', borderRadius: 6, fontSize: '0.74rem', fontWeight: 700, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <ExternalLink size={12} /> Inspect File
+                  </a>
+                </div>
+              ) : (
+                <div style={{ color: brand.danger, fontSize: '0.76rem', marginTop: 4 }}>No document attached!</div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
+              <Button variant="secondary" size="md" type="button" onClick={() => setShowDeclineModal(true)} style={{ color: brand.danger }}>
+                <FileX size={15} style={{ marginRight: 6 }} /> Decline (Invalid Proof)
               </Button>
-              <Button
-                variant="primary"
-                size="md"
-                type="submit"
-                disabled={saving}
-                style={{ backgroundColor: brand.primary, borderColor: brand.primary }}
-              >
-                {saving ? <Loader2 className="animate-spin" size={16} style={{ marginRight: 6 }} /> : null}
-                Issue Official Pass
+              <Button variant="primary" size="md" type="button" onClick={() => handleApprove(reviewingPass.id)} style={{ backgroundColor: brand.success, borderColor: brand.success }}>
+                <FileCheck size={15} style={{ marginRight: 6 }} /> Approve Authentic Travel Pass
               </Button>
             </div>
-          </form>
+          </div>
         </Modal>
       )}
 
-      {/* 5. Official Printable Gate Pass Slip Modal */}
+      {/* MODAL 3: Decline Reason Dialog */}
+      {showDeclineModal && reviewingPass && (
+        <Modal isOpen={showDeclineModal} onClose={() => setShowDeclineModal(false)} title="Decline Gate Pass">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <p style={{ margin: 0, fontSize: '0.80rem', color: tokens.textSecondary }}>
+              Provide the reason for declining this request (e.g. unverified travel order, missing school seal).
+            </p>
+            <textarea
+              rows={3}
+              value={declineReason}
+              onChange={(e) => setDeclineReason(e.target.value)}
+              placeholder="State reason for declining..."
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}` }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Button variant="secondary" size="md" type="button" onClick={() => setShowDeclineModal(false)}>Cancel</Button>
+              <Button variant="primary" size="md" type="button" onClick={handleDecline} style={{ backgroundColor: brand.danger, borderColor: brand.danger }}>
+                Confirm Decline
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* MODAL 4: Printable Slip */}
       {selectedPass && (
-        <Modal
-          isOpen={Boolean(selectedPass)}
-          onClose={() => setSelectedPass(null)}
-          title="Official Campus Exit Clearance Pass"
-        >
+        <Modal isOpen={Boolean(selectedPass)} onClose={() => setSelectedPass(null)} title="Official Campus Gate Slip">
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-            <div
-              id="printable-gate-pass"
-              style={{
-                width: 320,
-                backgroundColor: '#ffffff',
-                border: '2px solid #0f172a',
-                borderRadius: 10,
-                padding: '16px 18px',
-                textAlign: 'center',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
-                boxSizing: 'border-box',
-                color: '#0f172a',
-              }}
-            >
-              {school.school_logo || school.left_logo ? (
-                <div style={{ height: 44, display: 'flex', justifyContent: 'center', marginBottom: 6 }}>
-                  <img
-                    src={school.school_logo || school.left_logo || ''}
-                    alt="School Logo"
-                    style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
-                  />
-                </div>
-              ) : (
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 4 }}>
-                  <Building2 size={24} color="#0284c7" />
-                </div>
-              )}
+            <div style={{ width: 300, backgroundColor: '#ffffff', border: '2px solid #0f172a', borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: '0.64rem', fontWeight: 800, color: '#64748b' }}>DEPARTMENT OF EDUCATION</div>
+              <div style={{ fontSize: '0.90rem', fontWeight: 900, color: '#0f172a', marginTop: 2 }}>{school.school_name || 'ATTENDSURE CAMPUS'}</div>
+              <div style={{ fontSize: '0.74rem', fontWeight: 800, color: brand.primary, marginTop: 2 }}>OFFICIAL GATE CLEARANCE SLIP</div>
+              <div style={{ fontSize: '0.66rem', color: '#64748b', fontFamily: 'monospace' }}>Pass #: {selectedPass.pass_number}</div>
 
-              <div style={{ fontSize: '0.64rem', fontWeight: 800, color: '#64748b', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-                {school.region ? `${school.region} • ` : ''}
-                {school.division || 'INSTITUTIONAL ADMINISTRATION'}
-              </div>
-              <div style={{ fontSize: '0.90rem', fontWeight: 900, color: '#0f172a', marginTop: 2, textTransform: 'uppercase' }}>
-                {school.school_name || 'ATTENDSURE CAMPUS PORTAL'}
-              </div>
-              <div style={{ fontSize: '0.74rem', fontWeight: 800, color: '#0284c7', marginTop: 3 }}>
-                CAMPUS GATE EXIT SLIP
-              </div>
-              <div style={{ fontSize: '0.66rem', color: '#64748b', fontWeight: 700, marginTop: 1, fontFamily: 'monospace' }}>
-                Pass #: {getPassNumber(selectedPass)}
+              <div style={{ borderTop: '1px dashed #cbd5e1', borderBottom: '1px dashed #cbd5e1', padding: '8px 0', margin: '8px 0' }}>
+                <div style={{ fontSize: '0.70rem', color: '#64748b' }}>Bearer Name</div>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f172a' }}>
+                  {selectedPass.bearer_type === 'STUDENT' ? selectedPass.student_name : selectedPass.faculty_name}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: 2 }}><strong>Reason:</strong> {selectedPass.reason}</div>
               </div>
 
-              <div style={{ borderTop: '1px dashed #cbd5e1', borderBottom: '1px dashed #cbd5e1', padding: '10px 0', margin: '10px 0' }}>
-                <div style={{ fontSize: '0.70rem', color: '#64748b' }}>Authorized Bearer</div>
-                <div style={{ fontSize: '1.02rem', fontWeight: 800, color: '#0f172a' }}>
-                  {getBearerName(selectedPass)}
-                </div>
-                <div style={{ fontSize: '0.74rem', color: '#475569', marginTop: 4 }}>
-                  <strong>Reason:</strong> {selectedPass.reason}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  margin: '8px auto',
-                  padding: 6,
-                  backgroundColor: '#ffffff',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 8,
-                  width: 120,
-                  height: 120,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
+              <div style={{ margin: '8px auto', width: 130, height: 130 }}>
                 <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(
-                    `ATTENDSURE-GATEPASS:${getPassNumber(selectedPass)}:${getBearerName(selectedPass)}`
-                  )}`}
-                  alt="Gate Pass QR"
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=${encodeURIComponent(`ATTENDSURE-GATEPASS:${selectedPass.pass_number}`)}`}
+                  alt="Pass QR"
+                  style={{ width: '100%', height: '100%' }}
                 />
               </div>
 
-              <div style={{ fontSize: '0.66rem', color: '#64748b' }}>
-                Scan at kiosk scanner or present to Gate Guard
-              </div>
-
-              <div style={{ marginTop: 10, textAlign: 'left', fontSize: '0.66rem', color: '#334155', borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
-                <div><strong>Valid From:</strong> {new Date(selectedPass.valid_from).toLocaleString()}</div>
-                <div><strong>Valid Until:</strong> {new Date(selectedPass.valid_to).toLocaleString()}</div>
-                <div><strong>Issued By:</strong> {selectedPass.issued_by_name || selectedPass.approved_by || school.principal_name || 'Administration'}</div>
-                <div>
-                  <strong>Status:</strong>{' '}
-                  <span style={{ fontWeight: 800, color: selectedPass.status === 'ACTIVE' ? '#059669' : '#dc2626' }}>
-                    {selectedPass.status}
-                  </span>
-                </div>
+              <div style={{ fontSize: '0.66rem', color: '#334155', textAlign: 'left', borderTop: '1px solid #e2e8f0', paddingTop: 6 }}>
+                <div><strong>Class Adviser / Issuer:</strong> {selectedPass.adviser_name || 'Adviser'}</div>
+                <div><strong>Valid To:</strong> {new Date(selectedPass.valid_to).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                <div><strong>Status:</strong> <span style={{ fontWeight: 800, color: selectedPass.status === 'ACTIVE' ? '#10b981' : '#f59e0b' }}>{selectedPass.status}</span></div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-              <Button variant="secondary" size="md" type="button" onClick={() => setSelectedPass(null)}>
-                Close
-              </Button>
-              <Button
-                variant="primary"
-                size="md"
-                type="button"
-                onClick={() => window.print()}
-                style={{ backgroundColor: brand.primary, borderColor: brand.primary }}
-              >
-                <Printer size={15} style={{ marginRight: 6 }} />
-                Print Gate Pass Slip
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <Button variant="secondary" size="md" type="button" onClick={() => setSelectedPass(null)}>Close</Button>
+              <Button variant="primary" size="md" type="button" onClick={() => window.print()} style={{ backgroundColor: brand.primary }}>
+                <Printer size={15} style={{ marginRight: 6 }} /> Print Slip
               </Button>
             </div>
           </div>
@@ -1408,12 +604,6 @@ export const GatePassesTab: React.FC = () => {
       )}
     </div>
   );
-};
-
-const statsGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
-  gap: 14,
 };
 
 export default GatePassesTab;

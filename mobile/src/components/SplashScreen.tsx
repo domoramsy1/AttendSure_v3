@@ -1,5 +1,6 @@
 /**
- * AttendSure - Mobile Splash Screen (Copied from Web App Layout)
+ * AttendSure - Mobile Splash Screen
+ * Uses vector SVG logo for crisp, zero-latency rendering.
  * File: mobile/src/components/SplashScreen.tsx
  */
 
@@ -16,11 +17,11 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import * as NativeSplashScreen from 'expo-splash-screen';
 import { getServerBaseUrl, setServerBaseUrl } from '../services/configService';
+import { AttendSureLogo } from '../branding/AttendSureLogo';
 
 interface SplashScreenProps {
   loading?: boolean;
@@ -28,13 +29,27 @@ interface SplashScreenProps {
   onFinish?: () => void;
 }
 
+// Cybersecurity: Prevent script or unsafe protocol injection into server address
+const isValidServerUrl = (url: string): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.trim().toLowerCase();
+  if (
+    clean.startsWith('javascript:') ||
+    clean.startsWith('data:') ||
+    clean.startsWith('file:') ||
+    clean.startsWith('vbscript:')
+  ) {
+    return false;
+  }
+  return clean.startsWith('http://') || clean.startsWith('https://');
+};
+
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   loading = false,
-  minDurationMs = 2000,
+  minDurationMs = 800,
   onFinish,
 }) => {
   const [canExit, setCanExit] = useState(false);
-  const [fading, setFading] = useState(false);
   const [hidden, setHidden] = useState(false);
 
   const opacityAnim = useRef(new Animated.Value(1)).current;
@@ -58,10 +73,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 
   useEffect(() => {
     if (!loading && canExit && !isHoldingSplashRef.current) {
-      setFading(true);
       Animated.timing(opacityAnim, {
         toValue: 0,
-        duration: 500,
+        duration: 350,
         useNativeDriver: true,
       }).start(() => {
         setHidden(true);
@@ -78,8 +92,17 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   };
 
   const saveServerAddress = async () => {
+    const cleanUrl = customServerUrl.trim();
+    if (!isValidServerUrl(cleanUrl)) {
+      Alert.alert(
+        'Invalid Address',
+        'Please enter a valid URL starting with http:// or https://'
+      );
+      return;
+    }
+
     try {
-      await setServerBaseUrl(customServerUrl);
+      await setServerBaseUrl(cleanUrl);
       Alert.alert('Saved', 'School server address updated successfully.');
       setShowToolsModal(false);
       isHoldingSplashRef.current = false;
@@ -102,6 +125,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             style={styles.toolsButton}
             onPress={openTools}
             activeOpacity={0.8}
+            accessibilityLabel="Configure server endpoint"
           >
             <View style={styles.toolsIconHalo}>
               <View style={styles.toolsIconCircle}>
@@ -111,35 +135,45 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* Center Product Emblem (Matches Web AttendSureBadge style) */}
+        {/* Center Product Emblem: Uses AttendSure SVG Logo */}
         <View style={styles.centerSection}>
           <View style={styles.emblemContainer}>
-            <Image
-              source={require('../../assets/splash.png')}
-              style={styles.emblemImage}
-              contentFit="contain"
-            />
+            <AttendSureLogo size={56} />
           </View>
           <Text style={styles.brandTitle}>AttendSure</Text>
         </View>
 
-        {/* Developer Corporate Signature at Bottom (Matches Web TechBlazerSignature style) */}
+        {/* Developer Corporate Signature at Bottom */}
         <View style={styles.footerSection}>
           <Text style={styles.signatureText}>System by TechBlazer</Text>
         </View>
 
         {/* Network & Server Tools Modal */}
-        <Modal visible={showToolsModal} transparent animationType="fade">
+        <Modal
+          visible={showToolsModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            setShowToolsModal(false);
+            isHoldingSplashRef.current = false;
+            if (onFinish) onFinish();
+          }}
+        >
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Network &amp; Server Tools</Text>
-              <Text style={styles.modalSubtitle}>Configure school server endpoint address</Text>
+              <View style={styles.modalHeaderRow}>
+                <Ionicons name="server-outline" size={20} color="#004b87" />
+                <Text style={styles.modalTitle}>Network &amp; Server Tools</Text>
+              </View>
+              <Text style={styles.modalSubtitle}>
+                Configure local or cloud school server address
+              </Text>
 
               <TextInput
                 style={styles.modalInput}
                 value={customServerUrl}
                 onChangeText={setCustomServerUrl}
-                placeholder="http://192.168.100.4:8000"
+                placeholder="http://192.168.1.100:8000"
                 placeholderTextColor="#94a3b8"
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -174,7 +208,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     zIndex: 99999,
     backgroundColor: '#ffffff',
   },
@@ -194,17 +231,17 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   toolsIconHalo: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(2, 132, 199, 0.1)',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(2, 132, 199, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   toolsIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#0284c7',
     alignItems: 'center',
     justifyContent: 'center',
@@ -212,6 +249,7 @@ const styles = StyleSheet.create({
   centerSection: {
     alignItems: 'center',
     justifyContent: 'center',
+    transform: [{ translateY: -16 }],
   },
   emblemContainer: {
     width: 96,
@@ -223,36 +261,32 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#e2e8f0',
     shadowColor: '#004b87',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
     elevation: 4,
-    marginBottom: 12,
+    marginBottom: 14,
     overflow: 'hidden',
   },
-  emblemImage: {
-    width: 64,
-    height: 64,
-  },
   brandTitle: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '900',
     color: '#003460',
-    letterSpacing: -0.2,
+    letterSpacing: -0.3,
   },
   footerSection: {
     alignItems: 'center',
-    paddingBottom: 22,
+    paddingBottom: 20,
   },
   signatureText: {
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 11.5,
+    fontWeight: '700',
     color: '#94a3b8',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
@@ -263,17 +297,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 16,
     padding: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   modalTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     color: '#0f172a',
   },
   modalSubtitle: {
-    fontSize: 11,
+    fontSize: 11.5,
     color: '#64748b',
-    marginTop: 2,
+    marginTop: 4,
     marginBottom: 14,
+    lineHeight: 16,
   },
   modalInput: {
     height: 44,

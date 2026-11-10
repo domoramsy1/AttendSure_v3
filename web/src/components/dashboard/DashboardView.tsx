@@ -1,6 +1,5 @@
 /**
  * AttendSure V3 - School Executive Dashboard & Telemetry Hub
- * Pure White Institutional Theme with Bento Quick-Action Launchpad & Right-Side Calendar Rail.
  * File: web/src/components/dashboard/DashboardView.tsx
  */
 
@@ -25,6 +24,8 @@ import {
   ChevronRight,
   Bell,
   Sparkles,
+  QrCode,
+  BookOpen,
 } from 'lucide-react';
 
 interface HourlyScanItem {
@@ -93,6 +94,7 @@ interface DashboardViewProps {
   userRole?: string;
   onGateStatusChange?: (online: boolean) => void;
   onManualRefresh?: () => void;
+  onNavigateTab?: (tab: string, report?: string) => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -100,6 +102,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   userRole,
   onGateStatusChange,
   onManualRefresh,
+  onNavigateTab,
 }) => {
   const { tokens, brand } = useTheme();
 
@@ -115,7 +118,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const effectiveRole = (userRole || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
-  const isAdmin = effectiveRole === 'ADMIN' || effectiveRole === 'PRINCIPAL';
+  const isAdmin = effectiveRole === 'ADMIN' || effectiveRole === 'SUPERADMIN' || effectiveRole === 'PRINCIPAL';
+  const isFaculty = effectiveRole === 'FACULTY';
+  const isGuard = effectiveRole === 'GUARD';
 
   const [data, setData] = useState<DashboardMetrics>({
     total_students: 0,
@@ -143,6 +148,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const isOnline = isServerOnline && !fetchFailed;
 
   const navigateTo = (detail: string | { tab: string; report?: string }) => {
+    const targetTab = typeof detail === 'string' ? detail : detail.tab;
+    const targetReport = typeof detail === 'string' ? undefined : detail.report;
+
+    if (onNavigateTab) {
+      onNavigateTab(targetTab, targetReport);
+    }
     window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail }));
   };
 
@@ -455,7 +466,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* 3. Bento Quick-Action Launchpad */}
+        {/* 3. Quick Action Center */}
         <div
           style={{
             backgroundColor: '#FFFFFF',
@@ -474,7 +485,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
             <div>
               <h3 style={{ margin: 0, fontSize: '0.94rem', fontWeight: 800, color: tokens.textPrimary }}>
-                Quick Action Center
+                Quick Action
               </h3>
               <span style={{ fontSize: '0.70rem', color: tokens.textMuted }}>
                 Immediate 1-click shortcuts for daily school operations
@@ -489,101 +500,178 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               gap: 12,
             }}
           >
+            {/* 1. Attendance Scanner (Faculty & Admin) */}
+            {!isGuard && (
+              <button
+                type="button"
+                onClick={() => navigateTo('classroom-scanner')}
+                style={actionTileStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = brand.primary;
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 75, 135, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = tokens.borderSubtle;
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <div style={{ ...actionIconFrame, backgroundColor: tokens.primaryLight, color: brand.primary }}>
+                  <QrCode size={20} />
+                </div>
+                <div>
+                  <div style={actionTileTitle}>Attendance Scanner</div>
+                  <div style={actionTileDesc}>Scan student QR or barcode card</div>
+                </div>
+              </button>
+            )}
+
+            {/* 2. Issue Gate Pass (All Users) */}
             <button
               type="button"
               onClick={() => navigateTo('gate-passes')}
               style={actionTileStyle}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = brand.primary;
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 75, 135, 0.1)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = tokens.borderSubtle;
+                e.currentTarget.style.boxShadow = 'none';
+              }}
             >
               <div style={{ ...actionIconFrame, backgroundColor: 'rgba(0, 75, 135, 0.1)', color: brand.primary }}>
                 <Ticket size={20} />
               </div>
               <div>
-                <div style={actionTileTitle}>Issue Gate Pass</div>
-                <div style={actionTileDesc}>Authorize student or faculty exit</div>
+                <div style={actionTileTitle}>{isFaculty ? 'Issue Student Permit' : 'Gate Passes'}</div>
+                <div style={actionTileDesc}>Student exit &amp; faculty travel</div>
               </div>
             </button>
 
-            <button
-              type="button"
-              onClick={() => navigateTo({ tab: 'reports', report: 'sf2' })}
-              style={actionTileStyle}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
-            >
-              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(16, 185, 129, 0.1)', color: brand.success }}>
-                <CalendarCheck size={20} />
-              </div>
-              <div>
-                <div style={actionTileTitle}>Daily Attendance (SF2)</div>
-                <div style={actionTileDesc}>Official DepEd attendance register</div>
-              </div>
-            </button>
+            {/* 3. Daily Attendance SF2 (Faculty & Admin) */}
+            {!isGuard && (
+              <button
+                type="button"
+                onClick={() => navigateTo({ tab: 'reports', report: 'sf2' })}
+                style={actionTileStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = brand.primary;
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = tokens.borderSubtle;
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(16, 185, 129, 0.1)', color: brand.success }}>
+                  <CalendarCheck size={20} />
+                </div>
+                <div>
+                  <div style={actionTileTitle}>Daily Attendance (SF2)</div>
+                  <div style={actionTileDesc}>Official DepEd attendance register</div>
+                </div>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => navigateTo('dtr')}
-              style={actionTileStyle}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
-            >
-              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(2, 132, 199, 0.1)', color: brand.secondary }}>
-                <Clock size={20} />
-              </div>
-              <div>
-                <div style={actionTileTitle}>Civil Service DTR</div>
-                <div style={actionTileDesc}>Inspect and endorse Form 48 hours</div>
-              </div>
-            </button>
+            {/* 4. Civil Service DTR (Faculty & Admin) */}
+            {!isGuard && (
+              <button
+                type="button"
+                onClick={() => navigateTo('dtr')}
+                style={actionTileStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = brand.primary;
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(2, 132, 199, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = tokens.borderSubtle;
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(2, 132, 199, 0.1)', color: brand.secondary }}>
+                  <Clock size={20} />
+                </div>
+                <div>
+                  <div style={actionTileTitle}>Civil Service DTR</div>
+                  <div style={actionTileDesc}>Inspect and endorse Form 48 hours</div>
+                </div>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => navigateTo('sms')}
-              style={actionTileStyle}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
-            >
-              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(245, 158, 11, 0.1)', color: brand.warning }}>
-                <Send size={20} />
-              </div>
-              <div>
-                <div style={actionTileTitle}>SMS Parent Alert</div>
-                <div style={actionTileDesc}>Send emergency broadcast to parents</div>
-              </div>
-            </button>
+            {/* 5. Live Gate Monitor (Guards & Admins) */}
+            {(isAdmin || isGuard) && (
+              <button
+                type="button"
+                onClick={() => navigateTo('gate-logs')}
+                style={actionTileStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = brand.primary;
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(124, 58, 237, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = tokens.borderSubtle;
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(124, 58, 237, 0.1)', color: '#7c3aed' }}>
+                  <Scan size={20} />
+                </div>
+                <div>
+                  <div style={actionTileTitle}>Live Gate Monitor</div>
+                  <div style={actionTileDesc}>Real-time arrival &amp; departure taps</div>
+                </div>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => navigateTo('gate-logs')}
-              style={actionTileStyle}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
-            >
-              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(124, 58, 237, 0.1)', color: '#7c3aed' }}>
-                <Scan size={20} />
-              </div>
-              <div>
-                <div style={actionTileTitle}>Live Gate Monitor</div>
-                <div style={actionTileDesc}>Real-time arrival &amp; departure taps</div>
-              </div>
-            </button>
+            {/* 6. Class Lists / My Classes (Faculty & Admin) */}
+            {!isGuard && (
+              <button
+                type="button"
+                onClick={() => navigateTo(isFaculty ? 'my-classes' : 'students')}
+                style={actionTileStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = brand.primary;
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(100, 116, 139, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = tokens.borderSubtle;
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(100, 116, 139, 0.1)', color: tokens.textSecondary }}>
+                  {isFaculty ? <BookOpen size={20} /> : <Users size={20} />}
+                </div>
+                <div>
+                  <div style={actionTileTitle}>{isFaculty ? 'My Teaching Classes' : 'Class Lists'}</div>
+                  <div style={actionTileDesc}>Verify enrolled students by section</div>
+                </div>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => navigateTo(effectiveRole === 'FACULTY' ? 'my-classes' : 'students')}
-              style={actionTileStyle}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = brand.primary)}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.borderSubtle)}
-            >
-              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(100, 116, 139, 0.1)', color: tokens.textSecondary }}>
-                <Users size={20} />
-              </div>
-              <div>
-                <div style={actionTileTitle}>Class Lists</div>
-                <div style={actionTileDesc}>Verify enrolled students by section</div>
-              </div>
-            </button>
+            {/* 7. SMS Broadcast (Admin Only) */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => navigateTo('sms')}
+                style={actionTileStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = brand.primary;
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = tokens.borderSubtle;
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(245, 158, 11, 0.1)', color: brand.warning }}>
+                  <Send size={20} />
+                </div>
+                <div>
+                  <div style={actionTileTitle}>SMS Parent Alert</div>
+                  <div style={actionTileDesc}>Send emergency broadcast to parents</div>
+                </div>
+              </button>
+            )}
           </div>
         </div>
 
@@ -860,7 +948,9 @@ const actionTileStyle: React.CSSProperties = {
   backgroundColor: '#FFFFFF',
   cursor: 'pointer',
   textAlign: 'left',
-  transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+  width: '100%',
+  boxSizing: 'border-box',
+  transition: 'border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease',
 };
 
 const actionIconFrame: React.CSSProperties = {

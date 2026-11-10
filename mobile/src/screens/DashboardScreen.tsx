@@ -1,4 +1,4 @@
-// D:\AttendSure_V3\mobile\src\screens\HomeScreen.tsx
+// D:\AttendSure_V3\mobile\src\screens\DashboardScreen.tsx
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
@@ -170,7 +170,7 @@ const getMindfulGreeting = (): { greeting: string; thought: string } => {
   };
 };
 
-export const HomeScreen: React.FC = () => {
+export const DashboardScreen: React.FC = () => {
   const { user, refreshUser } = useAuth();
 
   const [sections, setSections] = useState<SectionItem[]>([]);
@@ -1683,4 +1683,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default HomeScreen;
+export default DashboardScreen;

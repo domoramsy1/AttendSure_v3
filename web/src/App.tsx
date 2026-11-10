@@ -42,11 +42,13 @@ import {
   SmsTab,
 } from './components/tabs';
 import { MyAssignedClassesTab } from './components/tabs/MyAssignedClassesTab';
+import { ClassroomScanner } from './components/scanner/ClassroomScanner';
 
 // Strict Role-Based Access Control (RBAC) Permission Map
 export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   ADMIN: [
     'dashboard',
+    'classroom-scanner',
     'gate-logs',
     'students',
     'facultys',
@@ -62,6 +64,7 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   ],
   PRINCIPAL: [
     'dashboard',
+    'classroom-scanner',
     'gate-logs',
     'students',
     'facultys',
@@ -76,6 +79,7 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   ],
   DEPT_HEAD: [
     'dashboard',
+    'classroom-scanner',
     'gate-logs',
     'students',
     'facultys',
@@ -86,6 +90,7 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   ],
   FACULTY: [
     'dashboard',
+    'classroom-scanner',
     'my-classes',
     'students',
     'dtr',
@@ -200,8 +205,11 @@ const AppContent: React.FC = () => {
     if (canTeach && !tabs.includes('my-classes') && userRole !== 'GUARD') {
       tabs.push('my-classes');
     }
+    if (canTeach && !tabs.includes('classroom-scanner') && userRole !== 'GUARD') {
+      tabs.push('classroom-scanner');
+    }
     if (userRole === 'GUARD') {
-      return tabs.filter((t) => t !== 'my-classes');
+      return tabs.filter((t) => t !== 'my-classes' && t !== 'classroom-scanner');
     }
     return tabs;
   }, [userRole, canTeach]);
@@ -228,6 +236,31 @@ const AppContent: React.FC = () => {
     setCanTeach(false);
     setIsCompleteProfileModalOpen(false);
   }, []);
+
+  const handleTabSelection = useCallback((tab: NavItemKey) => {
+    if (allowedTabs.includes(tab)) setActiveTab(tab);
+  }, [allowedTabs]);
+
+  // Listener for 1-click Quick Action events
+  useEffect(() => {
+    const handleNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<string | { tab: string; report?: string }>;
+      const detail = customEvent.detail;
+      if (!detail) return;
+
+      if (typeof detail === 'string') {
+        handleTabSelection(detail as NavItemKey);
+      } else if (typeof detail === 'object' && detail.tab) {
+        handleTabSelection(detail.tab as NavItemKey);
+        if (detail.report && ['sf1', 'sf2', 'sf4'].includes(detail.report)) {
+          setSelectedReport(detail.report as 'sf1' | 'sf2' | 'sf4');
+        }
+      }
+    };
+
+    window.addEventListener('attendsure:navigate', handleNavigate);
+    return () => window.removeEventListener('attendsure:navigate', handleNavigate);
+  }, [handleTabSelection]);
 
   useEffect(() => {
     if (!session?.token) return;
@@ -303,16 +336,13 @@ const AppContent: React.FC = () => {
     }
   }, []);
 
-  const handleTabSelection = (tab: NavItemKey) => {
-    if (allowedTabs.includes(tab)) setActiveTab(tab);
-  };
-
   const getPageTitle = (): string => {
     if (!isAllowedToAccess) return 'Access Restricted';
     const currentSchool = school.school_name ? `${school.school_name} ` : '';
 
     switch (activeTab) {
       case 'dashboard': return `${currentSchool}Dashboard`;
+      case 'classroom-scanner': return 'Classroom Attendance Scanner';
       case 'my-classes': return 'Classes';
       case 'gate-logs': return 'Gate Logs';
       case 'students': return 'Students & ID Cards';
@@ -357,7 +387,26 @@ const AppContent: React.FC = () => {
 
     switch (activeTab) {
       case 'dashboard':
-        return <DashboardView isServerOnline={isServerOnline} userRole={userRole} onGateStatusChange={setIsGateOnline} onManualRefresh={retryConnection} />;
+        return (
+          <DashboardView
+            isServerOnline={isServerOnline}
+            userRole={userRole}
+            onGateStatusChange={setIsGateOnline}
+            onManualRefresh={retryConnection}
+            onNavigateTab={(tab, report) => {
+              handleTabSelection(tab as NavItemKey);
+              if (report && ['sf1', 'sf2', 'sf4'].includes(report)) {
+                setSelectedReport(report as 'sf1' | 'sf2' | 'sf4');
+              }
+            }}
+          />
+        );
+      case 'classroom-scanner':
+        return (
+          <div style={{ padding: 'clamp(14px, 2vw, 24px)', width: '100%', boxSizing: 'border-box' }}>
+            <ClassroomScanner />
+          </div>
+        );
       case 'my-classes': return <MyAssignedClassesTab />;
       case 'gate-logs': return <GateLogsTab />;
       case 'reports':
@@ -396,7 +445,6 @@ const AppContent: React.FC = () => {
           }}
         />
       ) : (
-        /* Padded App Shell: 16px margins from all 4 screen edges */
         <div
           style={{
             display: 'flex',
@@ -481,7 +529,7 @@ const AppContent: React.FC = () => {
               )}
             </main>
 
-            {/* Institutional Telemetry Footer with Lucide Icons */}
+            {/* Institutional Telemetry Footer */}
             <footer
               style={{
                 height: 38,

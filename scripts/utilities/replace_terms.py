@@ -43,7 +43,7 @@ REPLACEMENTS = {
     os.path.normpath("mobile/src/components/reports/SF2ReportView.tsx"): [
         ("isClassListEmpty", "isListEmpty"),
     ],
-    os.path.normpath("mobile/src/screens/HomeScreen.tsx"): [
+    os.path.normpath("mobile/src/screens/DashboardScreen.tsx"): [
         ("interface StudentClassListItem", "interface StudentItem"),
         ("StudentClassListItem", "StudentItem"),
         ("interface SectionRoster", "interface SectionItem"),
