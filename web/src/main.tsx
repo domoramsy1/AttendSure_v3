@@ -1,4 +1,7 @@
-//D:\AttendSure_V3\web\src\main.tsx
+/**
+ * AttendSure V3 - Application Entry Point
+ * File: web/src/main.tsx
+ */
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -6,50 +9,66 @@ import App from './App';
 import './index.css';
 import appLogoSrc from './assets/attendsure-logo.svg';
 
-// Dynamically generate a high-contrast PNG favicon from attendsure-logo.svg
+// Dynamically generate a high-contrast PNG favicon from SVG emblem
 const applyAppFavicon = () => {
-  const img = new Image();
-  img.src = appLogoSrc;
+  try {
+    const img = new Image();
+    img.src = appLogoSrc;
 
-  img.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-    // Draw white circular background badge for high contrast on dark tabs
-    ctx.beginPath();
-    ctx.arc(32, 32, 30, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#e2e8f0';
-    ctx.stroke();
+        // Circular background badge for clear contrast on dark browser tabs
+        ctx.beginPath();
+        ctx.arc(32, 32, 30, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.stroke();
 
-    // Draw the AttendSure arch emblem centered
-    ctx.drawImage(img, 10, 10, 44, 44);
+        // Render AttendSure emblem centered
+        ctx.drawImage(img, 10, 10, 44, 44);
 
-    // Convert to PNG data URI
-    const pngDataUrl = canvas.toDataURL('image/png');
+        const pngDataUrl = canvas.toDataURL('image/png');
 
-    // Remove any existing broken icon links
-    const existingIcons = document.querySelectorAll("link[rel*='icon']");
-    existingIcons.forEach((el) => el.remove());
+        // Safely remove existing icon links to prevent duplicate DOM tags
+        const existingIcons = document.querySelectorAll("link[rel*='icon']");
+        existingIcons.forEach((el) => el.remove());
 
-    // Inject fresh link tag
-    const link = document.createElement('link');
-    link.type = 'image/png';
-    link.rel = 'icon';
-    link.href = pngDataUrl;
-    document.head.appendChild(link);
-  };
+        // Inject new favicon link
+        const link = document.createElement('link');
+        link.type = 'image/png';
+        link.rel = 'icon';
+        link.href = pngDataUrl;
+        document.head.appendChild(link);
+      } catch (err) {
+        // Fallback silently if canvas operations fail
+      }
+    };
+
+    img.onerror = () => {
+      // Keep existing default favicon if image load fails
+    };
+  } catch {
+    // Top-level error catch prevents favicon logic from blocking UI render
+  }
 };
 
+// Apply high-contrast favicon
 applyAppFavicon();
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+// Mount root React application
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+}

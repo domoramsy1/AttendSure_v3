@@ -9,9 +9,11 @@ import { LoginView } from './components/auth/LoginView';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { Sidebar, type NavItemKey } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
+import Footer from './components/layout/Footer';
 import { ProfileModal, type ProfileUpdatePayload } from './components/modals/ProfileModal';
 import { CompleteProfileModal, type CompletedProfileUser } from './components/modals/CompleteProfileModal';
 import { DashboardView } from './components/dashboard/DashboardView';
+import { AdvisorySubjectMonitor } from './components/advisory/AdvisorySubjectMonitor';
 import { SchoolProvider, useSchool } from './context/SchoolContext';
 import { AlertProvider } from './context/AlertContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
@@ -19,21 +21,17 @@ import type { UserSession } from './types/section';
 import {
   ShieldAlert,
   ArrowLeft,
-  Database,
-  Radio,
-  Building2,
+  WifiOff,
 } from 'lucide-react';
 
 // Modular Tab Views
 import {
-  GateLogsTab,
   SF1ReportTab,
   SF2ReportTab,
   SF4ReportTab,
   StudentsTab,
   FacultyTab,
   DTRTab,
-  ScannersTab,
   GatePassesTab,
   SchedulesTab,
   GeofenceTab,
@@ -44,12 +42,13 @@ import {
 import { MyAssignedClassesTab } from './components/tabs/MyAssignedClassesTab';
 import { ClassroomScanner } from './components/scanner/ClassroomScanner';
 
-// Strict Role-Based Access Control (RBAC) Permission Map
+// Role-Based Access Control (RBAC) Permissions Map (Classroom & Loafing Scope)
 export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   ADMIN: [
     'dashboard',
     'classroom-scanner',
-    'gate-logs',
+    'my-classes',
+    'advisory-monitor',
     'students',
     'facultys',
     'users',
@@ -57,7 +56,6 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'schedules',
     'dtr',
     'geofence',
-    'scanners',
     'sms',
     'reports',
     'settings',
@@ -65,14 +63,14 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   PRINCIPAL: [
     'dashboard',
     'classroom-scanner',
-    'gate-logs',
+    'my-classes',
+    'advisory-monitor',
     'students',
     'facultys',
     'gate-passes',
     'schedules',
     'dtr',
     'geofence',
-    'scanners',
     'sms',
     'reports',
     'settings',
@@ -80,7 +78,8 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
   DEPT_HEAD: [
     'dashboard',
     'classroom-scanner',
-    'gate-logs',
+    'my-classes',
+    'advisory-monitor',
     'students',
     'facultys',
     'gate-passes',
@@ -92,42 +91,35 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'dashboard',
     'classroom-scanner',
     'my-classes',
+    'advisory-monitor',
     'students',
     'dtr',
     'gate-passes',
     'reports',
   ],
-  GUARD: [
-    'dashboard',
-    'gate-logs',
-    'gate-passes',
-  ],
 };
 
-// ============================================================================
-// ATTENDSURE TELEMETRY VEIL (Activates only if network fails)
-// ============================================================================
-
-interface TelemetrySyncVeilProps {
+interface OfflineNoticeOverlayProps {
   onManualRetry: () => void;
   isChecking: boolean;
 }
 
-const TelemetrySyncVeil: React.FC<TelemetrySyncVeilProps> = ({ onManualRetry, isChecking }) => {
+const OfflineNoticeOverlay: React.FC<OfflineNoticeOverlayProps> = ({ onManualRetry, isChecking }) => {
   return (
     <div
       style={{
         position: 'absolute',
         inset: 0,
         zIndex: 35,
-        backgroundColor: 'rgba(7, 13, 24, 0.70)',
-        backdropFilter: 'blur(6px) grayscale(90%)',
-        WebkitBackdropFilter: 'blur(6px) grayscale(90%)',
+        backgroundColor: 'rgba(15, 23, 42, 0.70)',
+        backdropFilter: 'blur(5px)',
+        WebkitBackdropFilter: 'blur(5px)',
         display: 'flex',
         flexDirection: 'column',
-        padding: '22px 26px',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
         boxSizing: 'border-box',
-        overflow: 'hidden',
         userSelect: 'none',
       }}
       aria-busy="true"
@@ -135,33 +127,27 @@ const TelemetrySyncVeil: React.FC<TelemetrySyncVeilProps> = ({ onManualRetry, is
     >
       <div
         style={{
-          alignSelf: 'center',
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 12,
-          padding: '8px 18px',
+          gap: 10,
+          padding: '10px 20px',
           borderRadius: 9999,
-          backgroundColor: '#0E1729',
-          border: '1px solid rgba(0, 75, 135, 0.45)',
-          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.45)',
-          marginBottom: 22,
+          backgroundColor: '#0f172a',
+          border: '1px solid rgba(56, 189, 248, 0.4)',
+          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.4)',
           cursor: 'pointer',
         }}
         onClick={onManualRetry}
-        title="Click to retry connection"
+        title="Click to reconnect"
       >
-        <Radio size={14} color="#38bdf8" />
-        <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#f8fafc' }}>
-          {isChecking ? 'Reconnecting to AttendSure Server...' : 'Server Unreachable | Click to Reconnect'}
+        <WifiOff size={16} color="#38bdf8" />
+        <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#f8fafc' }}>
+          {isChecking ? 'Connecting to school system...' : 'System offline. Click to reconnect.'}
         </span>
       </div>
     </div>
   );
 };
-
-// ============================================================================
-// MAIN APPLICATION CONTENT
-// ============================================================================
 
 const AppContent: React.FC = () => {
   const { school, loading: isSchoolLoading } = useSchool();
@@ -172,8 +158,16 @@ const AppContent: React.FC = () => {
     const username = localStorage.getItem('attendsure_username');
     const faculty_name = localStorage.getItem('attendsure_faculty_name');
     const role = localStorage.getItem('attendsure_role');
+    const user_id = Number(localStorage.getItem('attendsure_user_id') || 0);
+
     return token
-      ? { token, username: username || '', faculty_name: faculty_name || '', role: role || '' }
+      ? {
+          user_id,
+          token,
+          username: username || '',
+          faculty_name: faculty_name || username || 'Faculty User',
+          role: role || 'FACULTY',
+        }
       : null;
   });
 
@@ -192,7 +186,6 @@ const AppContent: React.FC = () => {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
 
   const [isServerOnline, setIsServerOnline] = useState<boolean>(true);
-  const [isGateOnline, setIsGateOnline] = useState<boolean>(false);
   const [isCheckingServer, setIsCheckingServer] = useState<boolean>(false);
 
   const userRole = (session?.role || '').toUpperCase();
@@ -202,14 +195,14 @@ const AppContent: React.FC = () => {
     const baseAllowed = BASE_ROLE_PERMISSIONS[userRole] || BASE_ROLE_PERMISSIONS['FACULTY'];
     const tabs = [...baseAllowed];
 
-    if (canTeach && !tabs.includes('my-classes') && userRole !== 'GUARD') {
+    if (canTeach && !tabs.includes('my-classes')) {
       tabs.push('my-classes');
     }
-    if (canTeach && !tabs.includes('classroom-scanner') && userRole !== 'GUARD') {
+    if (canTeach && !tabs.includes('classroom-scanner')) {
       tabs.push('classroom-scanner');
     }
-    if (userRole === 'GUARD') {
-      return tabs.filter((t) => t !== 'my-classes' && t !== 'classroom-scanner');
+    if (canTeach && !tabs.includes('advisory-monitor')) {
+      tabs.push('advisory-monitor');
     }
     return tabs;
   }, [userRole, canTeach]);
@@ -229,6 +222,7 @@ const AppContent: React.FC = () => {
     localStorage.removeItem('attendsure_username');
     localStorage.removeItem('attendsure_faculty_name');
     localStorage.removeItem('attendsure_role');
+    localStorage.removeItem('attendsure_user_id');
     localStorage.removeItem('attendsure_user_photo');
     localStorage.removeItem('attendsure_can_teach');
     setSession(null);
@@ -241,7 +235,6 @@ const AppContent: React.FC = () => {
     if (allowedTabs.includes(tab)) setActiveTab(tab);
   }, [allowedTabs]);
 
-  // Listener for 1-click Quick Action events
   useEffect(() => {
     const handleNavigate = (e: Event) => {
       const customEvent = e as CustomEvent<string | { tab: string; report?: string }>;
@@ -276,6 +269,7 @@ const AppContent: React.FC = () => {
         const photo = res.data.photo || null;
         const name: string = String(res.data.full_name || res.data.username || '').trim();
         const role = (res.data.role || res.data.system_role || session.role || 'FACULTY').toUpperCase();
+        const userId = Number(res.data.id || res.data.user_id || 0);
         const isCompleted = res.data.is_profile_completed ?? true;
         const canTeachFlag = Boolean(
           res.data.can_teach ||
@@ -294,6 +288,7 @@ const AppContent: React.FC = () => {
 
         if (name) localStorage.setItem('attendsure_faculty_name', name);
         if (role) localStorage.setItem('attendsure_role', role);
+        if (userId) localStorage.setItem('attendsure_user_id', String(userId));
 
         setCanTeach(canTeachFlag);
         localStorage.setItem('attendsure_can_teach', String(canTeachFlag));
@@ -303,7 +298,14 @@ const AppContent: React.FC = () => {
         }
 
         setSession((prev) =>
-          prev ? { ...prev, faculty_name: name || prev.faculty_name, role: role || prev.role } : null
+          prev
+            ? {
+                ...prev,
+                user_id: userId || prev.user_id,
+                faculty_name: name || prev.faculty_name,
+                role: role || prev.role,
+              }
+            : null
         );
       })
       .catch((err) => {
@@ -343,23 +345,22 @@ const AppContent: React.FC = () => {
     switch (activeTab) {
       case 'dashboard': return `${currentSchool}Dashboard`;
       case 'classroom-scanner': return 'Classroom Attendance Scanner';
-      case 'my-classes': return 'Classes';
-      case 'gate-logs': return 'Gate Logs';
-      case 'students': return 'Students & ID Cards';
+      case 'my-classes': return 'My Classes';
+      case 'advisory-monitor': return 'Classroom Attendance & Loafing Monitor';
+      case 'students': return 'Student Profiles & IDs';
       case 'facultys': return 'Faculty & Staff Directory';
-      case 'users': return 'Users & Roles';
-      case 'gate-passes': return 'Gate Passes & Exit Permits';
+      case 'users': return 'User Accounts & Roles';
+      case 'gate-passes': return 'Classroom Exit Passes';
       case 'schedules': return 'Class Schedules & Sections';
-      case 'dtr': return 'Faculty Daily Time Records (DTR)';
-      case 'geofence': return 'Geofence Boundary';
-      case 'scanners': return 'Gate Scanners & Readers';
-      case 'sms': return 'SMS & Hardware Outbox';
+      case 'dtr': return 'Daily Time Records (DTR)';
+      case 'geofence': return 'Campus Boundary';
+      case 'sms': return 'Parent Text Messages (SMS)';
       case 'reports':
         if (selectedReport === 'sf1') return 'School Register (Form 1)';
         if (selectedReport === 'sf2') return 'Daily Attendance Register (Form 2)';
         return "Monthly Learner's Movement and Attendance (Form 4)";
-      case 'settings': return 'School & Institutional Settings';
-      default: return 'AttendSure Management System';
+      case 'settings': return 'School Settings';
+      default: return 'AttendSure System';
     }
   };
 
@@ -391,7 +392,6 @@ const AppContent: React.FC = () => {
           <DashboardView
             isServerOnline={isServerOnline}
             userRole={userRole}
-            onGateStatusChange={setIsGateOnline}
             onManualRefresh={retryConnection}
             onNavigateTab={(tab, report) => {
               handleTabSelection(tab as NavItemKey);
@@ -403,12 +403,17 @@ const AppContent: React.FC = () => {
         );
       case 'classroom-scanner':
         return (
-          <div style={{ padding: 'clamp(14px, 2vw, 24px)', width: '100%', boxSizing: 'border-box' }}>
+          <div style={{ padding: 'clamp(12px, 2vw, 20px)', width: '100%', boxSizing: 'border-box' }}>
             <ClassroomScanner />
           </div>
         );
       case 'my-classes': return <MyAssignedClassesTab />;
-      case 'gate-logs': return <GateLogsTab />;
+      case 'advisory-monitor':
+        return (
+          <div style={{ padding: 'clamp(12px, 2vw, 20px)', width: '100%', boxSizing: 'border-box' }}>
+            <AdvisorySubjectMonitor />
+          </div>
+        );
       case 'reports':
         return (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
@@ -420,14 +425,13 @@ const AppContent: React.FC = () => {
       case 'students': return <StudentsTab />;
       case 'facultys': return <FacultyTab />;
       case 'dtr': return <DTRTab />;
-      case 'scanners': return <ScannersTab />;
       case 'sms': return <SmsTab />;
       case 'gate-passes': return <GatePassesTab />;
       case 'schedules': return <SchedulesTab />;
       case 'geofence': return <GeofenceTab />;
       case 'users': return <UsersTab />;
       case 'settings': return <SettingsTab />;
-      default: return <DashboardView isServerOnline={isServerOnline} onGateStatusChange={setIsGateOnline} onManualRefresh={retryConnection} />;
+      default: return <DashboardView isServerOnline={isServerOnline} onManualRefresh={retryConnection} />;
     }
   };
 
@@ -449,18 +453,18 @@ const AppContent: React.FC = () => {
           style={{
             display: 'flex',
             height: '100vh',
-            width: '100vw',
-            maxWidth: '100vw',
+            width: '100%',
+            maxWidth: '100%',
             overflow: 'hidden',
-            backgroundColor: tokens.bgApp,
-            padding: '16px',
-            gap: '16px',
+            backgroundColor: tokens.bgApp || '#f1f5f9',
+            padding: 'clamp(8px, 1.2vw, 16px)',
+            gap: 'clamp(8px, 1.2vw, 16px)',
             boxSizing: 'border-box',
             textAlign: 'left',
             transition: 'background-color 0.2s ease',
           }}
         >
-          {/* Rounded Floating Sidebar Card */}
+          {/* Floating Sidebar */}
           <div
             style={{
               height: '100%',
@@ -489,13 +493,14 @@ const AppContent: React.FC = () => {
             />
           </div>
 
-          {/* Rounded Floating Main Content Card */}
+          {/* Floating Main Content Card */}
           <div
             style={{
               flex: 1,
               display: 'flex',
               flexDirection: 'column',
               minWidth: 0,
+              minHeight: 0,
               height: '100%',
               borderRadius: 16,
               backgroundColor: tokens.bgSurface,
@@ -508,7 +513,7 @@ const AppContent: React.FC = () => {
           >
             <Header
               title={getPageTitle()}
-              isGateNodeOnline={isServerOnline && isGateOnline}
+              isGateNodeOnline={isServerOnline}
               session={session}
               userPhoto={userPhoto}
               schoolName={school.school_name}
@@ -519,65 +524,46 @@ const AppContent: React.FC = () => {
               onOpenProfile={() => setIsProfileModalOpen(true)}
             />
 
-            <main style={{ flex: 1, minWidth: 0, overflowY: activeTab === 'dashboard' || activeTab === 'reports' ? 'hidden' : 'auto', overflowX: 'hidden', position: 'relative', backgroundColor: tokens.bgSurfaceSubtle }}>
-              <div style={{ height: '100%', width: '100%', filter: !isServerOnline ? 'grayscale(90%) blur(3px) opacity(0.30)' : 'none', pointerEvents: !isServerOnline ? 'none' : 'auto', userSelect: !isServerOnline ? 'none' : 'auto', transition: 'filter 0.25s ease' }}>
+            <main
+              style={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: 0,
+                overflowY: activeTab === 'dashboard' || activeTab === 'reports' ? 'hidden' : 'auto',
+                overflowX: 'hidden',
+                position: 'relative',
+                backgroundColor: tokens.bgSurfaceSubtle,
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  width: '100%',
+                  height: '100%',
+                  filter: !isServerOnline ? 'grayscale(90%) blur(3px) opacity(0.30)' : 'none',
+                  pointerEvents: !isServerOnline ? 'none' : 'auto',
+                  userSelect: !isServerOnline ? 'none' : 'text',
+                  transition: 'filter 0.25s ease',
+                }}
+              >
                 {renderActiveTabContent()}
               </div>
 
               {!isServerOnline && (
-                <TelemetrySyncVeil onManualRetry={retryConnection} isChecking={isCheckingServer} />
+                <OfflineNoticeOverlay onManualRetry={retryConnection} isChecking={isCheckingServer} />
               )}
             </main>
 
-            {/* Institutional Telemetry Footer */}
-            <footer
-              style={{
-                height: 38,
-                minHeight: 38,
-                backgroundColor: tokens.bgSurface,
-                borderTop: `1px solid ${tokens.borderSubtle}`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '0 24px',
-                fontSize: '0.74rem',
-                color: tokens.textSecondary,
-                boxSizing: 'border-box',
-                userSelect: 'none',
-                transition: 'background-color 0.2s ease, border-color 0.2s ease',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Building2 size={13} color={brand.primary} />
-                <span style={{ fontWeight: 700, color: tokens.textPrimary }}>
-                  School ID: <span style={{ fontFamily: 'monospace' }}>{school.school_id || '55555'}</span>
-                </span>
-                {school.division && (
-                  <>
-                    <span style={{ color: tokens.borderSubtle }}>|</span>
-                    <span style={{ color: tokens.textMuted }}>{school.division}</span>
-                  </>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: isServerOnline ? brand.success : tokens.textMuted, fontWeight: 600 }}>
-                  <Database size={12} />
-                  <span>{isServerOnline ? 'Database Live' : 'Reconnecting...'}</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: isGateOnline ? brand.primary : brand.danger, fontWeight: 600 }}>
-                  <Radio size={12} />
-                  <span>{isGateOnline ? 'Gate Live' : 'Gate Standby'}</span>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: tokens.textMuted }}>
-                <span>&copy; 2026 AttendSure | Developed by</span>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <strong style={{ color: tokens.textPrimary, letterSpacing: '0.04em' }}>TECHBLAZER</strong>
-                </div>
-              </div>
-            </footer>
+            <Footer
+              schoolName={school.school_name}
+              schoolId={school.school_id}
+              divisionOrCity={school.division}
+              isDatabaseConnected={isServerOnline}
+              isGateSystemOnline={isServerOnline}
+            />
           </div>
 
           <ProfileModal

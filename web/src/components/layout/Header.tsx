@@ -1,6 +1,5 @@
 /**
- * AttendSure V3 - Minimalist Institutional Header (Pure White Theme)
- * Pure Database Binding with Zero Hardcoded or Mock Notifications.
+ * AttendSure V3 - Main Header
  * File: web/src/components/layout/Header.tsx
  */
 
@@ -76,7 +75,7 @@ interface NotificationItem {
   message: string;
   type: 'GATE' | 'CLASS' | 'SMS' | 'KIOSK' | 'GATE_PASS';
   time: string;
-  targetRole?: 'ADMIN'  | 'ALL';
+  targetRole?: 'ADMIN' | 'ALL';
 }
 
 const isSafeImageUrl = (url?: string | null): boolean => {
@@ -131,7 +130,7 @@ export const Header: React.FC<HeaderProps> = ({
     }
   }, [isGateNodeOnline]);
 
-  const fetchLiveHeaderTelemetry = useCallback(async () => {
+  const fetchSystemStatus = useCallback(async () => {
     const token =
       localStorage.getItem('attendsure_token') ||
       localStorage.getItem('auth_token') ||
@@ -182,10 +181,10 @@ export const Header: React.FC<HeaderProps> = ({
         if (offlineList.length > 0) {
           generatedAlerts.push({
             id: 'gate-offline-alert',
-            title: 'Kiosk Disconnected',
-            message: `${offlineList.length} gate scanner device(s) are currently unreachable.`,
+            title: 'Gate Scanner Offline',
+            message: `${offlineList.length} gate scanner unit(s) are currently disconnected.`,
             type: 'KIOSK',
-            time: 'Live',
+            time: 'Just now',
             targetRole: 'ADMIN',
           });
         }
@@ -198,10 +197,10 @@ export const Header: React.FC<HeaderProps> = ({
         if (pendingCount > 50 || failedCount > 0) {
           generatedAlerts.push({
             id: 'sms-pending-alert',
-            title: 'SMS Transmission Delay',
-            message: `${pendingCount} parent notification(s) waiting in modem queue.`,
+            title: 'Text Alert Delay',
+            message: `${pendingCount} parent text message(s) are waiting to be sent.`,
             type: 'SMS',
-            time: 'Live',
+            time: 'Just now',
             targetRole: 'ADMIN',
           });
         }
@@ -214,10 +213,10 @@ export const Header: React.FC<HeaderProps> = ({
   }, [isGateNodeOnline]);
 
   useEffect(() => {
-    fetchLiveHeaderTelemetry();
-    const interval = setInterval(fetchLiveHeaderTelemetry, 30000);
+    fetchSystemStatus();
+    const interval = setInterval(fetchSystemStatus, 30000);
     return () => clearInterval(interval);
-  }, [fetchLiveHeaderTelemetry]);
+  }, [fetchSystemStatus]);
 
   const handleLogout = async () => {
     if (onLogout) {
@@ -243,7 +242,7 @@ export const Header: React.FC<HeaderProps> = ({
   const visibleNotifications = useMemo(() => {
     return liveNotifications.filter((n) => {
       if (n.targetRole === 'ADMIN') return isAdminOrPrincipal;
-if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincipal;
+      if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincipal;
       return true;
     });
   }, [liveNotifications, isAdminOrPrincipal, isFaculty]);
@@ -283,33 +282,61 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
       style={{
         backgroundColor: '#FFFFFF',
         borderBottom: `1px solid ${tokens.borderSubtle}`,
-        padding: '14px 24px',
+        padding: '12px clamp(12px, 2.5vw, 24px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: 16,
+        gap: '12px 16px',
         boxSizing: 'border-box',
+        width: '100%',
+        maxWidth: '100%',
+        minHeight: 64,
+        position: 'relative',
+        zIndex: 40,
       }}
     >
-      <div>
+      {/* Page Title & School ID */}
+      <div style={{ flex: '1 1 auto', minWidth: 'min(100%, 200px)' }}>
         <h1
           style={{
             margin: 0,
-            fontSize: '1.25rem',
+            fontSize: 'clamp(1.1rem, 2vw, 1.25rem)',
             fontWeight: 800,
             color: tokens.textPrimary,
             letterSpacing: '-0.3px',
+            lineHeight: 1.2,
           }}
         >
           {displayTitle}
         </h1>
-        <span style={{ fontSize: '0.74rem', color: tokens.textMuted, marginTop: 2, display: 'block' }}>
-          Lapasan National High School | School ID: 55555
+        <span
+          style={{
+            fontSize: '0.74rem',
+            color: tokens.textMuted,
+            marginTop: 3,
+            display: 'block',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          Macasandig National High School | School ID: 55555
         </span>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      {/* Action Controls */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '8px 12px',
+          justifyContent: 'flex-end',
+          flex: '1 1 auto',
+        }}
+      >
+        {/* Search Input Box */}
         <div
           style={{
             display: 'flex',
@@ -318,14 +345,17 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
             backgroundColor: tokens.bgSurfaceSubtle,
             border: `1px solid ${tokens.borderStrong}`,
             borderRadius: 9999,
-            padding: '6px 14px',
-            width: 220,
+            padding: '6px 12px',
+            flex: '1 1 160px',
+            maxWidth: 240,
+            minWidth: 130,
+            boxSizing: 'border-box',
           }}
         >
-          <Search size={14} color={tokens.textMuted} />
+          <Search size={14} color={tokens.textMuted} style={{ flexShrink: 0 }} />
           <input
             type="text"
-            placeholder="Search records, LRN..."
+            placeholder="Search student, LRN..."
             value={searchVal}
             onChange={(e) => setSearchVal(e.target.value)}
             style={{
@@ -335,10 +365,12 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
               fontSize: '0.78rem',
               color: tokens.textPrimary,
               width: '100%',
+              minWidth: 0,
             }}
           />
         </div>
 
+        {/* My Gate Pass Button */}
         <button
           type="button"
           onClick={() => setIsDigitalPassOpen(true)}
@@ -354,6 +386,8 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
             border: `1px solid ${brand.primary}`,
             color: brand.primary,
             cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
           }}
           title="Open your personal gate QR code pass"
         >
@@ -361,24 +395,28 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
           <span>My Pass</span>
         </button>
 
+        {/* Gate Status Pill */}
         <div
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
-            padding: '5px 12px',
+            padding: '6px 11px',
             borderRadius: 9999,
             fontSize: '0.72rem',
             fontWeight: 700,
             backgroundColor: gateOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
             border: `1px solid ${gateOnline ? 'rgba(16, 185, 129, 0.28)' : 'rgba(239, 68, 68, 0.28)'}`,
             color: gateOnline ? brand.success : brand.danger,
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
           }}
         >
           <Activity size={12} color={gateOnline ? brand.success : brand.danger} />
-          <span>{gateOnline ? 'Gate: Online' : 'Gate: Offline'}</span>
+          <span>{gateOnline ? 'Gate Online' : 'Gate Offline'}</span>
         </div>
 
+        {/* Notifications Icon & Popover */}
         <div style={{ position: 'relative' }}>
           <button
             type="button"
@@ -394,6 +432,7 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
+              flexShrink: 0,
             }}
             title="Notifications"
           >
@@ -426,18 +465,26 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
             <div
               style={{
                 position: 'absolute',
-                top: '115%',
+                top: 'calc(100% + 8px)',
                 right: 0,
-                width: 290,
+                width: 'min(300px, calc(100vw - 32px))',
                 backgroundColor: '#FFFFFF',
                 border: `1px solid ${tokens.borderSubtle}`,
                 borderRadius: 14,
                 boxShadow: tokens.cardShadow,
                 zIndex: 1000,
                 padding: '12px 14px',
+                boxSizing: 'border-box',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 10,
+                }}
+              >
                 <span style={{ fontSize: '0.80rem', fontWeight: 800, color: tokens.textPrimary }}>
                   Notifications
                 </span>
@@ -462,7 +509,15 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
                 )}
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 250, overflowY: 'auto' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                  maxHeight: 250,
+                  overflowY: 'auto',
+                }}
+              >
                 {visibleNotifications.length > 0 ? (
                   visibleNotifications.map((notif) => {
                     const isRead = readIds.includes(notif.id);
@@ -494,7 +549,13 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
                         <button
                           type="button"
                           onClick={() => dismissNotification(notif.id)}
-                          style={{ background: 'none', border: 'none', color: tokens.textMuted, cursor: 'pointer', padding: 0 }}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: tokens.textMuted,
+                            cursor: 'pointer',
+                            padding: 0,
+                          }}
                           title="Dismiss"
                         >
                           <X size={12} />
@@ -505,7 +566,7 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
                 ) : (
                   <div style={{ padding: '24px 12px', textAlign: 'center', color: tokens.textMuted }}>
                     <Inbox size={20} style={{ margin: '0 auto 6px auto', display: 'block' }} />
-                    <span style={{ fontSize: '0.76rem', fontWeight: 600 }}>No unread notifications</span>
+                    <span style={{ fontSize: '0.76rem', fontWeight: 600 }}>No unread alerts</span>
                   </div>
                 )}
               </div>
@@ -513,6 +574,7 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
           )}
         </div>
 
+        {/* User Profile & Account Menu */}
         <div style={{ position: 'relative' }}>
           <button
             type="button"
@@ -525,6 +587,7 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
               border: 'none',
               cursor: 'pointer',
               padding: '4px',
+              borderRadius: 8,
             }}
           >
             <div
@@ -538,6 +601,7 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
                 alignItems: 'center',
                 justifyContent: 'center',
                 border: `1px solid ${tokens.borderSubtle}`,
+                flexShrink: 0,
               }}
             >
               {resolvedPhoto ? (
@@ -550,35 +614,46 @@ if ((n.targetRole as string) === 'FACULTY') return isFaculty || isAdminOrPrincip
                 <User size={16} color={brand.primary} />
               )}
             </div>
-            <div style={{ textAlign: 'left' }}>
-              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
+            <div style={{ textAlign: 'left', minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  color: tokens.textPrimary,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  maxWidth: 120,
+                }}
+              >
                 {currentUser.full_name || 'My Account'}
               </div>
               <div style={{ fontSize: '0.66rem', color: tokens.textMuted }}>
                 {currentUser.role || 'FACULTY'}
               </div>
             </div>
-            <ChevronDown size={14} color={tokens.textMuted} />
+            <ChevronDown size={14} color={tokens.textMuted} style={{ flexShrink: 0 }} />
           </button>
 
           {dropdownOpen && (
             <div
               style={{
                 position: 'absolute',
-                top: '115%',
+                top: 'calc(100% + 8px)',
                 right: 0,
                 backgroundColor: '#FFFFFF',
                 border: `1px solid ${tokens.borderSubtle}`,
                 borderRadius: 12,
                 boxShadow: tokens.cardShadow,
-                width: 170,
+                width: 'min(190px, calc(100vw - 32px))',
                 zIndex: 1000,
                 overflow: 'hidden',
+                boxSizing: 'border-box',
               }}
             >
               <div style={{ padding: '8px 12px', borderBottom: `1px solid ${tokens.borderSubtle}` }}>
-                <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Signed in as</span>
-                <strong style={{ display: 'block', fontSize: '0.76rem', color: tokens.textPrimary }}>
+                <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Logged in as</span>
+                <strong style={{ display: 'block', fontSize: '0.76rem', color: tokens.textPrimary, wordBreak: 'break-all' }}>
                   {currentUser.username || 'User'}
                 </strong>
               </div>

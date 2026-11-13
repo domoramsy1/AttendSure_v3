@@ -121,7 +121,10 @@ def check_academic_admin_permission(user):
 
 
 def check_student_manager_permission(user):
-    """Allows administrators, school leaders, and faculty to update student profiles."""
+    """
+    Cybersecurity Guard:
+    Allows administrators, leadership, and faculty to update student details.
+    """
     if not user or not user.is_authenticated:
         raise PermissionDenied("You must log in first.")
     if user.is_superuser:
@@ -130,7 +133,6 @@ def check_student_manager_permission(user):
     if role not in ('ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR', 'FACULTY'):
         raise PermissionDenied("Only authorized staff or faculty can manage students.")
     return True
-
 
 # ==============================================================================
 # 1. ACADEMIC & PHYSICAL STRUCTURE VIEWSETS
@@ -335,6 +337,12 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 # ==============================================================================
 
 class StudentViewSet(viewsets.ModelViewSet):
+    """
+    Manages Student records with fast database prefetching.
+    Row-level access control:
+    - Administrators see all active students.
+    - Faculty see active students in their assigned class sections.
+    """
     serializer_class = StudentSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = AttendSurePagination
@@ -358,8 +366,9 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         if is_regular_faculty(role) and not user.is_superuser:
             faculty = resolve_faculty_for_user(user)
-            student_ids = get_faculty_student_ids(faculty)
-            qs = qs.filter(id__in=student_ids)
+            if faculty:
+                student_ids = get_faculty_student_ids(faculty)
+                qs = qs.filter(id__in=student_ids)
 
         section_id = self.request.query_params.get('section_id') or self.request.query_params.get('section')
         if section_id:
@@ -386,11 +395,15 @@ class StudentViewSet(viewsets.ModelViewSet):
         serializer.save(**save_kwargs)
 
     def perform_destroy(self, instance):
+        # Cybersecurity: Student deletion is strictly locked to administrators
         check_admin_permission(self.request.user)
         instance.delete()
 
     @action(detail=False, methods=['get'])
     def metrics(self, request):
+        """
+        Fast database-backed counts for active students with zero mock data.
+        """
         user = request.user
         role = get_user_role(user)
         today = timezone.localdate()
@@ -407,7 +420,7 @@ class StudentViewSet(viewsets.ModelViewSet):
             ).values('student_id').distinct().count()
         elif is_regular_faculty(role):
             faculty = resolve_faculty_for_user(user)
-            allowed_ids = get_faculty_student_ids(faculty)
+            allowed_ids = get_faculty_student_ids(faculty) if faculty else set()
             total_students = len(allowed_ids)
             enrolled_students = total_students
             present_today = DailyAttendanceSummary.objects.filter(
@@ -445,7 +458,6 @@ class StudentViewSet(viewsets.ModelViewSet):
             for s in qs
         ]
         return Response(data, status=status.HTTP_200_OK)
-
 
 class EnrollmentViewSet(viewsets.ModelViewSet):
     serializer_class = EnrollmentSerializer

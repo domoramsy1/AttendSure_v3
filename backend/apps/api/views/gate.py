@@ -44,6 +44,10 @@ ALLOWED_DOCUMENT_EXTENSIONS = ('.pdf', '.jpg', '.jpeg', '.png', '.webp')
 MAX_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024
 
 
+# ============================================================================
+# 1. GATE PASS SERIALIZER
+# ============================================================================
+
 class GatePassSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField(read_only=True)
     student_lrn = serializers.SerializerMethodField(read_only=True)
@@ -73,7 +77,6 @@ class GatePassSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'pass_number',
-            'bearer_type',
             'student',
             'student_name',
             'student_lrn',
@@ -108,25 +111,24 @@ class GatePassSerializer(serializers.ModelSerializer):
         ]
 
     def get_student_name(self, obj):
-        return obj.student.full_name if obj.student else None
+        return obj.student.full_name if getattr(obj, 'student', None) else None
 
     def get_student_lrn(self, obj):
-        return obj.student.lrn if obj.student else None
+        return obj.student.lrn if getattr(obj, 'student', None) else None
 
     def get_faculty_name(self, obj):
-        return obj.faculty.full_name if obj.faculty else None
+        return obj.faculty.full_name if getattr(obj, 'faculty', None) else None
 
     def get_faculty_emp_id(self, obj):
-        return obj.faculty.employee_id if obj.faculty else None
+        return obj.faculty.employee_id if getattr(obj, 'faculty', None) else None
 
     def get_adviser_name(self, obj):
-        if obj.issued_by:
-            full = f"{obj.issued_by.first_name} {obj.issued_by.last_name}".strip()
-            return full if full else obj.issued_by.username
+        if getattr(obj, 'issued_by', None):
+            return obj.issued_by.full_name
         return "Adviser / Staff"
 
     def get_approver_name(self, obj):
-        return obj.approved_by if obj.approved_by else None
+        return getattr(obj, 'approved_by', None)
 
     def get_attachment_url(self, obj):
         if hasattr(obj, 'attachment') and obj.attachment:
@@ -135,7 +137,6 @@ class GatePassSerializer(serializers.ModelSerializer):
         return None
 
     def validate(self, attrs):
-        bearer_type = attrs.get('bearer_type', 'STUDENT')
         student = attrs.get('student')
         faculty = attrs.get('faculty')
         attachment = attrs.get('attachment')
@@ -151,10 +152,8 @@ class GatePassSerializer(serializers.ModelSerializer):
                     "attachment": "The proof document size exceeds the allowed 10 MB limit."
                 })
 
-        if bearer_type == 'STUDENT' and not student:
-            raise serializers.ValidationError({"student": "Please select a student for this gate exit permit."})
-        if bearer_type == 'FACULTY' and not faculty:
-            raise serializers.ValidationError({"faculty": "Please select or link the faculty member requesting travel."})
+        if not student and not faculty:
+            raise serializers.ValidationError({"detail": "Please select a student or faculty member for this pass."})
 
         valid_from = attrs.get('valid_from') or timezone.now()
         valid_to = attrs.get('valid_to')
@@ -164,10 +163,14 @@ class GatePassSerializer(serializers.ModelSerializer):
         return attrs
 
 
+# ============================================================================
+# 2. GATE PASS VIEWSET
+# ============================================================================
+
 class GatePassViewSet(viewsets.ModelViewSet):
     """
     Manages official campus exit passes.
-    Handles field name normalization, RBAC, document verification, and admin alerts.
+    Applies row-level data isolation for faculty and audit logging for security.
     """
     queryset = GatePass.objects.select_related('student', 'faculty', 'issued_by').all().order_by('-created_at')
     serializer_class = GatePassSerializer
@@ -183,26 +186,35 @@ class GatePassViewSet(viewsets.ModelViewSet):
         if status_param != 'ALL':
             qs = qs.filter(status=status_param)
 
-        bearer_type = self.request.query_params.get('bearer_type', '').strip().upper()
-        if bearer_type in ['STUDENT', 'FACULTY']:
-            qs = qs.filter(bearer_type=bearer_type)
-
         search = self.request.query_params.get('search', '').strip()
         if search:
             qs = qs.filter(
                 Q(pass_number__icontains=search) |
-                Q(student__full_name__icontains=search) |
+                Q(student__first_name__icontains=search) |
+                Q(student__last_name__icontains=search) |
                 Q(student__lrn__icontains=search) |
-                Q(faculty__full_name__icontains=search) |
+                Q(faculty__first_name__icontains=search) |
+                Q(faculty__last_name__icontains=search) |
                 Q(reason__icontains=search)
             )
 
+        # Row-level data isolation for regular faculty
         if role in ['FACULTY'] and not (user.is_superuser or user.is_staff):
             fac = resolve_faculty_for_user(user)
             if not fac:
-                fac = FacultyProfile.objects.filter(account=user).first()
+                fac = FacultyProfile.objects.filter(account__user=user).first()
+                if not fac:
+                    fac = FacultyProfile.objects.filter(employee_id__iexact=user.username).first()
+
             if fac:
-                qs = qs.filter(Q(faculty=fac) | Q(issued_by=user))
+                allowed_student_ids = get_faculty_student_ids(fac)
+                qs = qs.filter(
+                    Q(faculty_id=fac.id) |
+                    Q(issued_by_id=fac.id) |
+                    Q(student_id__in=allowed_student_ids)
+                )
+            else:
+                qs = qs.none()
 
         return qs[:300]
 
@@ -235,27 +247,17 @@ class GatePassViewSet(viewsets.ModelViewSet):
         if not data.get('valid_to'):
             data['valid_to'] = (now + timedelta(hours=4)).isoformat()
 
-        bearer_type = str(data.get('bearer_type', 'STUDENT')).upper()
-        data['bearer_type'] = bearer_type
-
-        if bearer_type == 'FACULTY':
-            fac = resolve_faculty_for_user(user)
+        fac = resolve_faculty_for_user(user)
+        if not fac:
+            fac = FacultyProfile.objects.filter(account__user=user).first()
             if not fac:
-                fac = FacultyProfile.objects.filter(account=user).first()
+                fac = FacultyProfile.objects.filter(employee_id__iexact=user.username).first()
 
-            if not data.get('faculty') and fac:
-                data['faculty'] = fac.id
+        is_student_pass = bool(data.get('student'))
+        if not is_student_pass and not data.get('faculty') and fac:
+            data['faculty'] = fac.id
 
-            if not data.get('faculty') and not is_admin_or_principal:
-                return Response(
-                    {'error': 'No linked faculty profile found for this account.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            initial_status = 'ACTIVE' if is_admin_or_principal else 'PENDING'
-        else:
-            bearer_type = 'STUDENT'
-            initial_status = 'ACTIVE'
+        initial_status = 'ACTIVE' if is_admin_or_principal or is_student_pass else 'PENDING'
 
         date_stamp = timezone.now().strftime('%Y%m%d')
         unique_token = uuid.uuid4().hex[:6].upper()
@@ -269,15 +271,14 @@ class GatePassViewSet(viewsets.ModelViewSet):
 
         pass_obj = serializer.save(
             pass_number=pass_code,
-            bearer_type=bearer_type,
             status=initial_status,
-            issued_by=user,
+            issued_by=fac,
             approved_by=user.get_full_name() if initial_status == 'ACTIVE' else None
         )
 
-        if bearer_type == 'STUDENT':
-            adviser_name = user.get_full_name() or user.username
-            student_name = pass_obj.student.full_name if pass_obj.student else 'Student'
+        if is_student_pass and pass_obj.student:
+            adviser_name = fac.full_name if fac else (user.get_full_name() or user.username)
+            student_name = pass_obj.student.full_name
             reason_text = pass_obj.reason
 
             SmsOutbox.objects.create(
@@ -287,8 +288,8 @@ class GatePassViewSet(viewsets.ModelViewSet):
                     f"Student Exit Alert: Adviser {adviser_name} permitted {student_name} to leave campus. "
                     f"Reason: {reason_text}. Pass #{pass_code} generated."
                 ),
-                trigger_event="STUDENT_PASS_ISSUED",
-                category="ADMIN_ALERT",
+                trigger_event="GATE_OUT",
+                category="GATE_OUT",
                 priority="HIGH",
                 status="DELIVERED"
             )
@@ -300,7 +301,6 @@ class GatePassViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='approve')
     def approve_pass(self, request, pk=None):
-        """School Principal / Administrator verifies document authenticity and approves the pass."""
         user = request.user
         role = get_user_role(user)
         if not (user.is_superuser or role in ['ADMIN', 'SUPERADMIN', 'PRINCIPAL']):
@@ -319,7 +319,6 @@ class GatePassViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='decline')
     def decline_pass(self, request, pk=None):
-        """School Principal / Administrator declines a pass if proof is unverified or invalid."""
         user = request.user
         role = get_user_role(user)
         if not (user.is_superuser or role in ['ADMIN', 'SUPERADMIN', 'PRINCIPAL']):
@@ -335,7 +334,6 @@ class GatePassViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='mark-used')
     def mark_used(self, request, pk=None):
-        """Campus Gate Guard verifies pass and confirms bearer departure."""
         gate_pass = self.get_object()
         if gate_pass.status != 'ACTIVE':
             return Response({'error': f'Cannot clear exit. Pass status is {gate_pass.status}.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -349,7 +347,7 @@ class GatePassViewSet(viewsets.ModelViewSet):
         gate_pass.status = 'USED'
         gate_pass.save()
 
-        if gate_pass.bearer_type == 'STUDENT' and gate_pass.student:
+        if gate_pass.student:
             student = gate_pass.student
             if student.parent_contact and len(student.parent_contact) >= 10:
                 time_str = timezone.localtime(now).strftime('%I:%M %p')
@@ -360,8 +358,8 @@ class GatePassViewSet(viewsets.ModelViewSet):
                         f"AttendSure Notice: {student.full_name} has departed campus on an authorized "
                         f"adviser gate pass ({gate_pass.reason}) at {time_str}."
                     ),
-                    trigger_event="GATE_PASS_EXIT",
-                    category="GATE_PASS",
+                    trigger_event="GATE_OUT",
+                    category="GATE_OUT",
                     priority="HIGH",
                     status="PENDING"
                 )
@@ -370,14 +368,10 @@ class GatePassViewSet(viewsets.ModelViewSet):
 
 
 # ============================================================================
-# 2. HARDWARE SCANNER KIOSK API (CHECKS PASS STATUS AUTOMATICALLY)
+# 3. HARDWARE SCANNER KIOSK API
 # ============================================================================
 
 class KioskScanAPIView(APIView):
-    """
-    Hardware Kiosk Scanner Endpoint:
-    Automatically checks gate pass clearance status when an ID card or QR code is scanned.
-    """
     permission_classes = [permissions.AllowAny]
 
     @transaction.atomic
@@ -547,6 +541,10 @@ class KioskScanAPIView(APIView):
         return Response({'error': 'Unregistered ID card or QR pass.'}, status=status.HTTP_404_NOT_FOUND)
 
 
+# ============================================================================
+# 4. GATE LOGS VIEW
+# ============================================================================
+
 class GateLogsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -554,13 +552,16 @@ class GateLogsAPIView(APIView):
         user_role = get_user_role(request.user)
         faculty = resolve_faculty_for_user(request.user)
         if not faculty:
-            faculty = FacultyProfile.objects.filter(account=request.user).first()
+            faculty = FacultyProfile.objects.filter(account__user=request.user).first()
+            if not faculty:
+                faculty = FacultyProfile.objects.filter(employee_id__iexact=request.user.username).first()
 
         is_faculty = is_regular_faculty(user_role) and not request.user.is_superuser
 
         stu_qs = StudentGateLog.objects.select_related('student', 'kiosk').order_by('-scan_time')
         if is_faculty:
-            stu_qs = stu_qs.filter(student_id__in=get_faculty_student_ids(faculty))[:100]
+            allowed_ids = get_faculty_student_ids(faculty) if faculty else set()
+            stu_qs = stu_qs.filter(student_id__in=allowed_ids)[:100]
         else:
             stu_qs = stu_qs[:100]
 

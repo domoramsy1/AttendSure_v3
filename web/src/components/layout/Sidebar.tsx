@@ -27,12 +27,14 @@ import {
   ChevronLeft,
   ChevronRight,
   QrCode,
+  LayoutGrid,
 } from 'lucide-react';
 
 export type NavItemKey =
   | 'dashboard'
   | 'classroom-scanner'
   | 'my-classes'
+  | 'advisory-monitor'
   | 'gate-logs'
   | 'students'
   | 'facultys'
@@ -177,6 +179,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         items: [
           { key: 'classroom-scanner', label: 'Attendance Scanner', icon: <QrCode size={20} /> },
           { key: 'my-classes', label: 'Classes', icon: <BookOpen size={20} /> },
+          { key: 'advisory-monitor', label: 'Advisory Matrix', icon: <LayoutGrid size={20} /> },
           { key: 'students', label: 'Students', icon: <GraduationCap size={20} /> },
           { key: 'facultys', label: 'Faculties', icon: <Users size={20} /> },
           { key: 'schedules', label: 'Schedules', icon: <CalendarDays size={20} /> },
@@ -214,6 +217,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }
           if (item.key === 'classroom-scanner') return canTeach || isLeadership;
           if (item.key === 'my-classes') return canTeach;
+          if (item.key === 'advisory-monitor') return canTeach || isLeadership;
           if (item.key === 'users') return role === 'ADMIN' || role === 'SUPERADMIN';
           if (['settings', 'sms', 'scanners', 'geofence'].includes(item.key)) {
             return role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL';

@@ -1,5 +1,5 @@
 /**
- * AttendSure - Academic Timetables, Sections & Schedules
+ * AttendSure V3 - Academic Timetables, Sections & Schedules
  * File: web/src/components/tabs/SchedulesTab.tsx
  */
 
@@ -23,7 +23,8 @@ import {
   User as UserIcon,
   Plus,
   UserCheck,
-  GraduationCap
+  GraduationCap,
+  Sparkles
 } from 'lucide-react';
 import { AcademicSetupModal, type TabType as AcademicTabType } from '../modals/AcademicSetupModal';
 
@@ -31,7 +32,7 @@ interface ScheduleItem {
   id: number;
   schedule_code?: string;
   code?: string;
-  section?: number | { id: number; name: string } | null;
+  section?: number | { id: number; name?: string; section_name?: string } | null;
   section_id?: number;
   section_name?: string;
   grade_level_name?: string;
@@ -41,8 +42,9 @@ interface ScheduleItem {
   subject_name?: string; 
   subject_title?: string;
   faculty_id?: number;
-  faculty?: number | { id: number; full_name?: string; name?: string; photo_url?: string; photo?: string } | null;
+  faculty?: number | { id: number; full_name?: string; name?: string; photo_url?: string; photo?: string; employee_id?: string } | null;
   faculty_name?: string;
+  faculty_title?: string;
   room?: number | string | { id?: number; name?: string; room_number?: string } | null;
   room_name?: string;
   room_number?: string;
@@ -53,18 +55,21 @@ interface ScheduleItem {
 
 interface SectionOption {
   id: number;
-  name: string;
+  name?: string;
+  section_name?: string;
   code?: string;
-  grade_level?: number | string;
+  grade_level?: number | string | { id?: number; name?: string; code?: string };
   grade_level_name?: string;
   grade_level_code?: string;
-  adviser?: number | { id: number; full_name?: string } | null;
+  adviser?: number | string | { id?: number; full_name?: string; name?: string; photo_url?: string; photo?: string; employee_id?: string } | null;
   adviser_id?: number | null;
   adviser_name?: string;
+  adviser_full_name?: string;
   adviser_employee_id?: string;
   adviser_photo_url?: string | null;
   room_number?: string;
   capacity?: number;
+  is_adviser?: boolean;
 }
 
 interface FacultyOption {
@@ -79,7 +84,7 @@ interface FacultyOption {
   can_teach?: boolean;
 }
 
-// Cybersecurity helper: blocks dangerous links
+// Cybersecurity helper: blocks dangerous URI schemes
 const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
@@ -88,7 +93,7 @@ const isSafeImageUrl = (url?: string | null): boolean => {
   return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('/') || clean.startsWith('data:image/');
 };
 
-// Reads user role from local storage for view-only checks
+// Reads user role from local storage safely
 const getUserRole = (): string => {
   try {
     const raw = localStorage.getItem('attendsure_user') || localStorage.getItem('user');
@@ -100,6 +105,10 @@ const getUserRole = (): string => {
   } catch {
     return '';
   }
+};
+
+const getSectionDisplayName = (sec: SectionOption): string => {
+  return sec.name || sec.section_name || `Section #${sec.id}`;
 };
 
 interface ProfileAvatarProps {
@@ -181,18 +190,70 @@ export const SchedulesTab: React.FC = () => {
     };
   }, []);
 
-  // Security role check: Only managers can edit academic structure
   const userRole = useMemo(() => getUserRole(), []);
   const canManageSchedule = useMemo(() => {
     return ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole) || userRole === '';
   }, [userRole]);
 
-  // Faster data fetching with clean error handling
+  // Read stored identity for advisory identification
+  const loggedInFacultyName = useMemo(() => {
+    return (
+      localStorage.getItem('attendsure_faculty_name') ||
+      localStorage.getItem('faculty_name') ||
+      ''
+    ).trim().toLowerCase();
+  }, []);
+
+  const loggedInUsername = useMemo(() => {
+    return (
+      localStorage.getItem('attendsure_username') ||
+      localStorage.getItem('username') ||
+      ''
+    ).trim().toLowerCase();
+  }, []);
+
+  // Check if a section is the advisory class of the logged-in faculty
+  const isSectionAdvisoryForUser = useCallback((sec: SectionOption): boolean => {
+    if (sec.is_adviser) return true;
+
+    if (loggedInUsername) {
+      if (sec.adviser_employee_id && sec.adviser_employee_id.toLowerCase() === loggedInUsername) {
+        return true;
+      }
+    }
+
+    if (loggedInFacultyName) {
+      if (sec.adviser_name && sec.adviser_name.toLowerCase().includes(loggedInFacultyName)) {
+        return true;
+      }
+      if (sec.adviser_full_name && sec.adviser_full_name.toLowerCase().includes(loggedInFacultyName)) {
+        return true;
+      }
+      if (typeof sec.adviser === 'string' && sec.adviser.toLowerCase().includes(loggedInFacultyName)) {
+        return true;
+      }
+      if (typeof sec.adviser === 'object' && sec.adviser) {
+        const advName = (sec.adviser.full_name || sec.adviser.name || '').toLowerCase();
+        if (advName && (advName.includes(loggedInFacultyName) || loggedInFacultyName.includes(advName))) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }, [loggedInFacultyName, loggedInUsername]);
+
+  // Resolves the logged-in faculty's advisory section
+  const myAdvisorySection = useMemo(() => {
+    return sections.find((sec) => isSectionAdvisoryForUser(sec)) || null;
+  }, [sections, isSectionAdvisoryForUser]);
+
+  // Resilient data loading using Promise.allSettled
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setError('');
     try {
-      const [schedRes, secRes, facRes] = await Promise.all([
+      const results = await Promise.allSettled([
         apiClient.get('/schedules/?page_size=500'),
         apiClient.get('/sections/?page_size=500'),
         apiClient.get('/faculty/dropdown/'),
@@ -200,19 +261,35 @@ export const SchedulesTab: React.FC = () => {
 
       if (!isMounted.current) return;
 
-      const schedData = Array.isArray(schedRes.data) ? schedRes.data : schedRes.data?.results || [];
-      const secData = Array.isArray(secRes.data) ? secRes.data : secRes.data?.results || [];
-      const facData = Array.isArray(facRes.data) ? facRes.data : facRes.data?.results || [];
+      const schedRes = results[0].status === 'fulfilled' ? results[0].value : null;
+      const secRes = results[1].status === 'fulfilled' ? results[1].value : null;
+      const facRes = results[2].status === 'fulfilled' ? results[2].value : null;
 
-      setSchedules(schedData);
-      setSections(secData);
-      setFacultyList(facData);
+      if (schedRes?.data) {
+        const schedData = Array.isArray(schedRes.data) ? schedRes.data : schedRes.data?.results || [];
+        setSchedules(schedData);
+      }
+
+      if (secRes?.data) {
+        const secData = Array.isArray(secRes.data) ? secRes.data : secRes.data?.results || [];
+        setSections(secData);
+      }
+
+      if (facRes?.data) {
+        const facData = Array.isArray(facRes.data) ? facRes.data : facRes.data?.results || [];
+        setFacultyList(facData);
+      }
+
+      if (results[0].status === 'rejected' && results[1].status === 'rejected') {
+        const errReason: any = results[0].reason;
+        const status = errReason?.response?.status;
+        const detail = errReason?.response?.data?.detail || errReason?.response?.data?.error || errReason?.message;
+        setError(`[Error ${status || 'Network'}] Could not load timetable data: ${detail}`);
+      }
     } catch (err: any) {
       if (!isMounted.current) return;
       if (!silent) {
-        const status = err?.response?.status;
-        const detail = err?.response?.data?.detail || err?.response?.data?.error || err.message;
-        setError(`[Error ${status || 'Network'}] Could not load timetable data: ${detail}`);
+        setError(`Could not load timetable records. Please check server connection.`);
       }
     } finally {
       if (!silent && isMounted.current) {
@@ -225,13 +302,22 @@ export const SchedulesTab: React.FC = () => {
     loadData(false);
   }, [loadData]);
 
-  // Safe background refresh (pauses when browser tab is hidden)
+  // Auto-select the advisory section for faculty members on initial load
+  const hasAutoSelectedRef = useRef(false);
+  useEffect(() => {
+    if (!hasAutoSelectedRef.current && myAdvisorySection && userRole === 'FACULTY') {
+      setSelectedSectionFilter(String(myAdvisorySection.id));
+      hasAutoSelectedRef.current = true;
+    }
+  }, [myAdvisorySection, userRole]);
+
+  // Background refresh when tab is visible
   useEffect(() => {
     const liveInterval = setInterval(() => {
       if (!isInteracting.current && isMounted.current && document.visibilityState === 'visible') {
         loadData(true);
       }
-    }, 10000);
+    }, 12000);
 
     return () => clearInterval(liveInterval);
   }, [loadData]);
@@ -301,6 +387,7 @@ export const SchedulesTab: React.FC = () => {
     return item.schedule_code || item.code || `SCH-${String(item.id).padStart(4, '0')}`;
   };
 
+  // Fixed faculty resolution without duplicate checks
   const getFacultyInfo = useCallback((item: ScheduleItem) => {
     let name = 'Unassigned';
     let photo: string | null = null;
@@ -308,11 +395,12 @@ export const SchedulesTab: React.FC = () => {
 
     if (item.faculty_name && item.faculty_name.trim() !== '') {
       name = item.faculty_name.trim();
-    } else if (item.faculty_name && item.faculty_name.trim() !== '') {
-      name = item.faculty_name.trim();
+    } else if (item.faculty_title && item.faculty_title.trim() !== '') {
+      name = item.faculty_title.trim();
     } else if (typeof item.faculty === 'object' && item.faculty) {
       name = item.faculty.full_name || item.faculty.name || name;
       photo = item.faculty.photo_url || item.faculty.photo || null;
+      employeeId = item.faculty.employee_id || '';
     }
 
     let targetFacultyId: number | undefined;
@@ -331,7 +419,7 @@ export const SchedulesTab: React.FC = () => {
       if (matched) {
         name = matched.full_name || matched.name || name;
         photo = matched.photo_url || matched.photo || photo;
-        employeeId = matched.employee_id || '';
+        employeeId = matched.employee_id || employeeId;
       }
     }
 
@@ -359,7 +447,7 @@ export const SchedulesTab: React.FC = () => {
   const getSectionName = (item: ScheduleItem) => {
     if (item.section_name) return item.section_name;
     if (typeof item.section === 'object' && item.section) {
-      return item.section.name || `Section #${item.section.id}`;
+      return item.section.name || item.section.section_name || `Section #${item.section.id}`;
     }
     return item.section ? `Section #${item.section}` : 'Unassigned';
   };
@@ -375,6 +463,11 @@ export const SchedulesTab: React.FC = () => {
     return '—';
   };
 
+  // Safe search query sanitization
+  const cleanSearchQuery = useMemo(() => {
+    return searchQuery.trim().toLowerCase().slice(0, 60);
+  }, [searchQuery]);
+
   const filteredSchedules = useMemo(() => {
     return schedules.filter((s) => {
       if (selectedSectionFilter !== 'ALL') {
@@ -384,20 +477,25 @@ export const SchedulesTab: React.FC = () => {
         if (!matchesId && !matchesName) return false;
       }
 
-      if (searchQuery.trim() !== '') {
-        const q = searchQuery.toLowerCase();
+      if (cleanSearchQuery !== '') {
         const code = getScheduleCode(s).toLowerCase();
         const sec = getSectionName(s).toLowerCase();
         const sub = (getSubjectCode(s) + ' ' + getSubjectName(s)).toLowerCase();
         const fac = getFacultyInfo(s).name.toLowerCase();
         const rm = getRoomDisplay(s).toLowerCase();
 
-        return code.includes(q) || sec.includes(q) || sub.includes(q) || fac.includes(q) || rm.includes(q);
+        return (
+          code.includes(cleanSearchQuery) ||
+          sec.includes(cleanSearchQuery) ||
+          sub.includes(cleanSearchQuery) ||
+          fac.includes(cleanSearchQuery) ||
+          rm.includes(cleanSearchQuery)
+        );
       }
 
       return true;
     });
-  }, [schedules, selectedSectionFilter, searchQuery, getFacultyInfo]);
+  }, [schedules, selectedSectionFilter, cleanSearchQuery, getFacultyInfo]);
 
   // Selected Section Object
   const currentSelectedSectionObj = useMemo(() => {
@@ -405,34 +503,59 @@ export const SchedulesTab: React.FC = () => {
     return sections.find((sec) => String(sec.id) === selectedSectionFilter) || null;
   }, [selectedSectionFilter, sections]);
 
-  // Automatically resolves the Homeroom Adviser's real profile
-  const resolvedAdviser = useMemo(() => {
-    if (!currentSelectedSectionObj) return null;
+  // Robust adviser resolution checking direct properties, nested objects, and ID lookup
+  const getAdviserDetails = useCallback((sec: SectionOption | null) => {
+    if (!sec) return null;
 
-    let adviserId = currentSelectedSectionObj.adviser_id;
-    if (!adviserId && typeof currentSelectedSectionObj.adviser === 'number') {
-      adviserId = currentSelectedSectionObj.adviser;
-    } else if (!adviserId && typeof currentSelectedSectionObj.adviser === 'object' && currentSelectedSectionObj.adviser) {
-      adviserId = currentSelectedSectionObj.adviser.id;
+    let name = '';
+    let photo: string | null = null;
+    let employeeId = '';
+
+    if (sec.adviser_name) name = sec.adviser_name;
+    if (sec.adviser_full_name) name = sec.adviser_full_name;
+    if (sec.adviser_photo_url) photo = sec.adviser_photo_url;
+    if (sec.adviser_employee_id) employeeId = sec.adviser_employee_id;
+
+    if (typeof sec.adviser === 'object' && sec.adviser) {
+      if (!name) name = sec.adviser.full_name || sec.adviser.name || '';
+      if (!photo) photo = sec.adviser.photo_url || sec.adviser.photo || null;
+      if (!employeeId) employeeId = sec.adviser.employee_id || '';
+    } else if (typeof sec.adviser === 'string' && !name) {
+      name = sec.adviser;
     }
 
-    if (adviserId) {
+    let adviserId: number | undefined;
+    if (typeof sec.adviser_id === 'number') {
+      adviserId = sec.adviser_id;
+    } else if (typeof sec.adviser === 'number') {
+      adviserId = sec.adviser;
+    } else if (typeof sec.adviser === 'object' && sec.adviser && typeof sec.adviser.id === 'number') {
+      adviserId = sec.adviser.id;
+    }
+
+    if (adviserId !== undefined) {
       const match = facultyList.find((f) => f.id === adviserId);
       if (match) {
-        return {
-          name: match.full_name || match.name || 'Faculty',
-          photo: match.photo_url || match.photo || null,
-          employee_id: match.employee_id || '',
-        };
+        if (!name) name = match.full_name || match.name || '';
+        if (!photo) photo = match.photo_url || match.photo || null;
+        if (!employeeId) employeeId = match.employee_id || '';
       }
     }
 
     return {
-      name: currentSelectedSectionObj.adviser_name || null,
-      photo: currentSelectedSectionObj.adviser_photo_url || null,
-      employee_id: currentSelectedSectionObj.adviser_employee_id || '',
+      name: name || null,
+      photo: photo || null,
+      employeeId: employeeId || '',
     };
-  }, [currentSelectedSectionObj, facultyList]);
+  }, [facultyList]);
+
+  const resolvedAdviser = useMemo(() => {
+    return getAdviserDetails(currentSelectedSectionObj);
+  }, [currentSelectedSectionObj, getAdviserDetails]);
+
+  const resolvedMyAdviser = useMemo(() => {
+    return getAdviserDetails(myAdvisorySection);
+  }, [myAdvisorySection, getAdviserDetails]);
 
   const uniqueSectionsCount = useMemo(() => {
     return new Set(schedules.map((s) => getSectionName(s)).filter((n) => n !== 'Unassigned')).size;
@@ -448,7 +571,7 @@ export const SchedulesTab: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
-      {/* 1. Class and Faculty Summary Cards */}
+      {/* 1. Summary Cards */}
       <div style={statsGrid}>
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -499,12 +622,29 @@ export const SchedulesTab: React.FC = () => {
             style={selectStyle}
           >
             <option value="ALL">All Sections ({schedules.length} periods)</option>
-            {sections.map((sec) => (
-              <option key={sec.id} value={sec.id}>
-                {sec.name} {sec.code ? `(${sec.code})` : ''}
-              </option>
-            ))}
+            {sections.map((sec) => {
+              const displayName = getSectionDisplayName(sec);
+              const isMine = isSectionAdvisoryForUser(sec);
+              return (
+                <option key={sec.id} value={sec.id}>
+                  {displayName} {isMine ? '★ (Your Advisory Class)' : (sec.code ? `(${sec.code})` : '')}
+                </option>
+              );
+            })}
           </select>
+
+          {/* Quick jump to advisory section */}
+          {myAdvisorySection && selectedSectionFilter !== String(myAdvisorySection.id) && (
+            <button
+              type="button"
+              onClick={() => setSelectedSectionFilter(String(myAdvisorySection.id))}
+              style={advisoryJumpBtn}
+              title="Jump directly to your advisory class section"
+            >
+              <Sparkles size={13} color="#004b87" />
+              <span>View My Advisory Class</span>
+            </button>
+          )}
         </div>
 
         {canManageSchedule && (
@@ -548,7 +688,57 @@ export const SchedulesTab: React.FC = () => {
         )}
       </div>
 
-      {/* 3. Section Overview Banner (Shown when a specific section is chosen) */}
+      {/* 3A. Dedicated Advisory Class Banner (Displayed when in ALL view and user has an advisory class) */}
+      {selectedSectionFilter === 'ALL' && myAdvisorySection && (
+        <div style={myAdvisoryCalloutBanner}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={avatarCircle}>
+              {resolvedMyAdviser?.photo ? (
+                <img
+                  src={resolvedMyAdviser.photo}
+                  alt={resolvedMyAdviser.name || 'Adviser'}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <UserCheck size={20} color="#004b87" />
+              )}
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a' }}>
+                  Your Advisory Class: {getSectionDisplayName(myAdvisorySection)}
+                </span>
+                <span style={advisoryTagPill}>Official Class Adviser</span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontSize: '0.76rem' }}>
+                <span style={{ color: '#004b87', fontWeight: 700 }}>
+                  Assigned Adviser:
+                </span>
+                <strong style={{ color: '#0f172a' }}>
+                  {resolvedMyAdviser?.name || 'You are designated Class Adviser'}
+                </strong>
+                {resolvedMyAdviser?.employeeId && (
+                  <span style={{ fontFamily: 'monospace', color: '#64748b' }}>
+                    ({resolvedMyAdviser.employeeId})
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setSelectedSectionFilter(String(myAdvisorySection.id))}
+            style={primaryBtnStyle}
+          >
+            <span>Filter to My Advisory Class</span>
+          </button>
+        </div>
+      )}
+
+      {/* 3B. Section Overview Banner (Shown when a specific section is chosen) */}
       {currentSelectedSectionObj && (
         <div style={sectionOverviewBanner}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -567,7 +757,7 @@ export const SchedulesTab: React.FC = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a' }}>
-                  {currentSelectedSectionObj.name}
+                  {getSectionDisplayName(currentSelectedSectionObj)}
                 </span>
                 <span style={codeBadgePill}>
                   {currentSelectedSectionObj.code || 'SEC'}
@@ -576,6 +766,9 @@ export const SchedulesTab: React.FC = () => {
                   <span style={{ fontSize: '0.74rem', color: '#64748b' }}>
                     &bull; {currentSelectedSectionObj.grade_level_name}
                   </span>
+                )}
+                {isSectionAdvisoryForUser(currentSelectedSectionObj) && (
+                  <span style={advisoryTagPill}>Your Advisory Section</span>
                 )}
               </div>
 
@@ -586,9 +779,9 @@ export const SchedulesTab: React.FC = () => {
                 <strong style={{ color: resolvedAdviser?.name ? '#0f172a' : '#d97706' }}>
                   {resolvedAdviser?.name || 'No Homeroom Adviser Assigned'}
                 </strong>
-                {resolvedAdviser?.employee_id && (
+                {resolvedAdviser?.employeeId && (
                   <span style={{ fontFamily: 'monospace', color: '#64748b' }}>
-                    ({resolvedAdviser.employee_id})
+                    ({resolvedAdviser.employeeId})
                   </span>
                 )}
               </div>
@@ -801,7 +994,6 @@ export const SchedulesTab: React.FC = () => {
 
 export default SchedulesTab;
 
-// Styles matching AttendSure Design Standards
 const statsGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
@@ -860,6 +1052,18 @@ const sectionOverviewBanner: React.CSSProperties = {
   gap: 12,
 };
 
+const myAdvisoryCalloutBanner: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  padding: '12px 18px',
+  backgroundColor: '#eff6ff',
+  borderRadius: 10,
+  border: '1.5px solid #93c5fd',
+  flexWrap: 'wrap',
+  gap: 12,
+};
+
 const avatarCircle: React.CSSProperties = {
   width: 44,
   height: 44,
@@ -882,6 +1086,30 @@ const codeBadgePill: React.CSSProperties = {
   fontSize: '0.70rem',
   fontWeight: 800,
   border: '1px solid #bae6fd',
+};
+
+const advisoryTagPill: React.CSSProperties = {
+  padding: '2px 8px',
+  borderRadius: 4,
+  backgroundColor: '#ecfdf5',
+  color: '#059669',
+  fontSize: '0.70rem',
+  fontWeight: 800,
+  border: '1px solid #a7f3d0',
+};
+
+const advisoryJumpBtn: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '5px 10px',
+  backgroundColor: '#eff6ff',
+  color: '#004b87',
+  border: '1px solid #93c5fd',
+  borderRadius: 6,
+  fontSize: '0.74rem',
+  fontWeight: 700,
+  cursor: 'pointer',
 };
 
 const editSectionBtn: React.CSSProperties = {

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Classroom API Views & Universal Attendance Scanner Engine
+AttendSure V3 - Classroom Attendance & Loafing Monitoring Engine
 File: backend/apps/api/views/classroom.py
 """
 
@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q
+from django.apps import apps
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
@@ -19,7 +20,6 @@ from apps.academics.models import (
     Section,
     SubjectAttendanceLog,
     DailyAttendanceSummary,
-    StudentGateLog,
     Enrollment,
     FacultyProfile,
 )
@@ -36,26 +36,66 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# HELPER FUNCTIONS
+# HELPER FUNCTIONS & SECURITY SANITIZERS
 # ============================================================================
 
 def sanitize_qr_token(raw_token: str) -> str:
-    """Extracts clean identifier from plain text, JSON, or tagged barcode formats."""
-    clean = str(raw_token or '').strip().replace('\r', '').replace('\n', '')
+    """
+    Cleans raw card or QR inputs and blocks dangerous script or database characters.
+    """
+    clean = str(raw_token or '').strip().replace('\r', '').replace('\n', '').replace('\0', '')
+    if len(clean) > 64:
+        clean = clean[:64]
+
     if clean.startswith('{') and clean.endswith('}'):
         try:
             parsed = json.loads(clean)
-            return str(parsed.get('lrn') or parsed.get('student_lrn') or parsed.get('qr_token') or parsed.get('id') or clean).strip()
+            return str(
+                parsed.get('lrn')
+                or parsed.get('student_lrn')
+                or parsed.get('qr_token')
+                or parsed.get('id')
+                or clean
+            ).strip()
         except Exception:
             pass
+
     if ':' in clean:
         return clean.split(':')[-1].strip()
+
     return clean
+
+
+def resolve_faculty_record(user):
+    """
+    Finds the active faculty profile linked to the signed-in user account.
+    """
+    faculty = resolve_faculty_for_user(user)
+    if faculty:
+        return faculty
+
+    if hasattr(user, 'faculty_profile') and user.faculty_profile:
+        return user.faculty_profile
+    if hasattr(user, 'faculty') and user.faculty:
+        return user.faculty
+
+    faculty = FacultyProfile.objects.filter(Q(account=user) | Q(user=user)).first()
+    if faculty:
+        return faculty
+
+    if user.email:
+        faculty = FacultyProfile.objects.filter(email__iexact=user.email).first()
+        if faculty:
+            return faculty
+
+    username = str(user.username or '').strip()
+    return FacultyProfile.objects.filter(
+        Q(employee_id__iexact=username) | Q(code__iexact=username)
+    ).first()
 
 
 def get_device_model():
     """Finds the DeviceApproval model across registered apps safely."""
-    from django.apps import apps
     for app in ['core', 'academics', 'common', 'api']:
         try:
             m = apps.get_model(app, 'DeviceApproval')
@@ -75,8 +115,7 @@ def format_section_label(grade_name: str, section_name: str) -> str:
 
 def resolve_student_photo_url(student, request):
     """
-    Safely resolves profile photo URL across ImageField, CharField photo_path, 
-    or photo_thumbnail database fields.
+    Safely resolves student profile photo URL across database fields.
     """
     photo_field = (
         getattr(student, 'photo', None)
@@ -105,17 +144,33 @@ def resolve_student_photo_url(student, request):
     return None
 
 
+def determine_scan_status(schedule, current_dt, grace_minutes: int = 15) -> str:
+    """
+    Determines whether a classroom scan is PRESENT or LATE based on class start time.
+    """
+    if not schedule or not getattr(schedule, 'start_time', None):
+        return 'PRESENT'
+
+    local_now = timezone.localtime(current_dt)
+    class_start = timezone.make_aware(
+        datetime.combine(local_now.date(), schedule.start_time),
+        timezone.get_current_timezone()
+    )
+    if local_now > (class_start + timedelta(minutes=grace_minutes)):
+        return 'LATE'
+    return 'PRESENT'
+
+
 # ============================================================================
-# 1. HARDWARE OTG / USB / CAMERA SINGLE STUDENT SCANNER
+# 1. CLASSROOM ATTENDANCE SCANNER (MOBILE CAMERA & WEB OTG GUN)
 # ============================================================================
 
 class ClassroomStudentScanAPIView(APIView):
     """
-    Classroom Attendance & Student Verification Endpoint.
+    Records classroom attendance and checks for missed earlier subject periods.
     Used by:
-    - Web App: Laptops & PCs with USB / Wireless Barcode Scanners or Webcams.
-    - Mobile App: Phones with USB-C OTG Scanner Guns or built-in Cameras.
-    Validates faculty role (Class Adviser vs Subject Faculty), gate status, and registered devices.
+    - Web App: Laptops with USB / Wireless OTG Barcode Scanners.
+    - Mobile App: Phones using the built-in optical camera.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -131,7 +186,7 @@ class ClassroomStudentScanAPIView(APIView):
         DeviceModel = get_device_model()
         if DeviceModel and device_uuid:
             device_entry = DeviceModel.objects.filter(
-                device_uuid=device_uuid,
+                device_uuid=str(device_uuid).strip(),
                 is_active=True
             ).first()
 
@@ -140,19 +195,16 @@ class ClassroomStudentScanAPIView(APIView):
                     'error': 'This scanning device has been blocked. Contact school administration.'
                 }, status=status.HTTP_403_FORBIDDEN)
 
-        # 2. Resolve Faculty Profile safely using account reference
-        faculty = resolve_faculty_for_user(user)
-        if not faculty:
-            faculty = FacultyProfile.objects.filter(account=user).first()
-
+        # 2. Resolve Faculty Profile
+        faculty = resolve_faculty_record(user)
         is_admin = is_leadership_role(user) or user.is_superuser or role in ('ADMIN', 'SUPERADMIN', 'PRINCIPAL')
 
         if not faculty and not is_admin:
             return Response({
-                'error': 'Only verified faculty, advisers, and administrators can record attendance.'
+                'error': 'Only verified faculty, class advisers, and administrators can record attendance.'
             }, status=status.HTTP_403_FORBIDDEN)
 
-        # 3. Clean Scanned Token (Supports Barcode guns, RFID cards, and QR tokens)
+        # 3. Clean Scanned Code
         raw_code = str(
             request.data.get('code')
             or request.data.get('raw_identifier')
@@ -164,7 +216,7 @@ class ClassroomStudentScanAPIView(APIView):
         if not cleaned_token:
             return Response({'error': 'No barcode or QR code received.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 4. Fast Single-Trip Database Query to Match Student
+        # 4. Fast Single-Trip Query to Match Student
         student = Student.objects.filter(
             Q(lrn__iexact=cleaned_token) |
             Q(qr_token=cleaned_token) |
@@ -174,26 +226,40 @@ class ClassroomStudentScanAPIView(APIView):
 
         if not student:
             return Response({
-                'error': f'Unregistered student card or barcode ({cleaned_token}).'
+                'error': f'Unregistered student ID or barcode ({cleaned_token}).'
             }, status=status.HTTP_404_NOT_FOUND)
 
         # 5. Resolve Student Active Section
+        student_section = None
         enrollment = Enrollment.objects.filter(
             student=student,
             status='ENROLLED'
         ).select_related('section', 'section__grade_level').first()
 
-        if not enrollment or not enrollment.section:
+        if enrollment and enrollment.section:
+            student_section = enrollment.section
+        elif hasattr(student, 'section') and student.section:
+            student_section = student.section
+
+        if not student_section:
             return Response({
                 'error': f'Student {student.full_name} is not enrolled in an active section.'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        student_section = enrollment.section
         grade_name = student_section.grade_level.name if student_section.grade_level else ''
         section_display = format_section_label(grade_name, student_section.name)
 
-        # 6. Role-Based Access Control (RBAC): Verify Faculty Authorization
-        is_adviser = bool(faculty and student_section.adviser_id == faculty.id)
+        # 6. Role-Based Access Control: Verify Faculty Authorization
+        is_adviser = False
+        if faculty:
+            if student_section.adviser_id == faculty.id:
+                is_adviser = True
+            elif getattr(student_section, 'adviser', None) == faculty:
+                is_adviser = True
+            elif getattr(student_section.adviser, 'account_id', None) == user.id:
+                is_adviser = True
+            elif getattr(student_section.adviser, 'user_id', None) == user.id:
+                is_adviser = True
 
         active_schedule = None
         if faculty:
@@ -213,29 +279,32 @@ class ClassroomStudentScanAPIView(APIView):
             }, status=status.HTTP_403_FORBIDDEN)
 
         role_label = "Class Adviser" if is_adviser else ("Subject Faculty" if is_subject_faculty else "Administrator")
+        target_schedule = active_schedule if active_schedule else Schedule.objects.filter(section=student_section).order_by('start_time').first()
 
-        # 7. Resolve Target Schedule
-        target_schedule = active_schedule if active_schedule else Schedule.objects.filter(section=student_section).first()
-
-        # 8. Check Campus Gate Status
-        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
-        today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
-
-        latest_gate = StudentGateLog.objects.filter(
+        # 7. Check Earlier Periods Today for Loafing / Cutting Alerts
+        today_logs = SubjectAttendanceLog.objects.filter(
             student=student,
-            scan_time__gte=today_start,
-            scan_time__lte=today_end
-        ).order_by('-scan_time').first()
+            attendance_date=today
+        )
+        attended_schedule_ids = set(
+            today_logs.filter(status__in=['PRESENT', 'LATE']).values_list('schedule_id', flat=True)
+        )
 
-        gate_remarks = "Gate entrance verified."
-        if not latest_gate:
-            gate_remarks = "FLAGGED: No gate entry scan recorded today."
-        elif latest_gate.direction == 'OUT':
-            gate_remarks = "FLAGGED: Student was previously recorded leaving campus."
+        missed_earlier_count = 0
+        if target_schedule and getattr(target_schedule, 'start_time', None):
+            earlier_schedules = Schedule.objects.filter(
+                section=student_section,
+                start_time__lt=target_schedule.start_time
+            ).exclude(id__in=attended_schedule_ids)
+            missed_earlier_count = earlier_schedules.count()
+
+        attendance_note = "Classroom attendance verified."
+        if missed_earlier_count > 0:
+            attendance_note = f"LOAFING ALERT: Missed {missed_earlier_count} earlier subject period(s) today."
 
         photo_url = resolve_student_photo_url(student, request)
 
-        # 9. Duplicate Prevention: Check if already recorded for this schedule today
+        # 8. Duplicate Scan Prevention for This Period
         existing_log_query = {
             'student': student,
             'attendance_date': today,
@@ -256,7 +325,7 @@ class ClassroomStudentScanAPIView(APIView):
             return Response({
                 'success': True,
                 'is_duplicate': True,
-                'message': 'Card already tapped. Attendance already recorded for this class today.',
+                'message': 'ID already scanned. Attendance already recorded for this class period.',
                 'authorization_role': role_label,
                 'student_id': student.id,
                 'student_name': format_full_student_name(student),
@@ -264,15 +333,16 @@ class ClassroomStudentScanAPIView(APIView):
                 'section': section_display,
                 'status': getattr(existing_log, 'status', 'PRESENT'),
                 'scanned_at': timestamp_str,
-                'gate_status_note': gate_remarks,
+                'attendance_note': attendance_note,
                 'photo_url': photo_url,
                 'photo': photo_url,
             }, status=status.HTTP_200_OK)
 
-        # 10. Record Verified Attendance using Safe Upsert
+        # 9. Record Verified Classroom Attendance
+        computed_status = determine_scan_status(target_schedule, now)
         log_fields = {f.name for f in SubjectAttendanceLog._meta.fields}
         log_defaults = {
-            'status': 'PRESENT',
+            'status': computed_status,
         }
         if 'faculty' in log_fields:
             log_defaults['faculty'] = target_schedule.faculty if (target_schedule and target_schedule.faculty) else faculty
@@ -294,18 +364,18 @@ class ClassroomStudentScanAPIView(APIView):
                 defaults=log_defaults
             )
         except Exception as e:
-            logger.warning(f"[ClassroomStudentScanAPIView] update_or_create caught conflict: {e}")
+            logger.warning(f"[ClassroomStudentScanAPIView] update_or_create conflict caught: {e}")
             log = SubjectAttendanceLog.objects.filter(**log_filter_kwargs).first()
             created = False
 
-        # 11. Update Daily Attendance Summary for Dashboards
+        # 10. Update Daily Attendance Summary
         summary_fields = {f.name for f in DailyAttendanceSummary._meta.fields}
         summary_defaults = {
             'section': student_section,
-            'status': 'PRESENT',
+            'status': computed_status,
         }
         if 'remarks' in summary_fields:
-            summary_defaults['remarks'] = gate_remarks[:255]
+            summary_defaults['remarks'] = attendance_note[:255]
 
         DailyAttendanceSummary.objects.update_or_create(
             student=student,
@@ -318,15 +388,15 @@ class ClassroomStudentScanAPIView(APIView):
         return Response({
             'success': True,
             'is_duplicate': not created,
-            'message': f'Attendance verified by {role_label}.' if created else 'Card already tapped today.',
+            'message': f'Attendance recorded ({computed_status}) by {role_label}.' if created else 'ID already scanned today.',
             'authorization_role': role_label,
             'student_id': student.id,
             'student_name': format_full_student_name(student),
             'lrn': student.lrn,
             'section': section_display,
-            'status': 'PRESENT',
+            'status': computed_status,
             'scanned_at': timestamp_display,
-            'gate_status_note': gate_remarks,
+            'attendance_note': attendance_note,
             'photo_url': photo_url,
             'photo': photo_url,
         }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
@@ -336,27 +406,27 @@ ClassroomScanAPIView = ClassroomStudentScanAPIView
 
 
 # ============================================================================
-# 2. HARDWARE DEVICE REGISTRATION FOR GEOFENCING & SCANNER APPROVAL
+# 2. DEVICE REGISTRATION FOR GEOFENCING & CLASSROOM SCANNER APPROVAL
 # ============================================================================
 
 class UserDeviceRegisterAPIView(APIView):
     """
-    Registers staff and faculty mobile phones, laptops, and PCs for geofencing compliance.
+    Registers faculty mobile phones and laptops for GPS boundary verification.
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         user = request.user
         device_uuid = str(request.data.get('device_uuid', '')).strip()
-        device_name = str(request.data.get('device_name', 'Station Device')).strip()
+        device_name = str(request.data.get('device_name', 'Faculty Device')).strip()
         platform = str(request.data.get('platform', 'WEB')).upper()
 
         if not device_uuid:
-            return Response({'error': 'Device unique identifier required.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Device identifier is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         DeviceModel = get_device_model()
         if not DeviceModel:
-            return Response({'success': True, 'message': 'Device registered for campus presence.'})
+            return Response({'success': True, 'message': 'Device registered for classroom scanning.'})
 
         model_fields = {f.name for f in DeviceModel._meta.fields}
         device_defaults = {
@@ -379,7 +449,7 @@ class UserDeviceRegisterAPIView(APIView):
             'success': True,
             'device_uuid': device.device_uuid,
             'status': getattr(device, 'approval_status', 'APPROVED'),
-            'message': 'Hardware device registered for attendance scanning.'
+            'message': 'Device registered for classroom attendance scanning.'
         }, status=status.HTTP_200_OK)
 
 
@@ -392,17 +462,14 @@ DeviceRegisterAPIView = UserDeviceRegisterAPIView
 
 class ClassListAPIView(APIView):
     """
-    Returns teaching classes for the authenticated faculty with enrolled student lists
+    Returns assigned classes for the signed-in faculty with enrolled class lists
     and today's real attendance status pre-calculated in fast batch queries.
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        faculty = resolve_faculty_for_user(user)
-        if not faculty:
-            faculty = FacultyProfile.objects.filter(account=user).first()
-
+        faculty = resolve_faculty_record(user)
         is_admin = is_leadership_role(user) or user.is_superuser
         view_mode = str(request.query_params.get('mode', '')).lower()
         today = timezone.localdate()
@@ -410,7 +477,10 @@ class ClassListAPIView(APIView):
         if is_admin and view_mode == 'all':
             scheds = Schedule.objects.all()
         elif faculty:
-            scheds = Schedule.objects.filter(Q(faculty=faculty) | Q(section__adviser=faculty)).distinct()
+            advisory_q = Q(section__adviser=faculty)
+            if hasattr(faculty, 'account_id'):
+                advisory_q |= Q(section__adviser__account_id=faculty.account_id)
+            scheds = Schedule.objects.filter(Q(faculty=faculty) | advisory_q).distinct()
         elif is_admin:
             scheds = Schedule.objects.all()
         else:
@@ -420,12 +490,14 @@ class ClassListAPIView(APIView):
         scheds_list = list(scheds)
         section_ids = [s.section_id for s in scheds_list if s.section_id]
 
+        extra_advisory = []
         if faculty:
-            extra_advisory = Section.objects.filter(adviser=faculty).exclude(id__in=section_ids).select_related('grade_level')
+            adv_filter = Q(adviser=faculty)
+            if hasattr(faculty, 'account_id'):
+                adv_filter |= Q(adviser__account_id=faculty.account_id)
+            extra_advisory = Section.objects.filter(adv_filter).exclude(id__in=section_ids).select_related('grade_level')
             for sec in extra_advisory:
                 section_ids.append(sec.id)
-        else:
-            extra_advisory = []
 
         enrollments_qs = (
             Enrollment.objects.filter(section_id__in=section_ids, status='ENROLLED', student__is_active=True)
@@ -439,6 +511,15 @@ class ClassListAPIView(APIView):
             if enr.student:
                 students_by_section.setdefault(enr.section_id, []).append(enr.student)
                 all_student_ids.append(enr.student_id)
+
+        for sec_id in section_ids:
+            if sec_id not in students_by_section:
+                direct_students = list(
+                    Student.objects.filter(section_id=sec_id, is_active=True).order_by('last_name', 'first_name')
+                )
+                if direct_students:
+                    students_by_section[sec_id] = direct_students
+                    all_student_ids.extend([st.id for st in direct_students])
 
         subject_logs = {
             (log['schedule_id'], log['student_id']): log['status']
@@ -489,6 +570,14 @@ class ClassListAPIView(APIView):
             start_str = str(s.start_time)[:5] if s.start_time else ''
             end_str = str(s.end_time)[:5] if s.end_time else ''
 
+            is_adv = bool(
+                faculty and (
+                    sec.adviser_id == faculty.id
+                    or getattr(sec, 'adviser', None) == faculty
+                    or getattr(sec.adviser, 'account_id', None) == getattr(user, 'id', None)
+                )
+            )
+
             classes_data.append({
                 'id': s.id,
                 'schedule_id': s.id,
@@ -508,7 +597,7 @@ class ClassListAPIView(APIView):
                 'enrolled_count': len(student_items),
                 'student_count': len(student_items),
                 'students': student_items,
-                'is_adviser': bool(faculty and sec.adviser_id == faculty.id),
+                'is_adviser': is_adv,
             })
             seen_section_ids.add(sec.id)
 
@@ -556,7 +645,11 @@ class FacultyClassroomListAPIView(APIView):
 
         today = timezone.localdate()
         students = (
-            Student.objects.filter(enrollments__section_id=section_id, enrollments__status='ENROLLED', is_active=True)
+            Student.objects.filter(
+                Q(enrollments__section_id=section_id, enrollments__status='ENROLLED') |
+                Q(section_id=section_id),
+                is_active=True
+            )
             .distinct()
             .order_by('last_name', 'first_name')
         )
@@ -591,16 +684,13 @@ FacultyClassroomClassListAPIView = FacultyClassroomListAPIView
 
 
 # ============================================================================
-# 4. BATCH CLASSROOM SCANNING (BULK IMPORT / MULTI-SCAN)
+# 4. BATCH CLASSROOM SCANNING (MULTI-SCAN SUBMISSION)
 # ============================================================================
 
 class ClassroomBatchScanAPIView(APIView):
     """
-    Records student attendance verified by a faculty inside the classroom.
-    Validates Gate Attendance:
-    - If the student has NO gate scan today: Flagged as UNVERIFIED.
-    - If the student's last gate scan was OUT: Flagged as CUTTING.
-    - If verified inside campus via Gate scan: Confirmed as PRESENT or LATE.
+    Records batch classroom attendance verified by faculty.
+    Flags students who belong to a different section.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -618,23 +708,15 @@ class ClassroomBatchScanAPIView(APIView):
             return Response({'error': 'Active class section not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         today = timezone.localdate()
-        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
-        today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
-
         sec_to_check = sched.section if sched else target_section
+
         enrolled_student_ids = set(
             Enrollment.objects.filter(section=sec_to_check, status='ENROLLED').values_list('student_id', flat=True)
         )
-
-        today_gate_logs = (
-            StudentGateLog.objects.filter(scan_time__gte=today_start, scan_time__lte=today_end)
-            .order_by('student_id', '-scan_time')
-            .values('student_id', 'direction')
-        )
-        latest_gate_dir = {}
-        for gl in today_gate_logs:
-            if gl['student_id'] not in latest_gate_dir:
-                latest_gate_dir[gl['student_id']] = gl['direction']
+        if not enrolled_student_ids:
+            enrolled_student_ids = set(
+                Student.objects.filter(section=sec_to_check, is_active=True).values_list('id', flat=True)
+            )
 
         scans_data = serializer.validated_data['scans']
         clean_tokens = [sanitize_qr_token(item['qr_token']) for item in scans_data]
@@ -646,16 +728,17 @@ class ClassroomBatchScanAPIView(APIView):
 
         token_to_student = {}
         for st in matched_students:
-            if st.qr_token: token_to_student[st.qr_token] = st
-            if st.rfid_uid: token_to_student[st.rfid_uid.upper()] = st
-            if st.lrn: token_to_student[str(st.lrn).strip()] = st
+            if st.qr_token:
+                token_to_student[st.qr_token] = st
+            if st.rfid_uid:
+                token_to_student[st.rfid_uid.upper()] = st
+            if st.lrn:
+                token_to_student[str(st.lrn).strip()] = st
 
         processed_records = []
         now_dt = timezone.now()
         now_time_str = timezone.localtime(now_dt).strftime('%I:%M:%S %p')
-        faculty = resolve_faculty_for_user(request.user)
-        if not faculty:
-            faculty = FacultyProfile.objects.filter(account=request.user).first()
+        faculty = resolve_faculty_record(request.user)
 
         for item in scans_data:
             token = sanitize_qr_token(item['qr_token'])
@@ -666,26 +749,16 @@ class ClassroomBatchScanAPIView(APIView):
                 continue
 
             is_enrolled = st.id in enrolled_student_ids
-            last_gate_scan = latest_gate_dir.get(st.id)
 
             if not is_enrolled:
                 is_anomaly = True
                 final_status = 'UNVERIFIED'
-                anomaly_remarks = 'Student is enrolled in a different class section.'
-            elif last_gate_scan is None:
-                is_anomaly = True
-                final_status = 'UNVERIFIED'
-                anomaly_remarks = 'FLAGGED: No gate entry recorded today. Possible fence jump or unscanned entrance.'
-            elif last_gate_scan == 'OUT':
-                is_anomaly = True
-                final_status = 'CUTTING'
-                anomaly_remarks = 'FLAGGED: Student was previously recorded exiting the campus gate.'
+                remarks_text = 'Student belongs to a different class section.'
             else:
                 is_anomaly = False
                 final_status = target_status
-                anomaly_remarks = 'Classroom attendance verified. Gate entry confirmed.'
+                remarks_text = 'Classroom attendance verified.'
 
-            # Safe update or create Subject Attendance Log
             if sched:
                 SubjectAttendanceLog.objects.update_or_create(
                     student=st,
@@ -698,7 +771,6 @@ class ClassroomBatchScanAPIView(APIView):
                     }
                 )
 
-            # Update Daily Attendance Summary for web portal
             if sec_to_check:
                 summary_status = final_status if final_status in ['PRESENT', 'LATE', 'CUTTING'] else 'ABSENT'
                 DailyAttendanceSummary.objects.update_or_create(
@@ -707,7 +779,7 @@ class ClassroomBatchScanAPIView(APIView):
                     defaults={
                         'section': sec_to_check,
                         'status': summary_status,
-                        'remarks': anomaly_remarks[:255],
+                        'remarks': remarks_text[:255],
                     }
                 )
 
@@ -724,7 +796,7 @@ class ClassroomBatchScanAPIView(APIView):
                 'section': sec_to_check.name if sec_to_check else '',
                 'status': final_status,
                 'is_anomaly': is_anomaly,
-                'remarks': anomaly_remarks,
+                'remarks': remarks_text,
                 'scan_time': now_time_str,
             })
 
@@ -737,46 +809,96 @@ class ClassroomBatchScanAPIView(APIView):
 
 
 # ============================================================================
-# 5. ADVISER SUBJECT ATTENDANCE MATRIX
+# 5. ADVISER SUBJECT ATTENDANCE & LOAFING MATRIX
 # ============================================================================
 
 class AdviserSectionMatrixAPIView(APIView):
     """
-    Returns a comprehensive subject attendance matrix for the Class Adviser.
-    Shows student-by-student attendance status across all subjects today.
+    Builds the cross-subject attendance matrix for the Class Adviser.
+    Loafing Rule (No Gate Scanner):
+    - If a student is PRESENT or LATE in at least one subject class today,
+      any other subject period where they are missing is flagged as CUTTING (Loafing).
+    - If a student has zero subject scans all day, they remain UNSCANNED (Absent).
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
         today = timezone.localdate()
-        faculty = resolve_faculty_for_user(user)
-        if not faculty:
-            faculty = FacultyProfile.objects.filter(account=user).first()
-
+        faculty = resolve_faculty_record(user)
         is_admin = is_leadership_role(user) or user.is_superuser
 
-        section_id = request.query_params.get('section_id')
-        if section_id and is_admin:
-            section = Section.objects.filter(id=section_id).first()
+        # 1. Identify permitted sections
+        if is_admin:
+            available_sections_qs = Section.objects.filter(is_active=True).select_related('grade_level').order_by('grade_level__name', 'name')
         elif faculty:
-            section = Section.objects.filter(adviser=faculty).first()
-            if not section and is_admin:
-                section = Section.objects.first()
-        else:
-            section = None
+            advisory_q = Q(adviser=faculty)
+            if hasattr(faculty, 'account_id'):
+                advisory_q |= Q(adviser__account_id=faculty.account_id)
+            if hasattr(faculty, 'user_id'):
+                advisory_q |= Q(adviser__user_id=faculty.user_id)
 
-        if not section:
+            advisory_ids = set(Section.objects.filter(advisory_q, is_active=True).values_list('id', flat=True))
+            teaching_ids = set(Schedule.objects.filter(faculty=faculty, is_active=True).values_list('section_id', flat=True))
+            allowed_ids = advisory_ids | teaching_ids
+
+            available_sections_qs = Section.objects.filter(id__in=allowed_ids, is_active=True).select_related('grade_level').order_by('grade_level__name', 'name')
+        else:
+            available_sections_qs = Section.objects.none()
+
+        advisory_section_ids = set()
+        if faculty:
+            adv_filter = Q(adviser=faculty)
+            if hasattr(faculty, 'account_id'):
+                adv_filter |= Q(adviser__account_id=faculty.account_id)
+            if hasattr(faculty, 'user_id'):
+                adv_filter |= Q(adviser__user_id=faculty.user_id)
+            advisory_section_ids = set(Section.objects.filter(adv_filter, is_active=True).values_list('id', flat=True))
+
+        available_sections = [
+            {
+                'id': s.id,
+                'name': s.name,
+                'grade_level': s.grade_level.name if s.grade_level else '',
+                'is_adviser': s.id in advisory_section_ids,
+            }
+            for s in available_sections_qs
+        ]
+
+        # 2. Pick target section
+        target_section = None
+        raw_section_id = request.query_params.get('section_id')
+
+        if raw_section_id and str(raw_section_id).isdigit():
+            target_id = int(raw_section_id)
+            if is_admin:
+                target_section = Section.objects.filter(id=target_id, is_active=True).select_related('grade_level').first()
+            else:
+                target_section = available_sections_qs.filter(id=target_id).first()
+
+        if not target_section and advisory_section_ids:
+            first_adv_id = next(iter(advisory_section_ids))
+            target_section = available_sections_qs.filter(id=first_adv_id).first()
+
+        if not target_section and available_sections_qs.exists():
+            target_section = available_sections_qs.first()
+
+        if not target_section:
             return Response({
                 'has_advisory_class': False,
-                'message': 'No advisory class section linked to this account.',
+                'message': 'No advisory or assigned teaching class found for this account.',
+                'available_sections': available_sections,
                 'schedules': [],
                 'matrix': []
             }, status=status.HTTP_200_OK)
 
+        # 3. Retrieve Scheduled Subjects ordered chronologically
         schedules = Schedule.objects.filter(
-            section=section
+            section=target_section,
+            is_active=True
         ).select_related('subject', 'faculty').order_by('start_time')
+
+        schedules_list = list(schedules)
 
         schedule_headers = [
             {
@@ -786,55 +908,66 @@ class AdviserSectionMatrixAPIView(APIView):
                 'faculty_name': s.faculty.full_name if s.faculty else 'Unassigned',
                 'time_window': f"{str(s.start_time)[:5]} - {str(s.end_time)[:5]}" if s.start_time else 'All Day',
             }
-            for s in schedules
+            for s in schedules_list
         ]
 
+        # 4. Retrieve Enrolled Class List
         enrollments = Enrollment.objects.filter(
-            section=section,
+            section=target_section,
             status='ENROLLED',
             student__is_active=True
         ).select_related('student').order_by('student__last_name', 'student__first_name')
 
         students = [e.student for e in enrollments if e.student]
+        if not students:
+            students = list(
+                Student.objects.filter(section=target_section, is_active=True).order_by('last_name', 'first_name')
+            )
+
         student_ids = [s.id for s in students]
 
+        # 5. Fetch All Subject Logs for Today in Single Fast Query
         subject_logs = SubjectAttendanceLog.objects.filter(
             attendance_date=today,
             student_id__in=student_ids
-        ).values('student_id', 'schedule_id', 'status', 'scan_time')
+        ).values('student_id', 'schedule_id', 'status', 'scanned_at')
 
         log_map = {}
+        first_seen_map = {}
+
         for entry in subject_logs:
-            key = (entry['student_id'], entry['schedule_id'])
-            log_map[key] = {
-                'status': entry['status'],
-                'scan_time': entry['scan_time'].strftime('%I:%M %p') if entry['scan_time'] else ''
+            st_id = entry['student_id']
+            sched_id = entry['schedule_id']
+            st_status = str(entry['status'] or '').upper()
+            raw_dt = entry['scanned_at']
+
+            time_label = timezone.localtime(raw_dt).strftime('%I:%M %p') if raw_dt else ''
+            log_map[(st_id, sched_id)] = {
+                'status': st_status,
+                'scan_time': time_label,
             }
 
-        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
-        today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+            if st_status in ['PRESENT', 'LATE'] and raw_dt:
+                if st_id not in first_seen_map or raw_dt < first_seen_map[st_id]['dt']:
+                    first_seen_map[st_id] = {
+                        'dt': raw_dt,
+                        'time_label': time_label,
+                    }
 
-        gate_logs = StudentGateLog.objects.filter(
-            student_id__in=student_ids,
-            scan_time__gte=today_start,
-            scan_time__lte=today_end
-        ).order_by('student_id', '-scan_time').values('student_id', 'direction', 'scan_time')
-
-        latest_gate = {}
-        for gl in gate_logs:
-            if gl['student_id'] not in latest_gate:
-                latest_gate[gl['student_id']] = {
-                    'direction': gl['direction'],
-                    'time': gl['scan_time'].strftime('%I:%M %p')
-                }
-
+        # 6. Build Matrix Rows with Cross-Period Loafing Detection
         matrix_rows = []
         for idx, st in enumerate(students, start=1):
             subjects_attended = 0
             subjects_cutting = 0
             subject_details = []
 
-            for s in schedules:
+            # Check if student was seen in at least one subject class today
+            attended_any_today = any(
+                (log_map.get((st.id, s.id), {}).get('status') in ['PRESENT', 'LATE'])
+                for s in schedules_list
+            )
+
+            for s in schedules_list:
                 record = log_map.get((st.id, s.id))
                 if record:
                     st_status = record['status']
@@ -844,8 +977,14 @@ class AdviserSectionMatrixAPIView(APIView):
                     elif st_status == 'CUTTING':
                         subjects_cutting += 1
                 else:
-                    st_status = 'UNSCANNED'
-                    scan_t = ''
+                    # Student was present in another class today but skipped this subject -> Loafing!
+                    if attended_any_today:
+                        st_status = 'CUTTING'
+                        scan_t = ''
+                        subjects_cutting += 1
+                    else:
+                        st_status = 'UNSCANNED'
+                        scan_t = ''
 
                 subject_details.append({
                     'schedule_id': s.id,
@@ -854,13 +993,18 @@ class AdviserSectionMatrixAPIView(APIView):
                     'time': scan_t,
                 })
 
-            gate_info = latest_gate.get(st.id)
-            gate_display = (
-                f"Entered at {gate_info['time']}" if gate_info and gate_info['direction'] == 'IN'
-                else (f"Exited at {gate_info['time']}" if gate_info and gate_info['direction'] == 'OUT' else "No Gate Scan")
-            )
+            first_seen = first_seen_map.get(st.id)
+            if first_seen:
+                campus_status = f"First seen at {first_seen['time_label']}"
+                presence_state = 'ACTIVE'
+            elif attended_any_today:
+                campus_status = "Present in Class"
+                presence_state = 'ACTIVE'
+            else:
+                campus_status = "No Class Scans Yet"
+                presence_state = 'NONE'
 
-            total_subjects = len(schedules)
+            total_subjects = len(schedules_list)
             compliance_rate = round((subjects_attended / total_subjects) * 100) if total_subjects > 0 else 0
 
             matrix_rows.append({
@@ -869,8 +1013,8 @@ class AdviserSectionMatrixAPIView(APIView):
                 'student_name': format_full_student_name(st),
                 'lrn': str(st.lrn),
                 'photo_url': resolve_student_photo_url(st, request),
-                'gate_status': gate_display,
-                'gate_direction': gate_info['direction'] if gate_info else 'NONE',
+                'campus_status': campus_status,
+                'presence_state': presence_state,
                 'attended_count': subjects_attended,
                 'cutting_count': subjects_cutting,
                 'total_subjects': total_subjects,
@@ -878,12 +1022,19 @@ class AdviserSectionMatrixAPIView(APIView):
                 'subjects': subject_details,
             })
 
+        is_adv_of_target = target_section.id in advisory_section_ids
+
         return Response({
             'has_advisory_class': True,
-            'section_id': section.id,
-            'section_name': section.name,
-            'grade_level': section.grade_level.name if section.grade_level else '',
+            'is_adviser': is_adv_of_target,
+            'section_id': target_section.id,
+            'section_name': target_section.name,
+            'grade_level': target_section.grade_level.name if target_section.grade_level else '',
             'total_students': len(students),
+            'available_sections': available_sections,
             'schedules': schedule_headers,
             'matrix': matrix_rows,
         }, status=status.HTTP_200_OK)
+
+
+AdviserMatrixAPIView = AdviserSectionMatrixAPIView

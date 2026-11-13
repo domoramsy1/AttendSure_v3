@@ -237,7 +237,7 @@ def run_organization():
     # Step 3: Move loose JSON store files from apps/ to scripts/data/
     data_dir = BASE_DIR / "scripts" / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    for json_name in ["rooms_store.json", "telemetry_store.json"]:
+    for json_name in ["results/rooms_store.json", "results/telemetry_store.json"]:
         source_json = BASE_DIR / "apps" / json_name
         if source_json.exists():
             dest = data_dir / json_name

@@ -1,6 +1,7 @@
 /**
- * AttendSure V3 - Enhanced Mobile Classroom & OTG Barcode Scanner
+ * AttendSure V3 - Mobile Classroom Attendance Camera Scanner
  * File: mobile/src/screens/ScannerScreen.tsx
+ * Optical camera only. OTG barcode gun handling is reserved for the web application.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -9,7 +10,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   Alert,
   ActivityIndicator,
   Animated,
@@ -41,23 +41,20 @@ export const ScannerScreen: React.FC = () => {
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
 
-  // Mode states: Camera View vs USB-C OTG Barcode Gun
-  const [isOtgMode, setIsOtgMode] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [otgBuffer, setOtgBuffer] = useState('');
-
   const [activeStudent, setActiveStudent] = useState<VerifiedStudent | null>(null);
   const [scannedHistory, setScannedHistory] = useState<VerifiedStudent[]>([]);
   const [showHistorySheet, setShowHistorySheet] = useState(false);
 
-  // Hardware scanner ref typed safely to prevent flow type conflicts
-  const otgInputRef = useRef<any>(null);
+  // Fast scanning locks: prevent redundant camera frame triggers
+  const isProcessingRef = useRef(false);
+  const lastScannedCodeRef = useRef('');
+  const lastScannedTimeRef = useRef(0);
   const laserAnim = useRef(new Animated.Value(0)).current;
 
   // Viewfinder laser line animation
   useEffect(() => {
-    if (isOtgMode) return;
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(laserAnim, {
@@ -74,19 +71,40 @@ export const ScannerScreen: React.FC = () => {
     );
     loop.start();
     return () => loop.stop();
-  }, [isOtgMode, laserAnim]);
+  }, [laserAnim]);
 
-  // Handle scanned identifier from either Camera or OTG Gun
+  // Cybersecurity: Clean and validate QR code data before dispatching
+  const sanitizeScanInput = (raw: string): string | null => {
+    if (!raw || typeof raw !== 'string') return null;
+    const clean = raw.trim().replace(/[\r\n\t]/g, '');
+
+    // Allow only alphanumeric identifiers, dashes, and underscores (3 to 64 characters)
+    const validPattern = /^[a-zA-Z0-9\-_:]{3,64}$/;
+    if (!validPattern.test(clean)) return null;
+    return clean;
+  };
+
   const handleProcessCode = useCallback(
     async (rawCode: string) => {
-      const clean = rawCode.trim().replace(/[\r\n]/g, '');
-      if (!clean) return;
+      const cleanCode = sanitizeScanInput(rawCode);
+      const now = Date.now();
 
+      // Drop malicious, malformed, or rapid duplicate camera triggers
+      if (!cleanCode) return;
+      if (isProcessingRef.current) return;
+      if (cleanCode === lastScannedCodeRef.current && now - lastScannedTimeRef.current < 4000) {
+        return;
+      }
+
+      isProcessingRef.current = true;
+      lastScannedCodeRef.current = cleanCode;
+      lastScannedTimeRef.current = now;
       setLoading(true);
+
       try {
         const deviceUuid = `MOBILE-${Platform.OS}-${user?.username || 'STAFF'}`;
         const res = await apiClient.post('academics/classroom-scan/', {
-          code: clean,
+          code: cleanCode,
           device_uuid: deviceUuid,
         });
 
@@ -98,44 +116,39 @@ export const ScannerScreen: React.FC = () => {
             section: res.data.section,
             authorization_role: res.data.authorization_role || 'Faculty',
             scanned_at: res.data.scanned_at,
-            photo_url: res.data.photo_url,
+            photo_url: res.data.photo_url || null,
             gate_status_note: res.data.gate_status_note,
             is_duplicate: Boolean(res.data.is_duplicate),
           };
 
           setActiveStudent(student);
 
-          // Haptic Feedback
           if (student.is_duplicate) {
-            Vibration.vibrate(180);
+            Vibration.vibrate(120);
           } else {
-            Vibration.vibrate([0, 60, 40, 60]);
-            setScannedHistory((prev) => [student, ...prev.filter((s) => s.lrn !== student.lrn)]);
+            Vibration.vibrate([0, 50, 40, 50]);
+            setScannedHistory((prev) => [
+              student,
+              ...prev.filter((item) => item.lrn !== student.lrn),
+            ]);
           }
         }
       } catch (err: any) {
-        Vibration.vibrate(280);
-        const errMsg =
+        Vibration.vibrate(250);
+        const errorMessage =
           err?.response?.data?.error ||
-          'Scan Denied: Student is not enrolled in your advisory or subject class.';
-        Alert.alert('Verification Notice', errMsg);
+          'Attendance could not be recorded. Ensure the student is enrolled in this section.';
+        Alert.alert('Attendance Alert', errorMessage);
       } finally {
         setLoading(false);
-        setOtgBuffer('');
+        // Small delay before unlocking camera frames to keep processing smooth
+        setTimeout(() => {
+          isProcessingRef.current = false;
+        }, 1200);
       }
     },
     [user]
   );
-
-  // Maintain hidden input focus for hardware barcode readers
-  useEffect(() => {
-    if (isOtgMode) {
-      const interval = setInterval(() => {
-        otgInputRef.current?.focus();
-      }, 1200);
-      return () => clearInterval(interval);
-    }
-  }, [isOtgMode]);
 
   if (!permission) {
     return (
@@ -145,20 +158,17 @@ export const ScannerScreen: React.FC = () => {
     );
   }
 
-  if (!permission.granted && !isOtgMode) {
+  if (!permission.granted) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.permissionBox}>
-          <Ionicons name="camera-outline" size={54} color={COLORS.primary} />
-          <Text style={styles.permissionTitle}>Camera Permission Required</Text>
+          <Ionicons name="camera-outline" size={56} color={COLORS.primary} />
+          <Text style={styles.permissionTitle}>Camera Access Required</Text>
           <Text style={styles.permissionDesc}>
-            Enable camera access to scan student ID QR codes, or switch to an OTG USB/Bluetooth scanner gun.
+            The mobile application uses your phone camera to scan student ID cards for classroom attendance.
           </Text>
           <TouchableOpacity style={styles.primaryBtn} onPress={requestPermission}>
             <Text style={styles.btnTextWhite}>Allow Camera Access</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={() => setIsOtgMode(true)}>
-            <Text style={styles.secondaryBtnText}>Use OTG Barcode Scanner Instead</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -172,112 +182,63 @@ export const ScannerScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Top Controls Bar */}
+      {/* Header Bar */}
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>Classroom Scanner</Text>
-          <Text style={styles.headerSubtitle}>
-            {isOtgMode ? 'OTG Hardware Gun Mode' : 'Optical QR Camera Mode'}
-          </Text>
+          <Text style={styles.headerSubtitle}>Optical Camera Attendance Mode</Text>
         </View>
 
-        <View style={styles.headerActions}>
-          {!isOtgMode && (
-            <TouchableOpacity
-              style={[styles.actionIconBtn, torchOn && styles.actionIconBtnActive]}
-              onPress={() => setTorchOn(!torchOn)}
-            >
-              <Ionicons
-                name={torchOn ? 'flash' : 'flash-outline'}
-                size={18}
-                color={torchOn ? '#f59e0b' : '#334155'}
-              />
-            </TouchableOpacity>
-          )}
-
-          <TouchableOpacity
-            style={styles.switchModePill}
-            onPress={() => {
-              setIsOtgMode(!isOtgMode);
-              setActiveStudent(null);
-            }}
-          >
-            <Ionicons
-              name={isOtgMode ? 'camera-outline' : 'hardware-chip-outline'}
-              size={15}
-              color="#ffffff"
-            />
-            <Text style={styles.switchModeText}>
-              {isOtgMode ? 'Camera' : 'OTG Gun'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={[styles.actionIconBtn, torchOn && styles.actionIconBtnActive]}
+          onPress={() => setTorchOn(!torchOn)}
+        >
+          <Ionicons
+            name={torchOn ? 'flash' : 'flash-outline'}
+            size={18}
+            color={torchOn ? '#f59e0b' : '#334155'}
+          />
+        </TouchableOpacity>
       </View>
 
-      {/* Main View Area */}
-      <View style={styles.mainView}>
-        {isOtgMode ? (
-          <View style={styles.otgStation}>
-            <View style={styles.otgIconCircle}>
-              <Ionicons name="barcode-outline" size={54} color={COLORS.primary} />
-            </View>
-            <Text style={styles.otgHeading}>OTG Scanner Listening</Text>
-            <Text style={styles.otgSub}>
-              Connect your USB-C or Bluetooth barcode reader. Point at the student ID and pull the trigger.
-            </Text>
+      {/* Main Camera Viewport */}
+      <View style={styles.cameraContainer}>
+        <CameraView
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          enableTorch={torchOn}
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr', 'code128', 'ean13'],
+          }}
+          onBarcodeScanned={({ data }) => {
+            if (data) {
+              handleProcessCode(data);
+            }
+          }}
+        />
 
-            {/* Hidden Input for Hardware Keystrokes */}
-            <TextInput
-              ref={otgInputRef}
-              style={styles.hiddenOtgInput}
-              value={otgBuffer}
-              onChangeText={setOtgBuffer}
-              onSubmitEditing={() => handleProcessCode(otgBuffer)}
-              autoFocus
-              showSoftInputOnFocus={false}
-              blurOnSubmit={false}
+        {/* Viewfinder Target */}
+        <View style={styles.viewfinderCenter}>
+          <View style={styles.targetWindow}>
+            <Animated.View
+              style={[
+                styles.laserLine,
+                { transform: [{ translateY: laserTranslate }] },
+              ]}
             />
-
-            <View style={styles.pulseContainer}>
-              <View style={styles.pulseOrb} />
-              <Text style={styles.pulseText}>Listening for hardware taps...</Text>
-            </View>
-
-            {loading && <ActivityIndicator size="small" color={COLORS.primary} style={{ marginTop: 12 }} />}
           </View>
-        ) : (
-          <View style={styles.cameraContainer}>
-            <CameraView
-              style={StyleSheet.absoluteFill}
-              facing="back"
-              enableTorch={torchOn}
-              barcodeScannerSettings={{
-                barcodeTypes: ['qr', 'code128', 'ean13'],
-              }}
-              onBarcodeScanned={({ data }) => {
-                if (!loading && data) {
-                  handleProcessCode(data);
-                }
-              }}
-            />
+          <Text style={styles.viewfinderHint}>Align Student QR Code inside frame</Text>
+        </View>
 
-            {/* Target Viewfinder Overlay */}
-            <View style={styles.viewfinderCenter}>
-              <View style={styles.targetWindow}>
-                <Animated.View
-                  style={[
-                    styles.laserLine,
-                    { transform: [{ translateY: laserTranslate }] },
-                  ]}
-                />
-              </View>
-              <Text style={styles.viewfinderHint}>Align QR code inside box</Text>
-            </View>
+        {loading && (
+          <View style={styles.loadingOverlay}>
+            <ActivityIndicator size="small" color="#ffffff" />
+            <Text style={styles.loadingOverlayText}>Checking record...</Text>
           </View>
         )}
       </View>
 
-      {/* Verified Student Result Card */}
+      {/* Verified Student Confirmation Card */}
       {activeStudent && (
         <View style={styles.verifiedCard}>
           <View style={styles.verifiedRow}>
@@ -306,7 +267,7 @@ export const ScannerScreen: React.FC = () => {
                       { color: activeStudent.is_duplicate ? '#d97706' : '#059669' },
                     ]}
                   >
-                    {activeStudent.is_duplicate ? 'DUPLICATE' : 'PRESENT'}
+                    {activeStudent.is_duplicate ? 'ALREADY SCANNED' : 'PRESENT'}
                   </Text>
                 </View>
               </View>
@@ -315,7 +276,7 @@ export const ScannerScreen: React.FC = () => {
                 LRN: {activeStudent.lrn} &bull; {activeStudent.section}
               </Text>
               <Text style={styles.authBadge}>
-                Verified by {activeStudent.authorization_role} at {activeStudent.scanned_at}
+                Recorded by {activeStudent.authorization_role} at {activeStudent.scanned_at}
               </Text>
             </View>
 
@@ -326,12 +287,15 @@ export const ScannerScreen: React.FC = () => {
         </View>
       )}
 
-      {/* Session Class List Counter Footer */}
+      {/* Bottom Bar: Scanned Count & Class List */}
       <View style={styles.bottomBar}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <Ionicons name="people-outline" size={16} color="#64748b" />
           <Text style={styles.bottomBarText}>
-            Scanned This Period: <Text style={{ fontWeight: '800', color: COLORS.primary }}>{scannedHistory.length}</Text>
+            Class List Scanned Today:{' '}
+            <Text style={{ fontWeight: '800', color: COLORS.primary }}>
+              {scannedHistory.length}
+            </Text>
           </Text>
         </View>
 
@@ -344,10 +308,10 @@ export const ScannerScreen: React.FC = () => {
         )}
       </View>
 
-      {/* Recent Scans Drawer */}
+      {/* Class List Drawer */}
       {showHistorySheet && (
         <View style={styles.historyDrawer}>
-          <Text style={styles.drawerTitle}>Scanned Today ({scannedHistory.length})</Text>
+          <Text style={styles.drawerTitle}>Class List Scans ({scannedHistory.length})</Text>
           <FlatList
             data={scannedHistory}
             keyExtractor={(item) => item.lrn}
@@ -380,28 +344,16 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: '800', color: '#003460' },
   headerSubtitle: { fontSize: 11, color: '#64748b' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   actionIconBtn: {
-    width: 34,
-    height: 34,
+    width: 36,
+    height: 36,
     borderRadius: 8,
     backgroundColor: '#f1f5f9',
     alignItems: 'center',
     justifyContent: 'center',
   },
   actionIconBtnActive: { backgroundColor: '#fef3c7' },
-  switchModePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.primary,
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    gap: 4,
-  },
-  switchModeText: { fontSize: 11.5, fontWeight: '700', color: '#ffffff' },
-  mainView: { flex: 1, backgroundColor: '#000000' },
-  cameraContainer: { flex: 1, position: 'relative' },
+  cameraContainer: { flex: 1, position: 'relative', backgroundColor: '#000000' },
   viewfinderCenter: {
     flex: 1,
     justifyContent: 'center',
@@ -409,8 +361,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.3)',
   },
   targetWindow: {
-    width: 210,
-    height: 210,
+    width: 220,
+    height: 220,
     borderWidth: 2,
     borderColor: '#38bdf8',
     borderRadius: 16,
@@ -436,49 +388,19 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 12,
   },
-  otgStation: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  otgIconCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: '#e0f2fe',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  otgHeading: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
-  otgSub: {
-    fontSize: 12.5,
-    color: '#64748b',
-    textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 18,
-    maxWidth: 280,
-  },
-  hiddenOtgInput: { width: 1, height: 1, opacity: 0.01 },
-  pulseContainer: {
+  loadingOverlay: {
+    position: 'absolute',
+    top: 20,
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginTop: 24,
+    backgroundColor: 'rgba(0,0,0,0.75)',
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 6,
     borderRadius: 20,
-    backgroundColor: '#f1f5f9',
   },
-  pulseOrb: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#10b981',
-  },
-  pulseText: { fontSize: 11.5, fontWeight: '700', color: '#334155' },
+  loadingOverlayText: { color: '#ffffff', fontSize: 12, fontWeight: '700' },
   verifiedCard: {
     position: 'absolute',
     bottom: 52,
@@ -561,8 +483,6 @@ const styles = StyleSheet.create({
     marginTop: 18,
   },
   btnTextWhite: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
-  secondaryBtn: { marginTop: 12 },
-  secondaryBtnText: { color: COLORS.primary, fontSize: 12.5, fontWeight: '700' },
 });
 
 export default ScannerScreen;

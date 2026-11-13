@@ -351,14 +351,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               }}
             >
               <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: isOnline ? brand.success : brand.danger }} />
-              {isOnline ? 'DATABASE CONNECTED' : 'DATABASE OFFLINE'}
+              {isOnline ? 'ONLINE' : 'OFFLINE'}
             </span>
 
             {isAdmin && (
               <>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
                   <Database size={13} color={brand.primary} />
-                  <span>PostgreSQL: {isOnline ? 'Active' : 'Offline'}</span>
+                  <span>Server: {isOnline ? 'Active' : 'Offline'}</span>
                 </span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
                   <Radio size={13} color={brand.primary} />

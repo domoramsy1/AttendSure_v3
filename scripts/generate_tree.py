@@ -33,7 +33,7 @@ EXCLUDE_FILES = {
 }
 
 
-def generate_tree(start_dir: str, output_file: str = "file_structure.txt"):
+def generate_tree(start_dir: str, output_file: str = "file_results/structure.txt"):
     """
     Recursively scans the directory and outputs a visual ASCII tree
     to a .txt file, excluding libraries, virtual environments, and caches.
@@ -88,4 +88,4 @@ def generate_tree(start_dir: str, output_file: str = "file_structure.txt"):
 if __name__ == "__main__":
     # Scans the directory where the script is run
     current_directory = os.path.dirname(os.path.abspath(__file__))
-    generate_tree(current_directory, "file_structure.txt")
+    generate_tree(current_directory, "file_results/structure.txt")
