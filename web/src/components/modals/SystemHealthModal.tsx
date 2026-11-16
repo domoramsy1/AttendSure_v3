@@ -27,7 +27,7 @@ interface SystemHealthModalProps {
 
 interface IssueItem {
   id: string;
-  category: 'SMS' | 'GATE' | 'DATABASE' | 'ACCOUNTS';
+  category: 'push' | 'GATE' | 'DATABASE' | 'ACCOUNTS';
   title: string;
   whatHappened: string;
   whatItMeans: string;
@@ -46,7 +46,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
   const [fixSuccessMessage, setFixSuccessMessage] = useState<string | null>(null);
   const [issues, setIssues] = useState<IssueItem[]>([]);
 
-  // Checks hardware, database, SMS outbox, and account status
+  // Checks hardware, database, push alerts, and account status
   const runDiagnostics = useCallback(async () => {
     setScanning(true);
     setFixSuccessMessage(null);
@@ -61,8 +61,8 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
       ]);
 
       const schoolRes = results[0].status === 'fulfilled' ? results[0].value : null;
-      const smsRes = results[1].status === 'fulfilled' ? results[1].value : null;
-      const kioskRes = results[2].status === 'fulfilled' ? results[2].value : null;
+      const pushRes = results[1].status === 'fulfilled' ? results[1].value : null;
+      const stationRes = results[2].status === 'fulfilled' ? results[2].value : null;
       const usersRes = results[3].status === 'fulfilled' ? results[3].value : null;
 
       // 1. Check Database connection
@@ -80,24 +80,24 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
         });
       }
 
-      // 2. Check SMS queue and modem
-      if (smsRes?.data) {
-        const pending = Number(smsRes.data.pending_total || smsRes.data.pending_queue || 0);
-        const failed = Number(smsRes.data.failed_today || smsRes.data.failed_count || 0);
+      // 2. Check push queue and push_engine
+      if (pushRes?.data) {
+        const pending = Number(pushRes.data.pending_total || pushRes.data.pending_queue || 0);
+        const failed = Number(pushRes.data.failed_today || pushRes.data.failed_count || 0);
 
         if (pending > 20 || failed > 0) {
           discoveredIssues.push({
-            id: 'sms-stuck',
-            category: 'SMS',
+            id: 'push-stuck',
+            category: 'push',
             title: `${pending} text message(s) waiting to be sent to parents`,
-            whatHappened: 'The GSM text modem connected to the server computer has paused delivery.',
+            whatHappened: 'The GSM text push_engine connected to the server computer has paused delivery.',
             whatItMeans: 'Parents have not yet received attendance notifications on their phones.',
             solutionType: 'AUTO_BUTTON',
-            actionButtonLabel: 'Restart SMS Sending Queue',
+            actionButtonLabel: 'Restart push Sending Queue',
             actionEndpoint: '/system/status/',
             physicalSteps: [
-              'Check if the USB Text Modem dongle is firmly plugged into the computer USB port.',
-              'Ensure the school SIM card inside the modem has regular airtime load or an active SMS promo.',
+              'Check if the USB Text push_engine dongle is firmly plugged into the computer USB port.',
+              'Ensure the school SIM card inside the push_engine has regular airtime load or an active push promo.',
             ],
             severity: pending > 100 ? 'CRITICAL' : 'WARNING',
           });
@@ -105,20 +105,20 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
       }
 
       // 3. Check Gate Scanner Hardware
-      if (kioskRes?.data) {
-        const stationList = Array.isArray(kioskRes.data)
-          ? kioskRes.data
-          : kioskRes.data.results || [];
+      if (stationRes?.data) {
+        const stationList = Array.isArray(stationRes.data)
+          ? stationRes.data
+          : stationRes.data.results || [];
         const offlineStations = stationList.filter(
           (k: { is_online?: boolean; is_active?: boolean }) => k.is_active && !k.is_online
         );
 
         if (offlineStations.length > 0) {
           discoveredIssues.push({
-            id: 'kiosk-offline',
+            id: 'station-offline',
             category: 'GATE',
             title: `${offlineStations.length} Software Station(s) offline`,
-            whatHappened: 'The main gate scanner turnstile has lost connection to the server.',
+            whatHappened: 'The main gate scanner entry_point has lost connection to the server.',
             whatItMeans: 'Student and teacher ID card taps at this gate will not register on screen.',
             solutionType: 'AUTO_BUTTON',
             actionButtonLabel: 'Wake Up USB QR & Campus GPS',
@@ -369,7 +369,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                 Checking School Systems...
               </div>
               <p style={{ margin: '4px 0 0 0', fontSize: '0.76rem', color: tokens.textMuted }}>
-                Verifying gate scanner hardware, parent SMS modem, and student records.
+                Verifying gate scanner hardware, parent push push_engine, and student records.
               </p>
             </div>
           ) : issues.length === 0 ? (
@@ -421,7 +421,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   lineHeight: 1.5,
                 }}
               >
-                Gate scanners are recording arrival taps, the parent SMS modem is ready, and the school database is safely saving records.
+                Gate scanners are recording arrival taps, the parent push push_engine is ready, and the school database is safely saving records.
               </p>
 
               <div
@@ -449,7 +449,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   <MessageSquare size={14} color="#059669" />
                   <div>
                     <div style={{ fontWeight: 800, fontSize: '0.74rem', color: tokens.textPrimary }}>
-                      Parent SMS
+                      Parent push
                     </div>
                     <div style={{ fontSize: '0.66rem', color: '#059669', fontWeight: 700 }}>
                       Ready to Send
@@ -522,7 +522,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                           marginTop: 2,
                         }}
                       >
-                        {issue.category === 'SMS' && <MessageSquare size={18} color="#D97706" />}
+                        {issue.category === 'push' && <MessageSquare size={18} color="#D97706" />}
                         {issue.category === 'GATE' && <Radio size={18} color="#DC2626" />}
                         {issue.category === 'DATABASE' && <Database size={18} color="#DC2626" />}
                         {issue.category === 'ACCOUNTS' && <Unlock size={18} color="#D97706" />}

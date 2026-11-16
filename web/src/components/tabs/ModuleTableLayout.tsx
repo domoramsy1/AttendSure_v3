@@ -6,7 +6,7 @@
  * 1. Consistent title, subtitle, and search filter headers.
  * 2. Support for extra actions (filters, selectors) and bottom pagination slots.
  * 3. Type-safe ReactNode imports compliant with verbatimModuleSyntax.
- * 4. Responsive table overflow wrapper for kiosk and tablet displays.
+ * 4. Responsive table overflow wrapper for station and tablet displays.
  * 5. Defensive data unwrapping for direct arrays and paginated API payloads.
  */
 

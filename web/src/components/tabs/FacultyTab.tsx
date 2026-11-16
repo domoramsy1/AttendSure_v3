@@ -36,7 +36,7 @@ export interface Faculty {
   department: string;
   contact_number?: string;
   email?: string;
-  rfid_uid?: string;
+  qr_token?: string;
   photo?: string | null;
   photo_url?: string | null;
   is_active: boolean;
@@ -124,7 +124,7 @@ const INITIAL_FORM_DATA = {
   department: 'Junior High School',
   contact_number: '',
   email: '',
-  rfid_uid: '',
+  qr_token: '',
   photo: null as string | null,
 };
 
@@ -267,7 +267,7 @@ export const FacultyTab: React.FC = () => {
     const suffix = pageSize >= ALL_ROWS_SIZE ? 'ALL' : `Page${currentPage}_${pageSize}rows`;
     const exported = exportToCsv(
       `AttendSure_Faculty_${suffix}.csv`,
-      ['Employee ID', 'Full Name', 'Position', 'Department', 'Email', 'Contact', 'RFID UID', 'Status'],
+      ['Employee ID', 'Full Name', 'Position', 'Department', 'Email', 'Contact', 'qr_id UID', 'Status'],
       facultys.map((f) => [
         f.employee_id,
         f.full_name,
@@ -275,7 +275,7 @@ export const FacultyTab: React.FC = () => {
         f.department,
         f.email || '',
         f.contact_number || '',
-        f.rfid_uid || '',
+        f.qr_token || '',
         f.is_active ? 'ACTIVE' : 'INACTIVE',
       ])
     );
@@ -349,7 +349,7 @@ export const FacultyTab: React.FC = () => {
       department: faculty.department || 'Junior High School',
       contact_number: faculty.contact_number || '',
       email: faculty.email || '',
-      rfid_uid: faculty.rfid_uid || '',
+      qr_token: faculty.qr_token || '',
       photo: null,
     });
     setPhotoPreview(faculty.photo_url || faculty.photo || null);
@@ -372,7 +372,7 @@ export const FacultyTab: React.FC = () => {
       department: formData.department.trim(),
       email: formData.email.trim().toLowerCase(),
       contact_number: cleanedContact,
-      rfid_uid: formData.rfid_uid.trim().toUpperCase() || null,
+      qr_token: formData.qr_token.trim().toUpperCase() || null,
     };
 
     if (formData.photo !== null) {
@@ -402,7 +402,7 @@ export const FacultyTab: React.FC = () => {
     } catch (err: any) {
       const serverMessage =
         err.response?.data?.employee_id?.[0] ||
-        err.response?.data?.rfid_uid?.[0] ||
+        err.response?.data?.qr_token?.[0] ||
         err.response?.data?.email?.[0] ||
         err.response?.data?.detail ||
         'Failed to save faculty record. Please verify details.';
@@ -446,7 +446,7 @@ export const FacultyTab: React.FC = () => {
   };
 
   const activeFacultyCount = facultys.filter((f) => f.is_active).length;
-  const pairedCardsCount = facultys.filter((f) => Boolean(f.rfid_uid && f.rfid_uid.trim().length > 0)).length;
+  const pairedCardsCount = facultys.filter((f) => Boolean(f.qr_token && f.qr_token.trim().length > 0)).length;
   const uniqueDepartments = new Set(facultys.map((f) => f.department).filter(Boolean)).size;
 
 
@@ -578,7 +578,7 @@ export const FacultyTab: React.FC = () => {
         </div>
 
         <div style={dynamicStyles.statCard}>
-          <div style={dynamicStyles.statLabel}>RFID CARDS PAIRED</div>
+          <div style={dynamicStyles.statLabel}>qr_id CARDS PAIRED</div>
           <div style={{ ...dynamicStyles.statValue, color: brand.primary }}>
             {pairedCardsCount}
             <span style={{ fontSize: '0.82rem', color: tokens.textMuted, fontWeight: 500 }}>
@@ -647,7 +647,7 @@ export const FacultyTab: React.FC = () => {
                 <th style={dynamicStyles.th}>Position</th>
                 <th style={dynamicStyles.th}>Department</th>
                 <th style={dynamicStyles.th}>Contact</th>
-                <th style={dynamicStyles.th}>RFID Card UID</th>
+                <th style={dynamicStyles.th}>qr_id Card UID</th>
                 <th style={dynamicStyles.th}>Status</th>
                 <th style={{ ...dynamicStyles.th, textAlign: 'right' }}>Actions</th>
               </tr>
@@ -707,9 +707,9 @@ export const FacultyTab: React.FC = () => {
                       <div style={{ fontSize: '0.70rem', color: tokens.textMuted }}>{f.contact_number || '—'}</div>
                     </td>
                     <td style={dynamicStyles.td}>
-                      {f.rfid_uid ? (
+                      {f.qr_token ? (
                         <span
-                          onClick={() => handleCopy(f.rfid_uid!, `rfid-${f.id}`)}
+                          onClick={() => handleCopy(f.qr_token!, `qr-${f.id}`)}
                           style={{
                             fontFamily: 'monospace',
                             backgroundColor: tokens.bgSurfaceSubtle,
@@ -722,8 +722,8 @@ export const FacultyTab: React.FC = () => {
                           }}
                           title="Click to copy UID"
                         >
-                          {copiedKey === `rfid-${f.id}` ? <Check size={11} color={brand.success} /> : <Copy size={11} />}
-                          <span>{f.rfid_uid}</span>
+                          {copiedKey === `qr-${f.id}` ? <Check size={11} color={brand.success} /> : <Copy size={11} />}
+                          <span>{f.qr_token}</span>
                         </span>
                       ) : (
                         <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>Unassigned</span>
@@ -872,12 +872,12 @@ export const FacultyTab: React.FC = () => {
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                  RFID Card UID
+                  qr_id Card UID
                 </label>
                 <input
                   type="text"
-                  value={formData.rfid_uid}
-                  onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })}
+                  value={formData.qr_token}
+                  onChange={(e) => setFormData({ ...formData, qr_token: e.target.value.toUpperCase() })}
                   style={{
                     width: '100%',
                     padding: '8px 12px',
@@ -1060,7 +1060,7 @@ export const FacultyTab: React.FC = () => {
               </div>
 
               <div style={{ backgroundColor: tokens.bgSurfaceSubtle, padding: '8px 12px', borderTop: `1px solid ${tokens.borderSubtle}`, fontSize: '0.68rem', color: tokens.textSecondary }}>
-                Card UID: {inspectingFaculty.rfid_uid || 'No Card Linked'}
+                Card UID: {inspectingFaculty.qr_token || 'No Card Linked'}
               </div>
             </div>
 

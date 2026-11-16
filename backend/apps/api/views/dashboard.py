@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Live Classroom & Mobile App Dashboard API (No Hardware / No SMS)
+AttendSure V3 - Live Classroom & Mobile App Dashboard API (No Hardware / No push)
 File: backend/apps/api/views/dashboard.py
 """
 

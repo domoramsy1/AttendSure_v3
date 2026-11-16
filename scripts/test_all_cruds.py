@@ -472,7 +472,7 @@ class BackendVerifier:
                 format="json",
             )
             ok_dup = res_dup.status_code == 200 and isinstance(res_dup.data, dict) and res_dup.data.get("is_duplicate") is True
-            self.record("QR-SCAN", "Duplicate Scan Guard (POST)", ok_dup, f"HTTP {res_dup.status_code}", ms_dup, "" if ok_dup else self._format_response_error(res_dup))
+            self.record("QR-SCAN", "Duplicate Scan shield (POST)", ok_dup, f"HTTP {res_dup.status_code}", ms_dup, "" if ok_dup else self._format_response_error(res_dup))
 
             res_mat, ms_mat = self.timed_call(self.client.get, f"/api/classroom/adviser-matrix/?section_id={section.id}")
             ok_mat = res_mat.status_code == 200 and isinstance(res_mat.data, dict) and res_mat.data.get("total_students") == 1

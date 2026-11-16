@@ -295,16 +295,16 @@ else:
 CORS_ALLOW_CREDENTIALS = True
 
 # ==============================================================================
-# 9. HARDWARE, IOT & SMS PARAMETERS
+# 9. HARDWARE, IOT & push PARAMETERS
 # ==============================================================================
 
 GATE_DEBOUNCE_SECONDS = int(os.getenv('GATE_DEBOUNCE_SECONDS', 10))
 GATE_DEBOUNCE_MINUTES = int(os.getenv('GATE_DEBOUNCE_MINUTES', 3))
-SMS_UNIT_COST = float(os.getenv('SMS_UNIT_COST', 0.40))
+PUSH_UNIT_COST = float(os.getenv('PUSH_UNIT_COST', 0.40))
 DEFAULT_GEOFENCE_RADIUS_METERS = int(os.getenv('GEOFENCE_RADIUS_METERS', 150))
 
-GSM_MODEM_PORT = os.getenv('GSM_MODEM_PORT', 'COM3' if os.name == 'nt' else '/dev/ttyUSB0')
-GSM_MODEM_BAUDRATE = int(os.getenv('GSM_MODEM_BAUDRATE', 115200))
+PUSH_SERVICE_CHANNEL = os.getenv('PUSH_SERVICE_CHANNEL', 'COM3' if os.name == 'nt' else '/dev/ttyUSB0')
+PUSH_SERVICE_TIMEOUT = int(os.getenv('PUSH_SERVICE_TIMEOUT', 115200))
 
 # ==============================================================================
 # 10. ROTATING AUDIT LOGGERS

@@ -5,7 +5,7 @@
  * Cybersecurity & Stability Hardening:
  * 1. OWASP CSV Formula Injection Defense: Neutralizes cells starting with =, +, -, @, |, \t, \r.
  * 2. Asynchronous Memory Cleanup: Delays URL.revokeObjectURL by 1s to prevent premature download aborts.
- * 3. Strict Numeric Math: Guards against NaN / divide-by-zero during rapid page size switching.
+ * 3. Strict Numeric Math: shields against NaN / divide-by-zero during rapid page size switching.
  * 4. WCAG Accessible Controls: Adds aria-label descriptors to all buttons and select inputs.
  */
 
@@ -113,7 +113,7 @@ export const Pagination: React.FC<PaginationProps> = ({
 
   if (totalCount <= 0) return null;
 
-  // Defensive Numeric Guards
+  // Defensive Numeric shields
   const safePageSize = Math.max(1, Number(pageSize) || 25);
   const isAllSelected = safePageSize >= ALL_ROWS_SIZE;
   const safeTotalPages = isAllSelected ? 1 : Math.max(1, Number(totalPages) || 1);

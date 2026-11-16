@@ -49,7 +49,7 @@ interface RecentScan {
   grade_section: string;
   direction: 'IN' | 'OUT';
   scan_time: string;
-  scan_method: 'RFID' | 'QR' | string;
+  scan_method: 'qr_id' | 'QR' | string;
 }
 
 interface CampusNotice {
@@ -75,9 +75,9 @@ interface DashboardMetrics {
   total_faculty: number;
   gate_scans_today: number;
   active_gate_passes: number;
-  sms_sent_today: number;
-  sms_pending_count: number;
-  sms_failed_count?: number;
+  push_sent_today: number;
+  push_pending_count: number;
+  push_failed_count?: number;
   push_alerts_today: number;
   mobile_parents_connected: number;
   hourly_scans: HourlyScanItem[];
@@ -120,7 +120,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const effectiveRole = (userRole || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const isAdmin = effectiveRole === 'ADMIN' || effectiveRole === 'SUPERADMIN' || effectiveRole === 'PRINCIPAL';
   const isFaculty = effectiveRole === 'FACULTY';
-  const isGuard = effectiveRole === 'GUARD';
+  const isRestrictedRole = effectiveRole === 'PARENT';
 
   const [data, setData] = useState<DashboardMetrics>({
     total_students: 0,
@@ -131,9 +131,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     total_faculty: 0,
     gate_scans_today: 0,
     active_gate_passes: 0,
-    sms_sent_today: 0,
-    sms_pending_count: 0,
-    sms_failed_count: 0,
+    push_sent_today: 0,
+    push_pending_count: 0,
+    push_failed_count: 0,
     push_alerts_today: 0,
     mobile_parents_connected: 0,
     hourly_scans: [],
@@ -204,9 +204,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             total_faculty: Number(res.data.total_faculty) || 0,
             gate_scans_today: Number(res.data.gate_scans_today) || 0,
             active_gate_passes: Number(res.data.active_gate_passes) || 0,
-            sms_sent_today: Number(res.data.sms_sent_today) || 0,
-            sms_pending_count: Number(res.data.sms_pending_count) || 0,
-            sms_failed_count: Number(res.data.sms_failed_count) || 0,
+            push_sent_today: Number(res.data.push_sent_today) || 0,
+            push_pending_count: Number(res.data.push_pending_count) || 0,
+            push_failed_count: Number(res.data.push_failed_count) || 0,
             push_alerts_today: Number(res.data.push_alerts_today) || 0,
             mobile_parents_connected: Number(res.data.mobile_parents_connected) || 0,
             hourly_scans: normalizedHourly,
@@ -501,7 +501,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             }}
           >
             {/* 1. Attendance Scanner (Faculty & Admin) */}
-            {!isGuard && (
+            {!isRestrictedRole && (
               <button
                 type="button"
                 onClick={() => navigateTo('classroom-scanner')}
@@ -549,7 +549,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
 
             {/* 3. Daily Attendance SF2 (Faculty & Admin) */}
-            {!isGuard && (
+            {!isRestrictedRole && (
               <button
                 type="button"
                 onClick={() => navigateTo({ tab: 'reports', report: 'sf2' })}
@@ -574,7 +574,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             )}
 
             {/* 4. Civil Service DTR (Faculty & Admin) */}
-            {!isGuard && (
+            {!isRestrictedRole && (
               <button
                 type="button"
                 onClick={() => navigateTo('dtr')}
@@ -598,11 +598,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             )}
 
-            {/* 5. Live Gate Monitor (Guards & Admins) */}
-            {(isAdmin || isGuard) && (
+            {/* 5. Live Gate Monitor (shields & Admins) */}
+            {(isAdmin || isRestrictedRole) && (
               <button
                 type="button"
-                onClick={() => navigateTo('gate-logs')}
+                onClick={() => navigateTo('attendance-logs')}
                 style={actionTileStyle}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.borderColor = brand.primary;
@@ -624,7 +624,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             )}
 
             {/* 6. Class Lists / My Classes (Faculty & Admin) */}
-            {!isGuard && (
+            {!isRestrictedRole && (
               <button
                 type="button"
                 onClick={() => navigateTo(isFaculty ? 'my-classes' : 'students')}
@@ -648,11 +648,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             )}
 
-            {/* 7. SMS Broadcast (Admin Only) */}
+            {/* 7. push Broadcast (Admin Only) */}
             {isAdmin && (
               <button
                 type="button"
-                onClick={() => navigateTo('sms')}
+                onClick={() => navigateTo('push')}
                 style={actionTileStyle}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.borderColor = brand.primary;
@@ -731,7 +731,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() => navigateTo('gate-logs')}
+                  onClick={() => navigateTo('attendance-logs')}
                   style={{ background: 'none', border: 'none', color: brand.primary, fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
                 >
                   View All

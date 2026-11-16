@@ -1,7 +1,7 @@
 /**
  * AttendSure V3 - Gate Logs Ledger & Telemetry Monitor
  * Real-time transaction history with full light/dark color mode adaptation.
- * File: web/src/components/tabs/GateLogsTab.tsx
+ * File: web/src/components/tabs/AttendanceLogsTab.tsx
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -28,16 +28,16 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
-export interface GateLogEntry {
+export interface AttendanceLogEntry {
   log_id: string;
   person_type: 'STUDENT' | 'STAFF' | 'FACULTY';
   identifier: string;
   name: string;
   direction: 'IN' | 'OUT';
   scan_method: string;
-  kiosk_name?: string;
-  kiosk?: string;
-  kiosk_code?: string;
+  station_name?: string;
+  station?: string;
+  station_code?: string;
   scan_time: string;
   raw_time?: string;
   photo?: string | null;
@@ -46,7 +46,7 @@ export interface GateLogEntry {
   section_or_dept?: string;
 }
 
-export type GateLogItem = GateLogEntry;
+export type AttendanceLogItem = AttendanceLogEntry;
 
 interface PaginatedResponse<T> {
   count: number;
@@ -113,10 +113,10 @@ const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   );
 };
 
-export const GateLogsTab: React.FC = () => {
+export const AttendanceLogsTab: React.FC = () => {
   const { tokens, brand } = useTheme();
 
-  const [logs, setLogs] = useState<GateLogEntry[]>([]);
+  const [logs, setLogs] = useState<AttendanceLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -129,7 +129,7 @@ export const GateLogsTab: React.FC = () => {
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
 
-  const [inspectedLog, setInspectedLog] = useState<GateLogEntry | null>(null);
+  const [inspectedLog, setInspectedLog] = useState<AttendanceLogEntry | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const activeAbortController = useRef<AbortController | null>(null);
@@ -179,7 +179,7 @@ export const GateLogsTab: React.FC = () => {
         if (!silent) setLoading(true);
         setError(null);
 
-        const res = await apiClient.get<PaginatedResponse<GateLogEntry> | GateLogEntry[]>('/gate/logs/', {
+        const res = await apiClient.get<PaginatedResponse<AttendanceLogEntry> | AttendanceLogEntry[]>('/gate/logs/', {
           params: {
             page,
             page_size: size,
@@ -220,8 +220,8 @@ export const GateLogsTab: React.FC = () => {
       total_today: totalCount || safeLogs.length,
       in_today: safeLogs.filter((l) => l.direction === 'IN').length,
       out_today: safeLogs.filter((l) => l.direction === 'OUT').length,
-      rfid_count: safeLogs.filter((l) => l.scan_method === 'RFID').length,
-      qr_count: safeLogs.filter((l) => l.scan_method !== 'RFID').length,
+      qr_scan_count: safeLogs.filter((l) => l.scan_method === 'qr_id').length,
+      qr_count: safeLogs.filter((l) => l.scan_method !== 'qr_id').length,
     };
   }, [logs, totalCount]);
 
@@ -414,8 +414,8 @@ export const GateLogsTab: React.FC = () => {
         <div style={dynamicStyles.statCard}>
           <div style={dynamicStyles.statLabel}>SCAN METHODS (TODAY)</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <span style={{ fontSize: '1.25rem', fontWeight: 800, color: brand.primary }}>{metrics.rfid_count}</span>
-            <span style={{ fontSize: '0.74rem', color: tokens.textSecondary, fontWeight: 600 }}>RFID</span>
+            <span style={{ fontSize: '1.25rem', fontWeight: 800, color: brand.primary }}>{metrics.qr_scan_count}</span>
+            <span style={{ fontSize: '0.74rem', color: tokens.textSecondary, fontWeight: 600 }}>qr_id</span>
             <span style={{ fontSize: '1.25rem', fontWeight: 800, color: brand.success, marginLeft: 6 }}>{metrics.qr_count}</span>
             <span style={{ fontSize: '0.74rem', color: tokens.textSecondary, fontWeight: 600 }}>QR Code</span>
           </div>
@@ -521,7 +521,7 @@ export const GateLogsTab: React.FC = () => {
       <div style={dynamicStyles.tableCard}>
         <ModuleTableLayout
           title="Gate Logs Ledger"
-          subtitle="Real-time transaction history of RFID card taps and QR passes recorded at school gate terminals."
+          subtitle="Real-time transaction history of qr_id card taps and QR passes recorded at school gate terminals."
           searchPlaceholder="Search by name, LRN, or Employee ID..."
           searchValue={search}
           onSearchChange={setSearch}
@@ -626,10 +626,10 @@ export const GateLogsTab: React.FC = () => {
                     gap: 4,
                     fontSize: '0.74rem',
                     fontWeight: 700,
-                    color: item.scan_method === 'RFID' ? brand.primary : brand.success,
+                    color: item.scan_method === 'qr_id' ? brand.primary : brand.success,
                   }}
                 >
-                  {item.scan_method === 'RFID' ? <Radio size={12} /> : <QrCode size={12} />}
+                  {item.scan_method === 'qr_id' ? <Radio size={12} /> : <QrCode size={12} />}
                   {item.scan_method}
                 </span>
               ),
@@ -646,10 +646,10 @@ export const GateLogsTab: React.FC = () => {
               header: 'Station Terminal',
               render: (item) => (
                 <div style={{ fontSize: '0.76rem', color: tokens.textSecondary }}>
-                  <span style={{ fontWeight: 700 }}>{item.kiosk_name || item.kiosk || 'Terminal'}</span>{' '}
-                  {item.kiosk_code && (
+                  <span style={{ fontWeight: 700 }}>{item.station_name || item.station || 'Terminal'}</span>{' '}
+                  {item.station_code && (
                     <span style={{ fontSize: '0.68rem', color: tokens.textMuted, fontFamily: 'monospace' }}>
-                      ({item.kiosk_code})
+                      ({item.station_code})
                     </span>
                   )}
                 </div>
@@ -791,7 +791,7 @@ export const GateLogsTab: React.FC = () => {
               <div style={dynamicStyles.fieldBox}>
                 <div style={{ fontSize: '0.66rem', fontWeight: 700, color: tokens.textMuted }}>SECURITY METHOD</div>
                 <div style={{ marginTop: 3, fontWeight: 700, color: tokens.textPrimary, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  {inspectedLog.scan_method === 'RFID' ? <Radio size={13} color={brand.primary} /> : <QrCode size={13} color={brand.success} />}
+                  {inspectedLog.scan_method === 'qr_id' ? <Radio size={13} color={brand.primary} /> : <QrCode size={13} color={brand.success} />}
                   <span>{inspectedLog.scan_method} Verified</span>
                 </div>
               </div>
@@ -799,7 +799,7 @@ export const GateLogsTab: React.FC = () => {
               <div style={dynamicStyles.fieldBox}>
                 <div style={{ fontSize: '0.66rem', fontWeight: 700, color: tokens.textMuted }}>TERMINAL STATION</div>
                 <div style={{ marginTop: 3, fontWeight: 700, color: tokens.textPrimary }}>
-                  {inspectedLog.kiosk_name || inspectedLog.kiosk || 'Main Gate'}
+                  {inspectedLog.station_name || inspectedLog.station || 'Main Gate'}
                 </div>
               </div>
 
@@ -833,4 +833,4 @@ export const GateLogsTab: React.FC = () => {
   );
 };
 
-export default GateLogsTab; 
+export default AttendanceLogsTab; 

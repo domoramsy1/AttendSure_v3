@@ -55,7 +55,7 @@ interface Student {
   guardian_name?: string;
   guardian_relationship?: string;
   parent_contact: string;
-  rfid_uid?: string;
+  qr_token?: string;
   qr_token?: string;
   current_section?: string;
   section_id?: number;
@@ -172,7 +172,7 @@ export const StudentsTab: React.FC = () => {
     birthdate: '2012-01-01',
     grade_level_id: '',
     section_id: '',
-    rfid_uid: '',
+    qr_token: '',
     photo: null as string | null,
     house_street_sitio: '',
     barangay: '',
@@ -304,7 +304,7 @@ export const StudentsTab: React.FC = () => {
           'Sex',
           'Birthdate',
           'Class Section',
-          'RFID Card UID',
+          'qr_id Card UID',
           'Parent Contact',
           'Father Name',
           'Mother Maiden Name',
@@ -318,7 +318,7 @@ export const StudentsTab: React.FC = () => {
           s.sex || 'Male',
           s.birthdate || '',
           s.current_section || 'Unassigned',
-          s.rfid_uid || '',
+          s.qr_token || '',
           s.parent_contact || '',
           s.father_name || '',
           s.mother_maiden_name || '',
@@ -382,7 +382,7 @@ export const StudentsTab: React.FC = () => {
       birthdate: '2012-01-01',
       grade_level_id: gradeLevels.length > 0 ? String(gradeLevels[0].id) : '',
       section_id: '',
-      rfid_uid: '',
+      qr_token: '',
       photo: null,
       house_street_sitio: '',
       barangay: '',
@@ -425,7 +425,7 @@ export const StudentsTab: React.FC = () => {
       birthdate: student.birthdate || '2012-01-01',
       grade_level_id: inferredGL || (gradeLevels.length > 0 ? String(gradeLevels[0].id) : ''),
       section_id: student.section_id ? String(student.section_id) : (matchedSec ? String(matchedSec.id) : ''),
-      rfid_uid: student.rfid_uid || '',
+      qr_token: student.qr_token || '',
       photo: student.photo_url || student.photo || null,
       house_street_sitio: student.house_street_sitio || '',
       barangay: student.barangay || '',
@@ -481,7 +481,7 @@ export const StudentsTab: React.FC = () => {
         guardian_name: formData.guardian_name.trim() || '',
         guardian_relationship: formData.guardian_relationship.trim() || '',
         parent_contact: formData.parent_contact.trim().replace(/[\s-]/g, '') || '',
-        rfid_uid: formData.rfid_uid?.trim() ? formData.rfid_uid.trim().toUpperCase() : null,
+        qr_token: formData.qr_token?.trim() ? formData.qr_token.trim().toUpperCase() : null,
         section_id: Number(formData.section_id),
       };
 
@@ -538,7 +538,7 @@ export const StudentsTab: React.FC = () => {
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>RFID CARDS PAIRED</div>
+          <div style={statLabel}>qr_id CARDS PAIRED</div>
           <div style={{ ...statVal, color: '#004b87' }}>
             {metrics.paired.toLocaleString()} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {metrics.total.toLocaleString()}</span>
           </div>
@@ -694,10 +694,10 @@ export const StudentsTab: React.FC = () => {
                       </td>
 
                       <td style={tdStyle}>
-                        {row.rfid_uid ? (
+                        {row.qr_token ? (
                           <div style={cardPairedBadge}>
                             <CreditCard size={13} color="#16a34a" />
-                            <span>{row.rfid_uid}</span>
+                            <span>{row.qr_token}</span>
                           </div>
                         ) : (
                           <div style={cardUnpairedBadge}>
@@ -1042,12 +1042,12 @@ export const StudentsTab: React.FC = () => {
               </div>
 
               <div>
-                <label style={formLabel}>School Gate RFID UID (Optional)</label>
+                <label style={formLabel}>School Gate qr_id UID (Optional)</label>
                 <input
                   type="text"
                   placeholder="e.g. 6B69D870"
-                  value={formData.rfid_uid}
-                  onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })}
+                  value={formData.qr_token}
+                  onChange={(e) => setFormData({ ...formData, qr_token: e.target.value.toUpperCase() })}
                   style={{ ...formInput, fontFamily: 'monospace' }}
                 />
               </div>
@@ -1073,7 +1073,7 @@ export const StudentsTab: React.FC = () => {
                   <label style={formLabel}>Barangay</label>
                   <input
                     type="text"
-                    placeholder="e.g. Lapasan, Lumbia"
+                    placeholder="e.g. Macasandig, Lumbia"
                     value={formData.barangay}
                     onChange={(e) => setFormData({ ...formData, barangay: e.target.value })}
                     style={formInput}
@@ -1152,7 +1152,7 @@ export const StudentsTab: React.FC = () => {
               </div>
 
               <div>
-                <label style={formLabel}>Parent Contact Mobile (11 digits for SMS Alerts) *</label>
+                <label style={formLabel}>Parent Contact Mobile (11 digits for push Alerts) *</label>
                 <input
                   type="text"
                   required
@@ -1293,7 +1293,7 @@ export const StudentsTab: React.FC = () => {
               </div>
 
               <div style={{ backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', padding: '8px 12px', fontSize: '0.70rem', color: '#64748b' }}>
-                Card UID: <strong>{badgeStudent.rfid_uid || 'No Card Linked'}</strong>
+                Card UID: <strong>{badgeStudent.qr_token || 'No Card Linked'}</strong>
               </div>
             </div>
 

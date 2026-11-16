@@ -75,7 +75,7 @@ export function cleanUrl(rawUrl?: string | null): string {
 
 export const sanitizeUrl = cleanUrl;
 
-// 2. Protocol Validation (Guards against SSRF and script injection)
+// 2. Protocol Validation (shields against SSRF and script injection)
 export function isValidServerUrl(url?: string | null): boolean {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();

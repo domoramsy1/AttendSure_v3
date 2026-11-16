@@ -1,6 +1,6 @@
 /**
  * AttendSure - Reusable User & Faculty Avatar
- * Replaces duplicate implementations across FacultyTab, GateLogsTab, DTRTab, and MyAssignedClassesTab.
+ * Replaces duplicate implementations across FacultyTab, AttendanceLogsTab, DTRTab, and MyAssignedClassesTab.
  * File: web/src/components/common/ProfileAvatar.tsx
  */
 

@@ -91,14 +91,14 @@ def sync_students():
             changed = True
             
         if 'house_street_sitio' in student_fields and not getattr(s, 'house_street_sitio', None):
-            s.house_street_sitio = "Zone 4, Lapasan"
+            s.house_street_sitio = "Zone 4, Macasandig"
             changed = True
         elif 'house_street' in student_fields and not getattr(s, 'house_street', None):
-            s.house_street = "Zone 4, Lapasan"
+            s.house_street = "Zone 4, Macasandig"
             changed = True
             
         if 'barangay' in student_fields and not getattr(s, 'barangay', None):
-            s.barangay = "Lapasan"
+            s.barangay = "Macasandig"
             changed = True
             
         if 'municipality_city' in student_fields and not getattr(s, 'municipality_city', None):

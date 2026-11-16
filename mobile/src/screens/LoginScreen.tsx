@@ -150,7 +150,7 @@ export const LoginScreen: React.FC = () => {
     };
   }, [initializeLoginData]);
 
-  // 2. Authentication with Input Sanitization & Anti-Brute-Force Guard
+  // 2. Authentication with Input Sanitization & Anti-Brute-Force shield
   const handleLogin = async () => {
     const now = Date.now();
     if (now < lockoutUntilRef.current) {

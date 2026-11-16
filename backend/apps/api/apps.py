@@ -20,7 +20,7 @@ class ApiConfig(AppConfig):
         """
         Runs when the Django server boots up.
         
-        Cybersecurity Safeguards Applied:
+        Cybersecurity protections Applied:
         1. Availability Defense: Catches import errors gracefully to prevent gate scanner shutdowns.
         2. Migration Shield: Blocks event triggers while running database migrations or tests.
         3. Audit Tracking: Logs initialization states directly to security loggers.

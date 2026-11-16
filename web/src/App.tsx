@@ -55,7 +55,7 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'schedules',
     'dtr',
     'geofence',
-    'sms',
+    'push',
     'reports',
     'settings',
   ],
@@ -70,7 +70,7 @@ export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
     'schedules',
     'dtr',
     'geofence',
-    'sms',
+    'push',
     'reports',
     'settings',
   ],
@@ -353,7 +353,7 @@ const AppContent: React.FC = () => {
       case 'schedules': return 'Class Schedules & Sections';
       case 'dtr': return 'Daily Time Records (DTR)';
       case 'geofence': return 'Campus Boundary';  
-      case 'sms': return 'Parent Text Messages (SMS)';
+      case 'push': return 'Parent Text Messages (push)';
       case 'reports':
         if (selectedReport === 'sf1') return 'School Register (Form 1)';
         if (selectedReport === 'sf2') return 'Daily Attendance Register (Form 2)';

@@ -135,7 +135,7 @@ class ProjectAuditor:
 
     def check_routes(self):
         self.banner("Suite 4: API Route Resolution")
-        routes = ['/api/me/', '/api/settings/school/', '/api/students/', '/api/sections/', '/api/kiosks/']
+        routes = ['/api/me/', '/api/settings/school/', '/api/students/', '/api/sections/', '/api/stations/']
         for r in routes:
             try:
                 resolve(r)

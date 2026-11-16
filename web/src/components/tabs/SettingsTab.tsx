@@ -57,9 +57,9 @@ interface MaintenanceHealthStatus {
   dbLatencyMs: number;
   scannersOnline: number;
   scannersTotal: number;
-  smsPending: number;
-  smsFailed: number;
-  smsSentToday: number;
+  pushPending: number;
+  pushFailed: number;
+  pushSentToday: number;
   lastChecked: string;
 }
 
@@ -148,9 +148,9 @@ export const SettingsTab: React.FC = () => {
     dbLatencyMs: 2,
     scannersOnline: 0,
     scannersTotal: 0,
-    smsPending: 0,
-    smsFailed: 0,
-    smsSentToday: 0,
+    pushPending: 0,
+    pushFailed: 0,
+    pushSentToday: 0,
     lastChecked: '',
   });
 
@@ -190,7 +190,7 @@ export const SettingsTab: React.FC = () => {
 
   const fetchDiagnostics = async () => {
     try {
-      const [dbRes, scanRes, smsRes] = await Promise.all([
+      const [dbRes, scanRes, pushRes] = await Promise.all([
         apiClient.get('/core/maintenance/db-check/').catch(() => ({ data: { database: 'OFFLINE', latency_ms: 999 } })),
         apiClient.get('/system/status/').catch(() => ({ data: { online_count: 0, total_scanners: 0 } })),
         apiClient.get('/system/status/').catch(() => ({ data: { sent_today: 0, pending_queue: 0, failed_today: 0 } })),
@@ -201,9 +201,9 @@ export const SettingsTab: React.FC = () => {
         dbLatencyMs: Number(dbRes.data?.latency_ms) || 2,
         scannersOnline: Number(scanRes.data?.online_count) || 0,
         scannersTotal: Number(scanRes.data?.total_scanners) || 0,
-        smsSentToday: Number(smsRes.data?.sent_today) || 0,
-        smsPending: Number(smsRes.data?.pending_queue) || 0,
-        smsFailed: Number(smsRes.data?.failed_today) || 0,
+        pushSentToday: Number(pushRes.data?.sent_today) || 0,
+        pushPending: Number(pushRes.data?.pending_queue) || 0,
+        pushFailed: Number(pushRes.data?.failed_today) || 0,
         lastChecked: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       });
     } catch {}
@@ -775,14 +775,14 @@ export const SettingsTab: React.FC = () => {
                 <div style={telemetryStatBox(tokens)}>
                   <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>PUSH ALERTS TODAY</span>
                   <div style={{ fontSize: '1.05rem', fontWeight: 800, color: brand.success }}>
-                    {health.smsSentToday.toLocaleString()} Delivered
+                    {health.pushSentToday.toLocaleString()} Delivered
                   </div>
                 </div>
 
                 <div style={telemetryStatBox(tokens)}>
                   <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>PENDING PUSH ALERTS</span>
-                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: health.smsFailed > 0 ? brand.danger : brand.primary }}>
-                    {health.smsFailed} Failed / {health.smsPending} Waiting
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: health.pushFailed > 0 ? brand.danger : brand.primary }}>
+                    {health.pushFailed} Failed / {health.pushPending} Waiting
                   </div>
                 </div>
               </div>
@@ -809,16 +809,16 @@ export const SettingsTab: React.FC = () => {
                   disabled={actionLoading !== null}
                   onClick={() =>
                     runMaintenanceAction(
-                      'RETRY_SMS',
-                      'Retry All Failed SMS Texts',
-                      'This will re-queue all failed messages and instruct the GSM modem to send them immediately.',
+                      'SYNC_PUSH',
+                      'Retry All Failed push Texts',
+                      'This will re-queue all failed messages and instruct the GSM push_engine to send them immediately.',
                       () => apiClient.post('/system/status/', { action: 'RETRY_FAILED' })
                     )
                   }
                   style={actionBtnStyle(brand.secondary)}
                 >
-                  {actionLoading === 'RETRY_SMS' ? <Loader2 className="animate-spin" size={14} /> : <RotateCcw size={14} />}
-                  <span>{actionLoading === 'RETRY_SMS' ? 'Sending Texts...' : 'Sync Push Alerts Now'}</span>
+                  {actionLoading === 'SYNC_PUSH' ? <Loader2 className="animate-spin" size={14} /> : <RotateCcw size={14} />}
+                  <span>{actionLoading === 'SYNC_PUSH' ? 'Sending Texts...' : 'Sync Push Alerts Now'}</span>
                 </button>
               </div>
 
@@ -864,7 +864,7 @@ export const SettingsTab: React.FC = () => {
                     <h3 style={{ margin: 0, fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
                       Check USB QR & Campus GPS
                     </h3>
-                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Tests connection to RFID &amp; QR terminals</span>
+                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Tests connection to qr_id &amp; QR terminals</span>
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
@@ -875,7 +875,7 @@ export const SettingsTab: React.FC = () => {
                   disabled={actionLoading !== null}
                   onClick={() =>
                     runMaintenanceAction(
-                      'PING_KIOSK',
+                      'VERIFY_STATION',
                       'Test Gate Scanner Terminals',
                       'This sends a ping test to all enrolled campus gate scanners.',
                       () => apiClient.get('/system/status/')
@@ -883,8 +883,8 @@ export const SettingsTab: React.FC = () => {
                   }
                   style={actionBtnStyle(brand.success)}
                 >
-                  {actionLoading === 'PING_KIOSK' ? <Loader2 className="animate-spin" size={14} /> : <Radio size={14} />}
-                  <span>{actionLoading === 'PING_KIOSK' ? 'Checking Scanners...' : 'Verify Software Stations'}</span>
+                  {actionLoading === 'VERIFY_STATION' ? <Loader2 className="animate-spin" size={14} /> : <Radio size={14} />}
+                  <span>{actionLoading === 'VERIFY_STATION' ? 'Checking Scanners...' : 'Verify Software Stations'}</span>
                 </button>
               </div>
 
@@ -1006,7 +1006,7 @@ export const SettingsTab: React.FC = () => {
                   <option value="ALL">All Actions</option>
                   <option value="LOGIN">Sign In / Login</option>
                   <option value="LOGOUT">Sign Out / Logout</option>
-                  <option value="SCAN">QR / RFID Scan</option>
+                  <option value="SCAN">QR / qr_id Scan</option>
                   <option value="GATE_PASS">Gate Pass</option>
                   <option value="SECURITY">Security / Reset</option>
                   <option value="PROFILE">Profile Change</option>

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Faculty Profile Serializer (No RFID)
+AttendSure V3 - Faculty Profile Serializer (No qr_id)
 File: backend/apps/api/serializers/faculty.py
 """
 

@@ -172,7 +172,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       setSuccessMessage('A fresh verification code has been dispatched to your phone.');
       setOtpTimer(60);
     } catch (err: any) {
-      setErrorMessage(err.response?.data?.error || 'Unable to send SMS verification code right now.');
+      setErrorMessage(err.response?.data?.error || 'Unable to send push verification code right now.');
     } finally {
       setResending(false);
     }

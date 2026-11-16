@@ -5,7 +5,7 @@
  * Cybersecurity & Performance:
  * 1. Zero Mock Data: All school information is loaded strictly from the PostgreSQL database.
  * 2. Real-Time Cache Sync: Caches genuine database records in localStorage to ensure fast frame-1 boot.
- * 3. Quota Safety Guard: Strips excessive base64 payload strings before writing to browser storage.
+ * 3. Quota Safety shield: Strips excessive base64 payload strings before writing to browser storage.
  * 4. Simple English Terms: Clean data interfaces for school profile, head, and boundary settings.
  */
 

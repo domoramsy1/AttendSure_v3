@@ -51,7 +51,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
   const { user } = useAuth();
   const userRole = String(user?.role || user?.system_role || 'EMPLOYEE').toUpperCase();
   const isPrincipalOrAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
-  const isGuard = ['GUARD', 'SECURITY'].includes(userRole);
+  const isRestrictedRole = ['PARENT', 'SECURITY'].includes(userRole);
 
   const [passes, setPasses] = useState<GatePassItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -219,7 +219,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
           </View>
         </View>
 
-        {!isGuard && (
+        {!isRestrictedRole && (
           <TouchableOpacity
             style={styles.newBtn}
             onPress={() => {
@@ -497,7 +497,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                     style={styles.qrImage}
                     contentFit="contain"
                   />
-                  <Text style={styles.qrHint}>Present to Gate Guard upon exit.</Text>
+                  <Text style={styles.qrHint}>Present to Gate shield upon exit.</Text>
                 </View>
 
                 <View style={styles.infoRow}>
@@ -522,7 +522,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                   <Text style={styles.infoVal}>{selectedPass.reason}</Text>
                 </View>
 
-                {isGuard && selectedPass.status === 'ACTIVE' && (
+                {isRestrictedRole && selectedPass.status === 'ACTIVE' && (
                   <TouchableOpacity style={styles.confirmExitBtn} onPress={() => handleConfirmExit(selectedPass)}>
                     <Ionicons name="checkmark-circle" size={16} color="#ffffff" />
                     <Text style={styles.confirmExitBtnText}>Confirm Gate Exit</Text>

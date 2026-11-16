@@ -11,7 +11,7 @@ export const ENDPOINTS = {
   CAMPUS_GEOFENCE: 'geofence/',
 
   // Campus USB QR & Campus GPS
-  GATE_LOGS: 'gate/logs/',
+  ATTENDANCE_LOGS: 'gate/logs/',
   GATE_SCAN: 'gate/scan/',
 
   // Classroom Mobile Scans

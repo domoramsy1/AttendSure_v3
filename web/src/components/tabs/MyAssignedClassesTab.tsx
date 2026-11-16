@@ -34,7 +34,7 @@ export interface StudentItem {
   photo_url?: string | null;
   attendance_status: string;
   parent_contact?: string;
-  rfid_uid?: string;
+  qr_token?: string;
 }
 
 export interface AssignedClass {
@@ -160,7 +160,7 @@ export const MyAssignedClassesTab: React.FC = () => {
           photo_url: isSafeImageUrl(st.photo_url || st.photo) ? (st.photo_url || st.photo) : null,
           attendance_status: String(st.attendance_status || 'UNSCANNED').toUpperCase(),
           parent_contact: st.parent_contact || '',
-          rfid_uid: st.rfid_uid || '',
+          qr_token: st.qr_token || '',
         }));
 
         const sectionName = item.section_name || item.name || 'Section';
@@ -236,7 +236,7 @@ export const MyAssignedClassesTab: React.FC = () => {
       (st) =>
         st.name.toLowerCase().includes(query) ||
         st.lrn.toLowerCase().includes(query) ||
-        (st.rfid_uid && st.rfid_uid.toLowerCase().includes(query))
+        (st.qr_token && st.qr_token.toLowerCase().includes(query))
     );
   }, [selectedClass, searchQuery]);
 
@@ -245,7 +245,7 @@ export const MyAssignedClassesTab: React.FC = () => {
     const totalClasses = classes.length;
     const currentRosterCount = selectedClass?.students.length || 0;
     const presentToday = (selectedClass?.students || []).filter((s) => s.attendance_status === 'PRESENT').length;
-    const cardsPaired = (selectedClass?.students || []).filter((s) => Boolean(s.rfid_uid)).length;
+    const cardsPaired = (selectedClass?.students || []).filter((s) => Boolean(s.qr_token)).length;
 
     return { totalClasses, currentRosterCount, presentToday, cardsPaired };
   }, [classes, selectedClass]);
@@ -254,14 +254,14 @@ export const MyAssignedClassesTab: React.FC = () => {
     if (!selectedClass) return;
     exportToCsv(
       `AttendSure_ClassAttendance_${selectedClass.section_name}_${new Date().toISOString().slice(0, 10)}.csv`,
-      ['LRN', 'Student Name', 'Sex', 'Class Section', 'Subject', 'RFID UID', 'Parent Contact', 'Attendance Status'],
+      ['LRN', 'Student Name', 'Sex', 'Class Section', 'Subject', 'qr_id UID', 'Parent Contact', 'Attendance Status'],
       filteredStudents.map((st) => [
         st.lrn,
         st.name,
         st.gender,
         selectedClass.section_name,
         selectedClass.subject_title,
-        st.rfid_uid || '',
+        st.qr_token || '',
         st.parent_contact || '',
         st.attendance_status,
       ])
@@ -293,7 +293,7 @@ export const MyAssignedClassesTab: React.FC = () => {
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>RFID CARDS PAIRED</div>
+          <div style={statLabel}>qr_id CARDS PAIRED</div>
           <div style={{ ...statVal, color: '#d97706' }}>
             {stats.cardsPaired} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentRosterCount}</span>
           </div>
@@ -497,10 +497,10 @@ export const MyAssignedClassesTab: React.FC = () => {
 
                       {/* 4. School Gate Card */}
                       <td style={tdStyle}>
-                        {st.rfid_uid ? (
+                        {st.qr_token ? (
                           <div style={cardPairedBadge}>
                             <CreditCard size={13} color="#16a34a" />
-                            <span>{st.rfid_uid}</span>
+                            <span>{st.qr_token}</span>
                           </div>
                         ) : (
                           <div style={cardUnpairedBadge}>
@@ -657,8 +657,8 @@ export const MyAssignedClassesTab: React.FC = () => {
                 }}
               >
                 Card UID:{' '}
-                <strong style={{ color: badgeStudent.rfid_uid ? '#059669' : '#d97706' }}>
-                  {badgeStudent.rfid_uid || 'No Card Linked'}
+                <strong style={{ color: badgeStudent.qr_token ? '#059669' : '#d97706' }}>
+                  {badgeStudent.qr_token || 'No Card Linked'}
                 </strong>
               </div>
             </div>

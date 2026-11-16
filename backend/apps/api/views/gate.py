@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Digital Exit Pass Management (Mobile Push Enabled, No Hardware/SMS)
+AttendSure V3 - Digital Exit Pass Management (Mobile Push Enabled, No Hardware/push)
 File: backend/apps/api/views/gate.py
 """
 

@@ -92,7 +92,7 @@ MIDDLE_NAMES = [
 ]
 
 BARANGAYS = [
-    "Lapasan", "Nazareth", "Macasandig", "Carmen", "Kauswagan",
+    "Macasandig", "Nazareth", "Macasandig", "Carmen", "Kauswagan",
     "Balulang", "Bulua", "Patag", "Gusa", "Cugman", "Camaman-an", "Puntod", "Lumbia"
 ]
 
@@ -335,7 +335,7 @@ def run_seed():
                     bdate = date(b_year, b_month, b_day)
 
                     unique_lrn = generate_unique_lrn(existing_lrns)
-                    unique_rfid = secrets.token_hex(4).upper()
+                    unique_qr_token = secrets.token_hex(4).upper()
                     unique_token = secrets.token_urlsafe(32)
 
                     father_name = f"Edgardo {last} {suf}".strip() if is_male else f"Roberto {last}"
@@ -383,7 +383,7 @@ def run_seed():
                         'photo': f"students/photos/std_{unique_lrn}.jpg",
                         'qr_token': unique_token,
                         'is_active': True,
-                        'rfid_uid': unique_rfid,
+                        'qr_token': unique_qr_token,
                         'photo_thumbnail': f"students/thumbnails/std_{unique_lrn}_thumb.jpg",
                         'photo_updated_at': base_enrollment_dt,
                         'created_at': base_enrollment_dt,

@@ -31,8 +31,8 @@ export interface TabBadgeCounts {
   students?: number;
   faculties?: number;
   schedules?: number;
-  gatelogs?: number;
-  sms?: number;
+  attendancelogs?: number;
+  push?: number;
   gatepasses?: number;
   scanners?: number;
   [key: string]: number | undefined;
@@ -66,14 +66,14 @@ interface CurrentUser {
   role: string;
   photo_url?: string | null;
   employee_id?: string;
-  rfid_uid?: string;
+  qr_token?: string;
 }
 
 interface NotificationItem {
   id: string;
   title: string;
   message: string;
-  type: 'GATE' | 'CLASS' | 'SMS' | 'KIOSK' | 'GATE_PASS';
+  type: 'GATE' | 'CLASS' | 'push' | 'station' | 'GATE_PASS';
   time: string;
   targetRole?: 'ADMIN' | 'ALL';
 }
@@ -138,7 +138,7 @@ export const Header: React.FC<HeaderProps> = ({
     if (!token) return;
 
     try {
-      const [userRes, kioskRes, smsRes] = await Promise.allSettled([
+      const [userRes, stationRes, pushRes] = await Promise.allSettled([
         apiClient.get('/me/'),
         apiClient.get('/system/status/'),
         apiClient.get('/system/status/').catch(() => null),
@@ -152,16 +152,16 @@ export const Header: React.FC<HeaderProps> = ({
           role: String(u.role || u.system_role || 'FACULTY').toUpperCase(),
           photo_url: u.photo_url || u.photo || null,
           employee_id: u.employee_id || u.username || '',
-          rfid_uid: u.rfid_uid || '',
+          qr_token: u.qr_token || '',
         });
       }
 
       const generatedAlerts: NotificationItem[] = [];
 
-      if (kioskRes.status === 'fulfilled' && kioskRes.value?.data) {
-        const stations = Array.isArray(kioskRes.value.data)
-          ? kioskRes.value.data
-          : kioskRes.value.data.results || [];
+      if (stationRes.status === 'fulfilled' && stationRes.value?.data) {
+        const stations = Array.isArray(stationRes.value.data)
+          ? stationRes.value.data
+          : stationRes.value.data.results || [];
 
         const hasOnlineSystem =
           stations.length === 0 ||
@@ -183,23 +183,23 @@ export const Header: React.FC<HeaderProps> = ({
             id: 'gate-offline-alert',
             title: 'Gate Scanner Offline',
             message: `${offlineList.length} gate scanner unit(s) are currently disconnected.`,
-            type: 'KIOSK',
+            type: 'station',
             time: 'Just now',
             targetRole: 'ADMIN',
           });
         }
       }
 
-      if (smsRes && smsRes.status === 'fulfilled' && smsRes.value?.data) {
-        const pendingCount = Number(smsRes.value.data.pending_total || 0);
-        const failedCount = Number(smsRes.value.data?.failed_total || 0);
+      if (pushRes && pushRes.status === 'fulfilled' && pushRes.value?.data) {
+        const pendingCount = Number(pushRes.value.data.pending_total || 0);
+        const failedCount = Number(pushRes.value.data?.failed_total || 0);
 
         if (pendingCount > 50 || failedCount > 0) {
           generatedAlerts.push({
-            id: 'sms-pending-alert',
+            id: 'push-pending-alert',
             title: 'Text Alert Delay',
             message: `${pendingCount} parent text message(s) are waiting to be sent.`,
-            type: 'SMS',
+            type: 'push',
             time: 'Just now',
             targetRole: 'ADMIN',
           });
@@ -263,9 +263,9 @@ export const Header: React.FC<HeaderProps> = ({
     switch (type) {
       case 'CLASS':
         return <BookOpen size={14} color={brand.primary} />;
-      case 'SMS':
+      case 'push':
         return <Send size={14} color={brand.secondary} />;
-      case 'KIOSK':
+      case 'station':
         return <Cpu size={14} color={brand.danger} />;
       case 'GATE_PASS':
         return <FileClock size={14} color={brand.warning} />;
@@ -718,7 +718,7 @@ export const Header: React.FC<HeaderProps> = ({
             name: currentUser.full_name || currentUser.username,
             lrn: currentUser.employee_id || currentUser.username,
             photo_url: resolvedPhoto,
-            rfid_uid: currentUser.rfid_uid,
+            qr_token: currentUser.qr_token,
             gender: 'N/A',
             attendance_status: 'PRESENT',
           }}

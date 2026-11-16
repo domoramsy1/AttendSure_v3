@@ -45,7 +45,7 @@ def send_telemetry(mode="campus"):
         lat = 8.480050
         lon = 124.650030
         accuracy = 6.0
-        location_label = "Inside Lapasan Campus (~6m away)"
+        location_label = "Inside Macasandig Campus (~6m away)"
     else:
         # Lumbia / Upper CDO coordinates matching your device
         lat = 8.395400

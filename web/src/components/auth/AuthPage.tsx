@@ -4,7 +4,7 @@
  *
  * Capabilities:
  * - Dynamic school logo and name branding loaded from SchoolContext.
- * - Credential login with automated Two-Factor Authentication (2FA) SMS OTP challenge.
+ * - Credential login with automated Two-Factor Authentication (2FA) push OTP challenge.
  * - Faculty registration with synchronized password toggles and role selection.
  * - Browser-safe OTP countdown timer with resend cooldown.
  */
@@ -50,7 +50,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [statusNotice, setStatusNotice] = useState<string | null>(null);
 
   // 2FA state
   const [twoFactorData, setTwoFactorData] = useState<TwoFactorPayload>({
@@ -92,13 +92,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    setSuccessMsg(null);
+    setStatusNotice(null);
     setLoading(true);
 
     try {
       const res = await apiClient.post('/auth/login/', loginForm);
 
-      // Check if user requires 2FA SMS OTP verification
+      // Check if user requires 2FA push OTP verification
       if (res.data.requires_2fa || res.data.two_factor_required || res.data.status === '2FA_REQUIRED') {
         setTwoFactorData({
           username: res.data.username || loginForm.username,
@@ -108,7 +108,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
         setOtpCode('');
         setOtpCooldown(60);
         setActiveTab('2FA');
-        setSuccessMsg(res.data.message || 'Two-Factor Authentication required. A 6-digit OTP code has been dispatched via SMS.');
+        setStatusNotice(res.data.message || 'Two-Factor Authentication required. A 6-digit OTP code has been dispatched via push.');
         return;
       }
 
@@ -136,7 +136,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    setSuccessMsg(null);
+    setStatusNotice(null);
 
     const cleanOtp = otpCode.trim();
     if (cleanOtp.length < 6) {
@@ -182,10 +182,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
       await apiClient.post('/auth/resend-2fa-otp/', {
         username: twoFactorData.username,
       });
-      setSuccessMsg('A fresh verification code has been dispatched via SMS.');
+      setStatusNotice('A fresh verification code has been dispatched via push.');
       setOtpCooldown(60);
     } catch (err: any) {
-      setErrorMsg(err.response?.data?.error || 'Failed to dispatch new OTP code via SMS.');
+      setErrorMsg(err.response?.data?.error || 'Failed to dispatch new OTP code via push.');
     } finally {
       setResendingOtp(false);
     }
@@ -194,7 +194,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    setSuccessMsg(null);
+    setStatusNotice(null);
 
     if (regForm.password !== regForm.confirm_password) {
       setErrorMsg('Passwords do not match.');
@@ -210,7 +210,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
 
     try {
       await apiClient.post('/auth/register/', regForm);
-      setSuccessMsg('Faculty account successfully created! Please sign in with your credentials.');
+      setStatusNotice('Faculty account successfully created! Please sign in with your credentials.');
       setActiveTab('LOGIN');
       setLoginForm({ username: regForm.username, password: '' });
       setRegForm({
@@ -339,7 +339,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                 </div>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Dual-Credential Verification</div>
-                  <div style={{ fontSize: '0.78rem', color: '#bae6fd' }}>Fast gate RFID taps with printed QR code failover fallback.</div>
+                  <div style={{ fontSize: '0.78rem', color: '#bae6fd' }}>Fast gate qr_id taps with printed QR code failover fallback.</div>
                 </div>
               </div>
 
@@ -359,7 +359,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                 </div>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Automated Parent Alerts &amp; 2FA</div>
-                  <div style={{ fontSize: '0.78rem', color: '#bae6fd' }}>GSM modem SMS notifications on gate scans and secure login OTPs.</div>
+                  <div style={{ fontSize: '0.78rem', color: '#bae6fd' }}>GSM push_engine push notifications on gate scans and secure login OTPs.</div>
                 </div>
               </div>
             </div>
@@ -487,7 +487,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
             </div>
           )}
 
-          {successMsg && (
+          {statusNotice && (
             <div
               style={{
                 display: 'flex',
@@ -503,7 +503,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
               }}
             >
               <CheckCircle2 size={18} style={{ flexShrink: 0 }} />
-              <span>{successMsg}</span>
+              <span>{statusNotice}</span>
             </div>
           )}
 
@@ -621,7 +621,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                   }}
                 >
                   <RotateCw size={12} className={resendingOtp ? 'animate-spin' : ''} />
-                  {otpCooldown > 0 ? `Resend OTP in ${otpCooldown}s` : 'Resend OTP via SMS'}
+                  {otpCooldown > 0 ? `Resend OTP in ${otpCooldown}s` : 'Resend OTP via push'}
                 </button>
               </div>
 

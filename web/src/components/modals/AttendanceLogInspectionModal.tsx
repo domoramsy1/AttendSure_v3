@@ -1,6 +1,6 @@
 /**
  * AttendSure - Gate Log Inspection & Camera Snapshot Modal
- * File: web/src/components/modals/GateLogInspectionModal.tsx
+ * File: web/src/components/modals/AttendanceLogInspectionModal.tsx
  */
 
 import React from 'react';
@@ -8,14 +8,14 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { ProfileAvatar } from '../common/ProfileAvatar';
 import { StatusBadge } from '../common/StatusBadge';
-import type { GateLogItem } from '../tabs/GateLogsTab';
+import type { AttendanceLogItem } from '../tabs/AttendanceLogsTab';
 
-interface GateLogInspectionModalProps {
-  log: GateLogItem | null;
+interface AttendanceLogInspectionModalProps {
+  log: AttendanceLogItem | null;
   onClose: () => void;
 }
 
-export const GateLogInspectionModal: React.FC<GateLogInspectionModalProps> = ({ log, onClose }) => {
+export const AttendanceLogInspectionModal: React.FC<AttendanceLogInspectionModalProps> = ({ log, onClose }) => {
   if (!log) return null;
 
   return (
@@ -69,7 +69,7 @@ export const GateLogInspectionModal: React.FC<GateLogInspectionModalProps> = ({ 
           <div style={fieldInfoBox}>
             <span style={fieldInfoLabel}>TERMINAL</span>
             <strong style={{ fontSize: '0.80rem', color: 'var(--text-primary, #0f172a)' }}>
-              {log.kiosk}
+              {log.station}
             </strong>
           </div>
           <div style={fieldInfoBox}>
@@ -106,4 +106,4 @@ const fieldInfoLabel: React.CSSProperties = {
   letterSpacing: '0.4px',
 };
 
-export default GateLogInspectionModal;
+export default AttendanceLogInspectionModal;

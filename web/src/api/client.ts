@@ -79,7 +79,7 @@ apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     config.baseURL = resolveBaseUrl();
 
-    // Cybersecurity Guard: Prevent malicious pseudo-protocol injection
+    // Cybersecurity shield: Prevent malicious pseudo-protocol injection
     let requestPath = config.url || '';
     if (
       requestPath.startsWith('javascript:') ||
@@ -89,7 +89,7 @@ apiClient.interceptors.request.use(
       return Promise.reject(new Error('Blocked dangerous URL protocol.'));
     }
 
-    // Cybersecurity Guard: Prevent path traversal and enforce single /api/ prefix
+    // Cybersecurity shield: Prevent path traversal and enforce single /api/ prefix
     if (!requestPath.startsWith('http://') && !requestPath.startsWith('https://')) {
       const sanitized = requestPath
         .replace(/^\/+/, '')
@@ -98,7 +98,7 @@ apiClient.interceptors.request.use(
       config.url = `/api/${sanitized}`;
     }
 
-    // Cybersecurity Guard: Attach token with CRLF injection protection
+    // Cybersecurity shield: Attach token with CRLF injection protection
     const rawToken =
       localStorage.getItem('attendsure_token') ||
       localStorage.getItem('auth_token') ||

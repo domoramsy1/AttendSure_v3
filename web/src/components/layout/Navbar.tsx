@@ -46,12 +46,12 @@ export const Navbar: React.FC<NavbarProps> = ({
         if (!isMounted) return;
 
         const studRes = results[0].status === 'fulfilled' ? results[0].value : null;
-        const smsRes = results[1].status === 'fulfilled' ? results[1].value : null;
+        const pushRes = results[1].status === 'fulfilled' ? results[1].value : null;
 
         const counts: TabBadgeCounts = {
           ...badgeCounts,
           students: studRes?.data?.total || badgeCounts.students,
-          sms: smsRes?.data?.pending_total || badgeCounts.sms,
+          push: pushRes?.data?.pending_total || badgeCounts.push,
         };
 
         setInternalBadges(counts);
@@ -79,12 +79,12 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'gatelogs', label: 'Gate Logs', icon: DoorOpen, badgeKey: 'gatelogs' },
+    { id: 'attendancelogs', label: 'Gate Logs', icon: DoorOpen, badgeKey: 'attendancelogs' },
     { id: 'classes', label: 'Classes', icon: BookOpen },
     { id: 'students', label: 'Students', icon: GraduationCap, badgeKey: 'students' },
     { id: 'faculties', label: 'Faculties', icon: Users, badgeKey: 'faculties' },
     { id: 'schedules', label: 'Schedules', icon: Calendar, badgeKey: 'schedules' },
-    { id: 'sms', label: 'SMS Alerts', icon: MessageSquare, badgeKey: 'sms' },
+    { id: 'push', label: 'push Alerts', icon: MessageSquare, badgeKey: 'push' },
     { id: 'gatepasses', label: 'Exit Passes', icon: Ticket, badgeKey: 'gatepasses' },
     { id: 'scanners', label: 'Scanners', icon: Cpu, badgeKey: 'scanners' },
   ];

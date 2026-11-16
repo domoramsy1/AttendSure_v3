@@ -55,7 +55,7 @@ export const GatePassesTab: React.FC = () => {
 
   const userRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const isPrincipalOrAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
-  const isGuard = userRole === 'GUARD';
+  const isRestrictedRole = userRole === 'PARENT';
 
   const [passes, setPasses] = useState<GatePass[]>([]);
   const [loading, setLoading] = useState(true);
@@ -264,7 +264,7 @@ export const GatePassesTab: React.FC = () => {
           <Button variant="secondary" size="md" type="button" onClick={() => handleOpenCreateModal('FACULTY')}>
             <FileText size={15} style={{ marginRight: 6 }} /> Request Official Travel Pass
           </Button>
-          {!isGuard && (
+          {!isRestrictedRole && (
             <Button variant="primary" size="md" type="button" onClick={() => handleOpenCreateModal('STUDENT')} style={{ backgroundColor: brand.primary, borderColor: brand.primary }}>
               <Plus size={15} style={{ marginRight: 6 }} /> Issue Student Exit Pass
             </Button>

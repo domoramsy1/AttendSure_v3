@@ -1,5 +1,5 @@
 /**
- * AttendSure - Unified Digital ID & Gate Turnstile Pass Modal
+ * AttendSure - Unified Digital ID & Gate entry_point Pass Modal
  * Supports both Student and Faculty identification credentials.
  * File: web/src/components/modals/StudentIdPassModal.tsx
  */
@@ -11,7 +11,7 @@ import { ShieldCheck, Copy, Check, Printer, User as UserIcon } from 'lucide-reac
 import type { StudentItem, AssignedClass } from '../tabs/MyAssignedClassesTab';
 
 interface StudentIdPassModalProps {
-  student: (Partial<StudentItem> & { name: string; lrn: string; rfid_uid?: string; photo_url?: string | null }) | null;
+  student: (Partial<StudentItem> & { name: string; lrn: string; qr_token?: string; photo_url?: string | null }) | null;
   selectedClass?: AssignedClass | null;
   onClose: () => void;
   onCopyLrn: (lrn: string) => void;
@@ -52,7 +52,7 @@ export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({
   };
 
   return (
-    <Modal isOpen={Boolean(student)} onClose={onClose} title="Digital Pass & Gate Turnstile QR">
+    <Modal isOpen={Boolean(student)} onClose={onClose} title="Digital Pass & Gate entry_point QR">
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '6px 0' }}>
         <div
           id="printable-id-card"
@@ -160,7 +160,7 @@ export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({
             </div>
           </div>
 
-          {/* Footer NFC / RFID State */}
+          {/* Footer NFC / qr_id State */}
           <div
             style={{
               backgroundColor: '#F8FAFC',
@@ -171,8 +171,8 @@ export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({
             }}
           >
             Card UID:{' '}
-            <strong style={{ color: student.rfid_uid ? '#10B981' : '#F59E0B' }}>
-              {student.rfid_uid || 'No Card Linked'}
+            <strong style={{ color: student.qr_token ? '#10B981' : '#F59E0B' }}>
+              {student.qr_token || 'No Card Linked'}
             </strong>
           </div>
         </div>

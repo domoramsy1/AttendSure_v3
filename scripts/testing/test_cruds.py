@@ -37,9 +37,9 @@ from apps.academics.models import (
     UserProfile,
     Student,
     Schedule,
-    IoTKiosk,
+    SoftwareStation,
     GatePass,
-    SmsOutbox,
+    pushalerts,
 )
 
 User = get_user_model()
@@ -124,14 +124,14 @@ class FullCRUDVerificationTests(unittest.TestCase):
     # 4. FACULTY PROFILES CRUD & DROPDOWN
     def test_faculty_crud_and_dropdown(self):
         emp_id = f"EMP-{secrets.token_hex(3).upper()}"
-        rfid = f"RFID-{secrets.token_hex(4).upper()}"
+        qr_id = f"QR-{secrets.token_hex(4).upper()}"
         res = self.client.post("/api/faculty/", {
             "employee_id": emp_id,
             "first_name": "Maria",
             "last_name": "Santos",
             "department": "JHS",
             "position": "Faculty I",
-            "rfid_uid": rfid
+            "qr_token": qr_id
         })
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         fac_id = res.data["id"]
@@ -155,7 +155,7 @@ class FullCRUDVerificationTests(unittest.TestCase):
         stu_id = res.data["id"]
 
         self.assertEqual(self.client.get("/api/students/dropdown/").status_code, status.HTTP_200_OK)
-        self.assertEqual(self.client.patch(f"/api/students/{stu_id}/", {"barangay": "Lapasan"}).status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.patch(f"/api/students/{stu_id}/", {"barangay": "Macasandig"}).status_code, status.HTTP_200_OK)
         self.assertEqual(self.client.delete(f"/api/students/{stu_id}/").status_code, status.HTTP_204_NO_CONTENT)
 
     # 6. SCHEDULES CRUD
@@ -180,21 +180,21 @@ class FullCRUDVerificationTests(unittest.TestCase):
         self.assertEqual(self.client.patch(f"/api/schedules/{sched_id}/", {"room_number": "Room 302"}).status_code, status.HTTP_200_OK)
         self.assertEqual(self.client.delete(f"/api/schedules/{sched_id}/").status_code, status.HTTP_204_NO_CONTENT)
 
-    # 7. IOT KIOSKS & SCANNERS CRUD
-    def test_kiosks_crud(self):
+    # 7. IOT stations & SCANNERS CRUD
+    def test_stations_crud(self):
         code = f"KIO-{secrets.token_hex(3).upper()}"
-        res = self.client.post("/api/kiosks/", {
-            "kiosk_code": code,
-            "terminal_name": "Gate Kiosk Test",
+        res = self.client.post("/api/stations/", {
+            "station_code": code,
+            "terminal_name": "Gate station Test",
             "secret_hash": "rawsecret123",
             "location": "Main Campus Gate"
         })
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-        kiosk_id = res.data["id"]
+        station_id = res.data["id"]
 
-        self.assertEqual(self.client.get(f"/api/kiosks/{kiosk_id}/").status_code, status.HTTP_200_OK)
-        self.assertEqual(self.client.patch(f"/api/kiosks/{kiosk_id}/", {"terminal_name": "North Gate"}).status_code, status.HTTP_200_OK)
-        self.assertEqual(self.client.delete(f"/api/kiosks/{kiosk_id}/").status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(self.client.get(f"/api/stations/{station_id}/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.patch(f"/api/stations/{station_id}/", {"terminal_name": "North Gate"}).status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.delete(f"/api/stations/{station_id}/").status_code, status.HTTP_204_NO_CONTENT)
 
     # 8. GATE PASSES CRUD
     def test_gate_passes_crud(self):
@@ -217,9 +217,9 @@ class FullCRUDVerificationTests(unittest.TestCase):
         self.assertEqual(self.client.patch(f"/api/gate-passes/{pass_id}/", {"status": "USED"}).status_code, status.HTTP_200_OK)
         self.assertEqual(self.client.delete(f"/api/gate-passes/{pass_id}/").status_code, status.HTTP_204_NO_CONTENT)
 
-    # 9. SMS OUTBOX CRUD & METRICS
-    def test_sms_outbox_crud_and_metrics(self):
-        res = self.client.post("/api/sms-outbox/", {
+    # 9. push alerts CRUD & METRICS
+    def test_push_alerts_crud_and_metrics(self):
+        res = self.client.post("/api/push-alerts/", {
             "recipient_name": "Maria's Mother",
             "recipient_number": "09170001111",
             "message_body": "Your child has arrived at school.",
@@ -228,24 +228,24 @@ class FullCRUDVerificationTests(unittest.TestCase):
             "status": "PENDING"
         })
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-        sms_id = res.data["id"]
+        push_id = res.data["id"]
 
-        self.assertEqual(self.client.get(f"/api/sms-outbox/{sms_id}/").status_code, status.HTTP_200_OK)
-        self.assertEqual(self.client.get("/api/sms-outbox/metrics/").status_code, status.HTTP_200_OK)
-        self.assertEqual(self.client.patch(f"/api/sms-outbox/{sms_id}/", {"status": "SENT"}).status_code, status.HTTP_200_OK)
-        self.assertEqual(self.client.delete(f"/api/sms-outbox/{sms_id}/").status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(self.client.get(f"/api/push-alerts/{push_id}/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/api/push-alerts/metrics/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.patch(f"/api/push-alerts/{push_id}/", {"status": "SENT"}).status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.delete(f"/api/push-alerts/{push_id}/").status_code, status.HTTP_204_NO_CONTENT)
 
     # 10. USER MANAGEMENT CRUD & /api/me/
     def test_users_crud_and_me_endpoint(self):
         self.assertEqual(self.client.get("/api/me/").status_code, status.HTTP_200_OK)
 
-        new_username = f"guard_{secrets.token_hex(4)}"
+        new_username = f"shield_{secrets.token_hex(4)}"
         res = self.client.post("/api/users/", {
             "username": new_username,
             "first_name": "Security",
             "last_name": "Officer",
-            "role": "GUARD",
-            "password": "GuardPassword123!"
+            "role": "PARENT",
+            "password": "shieldPassword123!"
         })
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         new_user_id = res.data["id"]

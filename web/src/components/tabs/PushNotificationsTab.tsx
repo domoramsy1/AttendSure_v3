@@ -1,6 +1,6 @@
 /**
- * AttendSure - SMS & Outbox Dispatcher
- * File: web/src/components/tabs/SmsTab.tsx
+ * AttendSure - push & alerts Dispatcher
+ * File: web/src/components/tabs/PushNotificationsTab.tsx
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -44,14 +44,14 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 
-export type SmsCategory =
+export type PushCategory =
   | 'GATE_TAP'
   | 'CLASS_ATTENDANCE'
   | 'ANNOUNCEMENT'
   | 'OTP_2FA'
   | 'GENERAL_NOTICE';
 
-export type ClassroomSmsMode = 'INSTANT' | 'GATE_OUT_SUMMARY';
+export type ClassroomAlertMode = 'INSTANT' | 'GATE_OUT_SUMMARY';
 
 export type AnnouncementAudience =
   | 'ALL_PARENTS'
@@ -62,13 +62,13 @@ export type AnnouncementAudience =
   | 'SPECIFIC_PARENT'
   | 'SPECIFIC_FACULTY';
 
-interface SmsRecord {
+interface PushAlertRecord {
   id: number;
   recipient_name: string;
   recipient_number: string;
   message_body: string;
   trigger_event: string;
-  category: SmsCategory | string;
+  category: PushCategory | string;
   priority: string;
   status: 'PENDING' | 'SENT' | 'FAILED';
   retry_count: number;
@@ -102,13 +102,13 @@ interface SectionOption {
   grade_level: string;
 }
 
-interface SmsMetrics {
+interface PushAlertMetrics {
   total_today: number;
   pending: number;
   sent_today: number;
   failed: number;
-  modem_port: string;
-  modem_baudrate: number;
+  service_channel: string;
+  service_rate: number;
 }
 
 interface PaginatedResponse<T> {
@@ -118,7 +118,7 @@ interface PaginatedResponse<T> {
   results: T[];
 }
 
-const SMS_TEMPLATES: Record<SmsCategory, { label: string; text: string }> = {
+const PUSH_TEMPLATES: Record<PushCategory, { label: string; text: string }> = {
   GATE_TAP: {
     label: 'Gate Tap (Entry/Exit)',
     text: '[AttendSure] Good day! Your child {NAME} has successfully tapped {DIRECTION} at the school main gate at {TIME}.',
@@ -129,7 +129,7 @@ const SMS_TEMPLATES: Record<SmsCategory, { label: string; text: string }> = {
   },
   ANNOUNCEMENT: {
     label: 'School Announcement',
-    text: '[LNHS Advisory] To our school community: Classes and activities will be {DETAILS}. Please be guided accordingly.',
+    text: '[MNHS Advisory] To our school community: Classes and activities will be {DETAILS}. Please be guided accordingly.',
   },
   OTP_2FA: {
     label: '2FA Login Security OTP',
@@ -137,7 +137,7 @@ const SMS_TEMPLATES: Record<SmsCategory, { label: string; text: string }> = {
   },
   GENERAL_NOTICE: {
     label: 'General Notice / Memo',
-    text: '[LNHS Notice] Dear Parent/Guardian of {NAME}: Please be informed of the school schedule update on {DATE}.',
+    text: '[MNHS Notice] Dear Parent/Guardian of {NAME}: Please be informed of the school schedule update on {DATE}.',
   },
 };
 
@@ -152,29 +152,29 @@ const extractGradeLevelString = (val: any): string => {
   return String(val).trim();
 };
 
-export const SmsTab: React.FC = () => {
+export const PushNotificationsTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
 
   const userRole = (localStorage.getItem('attendsure_role') || 'ADMIN').toUpperCase();
   const isAdmin = userRole === 'ADMIN' || userRole === 'PRINCIPAL' || userRole === 'SUPERUSER';
 
-  const [messages, setMessages] = useState<SmsRecord[]>([]);
+  const [messages, setMessages] = useState<PushAlertRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
 
-  const [classroomSmsMode, setClassroomSmsMode] = useState<ClassroomSmsMode>('GATE_OUT_SUMMARY');
+  const [classroomAlertMode, setClassroomAlertMode] = useState<ClassroomAlertMode>('GATE_OUT_SUMMARY');
   const [savingPolicy, setSavingPolicy] = useState(false);
 
-  const [metrics, setMetrics] = useState<SmsMetrics>({
+  const [metrics, setMetrics] = useState<PushAlertMetrics>({
     total_today: 0,
     pending: 0,
     sent_today: 0,
     failed: 0,
-    modem_port: 'COM3',
-    modem_baudrate: 115200,
+    service_channel: 'COM3',
+    service_rate: 115200,
   });
 
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -188,8 +188,8 @@ export const SmsTab: React.FC = () => {
 
   const [isComposeModalOpen, setIsComposeModalOpen] = useState(false);
   const [isBroadcastModalOpen, setIsBroadcastModalOpen] = useState(false);
-  const [editingSms, setEditingSms] = useState<SmsRecord | null>(null);
-  const [inspectedSms, setInspectedSms] = useState<SmsRecord | null>(null);
+  const [editingAlert, setEditingAlert] = useState<PushAlertRecord | null>(null);
+  const [inspectedAlert, setInspectedAlert] = useState<PushAlertRecord | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
@@ -199,7 +199,7 @@ export const SmsTab: React.FC = () => {
     recipient_name: '',
     recipient_number: '',
     message_body: '',
-    category: 'GATE_TAP' as SmsCategory,
+    category: 'GATE_TAP' as PushCategory,
     priority: 'HIGH',
   });
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
@@ -215,7 +215,7 @@ export const SmsTab: React.FC = () => {
 
   const isInteracting = useRef(false);
   isInteracting.current =
-    isComposeModalOpen || isBroadcastModalOpen || Boolean(editingSms) || Boolean(inspectedSms);
+    isComposeModalOpen || isBroadcastModalOpen || Boolean(editingAlert) || Boolean(inspectedAlert);
 
   const availableYearLevels = useMemo(() => {
     const list = new Set<string>();
@@ -332,10 +332,10 @@ export const SmsTab: React.FC = () => {
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const res = await apiClient.get<SmsMetrics>('/system/status/');
+      const res = await apiClient.get<PushAlertMetrics>('/system/status/');
       setMetrics(res.data);
     } catch (err) {
-      console.warn('[SmsTab] Metrics fetch error:', err);
+      console.warn('[PushNotificationsTab] Metrics fetch error:', err);
     }
   }, []);
 
@@ -344,7 +344,7 @@ export const SmsTab: React.FC = () => {
       try {
         if (!silent) setLoading(true);
         setError(null);
-        const res = await apiClient.get<PaginatedResponse<SmsRecord> | SmsRecord[]>('/notifications/', {
+        const res = await apiClient.get<PaginatedResponse<PushAlertRecord> | PushAlertRecord[]>('/notifications/', {
           params: {
             page,
             page_size: size,
@@ -367,7 +367,7 @@ export const SmsTab: React.FC = () => {
         }
       } catch (err: any) {
         if (!silent) {
-          setError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to load SMS outbox logs.');
+          setError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to load push alerts logs.');
         }
       } finally {
         if (!silent) setLoading(false);
@@ -425,11 +425,11 @@ export const SmsTab: React.FC = () => {
         );
       }
 
-      if (settingsRes.status === 'fulfilled' && settingsRes.value.data?.classroom_sms_mode) {
-        setClassroomSmsMode(settingsRes.value.data.classroom_sms_mode);
+      if (settingsRes.status === 'fulfilled' && settingsRes.value.data?.classroom_alert_mode) {
+        setClassroomAlertMode(settingsRes.value.data.classroom_alert_mode);
       }
     } catch (err) {
-      console.warn('[SmsTab] Directory caching error:', err);
+      console.warn('[PushNotificationsTab] Directory caching error:', err);
     }
   };
 
@@ -470,28 +470,28 @@ export const SmsTab: React.FC = () => {
     fetchMessages(1, newSize, search, statusFilter, categoryFilter, false);
   };
 
-  const handleSaveClassroomPolicy = async (newMode: ClassroomSmsMode) => {
+  const handleSaveClassroomPolicy = async (newMode: ClassroomAlertMode) => {
     if (!isAdmin) {
       showAlert({
         title: 'Access Restricted',
-        message: 'Only system administrators can alter the global SMS dispatch policy.',
+        message: 'Only system administrators can alter the global push dispatch policy.',
         type: 'error',
       });
       return;
     }
 
-    setClassroomSmsMode(newMode);
+    setClassroomAlertMode(newMode);
     setSavingPolicy(true);
     try {
       await apiClient.patch('/settings/school/', {
-        classroom_sms_mode: newMode,
+        classroom_alert_mode: newMode,
       });
       showAlert({
-        title: 'SMS Policy Updated',
+        title: 'push Policy Updated',
         message:
           newMode === 'GATE_OUT_SUMMARY'
-            ? 'Parents will receive 1 consolidated summary SMS when learner scans OUT at the gate.'
-            : 'Parents will receive immediate real-time SMS notifications on every classroom scan.',
+            ? 'Parents will receive 1 consolidated summary push when learner scans OUT at the gate.'
+            : 'Parents will receive immediate real-time push notifications on every classroom scan.',
         type: 'success',
       });
     } catch {
@@ -517,7 +517,7 @@ export const SmsTab: React.FC = () => {
 
     setBroadcastForm({
       audience: 'ALL_PARENTS',
-      message_body: SMS_TEMPLATES.ANNOUNCEMENT.text,
+      message_body: PUSH_TEMPLATES.ANNOUNCEMENT.text,
       priority: 'HIGH',
       year_level: '',
       section_id: '',
@@ -610,18 +610,18 @@ export const SmsTab: React.FC = () => {
     setComposeForm({
       recipient_name: '',
       recipient_number: '',
-      message_body: SMS_TEMPLATES.GATE_TAP.text,
+      message_body: PUSH_TEMPLATES.GATE_TAP.text,
       category: 'GATE_TAP',
       priority: 'HIGH',
     });
     setIsComposeModalOpen(true);
   };
 
-  const handleCategorySelectInCompose = (cat: SmsCategory) => {
+  const handleCategorySelectInCompose = (cat: PushCategory) => {
     setComposeForm((prev) => ({
       ...prev,
       category: cat,
-      message_body: SMS_TEMPLATES[cat]?.text || prev.message_body,
+      message_body: PUSH_TEMPLATES[cat]?.text || prev.message_body,
     }));
   };
 
@@ -630,7 +630,7 @@ export const SmsTab: React.FC = () => {
     const matched = students.find((s) => String(s.id) === idStr);
     if (matched) {
       setComposeForm((prev) => {
-        const template = SMS_TEMPLATES[prev.category]?.text || prev.message_body;
+        const template = PUSH_TEMPLATES[prev.category]?.text || prev.message_body;
         const personalized = template.replace('{NAME}', matched.full_name);
         return {
           ...prev,
@@ -642,7 +642,7 @@ export const SmsTab: React.FC = () => {
     }
   };
 
-  const handleCreateSms = async (e: React.FormEvent) => {
+  const handleCreateAlert = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanNumber = sanitizePhoneNumber(composeForm.recipient_number);
     if (!cleanNumber || !composeForm.message_body.trim()) {
@@ -672,7 +672,7 @@ export const SmsTab: React.FC = () => {
       fetchMetrics();
 
       showAlert({
-        title: 'SMS Queued',
+        title: 'push Queued',
         message: `Notification queued for ${cleanNumber} (${composeForm.category}).`,
         type: 'info',
       });
@@ -692,7 +692,7 @@ export const SmsTab: React.FC = () => {
     }
   };
 
-  const handleOpenEdit = (sms: SmsRecord) => {
+  const handleOpenEdit = (push: PushAlertRecord) => {
     if (!isAdmin) {
       showAlert({
         title: 'Access Restricted',
@@ -701,34 +701,34 @@ export const SmsTab: React.FC = () => {
       });
       return;
     }
-    setEditingSms({ ...sms });
+    setEditingAlert({ ...push });
   };
 
-  const handleUpdateSms = async (e: React.FormEvent) => {
+  const handleUpdateAlert = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingSms) return;
+    if (!editingAlert) return;
 
-    const cleanNumber = sanitizePhoneNumber(editingSms.recipient_number);
+    const cleanNumber = sanitizePhoneNumber(editingAlert.recipient_number);
 
     try {
       setSubmitting(true);
-      await apiClient.patch(`/notifications/${editingSms.id}/`, {
-        recipient_name: editingSms.recipient_name,
+      await apiClient.patch(`/notifications/${editingAlert.id}/`, {
+        recipient_name: editingAlert.recipient_name,
         recipient_number: cleanNumber,
-        message: editingSms.message_body,
-        message_body: editingSms.message_body,
-        category: editingSms.category,
-        priority: editingSms.priority,
-        status: editingSms.status,
+        message: editingAlert.message_body,
+        message_body: editingAlert.message_body,
+        category: editingAlert.category,
+        priority: editingAlert.priority,
+        status: editingAlert.status,
       });
 
-      setEditingSms(null);
+      setEditingAlert(null);
       fetchMessages(currentPage, pageSize, search, statusFilter, categoryFilter, true);
       fetchMetrics();
 
       showAlert({
         title: 'Message Updated',
-        message: `Outbox entry #${editingSms.id} saved successfully.`,
+        message: `alerts entry #${editingAlert.id} saved successfully.`,
         type: 'info',
       });
     } catch (err: any) {
@@ -742,32 +742,32 @@ export const SmsTab: React.FC = () => {
     }
   };
 
-  const promptDeleteSms = (id: number) => {
+  const promptDeleteAlert = (id: number) => {
     if (!isAdmin) {
       showAlert({
         title: 'Access Restricted',
-        message: 'Only administrators can delete SMS outbox logs.',
+        message: 'Only administrators can delete push alerts logs.',
         type: 'error',
       });
       return;
     }
 
     showConfirm({
-      title: 'Delete Outbox Entry',
-      message: `Permanently delete SMS message #${id}? This action cannot be undone.`,
+      title: 'Delete alerts Entry',
+      message: `Permanently delete push message #${id}? This action cannot be undone.`,
       confirmLabel: 'Delete Entry',
       isDestructive: true,
       onConfirm: async () => {
         try {
           setActionLoadingId(id);
           await apiClient.delete(`/notifications/${id}/`);
-          if (inspectedSms?.id === id) setInspectedSms(null);
-          if (editingSms?.id === id) setEditingSms(null);
+          if (inspectedAlert?.id === id) setInspectedAlert(null);
+          if (editingAlert?.id === id) setEditingAlert(null);
           fetchMessages(currentPage, pageSize, search, statusFilter, categoryFilter, true);
           fetchMetrics();
           showAlert({
             title: 'Entry Deleted',
-            message: `Outbox record #${id} removed from database.`,
+            message: `alerts record #${id} removed from database.`,
             type: 'info',
           });
         } catch (err: any) {
@@ -826,15 +826,15 @@ export const SmsTab: React.FC = () => {
     if (!isAdmin) {
       showAlert({
         title: 'Access Restricted',
-        message: 'Only administrators can clear the modem dispatch queue.',
+        message: 'Only administrators can clear the push_engine dispatch queue.',
         type: 'error',
       });
       return;
     }
 
     showConfirm({
-      title: 'Clear Outbox Queue',
-      message: 'Cancel and delete all unsent messages currently in the queue? The GSM modem will not dispatch them.',
+      title: 'Clear alerts Queue',
+      message: 'Cancel and delete all unsent messages currently in the queue? The GSM push_engine will not dispatch them.',
       confirmLabel: 'Clear Pending Queue',
       isDestructive: true,
       onConfirm: async () => {
@@ -845,13 +845,13 @@ export const SmsTab: React.FC = () => {
           fetchMetrics();
           showAlert({
             title: 'Queue Cleared',
-            message: 'All pending outbox messages have been cleared.',
+            message: 'All pending alerts messages have been cleared.',
             type: 'info',
           });
         } catch (err: any) {
           showAlert({
             title: 'Clear Failed',
-            message: err?.response?.data?.error || 'Could not clear outbox queue.',
+            message: err?.response?.data?.error || 'Could not clear alerts queue.',
             type: 'error',
           });
         } finally {
@@ -861,18 +861,18 @@ export const SmsTab: React.FC = () => {
     });
   };
 
-  const handleRetrySingle = async (sms: SmsRecord) => {
+  const handleRetrySingle = async (push: PushAlertRecord) => {
     try {
-      setActionLoadingId(sms.id);
+      setActionLoadingId(push.id);
       await apiClient.post('/notifications/mark-read/');
       fetchMessages(currentPage, pageSize, search, statusFilter, categoryFilter, true);
       fetchMetrics();
-      if (inspectedSms?.id === sms.id) {
-        setInspectedSms((prev) => (prev ? { ...prev, status: 'PENDING' } : null));
+      if (inspectedAlert?.id === push.id) {
+        setInspectedAlert((prev) => (prev ? { ...prev, status: 'PENDING' } : null));
       }
       showAlert({
         title: 'Message Queued',
-        message: `Message #${sms.id} re-queued for immediate dispatch.`,
+        message: `Message #${push.id} re-queued for immediate dispatch.`,
         type: 'info',
       });
     } catch (err: any) {
@@ -889,7 +889,7 @@ export const SmsTab: React.FC = () => {
   const promptRetryAllFailed = () => {
     showConfirm({
       title: 'Retry All Failed Messages',
-      message: 'Re-queue all failed SMS notifications for immediate modem resend?',
+      message: 'Re-queue all failed push notifications for immediate push_engine resend?',
       confirmLabel: 'Queue All',
       isDestructive: false,
       onConfirm: async () => {
@@ -921,7 +921,7 @@ export const SmsTab: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* 1. Live SMS Metrics Overview */}
+      {/* 1. Live push Metrics Overview */}
       <div style={statsGrid}>
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -938,7 +938,7 @@ export const SmsTab: React.FC = () => {
             <Clock size={18} color="#0284c7" />
           </div>
           <div style={{ ...statVal, color: '#0284c7' }}>{metrics.pending}</div>
-          <div style={statSub}>Awaiting GSM modem transmission</div>
+          <div style={statSub}>Awaiting GSM push_engine transmission</div>
         </div>
 
         <div style={statCard}>
@@ -952,13 +952,13 @@ export const SmsTab: React.FC = () => {
 
         <div style={statCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>GSM MODEM PORT</span>
+            <span style={statLabel}>GSM push_engine PORT</span>
             <Radio size={18} color="#0284c7" />
           </div>
           <div style={{ ...statVal, fontSize: '1.25rem', fontFamily: 'monospace', color: '#0f172a' }}>
-            {metrics.modem_port || 'COM3'}
+            {metrics.service_channel || 'COM3'}
           </div>
-          <div style={statSub}>Baudrate: {metrics.modem_baudrate || 115200} bps &bull; Online</div>
+          <div style={statSub}>Baudrate: {metrics.service_rate || 115200} bps &bull; Online</div>
         </div>
       </div>
 
@@ -970,7 +970,7 @@ export const SmsTab: React.FC = () => {
           </div>
           <div>
             <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>Classroom Attendance SMS Dispatch Policy</span>
+              <span>Classroom Attendance push Dispatch Policy</span>
               {!isAdmin && (
                 <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                   <ShieldAlert size={12} /> (Admin Managed)
@@ -990,9 +990,9 @@ export const SmsTab: React.FC = () => {
             onClick={() => handleSaveClassroomPolicy('GATE_OUT_SUMMARY')}
             style={{
               ...policyBtnStyle,
-              borderColor: classroomSmsMode === 'GATE_OUT_SUMMARY' ? '#0284c7' : '#cbd5e1',
-              backgroundColor: classroomSmsMode === 'GATE_OUT_SUMMARY' ? '#eff6ff' : '#ffffff',
-              color: classroomSmsMode === 'GATE_OUT_SUMMARY' ? '#0284c7' : '#475569',
+              borderColor: classroomAlertMode === 'GATE_OUT_SUMMARY' ? '#0284c7' : '#cbd5e1',
+              backgroundColor: classroomAlertMode === 'GATE_OUT_SUMMARY' ? '#eff6ff' : '#ffffff',
+              color: classroomAlertMode === 'GATE_OUT_SUMMARY' ? '#0284c7' : '#475569',
               cursor: isAdmin ? 'pointer' : 'not-allowed',
               opacity: isAdmin ? 1 : 0.7,
             }}
@@ -1007,9 +1007,9 @@ export const SmsTab: React.FC = () => {
             onClick={() => handleSaveClassroomPolicy('INSTANT')}
             style={{
               ...policyBtnStyle,
-              borderColor: classroomSmsMode === 'INSTANT' ? '#0284c7' : '#cbd5e1',
-              backgroundColor: classroomSmsMode === 'INSTANT' ? '#eff6ff' : '#ffffff',
-              color: classroomSmsMode === 'INSTANT' ? '#0284c7' : '#475569',
+              borderColor: classroomAlertMode === 'INSTANT' ? '#0284c7' : '#cbd5e1',
+              backgroundColor: classroomAlertMode === 'INSTANT' ? '#eff6ff' : '#ffffff',
+              color: classroomAlertMode === 'INSTANT' ? '#0284c7' : '#475569',
               cursor: isAdmin ? 'pointer' : 'not-allowed',
               opacity: isAdmin ? 1 : 0.7,
             }}
@@ -1152,15 +1152,15 @@ export const SmsTab: React.FC = () => {
             style={{ display: 'flex', alignItems: 'center', gap: 6 }}
           >
             <Plus size={16} />
-            Compose SMS
+            Compose push
           </Button>
         </div>
       </div>
 
-      {/* 4. Main SMS Logs Table */}
+      {/* 4. Main push Logs Table */}
       <div style={{ backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1, borderStyle: 'solid', borderColor: '#e2e8f0', overflow: 'hidden' }}>
         <ModuleTableLayout
-          title="SMS & Outbox Dispatcher"
+          title="push & alerts Dispatcher"
           subtitle="Real-time log of automated school notifications: gate taps, classroom attendance, announcements, and 2FA OTPs."
           searchPlaceholder="Search phone number, student name, or message text..."
           searchValue={search}
@@ -1294,7 +1294,7 @@ export const SmsTab: React.FC = () => {
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
                   <button
                     type="button"
-                    onClick={() => setInspectedSms(m)}
+                    onClick={() => setInspectedAlert(m)}
                     title="View Message Details"
                     style={actionBtn}
                   >
@@ -1331,7 +1331,7 @@ export const SmsTab: React.FC = () => {
                   {isAdmin && (
                     <button
                       type="button"
-                      onClick={() => promptDeleteSms(m.id)}
+                      onClick={() => promptDeleteAlert(m.id)}
                       disabled={actionLoadingId === m.id}
                       title="Delete Message"
                       style={{ ...actionBtn, backgroundColor: '#fff1f2', borderColor: '#fecdd3' }}
@@ -1569,7 +1569,7 @@ export const SmsTab: React.FC = () => {
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: '#64748b', marginTop: 4 }}>
               <span>Characters: {broadcastForm.message_body.length} / 160</span>
-              <span>Segments: {Math.ceil(broadcastForm.message_body.length / 160) || 1} SMS per recipient</span>
+              <span>Segments: {Math.ceil(broadcastForm.message_body.length / 160) || 1} push per recipient</span>
             </div>
           </div>
 
@@ -1585,13 +1585,13 @@ export const SmsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 6. MODAL: COMPOSE INDIVIDUAL SMS */}
+      {/* 6. MODAL: COMPOSE INDIVIDUAL push */}
       <Modal
         isOpen={isComposeModalOpen}
         onClose={() => setIsComposeModalOpen(false)}
-        title="Compose Individual Notification SMS"
+        title="Compose Individual Notification push"
       >
-        <form onSubmit={handleCreateSms} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <form onSubmit={handleCreateAlert} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 5 }}>
               <Sparkles size={13} color="#0284c7" />
@@ -1605,7 +1605,7 @@ export const SmsTab: React.FC = () => {
                   'ANNOUNCEMENT',
                   'OTP_2FA',
                   'GENERAL_NOTICE',
-                ] as SmsCategory[]
+                ] as PushCategory[]
               ).map((cat) => (
                 <button
                   key={cat}
@@ -1625,7 +1625,7 @@ export const SmsTab: React.FC = () => {
                     textAlign: 'center',
                   }}
                 >
-                  {SMS_TEMPLATES[cat]?.label || cat}
+                  {PUSH_TEMPLATES[cat]?.label || cat}
                 </button>
               ))}
             </div>
@@ -1704,7 +1704,7 @@ export const SmsTab: React.FC = () => {
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: '#64748b', marginTop: 4 }}>
               <span>Characters: {composeForm.message_body.length} / 160</span>
-              <span>Segments: {Math.ceil(composeForm.message_body.length / 160) || 1} SMS</span>
+              <span>Segments: {Math.ceil(composeForm.message_body.length / 160) || 1} push</span>
             </div>
           </div>
 
@@ -1720,21 +1720,21 @@ export const SmsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 7. MODAL: EDIT SMS */}
-      {editingSms && (
+      {/* 7. MODAL: EDIT push */}
+      {editingAlert && (
         <Modal
-          isOpen={Boolean(editingSms)}
-          onClose={() => setEditingSms(null)}
-          title={`Edit Outbox Entry #${editingSms.id}`}
+          isOpen={Boolean(editingAlert)}
+          onClose={() => setEditingAlert(null)}
+          title={`Edit alerts Entry #${editingAlert.id}`}
         >
-          <form onSubmit={handleUpdateSms} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <form onSubmit={handleUpdateAlert} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div>
                 <label style={labelStyle}>Recipient Name</label>
                 <input
                   type="text"
-                  value={editingSms.recipient_name}
-                  onChange={(e) => setEditingSms({ ...editingSms, recipient_name: e.target.value })}
+                  value={editingAlert.recipient_name}
+                  onChange={(e) => setEditingAlert({ ...editingAlert, recipient_name: e.target.value })}
                   style={inputStyle}
                 />
               </div>
@@ -1744,8 +1744,8 @@ export const SmsTab: React.FC = () => {
                 <input
                   type="text"
                   required
-                  value={editingSms.recipient_number}
-                  onChange={(e) => setEditingSms({ ...editingSms, recipient_number: e.target.value })}
+                  value={editingAlert.recipient_number}
+                  onChange={(e) => setEditingAlert({ ...editingAlert, recipient_number: e.target.value })}
                   style={inputStyle}
                 />
               </div>
@@ -1755,8 +1755,8 @@ export const SmsTab: React.FC = () => {
               <div>
                 <label style={labelStyle}>Notification Category</label>
                 <select
-                  value={editingSms.category}
-                  onChange={(e) => setEditingSms({ ...editingSms, category: e.target.value as any })}
+                  value={editingAlert.category}
+                  onChange={(e) => setEditingAlert({ ...editingAlert, category: e.target.value as any })}
                   style={inputStyle}
                 >
                   <option value="GATE_TAP">Gate Tap Attendance</option>
@@ -1770,8 +1770,8 @@ export const SmsTab: React.FC = () => {
               <div>
                 <label style={labelStyle}>Delivery Status</label>
                 <select
-                  value={editingSms.status}
-                  onChange={(e) => setEditingSms({ ...editingSms, status: e.target.value as any })}
+                  value={editingAlert.status}
+                  onChange={(e) => setEditingAlert({ ...editingAlert, status: e.target.value as any })}
                   style={inputStyle}
                 >
                   <option value="PENDING">PENDING (In Queue)</option>
@@ -1786,12 +1786,12 @@ export const SmsTab: React.FC = () => {
               <textarea
                 required
                 rows={3}
-                value={editingSms.message_body}
-                onChange={(e) => setEditingSms({ ...editingSms, message_body: e.target.value })}
+                value={editingAlert.message_body}
+                onChange={(e) => setEditingAlert({ ...editingAlert, message_body: e.target.value })}
                 style={{ ...inputStyle, resize: 'vertical' }}
               />
               <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 4 }}>
-                Characters: {editingSms.message_body.length} / 160
+                Characters: {editingAlert.message_body.length} / 160
               </div>
             </div>
 
@@ -1800,14 +1800,14 @@ export const SmsTab: React.FC = () => {
                 variant="secondary"
                 size="md"
                 type="button"
-                onClick={() => promptDeleteSms(editingSms.id)}
+                onClick={() => promptDeleteAlert(editingAlert.id)}
                 style={{ color: '#dc2626', borderColor: '#fecaca' }}
               >
                 Delete Entry
               </Button>
 
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button variant="secondary" size="md" type="button" onClick={() => setEditingSms(null)}>
+                <Button variant="secondary" size="md" type="button" onClick={() => setEditingAlert(null)}>
                   Cancel
                 </Button>
                 <Button variant="primary" size="md" type="submit" disabled={submitting}>
@@ -1820,12 +1820,12 @@ export const SmsTab: React.FC = () => {
         </Modal>
       )}
 
-      {/* 8. MODAL: INSPECT FULL SMS DETAILS */}
-      {inspectedSms && (
+      {/* 8. MODAL: INSPECT FULL push DETAILS */}
+      {inspectedAlert && (
         <Modal
-          isOpen={Boolean(inspectedSms)}
-          onClose={() => setInspectedSms(null)}
-          title={`Message Details: #${inspectedSms.id}`}
+          isOpen={Boolean(inspectedAlert)}
+          onClose={() => setInspectedAlert(null)}
+          title={`Message Details: #${inspectedAlert.id}`}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ padding: '12px 14px', backgroundColor: '#f8fafc', borderRadius: 8, borderWidth: 1, borderStyle: 'solid', borderColor: '#e2e8f0' }}>
@@ -1834,15 +1834,15 @@ export const SmsTab: React.FC = () => {
                 <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748b' }}>FULL MESSAGE TEXT</span>
               </div>
               <div style={{ fontSize: '0.86rem', color: '#0f172a', marginTop: 6, lineHeight: 1.45 }}>
-                {inspectedSms.message_body}
+                {inspectedAlert.message_body}
               </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: '0.74rem' }}>
               <div style={fieldBox}>
                 <div style={{ fontWeight: 700, color: '#64748b' }}>Recipient</div>
-                <div style={{ fontWeight: 800, color: '#0f172a', marginTop: 2 }}>{inspectedSms.recipient_name || 'Guardian'}</div>
-                <div style={{ fontFamily: 'monospace', color: '#0284c7', marginTop: 1 }}>{inspectedSms.recipient_number}</div>
+                <div style={{ fontWeight: 800, color: '#0f172a', marginTop: 2 }}>{inspectedAlert.recipient_name || 'Guardian'}</div>
+                <div style={{ fontFamily: 'monospace', color: '#0284c7', marginTop: 1 }}>{inspectedAlert.recipient_number}</div>
               </div>
 
               <div style={fieldBox}>
@@ -1854,26 +1854,26 @@ export const SmsTab: React.FC = () => {
                       borderRadius: 10,
                       fontSize: '0.68rem',
                       fontWeight: 800,
-                      ...getStatusBadge(inspectedSms.status),
+                      ...getStatusBadge(inspectedAlert.status),
                     }}
                   >
-                    {inspectedSms.status}
+                    {inspectedAlert.status}
                   </span>
                   <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: 700 }}>
-                    {inspectedSms.category}
+                    {inspectedAlert.category}
                   </span>
                 </div>
                 <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: 4 }}>
-                  Priority: {inspectedSms.priority} &bull; Retries: {inspectedSms.retry_count}
+                  Priority: {inspectedAlert.priority} &bull; Retries: {inspectedAlert.retry_count}
                 </div>
               </div>
             </div>
 
-            {inspectedSms.error_message && (
+            {inspectedAlert.error_message && (
               <div style={{ padding: '10px 12px', backgroundColor: '#fef2f2', borderRadius: 6, borderWidth: 1, borderStyle: 'solid', borderColor: '#fecaca' }}>
-                <div style={{ fontSize: '0.70rem', fontWeight: 800, color: '#dc2626' }}>MODEM ERROR LOG</div>
+                <div style={{ fontSize: '0.70rem', fontWeight: 800, color: '#dc2626' }}>push_engine ERROR LOG</div>
                 <div style={{ fontSize: '0.74rem', color: '#b91c1c', marginTop: 2, fontFamily: 'monospace' }}>
-                  {inspectedSms.error_message}
+                  {inspectedAlert.error_message}
                 </div>
               </div>
             )}
@@ -1886,9 +1886,9 @@ export const SmsTab: React.FC = () => {
                     size="md"
                     type="button"
                     onClick={() => {
-                      const smsToEdit = inspectedSms;
-                      setInspectedSms(null);
-                      handleOpenEdit(smsToEdit);
+                      const alertToEdit = inspectedAlert;
+                      setInspectedAlert(null);
+                      handleOpenEdit(alertToEdit);
                     }}
                     style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                   >
@@ -1897,16 +1897,16 @@ export const SmsTab: React.FC = () => {
                   </Button>
                 )}
 
-                {inspectedSms.status === 'FAILED' && (
+                {inspectedAlert.status === 'FAILED' && (
                   <Button
                     variant="secondary"
                     size="md"
                     type="button"
-                    onClick={() => handleRetrySingle(inspectedSms)}
-                    disabled={actionLoadingId === inspectedSms.id}
+                    onClick={() => handleRetrySingle(inspectedAlert)}
+                    disabled={actionLoadingId === inspectedAlert.id}
                     style={{ color: '#0284c7', borderColor: '#bae6fd', display: 'flex', alignItems: 'center', gap: 6 }}
                   >
-                    {actionLoadingId === inspectedSms.id ? (
+                    {actionLoadingId === inspectedAlert.id ? (
                       <Loader2 className="animate-spin" size={14} />
                     ) : (
                       <RotateCw size={14} />
@@ -1922,14 +1922,14 @@ export const SmsTab: React.FC = () => {
                     variant="secondary"
                     size="md"
                     type="button"
-                    onClick={() => promptDeleteSms(inspectedSms.id)}
+                    onClick={() => promptDeleteAlert(inspectedAlert.id)}
                     style={{ color: '#dc2626', borderColor: '#fecaca', display: 'flex', alignItems: 'center', gap: 6 }}
                   >
                     <Trash2 size={14} />
                     Delete
                   </Button>
                 )}
-                <Button variant="primary" size="md" type="button" onClick={() => setInspectedSms(null)}>
+                <Button variant="primary" size="md" type="button" onClick={() => setInspectedAlert(null)}>
                   Close
                 </Button>
               </div>
@@ -1941,7 +1941,7 @@ export const SmsTab: React.FC = () => {
   );
 };
 
-export default SmsTab;
+export default PushNotificationsTab;
 
 // UI Styles
 const statsGrid: React.CSSProperties = {

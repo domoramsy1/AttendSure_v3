@@ -31,7 +31,7 @@ export type NavItemKey =
   | 'classroom-scanner'
   | 'my-classes'
   | 'advisory-monitor'
-  | 'gate-logs'
+  | 'attendance-logs'
   | 'students'
   | 'facultys'
   | 'users'
@@ -40,7 +40,7 @@ export type NavItemKey =
   | 'dtr'
   | 'geofence'
   | 'scanners'
-  | 'sms'
+  | 'push'
   | 'notifications'
   | 'reports'
   | 'settings';
@@ -183,7 +183,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {
         groupTitle: 'ATTENDANCE & ALERTS',
         items: [
-          { key: 'sms', label: 'Push Alerts', icon: <Bell size={20} /> },
+          { key: 'push', label: 'Push Alerts', icon: <Bell size={20} /> },
           { key: 'gate-passes', label: 'Exit Passes', icon: <Ticket size={20} /> },
           { key: 'dtr', label: 'Faculty DTR', icon: <Clock size={20} /> },
           { key: 'geofence', label: 'Campus GPS', icon: <MapPin size={20} /> },
@@ -213,7 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           if (item.key === 'my-classes') return canTeach;
           if (item.key === 'advisory-monitor') return canTeach || isLeadership;
           if (item.key === 'users') return role === 'ADMIN' || role === 'SUPERADMIN';
-          if (['settings', 'sms', 'notifications', 'geofence'].includes(item.key)) {
+          if (['settings', 'push', 'notifications', 'geofence'].includes(item.key)) {
             return role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL';
           }
           if (['facultys', 'reports', 'schedules'].includes(item.key)) return isLeadership;

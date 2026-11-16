@@ -132,7 +132,7 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     });
   }, []);
 
-  // Keyboard navigation safeguard (Escape key closes modals)
+  // Keyboard navigation protection (Escape key closes modals)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {

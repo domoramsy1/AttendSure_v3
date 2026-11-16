@@ -38,7 +38,7 @@ export default defineConfig({
         timeout: 10000,
         configure: (proxy) => {
           proxy.on('error', (err, _req, res) => {
-            // Guard: verify res is an HTTP response before writing headers
+            // shield: verify res is an HTTP response before writing headers
             if (res && 'writeHead' in res && typeof res.writeHead === 'function') {
               const httpRes = res as ServerResponse;
               if (!httpRes.headersSent) {

@@ -6,7 +6,7 @@ Cybersecurity & Performance:
 1. Resilient Telemetry Ingestion: Safely handles nested coordinate payloads.
 2. Haversine Calculations: Computes physical distance to school boundary.
 3. Loafing Sentry: Records security violations if faculty exits boundary during class.
-4. Battery Guard: Prevents false loafing reports when device battery drops below 5%.
+4. Battery shield: Prevents false loafing reports when device battery drops below 5%.
 """
 
 from datetime import timedelta
@@ -22,7 +22,7 @@ from apps.academics.models import (
     FacultyHeartbeat,
     LoafingIncident,
     FacultyProfile,
-    StudentGateLog,
+    StudentAttendanceLog,
     GatePass,
 )
 from apps.api.views.common import (
