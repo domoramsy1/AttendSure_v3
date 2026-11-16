@@ -96,7 +96,7 @@ export const ReportsScreen: React.FC = () => {
 
   const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR'].includes(userRole) || Boolean(currentUser?.is_superuser);
   const isFaculty = ['FACULTY', 'FACULTY'].includes(userRole);
-  const isStaffOnly = ['STAFF', 'GUARD', 'SECURITY'].includes(userRole);
+  const isStaffOnly = ['STAFF', 'PARENT', 'SECURITY'].includes(userRole);
 
   const availableTabs = useMemo(() => {
     const tabs: Array<{ key: ReportType; label: string; icon: keyof typeof Ionicons.glyphMap }> = [];

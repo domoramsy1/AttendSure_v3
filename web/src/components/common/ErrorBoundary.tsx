@@ -3,7 +3,7 @@
  * File: frontend/src/components/common/ErrorBoundary.tsx
  *
  * Prevents sub-feature crashes (such as heavy DepEd report calculations,
- * canvas layout engines, or kiosk monitors) from crashing the entire portal.
+ * canvas layout engines, or terminals monitors) from crashing the entire portal.
  */
 
 import React, { Component } from 'react';

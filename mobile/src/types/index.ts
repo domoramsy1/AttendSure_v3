@@ -5,7 +5,7 @@
 // 1. ROLES & DEVICE IDENTIFICATION (CYBERSECURITY CONTROLS)
 // ==============================================================================
 
-export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'GUARD';
+export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'PARENT';
 
 export interface DeviceIdentity {
   deviceId: string;
@@ -18,7 +18,7 @@ export interface DeviceIdentity {
 }
 
 // ==============================================================================
-// 2. KIOSK GATE LOGS & CAMPUS PROFILE
+// 2. terminals GATE LOGS & CAMPUS PROFILE
 // ==============================================================================
 
 export interface GateLog {
@@ -28,9 +28,8 @@ export interface GateLog {
   identifier?: string;
   name?: string;
   direction: 'IN' | 'OUT';
-  scan_method: 'RFID' | 'QR';
-  kiosk_name?: string;
-  kiosk_code?: string;
+  scan_method: 'QR ID' | 'QR';
+  kiosks_name?: string;
   scan_time: string;
   raw_time?: string;
 }

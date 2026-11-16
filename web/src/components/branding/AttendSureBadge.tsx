@@ -27,7 +27,7 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = ({
       }}
     >
       <img
-        src="/splash.svg"
+        src="/AttendSureLogo.png"
         alt="AttendSure"
         style={{
           width: `${iconSize}px`,

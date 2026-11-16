@@ -10,11 +10,11 @@ export const UI_TEXT = {
     footerText: "AttendSure • Simple School Attendance & Campus Safety",
   },
   header: {
-    gateOnline: "Gate Scanner: Online",
-    gateOffline: "Gate Scanner: Offline",
+    systemOnline: "USB QR scanner: Online",
+    gateOffline: "USB QR scanner: Offline",
   },
   dashboard: {
-    telemetryWaiting: "Waiting for Gate Taps",
+    telemetryWaiting: "Waiting for Attendance Scans",
     telemetryActive: "Gate Active & Logging",
     mainTitle: "Today's Attendance Overview",
     mainSubtitle: "Live gate taps, classroom attendance, and faculty time cards.",
@@ -69,7 +69,7 @@ export const UI_TEXT = {
     schedules: "Classes & Sections",
     dtr: "Faculty DTR (DTR)",
     geofence: "Campus Boundary",
-    scanners: "Gate Scanners",
+    scanners: "USB QR scanner",
     reports: "Reports (SF1, SF2)",
   },
 } as const;

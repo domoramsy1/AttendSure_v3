@@ -2,7 +2,7 @@ import os
 import re
 
 OUTPUT_FILE = "search_results.txt"
-PATTERN = re.compile(r"class list|kiosk", re.IGNORECASE)
+PATTERN = re.compile(r"class list|'geofence/status/', re.IGNORECASE)
 EXCLUDE_DIRS = {"node_modules", ".git", "venv", "__pycache__", ".expo", "staticfiles", "media"}
 EXCLUDE_EXTS = {".png", ".jpg", ".jpeg", ".ico", ".pdf", ".pyc", ".lock"}
 

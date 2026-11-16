@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Profile & User Management Serializer
+AttendSure V3 - School Profile & User Management Serializer (QR ID & Mobile App Only)
 File: backend/apps/api/serializers/users.py
 """
 
@@ -10,8 +10,9 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Q
 from rest_framework import serializers
-from apps.academics.models import SchoolProfile, UserProfile, FacultyProfile
-from apps.common.utils import get_user_role
+from apps.academics.models import FacultyProfile, SchoolProfile, Student, UserProfile
+from apps.academics.models.people import normalize_ph_phone
+from apps.api.views.common import get_user_role
 from .base import FlexibleImageField, safe_photo_url
 
 User = get_user_model()
@@ -77,9 +78,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
     suffix = serializers.CharField(required=False, allow_blank=True)
     full_name = serializers.SerializerMethodField()
     contact_number = serializers.CharField(required=False, allow_blank=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True)
     department = serializers.CharField(required=False, allow_blank=True)
     position = serializers.CharField(required=False, allow_blank=True)
-    rfid_uid = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     photo = FlexibleImageField(required=False, allow_null=True)
     photo_url = serializers.SerializerMethodField()
@@ -89,28 +90,27 @@ class UserManagementSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'username', 'employee_id', 'first_name', 'middle_name', 'last_name',
-            'suffix', 'full_name', 'email', 'contact_number', 'department', 'position',
-            'rfid_uid', 'role', 'current_role', 'is_teaching', 'can_teach',
-            'is_profile_completed', 'faculty_id', 'photo', 'photo_url', 'is_active',
-            'is_staff', 'is_superuser', 'password',
+            'suffix', 'full_name', 'email', 'contact_number', 'phone_number',
+            'department', 'position', 'role', 'current_role', 'is_teaching',
+            'can_teach', 'is_profile_completed', 'faculty_id', 'photo',
+            'photo_url', 'is_active', 'is_staff', 'is_superuser', 'password',
         ]
 
     def _get_profile(self, obj):
-        return getattr(obj, 'profile', None) or getattr(obj, 'userprofile', None)
+        return getattr(obj, 'profile', None)
 
     def get_full_name(self, obj):
         prof = self._get_profile(obj)
         if prof and prof.faculty and prof.faculty.full_name:
             return prof.faculty.full_name
-        name_parts = filter(None, [obj.first_name, getattr(obj, 'middle_name', ''), obj.last_name])
-        return " ".join(name_parts).strip() or obj.username
+        return ' '.join(filter(None, [obj.first_name, obj.last_name])).strip() or obj.username
 
     def get_photo_url(self, obj):
         request = self.context.get('request')
         prof = self._get_profile(obj)
-        if prof and getattr(prof, 'faculty', None) and prof.faculty.photo:
+        if prof and prof.faculty and prof.faculty.photo:
             return safe_photo_url(prof.faculty.photo, request)
-        if prof and getattr(prof, 'avatar', None):
+        if prof and prof.avatar:
             return safe_photo_url(prof.avatar, request)
         return None
 
@@ -127,65 +127,32 @@ class UserManagementSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(f"Employee ID '{clean_id}' is already registered.")
         return clean_id
 
-    def validate_rfid_uid(self, value):
-        if not value or not str(value).strip():
-            return None
-        clean_rfid = str(value).strip().upper()
-        qs = FacultyProfile.objects.filter(rfid_uid__iexact=clean_rfid)
-        if self.instance:
-            prof = self._get_profile(self.instance)
-            if prof and prof.faculty_id:
-                qs = qs.exclude(id=prof.faculty_id)
-        if qs.exists():
-            raise serializers.ValidationError(f"RFID card UID '{clean_rfid}' is already registered.")
-        return clean_rfid
-
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         prof = self._get_profile(instance)
-        faculty = getattr(prof, 'faculty', None) if prof else None
+        faculty = prof.faculty if prof else None
 
-        base_role = str(prof.role).upper() if prof and getattr(prof, 'role', None) else ('ADMIN' if instance.is_superuser else 'FACULTY')
-        is_teach = bool(prof.is_teaching) if prof and hasattr(prof, 'is_teaching') else (base_role in ('FACULTY', 'FACULTY_ADMIN'))
+        base_role = str(prof.role).upper() if (prof and prof.role) else ('ADMIN' if instance.is_superuser else 'FACULTY')
+        is_teach = False if base_role == 'PARENT' else (bool(prof.is_teaching) if prof else base_role == 'FACULTY')
 
         ret['role'] = base_role
-        ret['current_role'] = 'FACULTY_ADMIN' if base_role == 'ADMIN' and is_teach else base_role
+        ret['current_role'] = 'FACULTY_ADMIN' if (base_role == 'ADMIN' and is_teach) else base_role
         ret['is_teaching'] = is_teach
         ret['can_teach'] = is_teach
-        ret['is_profile_completed'] = (
-            bool(prof.is_profile_completed)
-            if prof and hasattr(prof, 'is_profile_completed')
-            else bool(instance.first_name and instance.last_name)
-        )
-        ret['faculty_id'] = getattr(prof, 'faculty_id', None) if prof else None
-
-        ret['employee_id'] = getattr(faculty, 'employee_id', instance.username) if faculty else instance.username
-        ret['middle_name'] = getattr(faculty, 'middle_name', '') if faculty else ''
-        ret['suffix'] = getattr(faculty, 'suffix', '') if faculty else ''
-        ret['contact_number'] = getattr(faculty, 'contact_number', '') if faculty else ''
-        ret['department'] = getattr(faculty, 'department', '') if faculty else ''
-        ret['position'] = getattr(faculty, 'position', '') if faculty else base_role.replace('_', ' ').title()
-        ret['rfid_uid'] = getattr(faculty, 'rfid_uid', '') if faculty else ''
-
+        ret['is_profile_completed'] = bool(prof.is_profile_completed) if prof else bool(instance.first_name and instance.last_name)
+        ret['faculty_id'] = prof.faculty_id if prof else None
+        ret['employee_id'] = faculty.employee_id if faculty else instance.username
+        ret['middle_name'] = faculty.middle_name if faculty else ''
+        ret['suffix'] = faculty.suffix if faculty else ''
+        phone = (prof.phone_number if prof and prof.phone_number else '') or (faculty.contact_number if faculty else '')
+        ret['contact_number'] = phone
+        ret['phone_number'] = phone
+        ret['department'] = faculty.department if faculty else ('Parent / Guardian' if base_role == 'PARENT' else '')
+        ret['position'] = faculty.position if faculty else base_role.replace('_', ' ').title()
         photo_url = self.get_photo_url(instance)
         ret['photo'] = photo_url
         ret['photo_url'] = photo_url
         return ret
-
-    def _sync_school_principal_settings(self, faculty):
-        if not faculty:
-            return
-        try:
-            school = SchoolProfile.objects.first()
-            if not school:
-                school = SchoolProfile.objects.create(school_id="", school_name="")
-            school.principal_faculty = faculty
-            school.principal_name = faculty.full_name
-            school.principal_title = faculty.position or 'Secondary School Principal IV'
-            school.save()
-            cache.delete("attendsure_school_settings_fast_payload")
-        except Exception:
-            pass
 
     @transaction.atomic
     def create(self, validated_data):
@@ -194,46 +161,35 @@ class UserManagementSerializer(serializers.ModelSerializer):
         is_teaching_param = validated_data.pop('is_teaching', None)
         photo = validated_data.pop('photo', None)
 
-        employee_id_val = validated_data.pop('employee_id', None)
-        employee_id = str(employee_id_val or self.initial_data.get('employee_id') or validated_data.get('username') or '').strip().upper()
+        employee_id = str(
+            validated_data.pop('employee_id', None) or self.initial_data.get('employee_id') or validated_data.get('username') or ''
+        ).strip().upper()
+        middle_name = str(validated_data.pop('middle_name', None) or self.initial_data.get('middle_name') or '').strip()
+        suffix = str(validated_data.pop('suffix', None) or self.initial_data.get('suffix') or '').strip()
+        raw_contact = (
+            validated_data.pop('contact_number', None)
+            or validated_data.pop('phone_number', None)
+            or self.initial_data.get('contact_number')
+            or self.initial_data.get('phone_number')
+            or ''
+        )
+        contact_number = normalize_ph_phone(raw_contact)
+        department = str(validated_data.pop('department', None) or self.initial_data.get('department') or 'Junior High School').strip()
+        position = str(validated_data.pop('position', None) or self.initial_data.get('position') or 'Faculty I').strip()
 
-        middle_name_val = validated_data.pop('middle_name', None)
-        middle_name = str(middle_name_val if middle_name_val is not None else self.initial_data.get('middle_name') or '').strip()
-
-        suffix_val = validated_data.pop('suffix', None)
-        suffix = str(suffix_val if suffix_val is not None else self.initial_data.get('suffix') or '').strip()
-
-        contact_val = validated_data.pop('contact_number', None)
-        contact_number = str(contact_val if contact_val is not None else self.initial_data.get('contact_number') or '').strip()
-
-        dept_val = validated_data.pop('department', None)
-        department = str(dept_val if dept_val is not None else self.initial_data.get('department') or 'Junior High School').strip()
-
-        pos_val = validated_data.pop('position', None)
-        default_pos = 'Secondary School Principal IV' if str(raw_role).upper() == 'PRINCIPAL' else 'Faculty I'
-        position = str(pos_val if pos_val is not None else self.initial_data.get('position') or default_pos).strip()
-
-        raw_rfid = validated_data.pop('rfid_uid', None) or self.initial_data.get('rfid_uid')
-        rfid_uid = str(raw_rfid).strip().upper() if raw_rfid and str(raw_rfid).strip() else None
-
-        clean_role_str = str(raw_role).upper()
-        if clean_role_str == 'FACULTY_ADMIN':
-            final_role = 'ADMIN'
-            final_is_teaching = True
-        elif clean_role_str == 'FACULTY':
+        clean_role = str(raw_role).upper()
+        if clean_role == 'FACULTY_ADMIN':
+            final_role, final_is_teaching = 'ADMIN', True
+        elif clean_role == 'PARENT':
+            final_role, final_is_teaching = 'PARENT', False
+        elif clean_role == 'FACULTY':
             final_role = 'FACULTY'
             final_is_teaching = bool(is_teaching_param) if is_teaching_param is not None else True
-        elif clean_role_str == 'GUARD':
-            final_role = 'GUARD'
-            final_is_teaching = False
-        elif clean_role_str == 'PRINCIPAL':
-            final_role = 'PRINCIPAL'
-            final_is_teaching = bool(is_teaching_param) if is_teaching_param is not None else True
         else:
-            final_role = clean_role_str
+            final_role = clean_role
             final_is_teaching = bool(is_teaching_param) if is_teaching_param is not None else False
 
-        is_admin = (final_role == 'ADMIN')
+        is_admin = final_role == 'ADMIN'
         validated_data['is_staff'] = is_admin
         validated_data['is_superuser'] = is_admin
 
@@ -247,227 +203,111 @@ class UserManagementSerializer(serializers.ModelSerializer):
         photo_bytes = None
         photo_name = getattr(photo, 'name', 'avatar.jpg') if photo else 'avatar.jpg'
         if photo and hasattr(photo, 'read'):
-            try:
-                photo_bytes = photo.read()
-                photo.seek(0)
-            except Exception:
-                pass
+            photo_bytes = photo.read()
+            photo.seek(0)
 
         profile, _ = UserProfile.objects.get_or_create(user=user)
         profile.role = final_role
+        profile.phone_number = contact_number
         profile.is_teaching = final_is_teaching
         profile.is_profile_completed = bool(user.first_name and user.last_name)
         if photo_bytes:
             profile.avatar = ContentFile(photo_bytes, name=photo_name)
-        elif photo:
-            profile.avatar = photo
         profile.save()
 
+        # Parent accounts do not create FacultyProfile records; instead link matching students
+        if final_role == 'PARENT':
+            if contact_number:
+                Student.objects.filter(parent_contact=contact_number, parent_user__isnull=True).update(parent_user=user)
+            return user
+
         clean_emp_id = employee_id or user.username.upper()[:50]
-        faculty = (
-            FacultyProfile.objects.filter(employee_id__iexact=clean_emp_id).first()
-            or (FacultyProfile.objects.filter(email__iexact=user.email).first() if user.email else None)
+        faculty_photo = ContentFile(photo_bytes, name=photo_name) if photo_bytes else None
+        faculty, _ = FacultyProfile.objects.update_or_create(
+            employee_id=clean_emp_id,
+            defaults={
+                'first_name': user.first_name or user.username,
+                'middle_name': middle_name,
+                'last_name': user.last_name or 'Staff',
+                'suffix': suffix,
+                'email': user.email or '',
+                'contact_number': contact_number,
+                'department': department,
+                'position': position,
+                'can_teach': final_is_teaching,
+                'is_active': user.is_active,
+                'qr_token': secrets.token_urlsafe(24),
+                **({'photo': faculty_photo} if faculty_photo else {}),
+            },
         )
-
-        faculty_photo = ContentFile(photo_bytes, name=photo_name) if photo_bytes else (photo if photo else None)
-
-        if not faculty:
-            faculty = FacultyProfile.objects.create(
-                employee_id=clean_emp_id,
-                first_name=user.first_name or user.username,
-                middle_name=middle_name,
-                last_name=user.last_name or 'Staff',
-                suffix=suffix,
-                email=user.email or '',
-                contact_number=contact_number,
-                department=department,
-                position=position,
-                rfid_uid=rfid_uid,
-                photo=faculty_photo,
-                can_teach=final_is_teaching,
-                is_active=user.is_active,
-                qr_token=secrets.token_urlsafe(32),
-            )
-        else:
-            faculty.first_name = user.first_name or faculty.first_name
-            faculty.middle_name = middle_name or faculty.middle_name
-            faculty.last_name = user.last_name or faculty.last_name
-            faculty.suffix = suffix or faculty.suffix
-            faculty.email = user.email or faculty.email
-            faculty.contact_number = contact_number or faculty.contact_number
-            faculty.department = department or faculty.department
-            faculty.position = position or faculty.position
-            if rfid_uid is not None:
-                faculty.rfid_uid = rfid_uid
-            if faculty_photo:
-                faculty.photo = faculty_photo
-            faculty.can_teach = final_is_teaching
-            faculty.is_active = user.is_active
-            faculty.save()
-
         profile.faculty = faculty
         profile.save(update_fields=['faculty'])
-
-        if final_role == 'PRINCIPAL':
-            self._sync_school_principal_settings(faculty)
-
         return user
 
     @transaction.atomic
     def update(self, instance, validated_data):
         request = self.context.get('request')
-        is_request_admin = False
-        if request and request.user and request.user.is_authenticated:
-            is_request_admin = request.user.is_superuser or get_user_role(request.user) == 'ADMIN'
+        is_admin_req = bool(
+            request and request.user and request.user.is_authenticated
+            and (request.user.is_superuser or get_user_role(request.user) == 'ADMIN')
+        )
 
         password = validated_data.pop('password', None)
-        raw_role = validated_data.pop('role', None) or self.initial_data.get('role', None)
+        raw_role = validated_data.pop('role', None) or self.initial_data.get('role')
         is_teaching_param = validated_data.pop('is_teaching', None)
         photo = validated_data.pop('photo', None)
 
-        # Cybersecurity: Non-admin users cannot alter administrative fields
-        if not is_request_admin:
+        if not is_admin_req:
             raw_role = None
             is_teaching_param = None
             validated_data.pop('is_staff', None)
             validated_data.pop('is_superuser', None)
             validated_data.pop('is_active', None)
 
-        employee_id_val = validated_data.pop('employee_id', None)
-        employee_id = employee_id_val if employee_id_val is not None else self.initial_data.get('employee_id')
-
-        middle_name_val = validated_data.pop('middle_name', None)
-        middle_name = middle_name_val if middle_name_val is not None else self.initial_data.get('middle_name')
-
-        suffix_val = validated_data.pop('suffix', None)
-        suffix = suffix_val if suffix_val is not None else self.initial_data.get('suffix')
-
-        contact_val = validated_data.pop('contact_number', None)
-        contact_number = contact_val if contact_val is not None else self.initial_data.get('contact_number')
-
-        dept_val = validated_data.pop('department', None)
-        department = dept_val if dept_val is not None else self.initial_data.get('department')
-
-        pos_val = validated_data.pop('position', None)
-        position = pos_val if pos_val is not None else self.initial_data.get('position')
-
-        raw_rfid = validated_data.pop('rfid_uid', None) or self.initial_data.get('rfid_uid')
-        rfid_uid = str(raw_rfid).strip().upper() if raw_rfid and str(raw_rfid).strip() else None
+        raw_contact = (
+            validated_data.pop('contact_number', None)
+            or validated_data.pop('phone_number', None)
+            or self.initial_data.get('contact_number')
+            or self.initial_data.get('phone_number')
+        )
+        contact_number = normalize_ph_phone(raw_contact) if raw_contact is not None else None
 
         if password and str(password).strip():
             instance.set_password(str(password).strip())
 
-        if raw_role and is_request_admin:
-            clean_role_str = str(raw_role).upper()
-            if clean_role_str == 'FACULTY_ADMIN':
-                final_role = 'ADMIN'
-                final_is_teaching = True
-            elif clean_role_str == 'FACULTY':
-                final_role = 'FACULTY'
-                final_is_teaching = bool(is_teaching_param) if is_teaching_param is not None else True
-            elif clean_role_str == 'GUARD':
-                final_role = 'GUARD'
-                final_is_teaching = False
-            elif clean_role_str == 'PRINCIPAL':
-                final_role = 'PRINCIPAL'
-                final_is_teaching = bool(is_teaching_param) if is_teaching_param is not None else True
-            else:
-                final_role = clean_role_str
-                final_is_teaching = bool(is_teaching_param) if is_teaching_param is not None else False
-
-            is_admin = (final_role == 'ADMIN')
-            instance.is_staff = is_admin
-            instance.is_superuser = is_admin
-        else:
-            final_role = None
-            final_is_teaching = is_teaching_param
-
         for attr, value in validated_data.items():
-            setattr(instance, attr, value)
+            if hasattr(instance, attr):
+                setattr(instance, attr, value)
         instance.save()
 
-        photo_bytes = None
-        photo_name = getattr(photo, 'name', 'avatar.jpg') if photo else 'avatar.jpg'
-        if photo and hasattr(photo, 'read'):
-            try:
-                photo_bytes = photo.read()
-                photo.seek(0)
-            except Exception:
-                pass
-
         profile, _ = UserProfile.objects.get_or_create(user=instance)
-        if final_role:
-            profile.role = final_role
-        if final_is_teaching is not None and is_request_admin:
-            profile.is_teaching = bool(final_is_teaching)
+        if raw_role and is_admin_req:
+            clean_role = str(raw_role).upper()
+            profile.role = 'ADMIN' if clean_role == 'FACULTY_ADMIN' else clean_role
+            instance.is_staff = profile.role == 'ADMIN'
+            instance.is_superuser = profile.role == 'ADMIN'
+            instance.save(update_fields=['is_staff', 'is_superuser'])
+        if is_teaching_param is not None and is_admin_req:
+            profile.is_teaching = False if profile.role == 'PARENT' else bool(is_teaching_param)
+        if contact_number is not None:
+            profile.phone_number = contact_number
+        if photo and hasattr(photo, 'read'):
+            profile.avatar = ContentFile(photo.read(), name=getattr(photo, 'name', 'avatar.jpg'))
         profile.is_profile_completed = bool(instance.first_name and instance.last_name)
-        if photo_bytes:
-            profile.avatar = ContentFile(photo_bytes, name=photo_name)
-        elif photo is not None:
-            profile.avatar = photo
         profile.save()
 
-        faculty = profile.faculty
-        if not faculty:
-            clean_emp_id = (employee_id or instance.username).strip().upper()[:50]
-            faculty = FacultyProfile.objects.filter(
-                Q(employee_id__iexact=clean_emp_id) | Q(email__iexact=instance.email)
-            ).first()
-            if faculty:
-                profile.faculty = faculty
-                profile.save(update_fields=['faculty'])
-
-        faculty_photo = ContentFile(photo_bytes, name=photo_name) if photo_bytes else photo
-
-        if faculty:
-            if is_request_admin and employee_id is not None and str(employee_id).strip():
-                faculty.employee_id = str(employee_id).strip().upper()[:50]
-            faculty.first_name = instance.first_name or faculty.first_name
-            if middle_name is not None:
-                faculty.middle_name = str(middle_name).strip()
-            faculty.last_name = instance.last_name or faculty.last_name
-            if suffix is not None:
-                faculty.suffix = str(suffix).strip()
-            faculty.email = instance.email or faculty.email
+        if profile.role == 'PARENT' and profile.phone_number:
+            Student.objects.filter(parent_contact=profile.phone_number, parent_user__isnull=True).update(parent_user=instance)
+        elif profile.faculty:
+            fac = profile.faculty
+            fac.first_name = instance.first_name or fac.first_name
+            fac.last_name = instance.last_name or fac.last_name
+            fac.email = instance.email or fac.email
             if contact_number is not None:
-                faculty.contact_number = str(contact_number).strip()
-            if is_request_admin and department is not None:
-                faculty.department = str(department).strip()
-            if is_request_admin and position is not None:
-                faculty.position = str(position).strip()
-            if is_request_admin and raw_rfid is not None:
-                faculty.rfid_uid = rfid_uid
-            if faculty_photo is not None:
-                faculty.photo = faculty_photo
-            elif profile.avatar and not faculty.photo:
-                faculty.photo = profile.avatar
-            if final_is_teaching is not None and is_request_admin:
-                faculty.can_teach = bool(final_is_teaching)
-            faculty.is_active = instance.is_active
-            faculty.save()
-        else:
-            clean_emp_id = (employee_id or instance.username).strip().upper()[:50]
-            new_faculty = FacultyProfile.objects.create(
-                employee_id=clean_emp_id,
-                first_name=instance.first_name or instance.username,
-                middle_name=str(middle_name or '').strip(),
-                last_name=instance.last_name or 'Staff',
-                suffix=str(suffix or '').strip(),
-                email=instance.email or '',
-                contact_number=str(contact_number or '').strip(),
-                department=str(department or 'Junior High School').strip(),
-                position=str(position or 'Faculty I').strip(),
-                rfid_uid=rfid_uid if is_request_admin else None,
-                photo=faculty_photo if faculty_photo else profile.avatar,
-                can_teach=bool(final_is_teaching) if (final_is_teaching is not None and is_request_admin) else False,
-                is_active=instance.is_active,
-                qr_token=secrets.token_urlsafe(32),
-            )
-            profile.faculty = new_faculty
-            profile.save(update_fields=['faculty'])
-            faculty = new_faculty
+                fac.contact_number = contact_number
+            fac.can_teach = profile.is_teaching
+            fac.is_active = instance.is_active
+            fac.save()
 
-        if profile.role == 'PRINCIPAL':
-            self._sync_school_principal_settings(faculty)
-
+        cache.clear()
         return instance

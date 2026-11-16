@@ -11,65 +11,65 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AlterModelOptions(
-            name='smsoutbox',
+            name='AppNotification',
             options={'ordering': ['-created_at']},
         ),
         migrations.AddField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='category',
             field=models.CharField(blank=True, choices=[('GATE_IN', 'Gate Entry Notice'), ('GATE_OUT', 'Gate Exit Notice'), ('CLASS_ABSENT', 'Class Absence'), ('EMERGENCY', 'School Broadcast'), ('TEST', 'Modem Signal Test')], default='GATE_IN', max_length=30),
         ),
         migrations.AddField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='error_message',
             field=models.TextField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='recipient_name',
             field=models.CharField(blank=True, default='', max_length=150),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='created_at',
             field=models.DateTimeField(auto_now_add=True, db_index=True),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='id',
             field=models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID'),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='priority',
             field=models.CharField(choices=[('HIGH', 'High Priority (Gate Entry/Exit)'), ('NORMAL', 'Normal Priority (Class Attendance)'), ('LOW', 'Low Priority (Announcements)')], db_index=True, default='HIGH', max_length=15),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='recipient_number',
             field=models.CharField(db_index=True, max_length=25),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='retry_count',
             field=models.PositiveIntegerField(default=0),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='status',
             field=models.CharField(choices=[('PENDING', 'Pending Dispatch'), ('SENT', 'Delivered'), ('FAILED', 'Failed / No Signal')], db_index=True, default='PENDING', max_length=15),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='trigger_event',
             field=models.CharField(choices=[('GATE_IN', 'Gate Entry Notice'), ('GATE_OUT', 'Gate Exit Notice'), ('CLASS_ABSENT', 'Class Absence'), ('EMERGENCY', 'School Broadcast'), ('TEST', 'Modem Signal Test')], db_index=True, default='GATE_IN', max_length=30),
         ),
         migrations.AddIndex(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             index=models.Index(fields=['status', 'priority', 'created_at'], name='academics_s_status_ab0ea0_idx'),
         ),
         migrations.AlterModelTable(
-            name='smsoutbox',
+            name='AppNotification',
             table=None,
         ),
     ]

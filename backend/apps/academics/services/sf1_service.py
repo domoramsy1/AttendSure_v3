@@ -5,12 +5,10 @@ File: backend/apps/academics/services/sf1_service.py
 
 from datetime import date, datetime, timedelta
 from apps.academics.models import Section, Enrollment
-from apps.api.views.common import get_school_metadata
-from apps.common.utils import format_full_student_name
+from apps.api.views.common import get_school_metadata, format_full_student_name
 
 
 def calculate_age_as_of_cut_off(birthdate, cut_off_date: date) -> int | str:
-    """Calculates chronological age as of the official DepEd cut-off date."""
     if not birthdate:
         return ""
     try:
@@ -21,10 +19,8 @@ def calculate_age_as_of_cut_off(birthdate, cut_off_date: date) -> int | str:
                     break
                 except ValueError:
                     pass
-
         if not isinstance(birthdate, (date, datetime)):
             return ""
-
         age = cut_off_date.year - birthdate.year - (
             (cut_off_date.month, cut_off_date.day) < (birthdate.month, birthdate.day)
         )
@@ -46,11 +42,10 @@ def get_sf1_data(section_id, school_year=None, as_of_date=None):
     cut_off = getattr(ay, 'first_friday_june', None)
     if not cut_off:
         june_1 = date(target_year, 6, 1)
-        days_ahead = (4 - june_1.weekday()) % 7
-        cut_off = june_1 + timedelta(days=days_ahead)
+        cut_off = june_1 + timedelta(days=(4 - june_1.weekday()) % 7)
 
     enrollments = (
-        Enrollment.objects.filter(section=section, status='ENROLLED')
+        Enrollment.objects.filter(section=section, status='ENROLLED', student__is_active=True)
         .select_related('student')
         .order_by('student__last_name', 'student__first_name')
     )
@@ -64,6 +59,9 @@ def get_sf1_data(section_id, school_year=None, as_of_date=None):
 
         is_m = str(s.sex or '').strip().upper().startswith('M')
         b_str = s.birthdate.strftime('%m/%d/%Y') if isinstance(s.birthdate, (date, datetime)) else str(s.birthdate or '')
+        full_address = ", ".join(
+            part for part in [s.house_street_sitio, s.barangay, s.municipality_city, s.province] if str(part or '').strip()
+        )
 
         learner = {
             'id': s.id,
@@ -76,6 +74,7 @@ def get_sf1_data(section_id, school_year=None, as_of_date=None):
             'mother_tongue': str(s.mother_tongue or '').strip(),
             'ethnic_group': str(s.ethnic_group or '').strip(),
             'religion': str(s.religion or '').strip(),
+            'address': full_address,
             'house_street': str(s.house_street_sitio or '').strip(),
             'barangay': str(s.barangay or '').strip(),
             'municipality_city': str(s.municipality_city or '').strip(),
@@ -84,15 +83,13 @@ def get_sf1_data(section_id, school_year=None, as_of_date=None):
             'mother_maiden_name': str(s.mother_maiden_name or '').strip(),
             'guardian_name': str(s.guardian_name or '').strip(),
             'guardian_relationship': str(s.guardian_relationship or '').strip(),
+            'guardian_rel': str(s.guardian_relationship or '').strip(),
             'parent_contact': str(s.parent_contact or '').strip(),
             'remarks': str(e.remarks or '').strip(),
         }
 
         combined.append(learner)
-        if is_m:
-            males.append(learner)
-        else:
-            females.append(learner)
+        (males if is_m else females).append(learner)
 
     return {
         **school_meta,

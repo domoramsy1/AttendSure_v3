@@ -55,8 +55,8 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
     try {
       const results = await Promise.allSettled([
         apiClient.get('/settings/school/'),
-        apiClient.get('/sms-outbox/metrics/'),
-        apiClient.get('/kiosks/'),
+        apiClient.get('/notifications/'),
+        apiClient.get('/geofence/status/'),
         apiClient.get('/users/'),
       ]);
 
@@ -94,7 +94,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
             whatItMeans: 'Parents have not yet received attendance notifications on their phones.',
             solutionType: 'AUTO_BUTTON',
             actionButtonLabel: 'Restart SMS Sending Queue',
-            actionEndpoint: '/sms/test-gateway/',
+            actionEndpoint: '/notifications/',
             physicalSteps: [
               'Check if the USB Text Modem dongle is firmly plugged into the computer USB port.',
               'Ensure the school SIM card inside the modem has regular airtime load or an active SMS promo.',
@@ -104,7 +104,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
         }
       }
 
-      // 3. Check Gate Scanner Hardware
+      // 3. Check USB QR scanner Hardware
       if (kioskRes?.data) {
         const kioskList = Array.isArray(kioskRes.data)
           ? kioskRes.data
@@ -115,17 +115,17 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
 
         if (offlineKiosks.length > 0) {
           discoveredIssues.push({
-            id: 'kiosk-offline',
+            id: 'terminals-offline',
             category: 'GATE',
-            title: `${offlineKiosks.length} Gate Scanner(s) are offline`,
-            whatHappened: 'The main gate scanner kiosk has lost connection to the server.',
+            title: `${offlineKiosks.length} Classroom QR Station(s) offline`,
+            whatHappened: 'The main USB QR scanner terminals has lost connection to the server.',
             whatItMeans: 'Student and faculty ID card taps at this gate will not register on screen.',
             solutionType: 'AUTO_BUTTON',
-            actionButtonLabel: 'Wake Up Gate Scanners',
-            actionEndpoint: '/telemetry/ping-scanners/',
+            actionButtonLabel: 'Wake Up USB QR scanner',
+            actionEndpoint: '/geofence/status/',
             physicalSteps: [
-              'Ensure the gate scanner device has power and the LED light is ON.',
-              'Check the blue network cable (LAN wire) connecting the gate scanner to the school network router.',
+              'Ensure the USB QR scanner device has power and the LED light is ON.',
+              'Check the blue network cable (LAN wire) connecting the USB QR scanner to the school network router.',
             ],
             severity: 'CRITICAL',
           });
@@ -369,7 +369,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                 Checking School Systems...
               </div>
               <p style={{ margin: '4px 0 0 0', fontSize: '0.76rem', color: tokens.textMuted }}>
-                Verifying gate scanner hardware, parent SMS modem, and student records.
+                Verifying USB QR scanner hardware, parent SMS modem, and student records.
               </p>
             </div>
           ) : issues.length === 0 ? (
@@ -421,7 +421,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   lineHeight: 1.5,
                 }}
               >
-                Gate scanners are recording arrival taps, the parent SMS modem is ready, and the school database is safely saving records.
+                USB QR scanner are recording arrival taps, the parent SMS modem is ready, and the school database is safely saving records.
               </p>
 
               <div

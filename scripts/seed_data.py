@@ -383,7 +383,6 @@ def run_seed():
                         'photo': f"students/photos/std_{unique_lrn}.jpg",
                         'qr_token': unique_token,
                         'is_active': True,
-                        'rfid_uid': unique_rfid,
                         'photo_thumbnail': f"students/thumbnails/std_{unique_lrn}_thumb.jpg",
                         'photo_updated_at': base_enrollment_dt,
                         'created_at': base_enrollment_dt,

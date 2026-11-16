@@ -55,7 +55,7 @@ export const GatePassesTab: React.FC = () => {
 
   const userRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const isPrincipalOrAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
-  const isGuard = userRole === 'GUARD';
+  const isGuard = userRole === 'PARENT';
 
   const [passes, setPasses] = useState<GatePass[]>([]);
   const [loading, setLoading] = useState(true);

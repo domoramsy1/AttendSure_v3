@@ -156,7 +156,7 @@ const login = async (username: string, password: string): Promise<void> => {
     const receivedUser: AuthenticatedUser | undefined = res.data?.user;
 
     if (!receivedToken || !receivedUser) {
-      throw new Error('Invalid response received from authentication server.');
+      throw new Error('Invalid response received from sign in server.');
     }
 
     await saveTokenSafely(receivedToken);

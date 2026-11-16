@@ -1,4 +1,3 @@
-export * from './GateLogsTab';
 export * from './SF1ReportTab';
 export * from './SF2ReportTab';
 export * from './SF4ReportTab';
@@ -12,4 +11,3 @@ export * from './GeofenceTab';
 export * from './UsersTab';
 export * from './SettingsTab';
 export * from './GeofenceTab';
-export * from './SmsTab';

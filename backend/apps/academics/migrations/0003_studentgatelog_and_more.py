@@ -18,7 +18,7 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
                 ('scan_time', models.DateTimeField(default=django.utils.timezone.now)),
                 ('direction', models.CharField(choices=[('IN', 'Entry (Arrival)'), ('OUT', 'Exit (Departure)')], max_length=10)),
-                ('scan_method', models.CharField(choices=[('RFID', 'RFID Tap (Primary)'), ('QR', 'QR Code Scan (Backup)')], default='RFID', max_length=10)),
+                ('scan_method', models.CharField(choices=[('QR ID', 'QR ID Tap (Primary)'), ('QR', 'QR Code Scan (Backup)')], default='QR ID', max_length=10)),
                 ('raw_identifier', models.CharField(max_length=128)),
             ],
             options={
@@ -39,7 +39,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='facultygatelog',
             name='scan_method',
-            field=models.CharField(choices=[('RFID', 'RFID Tap (Primary)'), ('QR', 'QR Code Scan (Backup)')], default='RFID', max_length=10),
+            field=models.CharField(choices=[('QR ID', 'QR ID Tap (Primary)'), ('QR', 'QR Code Scan (Backup)')], default='QR ID', max_length=10),
         ),
         migrations.AddField(
             model_name='facultyprofile',
@@ -48,13 +48,13 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name='student',
-            name='rfid_uid',
-            field=models.CharField(blank=True, help_text='Primary RFID card serial number', max_length=64, null=True, unique=True),
+            name='qr_token',
+            field=models.CharField(blank=True, help_text='Primary QR ID card serial number', max_length=64, null=True, unique=True),
         ),
         migrations.AlterField(
             model_name='facultyprofile',
-            name='rfid_uid',
-            field=models.CharField(blank=True, help_text='Unique RFID card serial number', max_length=64, null=True, unique=True),
+            name='qr_token',
+            field=models.CharField(blank=True, help_text='Unique QR ID card serial number', max_length=64, null=True, unique=True),
         ),
         migrations.AlterField(
             model_name='student',
@@ -63,12 +63,12 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='student',
-            index=models.Index(fields=['rfid_uid'], name='idx_student_rfid'),
+            index=models.Index(fields=['qr_token'], name='idx_student_rfid'),
         ),
         migrations.AddField(
             model_name='studentgatelog',
-            name='kiosk',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='academics.iotkiosk'),
+            name='terminals',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='academics.GeofenceSetting'),
         ),
         migrations.AddField(
             model_name='studentgatelog',
@@ -77,7 +77,7 @@ class Migration(migrations.Migration):
         ),
         migrations.RemoveField(
             model_name='facultygatelog',
-            name='card_uid',
+            name='qr_token',
         ),
         migrations.AddIndex(
             model_name='studentgatelog',

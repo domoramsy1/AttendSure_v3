@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Form 2 (SF2) Daily Attendance Service
+AttendSure V3 - School Form 2 (SF2) Database-Driven Daily Attendance Service
 File: backend/apps/academics/services/sf2_service.py
 """
 
@@ -7,11 +7,11 @@ import calendar
 from datetime import date, timedelta
 from apps.academics.models import (
     DailyAttendanceSummary,
+    SubjectAttendanceLog,
     Enrollment,
     Section,
-    StudentGateLog,
 )
-from apps.api.views.common import get_school_metadata
+from apps.api.views.common import get_school_metadata, format_full_student_name
 
 MONTH_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -21,6 +21,19 @@ MONTH_NAMES = [
 
 def make_metric(m=0, f=0):
     return {"m": m, "f": f, "total": m + f}
+
+
+def count_consecutive_absences(att_map: dict, school_day_numbers: list[int], threshold: int = 5) -> bool:
+    streak = 0
+    for day_num in school_day_numbers:
+        val = att_map.get(day_num, '')
+        if val in ('absent', 'x', 'a'):
+            streak += 1
+            if streak >= threshold:
+                return True
+        else:
+            streak = 0
+    return False
 
 
 def generate_sf2_data(section_id, month_name='October', year=2026):
@@ -41,105 +54,101 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
 
     day_abbrs = {0: 'M', 1: 'T', 2: 'W', 3: 'TH', 4: 'F'}
     school_days = []
+    school_day_numbers = []
     for d in range(1, num_days + 1):
         dt = date(year, month_num, d)
         if dt.weekday() < 5:
+            school_day_numbers.append(d)
             school_days.append({
                 "dateNumber": d,
                 "dayOfWeek": day_abbrs[dt.weekday()],
                 "fullDate": dt.strftime('%Y-%m-%d')
             })
 
-    enrollments_qs = (
-        Enrollment.objects.filter(section=section)
+    enrollments = list(
+        Enrollment.objects.filter(section=section, student__is_active=True)
         .select_related('student')
         .order_by('student__last_name', 'student__first_name')
     )
-    enrollments = list(enrollments_qs)
-    students = [e.student for e in enrollments if getattr(e, 'student', None)]
+    students = [e.student for e in enrollments if e.student]
+    student_ids = [s.id for s in students]
 
-    daily_summaries = DailyAttendanceSummary.objects.filter(
-        section=section,
-        attendance_date__gte=month_start,
-        attendance_date__lte=month_end
-    )
     records_by_student = {}
-    for ds in daily_summaries:
-        s_id = ds.student_id
-        records_by_student.setdefault(s_id, {})[ds.attendance_date.day] = str(ds.status or 'PRESENT').lower().strip()
+    if student_ids:
+        for ds in DailyAttendanceSummary.objects.filter(
+            section=section,
+            student_id__in=student_ids,
+            attendance_date__gte=month_start,
+            attendance_date__lte=month_end
+        ).values('student_id', 'attendance_date', 'status'):
+            records_by_student.setdefault(ds['student_id'], {})[ds['attendance_date'].day] = str(ds['status'] or 'PRESENT').lower().strip()
 
-    if students:
-        gate_logs = StudentGateLog.objects.filter(
-            student__in=students,
-            direction='IN',
-            scan_time__date__gte=month_start,
-            scan_time__date__lte=month_end
-        ).values('student_id', 'scan_time__date')
-
-        for gl in gate_logs:
-            s_id = gl['student_id']
-            day_num = gl['scan_time__date'].day
-            records_by_student.setdefault(s_id, {}).setdefault(day_num, 'present')
+        # Fill any un-summarized classroom subject attendance days directly from SubjectAttendanceLog
+        for sl in SubjectAttendanceLog.objects.filter(
+            student_id__in=student_ids,
+            attendance_date__gte=month_start,
+            attendance_date__lte=month_end,
+            status__in=['PRESENT', 'LATE', 'CUTTING', 'ABSENT', 'EXCUSED']
+        ).values('student_id', 'attendance_date', 'status'):
+            records_by_student.setdefault(sl['student_id'], {}).setdefault(
+                sl['attendance_date'].day,
+                str(sl['status']).lower().strip()
+            )
 
     def build_learner_record(enr):
         st = enr.student
-        raw_sex = str(getattr(st, 'sex', '') or '').strip().upper()
-        is_male = raw_sex.startswith('M')
-
+        is_male = str(st.sex or '').strip().upper().startswith('M')
         att_map = records_by_student.get(st.id, {})
-        total_absent = sum(1 for v in att_map.values() if v in ['absent', 'x', '1', 'a'])
-        total_tardy = sum(1 for v in att_map.values() if v in ['tardy', 'late', '2', 't'])
-
-        middle = f" {st.middle_name}" if getattr(st, 'middle_name', '') else ""
-        suffix = f" {st.suffix}" if getattr(st, 'suffix', '') else ""
-        full_name = f"{st.last_name}, {st.first_name}{middle}{suffix}".strip()
+        total_absent = sum(1 for v in att_map.values() if v in ('absent', 'x', 'a'))
+        total_tardy = sum(1 for v in att_map.values() if v in ('tardy', 'late', 't'))
 
         return {
             "id": st.id,
-            "lrn": str(getattr(st, 'lrn', '') or ''),
-            "name": full_name,
+            "lrn": str(st.lrn or ''),
+            "name": format_full_student_name(st),
             "sex": 'M' if is_male else 'F',
             "attendance": att_map,
             "total_absent": total_absent,
             "total_tardy": total_tardy,
-            "remarks": str(getattr(enr, 'remarks', '') or getattr(st, 'remarks', '') or '')
+            "remarks": str(enr.remarks or '')
         }
 
-    males_list = []
-    females_list = []
+    males_list, females_list = [], []
+    consec_5_m, consec_5_f = 0, 0
 
     for e in enrollments:
         if not e.student:
             continue
-        raw_sex = str(getattr(e.student, 'sex', '') or '').strip().upper()
+        is_male = str(e.student.sex or '').strip().upper().startswith('M')
         rec = build_learner_record(e)
-        if raw_sex.startswith('M'):
+        if is_male:
             males_list.append(rec)
+            if count_consecutive_absences(rec["attendance"], school_day_numbers):
+                consec_5_m += 1
         else:
             females_list.append(rec)
+            if count_consecutive_absences(rec["attendance"], school_day_numbers):
+                consec_5_f += 1
 
     total_m = len(males_list)
     total_f = len(females_list)
     total_registered = total_m + total_f
 
-    # Dynamically resolve First Friday of June from AcademicYear
     ay = section.academic_year
     if ay and ay.first_friday_june:
         first_friday_june = ay.first_friday_june
     else:
         june_1 = date(year, 6, 1)
-        days_ahead = (4 - june_1.weekday()) % 7
-        first_friday_june = june_1 + timedelta(days=days_ahead)
+        first_friday_june = june_1 + timedelta(days=(4 - june_1.weekday()) % 7)
 
-    enrolled_june_m, enrolled_june_f = 0, 0
-    late_m, late_f = 0, 0
-    drop_m, drop_f = 0, 0
-    tout_m, tout_f = 0, 0
-    tin_m, tin_f = 0, 0
+    enrolled_june_m = enrolled_june_f = 0
+    late_m = late_f = 0
+    drop_m = drop_f = 0
+    tout_m = tout_f = 0
+    tin_m = tin_f = 0
 
     for e in enrollments:
-        raw_sex = str(getattr(e.student, 'sex', '') or '').strip().upper()
-        is_m = raw_sex.startswith('M')
+        is_m = str(e.student.sex or '').strip().upper().startswith('M')
         enr_date = e.enrollment_date or month_start
         status_val = str(e.status or '').upper()
 
@@ -162,12 +171,12 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
 
     num_school_days = len(school_days) or 1
     male_present_count = sum(
-        1 for m in males_list for status in m["attendance"].values()
-        if status in ['present', 'tardy', 'cutting', '0', '']
+        1 for m in males_list for st_val in m["attendance"].values()
+        if st_val in ('present', 'tardy', 'late', 'cutting', 'excused')
     )
     female_present_count = sum(
-        1 for f in females_list for status in f["attendance"].values()
-        if status in ['present', 'tardy', 'cutting', '0', '']
+        1 for f in females_list for st_val in f["attendance"].values()
+        if st_val in ('present', 'tardy', 'late', 'cutting', 'excused')
     )
 
     avg_daily_m = male_present_count / num_school_days
@@ -190,13 +199,11 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
         "percentage_enrolment": {"m": pct_enr_m, "f": pct_enr_f, "total": pct_enr_total},
         "average_daily_attendance": {"m": round(avg_daily_m, 1), "f": round(avg_daily_f, 1), "total": round(avg_daily_total, 1)},
         "percentage_attendance": {"m": pct_att_m, "f": pct_att_f, "total": pct_att_total},
-        "consecutive_5_absent_count": make_metric(0, 0),
+        "consecutive_5_absent_count": make_metric(consec_5_m, consec_5_f),
         "drop_out": make_metric(drop_m, drop_f),
         "transferred_out": make_metric(tout_m, tout_f),
         "transferred_in": make_metric(tin_m, tin_f),
     }
-
-    adviser_name = section.adviser.full_name if section.adviser else ""
 
     return {
         **get_school_metadata(),
@@ -205,10 +212,10 @@ def generate_sf2_data(section_id, month_name='October', year=2026):
         "section_name": section.name,
         "month": month_name,
         "year": year,
-        "adviser_name": adviser_name,
+        "adviser_name": section.adviser.full_name if section.adviser else "",
         "school_days": school_days,
         "has_enrolled_students": total_registered > 0,
         "males": males_list,
         "females": females_list,
-        "metrics": metrics
+        "metrics": metrics,
     }

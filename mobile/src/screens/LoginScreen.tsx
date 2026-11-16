@@ -27,8 +27,8 @@ import { startPassivePresenceTracking } from '../services/backgroundLocation';
 import { getOrCreateDeviceUuid } from '../services/deviceService';
 
 // Direct SVG vector assets
-const attendsureLogoSvg = require('../../assets/attendsure-logo.svg');
-const techblazerSvg = require('../../assets/techblazer.svg');
+const attendsureLogoSvg = require('../../assets/AttendSureLogo.png');
+const techblazerSvg = require('../../assets/AttendSureLogo.png');
 const CACHED_SCHOOL_PROFILE_KEY = 'attendsure_cached_school_profile';
 
 // Cybersecurity: Brute-Force lockout configuration
@@ -150,7 +150,7 @@ export const LoginScreen: React.FC = () => {
     };
   }, [initializeLoginData]);
 
-  // 2. Authentication with Input Sanitization & Anti-Brute-Force Guard
+  // 2. Sign In with Input Sanitization & Anti-Brute-Force Guard
   const handleLogin = async () => {
     const now = Date.now();
     if (now < lockoutUntilRef.current) {
@@ -195,7 +195,7 @@ export const LoginScreen: React.FC = () => {
         rawError.includes('SyntaxError');
 
       const safeMessage = isInternalLeak
-        ? 'Authentication error. Please contact your school administrator.'
+        ? 'Sign In error. Please contact your school administrator.'
         : rawError ||
           (err?.code === 'ECONNABORTED' || err?.message?.includes('Network Error')
             ? 'Cannot reach school server. Please verify your Wi-Fi or network connection.'
@@ -228,7 +228,7 @@ export const LoginScreen: React.FC = () => {
           showsVerticalScrollIndicator={false}
         >
           {/* Top Status Badge (Tappable to reconnect) */}
-          <View style={styles.topUtilityBar}>
+          {/* <View style={styles.topUtilityBar}>
             <TouchableOpacity
               activeOpacity={0.75}
               onPress={initializeLoginData}
@@ -274,7 +274,7 @@ export const LoginScreen: React.FC = () => {
                   : 'CONNECTING...'}
               </Text>
             </TouchableOpacity>
-          </View>
+          </View> */}
 
           {/* School Header with Circular SVG Logo */}
           <View style={styles.brandSection}>

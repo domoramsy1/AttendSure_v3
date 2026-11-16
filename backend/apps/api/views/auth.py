@@ -105,7 +105,6 @@ def build_authenticated_user_payload(user, request=None):
         'contact_number': getattr(faculty, 'contact_number', '') if faculty else '',
         'position': getattr(faculty, 'position', '') if faculty else '',
         'department': getattr(faculty, 'department', '') if faculty else '',
-        'rfid_uid': getattr(faculty, 'rfid_uid', '') if faculty else '',
         'photo': photo_url,
         'photo_url': photo_url,
         'school_name': getattr(school, 'school_name', '') if school else '',

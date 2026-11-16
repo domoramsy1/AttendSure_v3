@@ -70,7 +70,7 @@ class Migration(migrations.Migration):
             name='idx_heartbeat_time',
         ),
         migrations.RemoveIndex(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='idx_sms_queue_fetch',
         ),
         migrations.RemoveIndex(
@@ -243,11 +243,6 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name='facultyprofile',
-            name='rfid_uid',
-            field=models.CharField(blank=True, max_length=64, null=True, unique=True),
-        ),
-        migrations.AlterField(
-            model_name='facultyprofile',
             name='updated_by',
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='updated_faculty', to=settings.AUTH_USER_MODEL),
         ),
@@ -282,17 +277,17 @@ class Migration(migrations.Migration):
             field=models.IntegerField(default=1),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='kiosk_code',
             field=models.CharField(max_length=50, unique=True),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='location',
             field=models.CharField(default='Main Gate', max_length=100),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='secret_hash',
             field=models.CharField(max_length=255),
         ),
@@ -367,17 +362,17 @@ class Migration(migrations.Migration):
             field=models.CharField(blank=True, default='', max_length=150),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='priority',
             field=models.SmallIntegerField(default=2),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='status',
             field=models.CharField(default='PENDING', max_length=20),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='trigger_event',
             field=models.CharField(default='CLASS_TAP', max_length=50),
         ),
@@ -435,11 +430,6 @@ class Migration(migrations.Migration):
             model_name='student',
             name='qr_token',
             field=models.CharField(max_length=128, unique=True),
-        ),
-        migrations.AlterField(
-            model_name='student',
-            name='rfid_uid',
-            field=models.CharField(blank=True, max_length=64, null=True, unique=True),
         ),
         migrations.AlterField(
             model_name='studentgatelog',

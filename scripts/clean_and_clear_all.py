@@ -50,13 +50,13 @@ REPLACEMENT_RULES = [
     (re.compile(r"\bRoster\b"), "Class List"),
     (re.compile(r"\broster\b"), "class list"),
 
-    # Kiosks / Kiosk
-    (re.compile(r"\bTURNSTILES\b"), "KIOSKS"),
-    (re.compile(r"\bTurnstiles\b"), "Kiosks"),
-    (re.compile(r"\bturnstiles\b"), "kiosks"),
-    (re.compile(r"\bTURNSTILE\b"), "KIOSK"),
-    (re.compile(r"\bTurnstile\b"), "Kiosk"),
-    (re.compile(r"\bturnstile\b"), "kiosk"),
+    # 'geofence/status/' / 'geofence/status/'
+    (re.compile(r"\bTURNSTILES\b"), 'geofence/status/'),
+    (re.compile(r"\bTurnstiles\b"), 'geofence/status/'),
+    (re.compile(r"\bturnstiles\b"), 'geofence/status/'),
+    (re.compile(r"\bTURNSTILE\b"), 'geofence/status/'),
+    (re.compile(r"\bTurnstile\b"), 'geofence/status/'),
+    (re.compile(r"\bturnstile\b"), 'geofence/status/'),
 
     # Absences (outside official DepEd form titles)
     (re.compile(r"\bABSENTEEISM\b"), "ABSENCES"),
@@ -94,9 +94,9 @@ WHITELISTED_FILES = [
     "check_blacklisted_terms.py",
     "resolve_all_violations.py",
     "clean_blacklisted_terms.py",
-    "replace_kiosk.py",
+    "replace_'geofence/status/'.py",
     "search_teacher.py",
-    "search_kiosk.py",
+    "search_'geofence/status/'.py",
     "remove_teacher_role.py",
     "organize_and_clean.py",
     "reorganize_backend.py",

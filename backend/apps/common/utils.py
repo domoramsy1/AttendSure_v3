@@ -164,15 +164,3 @@ def is_leadership_role(user) -> bool:
     if getattr(user, "is_superuser", False):
         return True
     return get_user_role(user) in {"ADMIN", "SUPERADMIN", "PRINCIPAL", "DEPT_HEAD"}
-
-
-def verify_hardware_secret(kiosk, raw_secret: str) -> bool:
-    if not kiosk or not raw_secret or not getattr(kiosk, "secret_hash", None):
-        return False
-    clean_secret = str(raw_secret).strip()
-    if hasattr(kiosk, "verify_secret") and kiosk.secret_hash.startswith(("pbkdf2_", "argon2", "bcrypt")):
-        return kiosk.verify_secret(clean_secret)
-    return hmac.compare_digest(
-        str(kiosk.secret_hash).strip().encode("utf-8"),
-        clean_secret.encode("utf-8")
-    )

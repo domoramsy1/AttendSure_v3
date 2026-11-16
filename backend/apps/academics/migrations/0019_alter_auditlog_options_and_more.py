@@ -15,17 +15,17 @@ class Migration(migrations.Migration):
             options={'managed': True, 'ordering': ['-created_at']},
         ),
         migrations.RenameIndex(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             new_name='sms_outbox_status_f10124_idx',
             old_name='academics_s_status_ab0ea0_idx',
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='id',
             field=models.BigAutoField(primary_key=True, serialize=False),
         ),
         migrations.AlterModelTable(
-            name='smsoutbox',
-            table='sms_outbox',
+            name='AppNotification',
+            table='app_notifications',
         ),
     ]

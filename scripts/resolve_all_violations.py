@@ -53,12 +53,12 @@ REPLACEMENT_RULES = [
     (re.compile(r"\broster\b"), "class list"),
 
     # Turnstiles / Turnstile
-    (re.compile(r"\bTURNSTILES\b"), "KIOSKS"),
-    (re.compile(r"\bTurnstiles\b"), "Kiosks"),
-    (re.compile(r"\bturnstiles\b"), "kiosks"),
-    (re.compile(r"\bTURNSTILE\b"), "KIOSK"),
-    (re.compile(r"\bTurnstile\b"), "Kiosk"),
-    (re.compile(r"\bturnstile\b"), "kiosk"),
+    (re.compile(r"\bTURNSTILES\b"), 'geofence/status/'),
+    (re.compile(r"\bTurnstiles\b"), 'geofence/status/'),
+    (re.compile(r"\bturnstiles\b"), 'geofence/status/'),
+    (re.compile(r"\bTURNSTILE\b"), 'geofence/status/'),
+    (re.compile(r"\bTurnstile\b"), 'geofence/status/'),
+    (re.compile(r"\bturnstile\b"), 'geofence/status/'),
 
     # Absenteeism (outside official DepEd form titles)
     (re.compile(r"\bABSENTEEISM\b"), "ABSENCES"),

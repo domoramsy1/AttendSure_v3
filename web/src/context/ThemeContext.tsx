@@ -51,7 +51,7 @@ const PURE_WHITE_TOKENS: ThemeTokens = {
   bgSurface: '#FFFFFF',           // Crisp white floating cards
   bgSurfaceSubtle: '#F8FAFC',     // Subdued containers and inputs
   bgSurfaceHover: '#F1F5F9',      // Active hover tone
-  borderSubtle: '#E2E8F0',        // Clean institutional borders
+  borderSubtle: '#E2E8F0',        // Clean school borders
   borderStrong: '#CBD5E1',
   textPrimary: '#0F172A',         // High contrast slate
   textSecondary: '#475569',
@@ -76,7 +76,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     root.setAttribute('data-theme', 'light');
     localStorage.removeItem('attendsure_theme');
 
-    // Lock global CSS variables to pure white institutional colors
+    // Lock global CSS variables to pure white school colors
     root.style.setProperty('--bg-app', PURE_WHITE_TOKENS.bgApp);
     root.style.setProperty('--bg-surface', PURE_WHITE_TOKENS.bgSurface);
     root.style.setProperty('--bg-surface-subtle', PURE_WHITE_TOKENS.bgSurfaceSubtle);

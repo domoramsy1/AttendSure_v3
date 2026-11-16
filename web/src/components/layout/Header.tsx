@@ -66,14 +66,14 @@ interface CurrentUser {
   role: string;
   photo_url?: string | null;
   employee_id?: string;
-  rfid_uid?: string;
+  qr_token?: string;
 }
 
 interface NotificationItem {
   id: string;
   title: string;
   message: string;
-  type: 'GATE' | 'CLASS' | 'SMS' | 'KIOSK' | 'GATE_PASS';
+  type: 'GATE' | 'CLASS' | 'SMS' | 'SCANNERS' | 'GATE_PASS';
   time: string;
   targetRole?: 'ADMIN' | 'ALL';
 }
@@ -116,7 +116,7 @@ export const Header: React.FC<HeaderProps> = ({
     role: '',
   });
 
-  const [gateOnline, setGateOnline] = useState<boolean>(true);
+  const [systemOnline, setGateOnline] = useState<boolean>(true);
   const [searchVal, setSearchVal] = useState<string>('');
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const [notifOpen, setNotifOpen] = useState<boolean>(false);
@@ -140,8 +140,8 @@ export const Header: React.FC<HeaderProps> = ({
     try {
       const [userRes, kioskRes, smsRes] = await Promise.allSettled([
         apiClient.get('/me/'),
-        apiClient.get('/kiosks/'),
-        apiClient.get('/sms-outbox/metrics/').catch(() => null),
+        apiClient.get('/geofence/status/'),
+        apiClient.get('/notifications/').catch(() => null),
       ]);
 
       if (userRes.status === 'fulfilled' && userRes.value?.data) {
@@ -152,38 +152,38 @@ export const Header: React.FC<HeaderProps> = ({
           role: String(u.role || u.system_role || 'FACULTY').toUpperCase(),
           photo_url: u.photo_url || u.photo || null,
           employee_id: u.employee_id || u.username || '',
-          rfid_uid: u.rfid_uid || '',
+          qr_token: u.qr_token || '',
         });
       }
 
       const generatedAlerts: NotificationItem[] = [];
 
       if (kioskRes.status === 'fulfilled' && kioskRes.value?.data) {
-        const kiosks = Array.isArray(kioskRes.value.data)
+        const terminals = Array.isArray(kioskRes.value.data)
           ? kioskRes.value.data
           : kioskRes.value.data.results || [];
 
-        const hasOnlineKiosks =
-          kiosks.length === 0 ||
-          kiosks.some(
+        const hasOnlineKiosk =
+          terminals.length === 0 ||
+          terminals.some(
             (k: { is_active?: boolean; is_online?: boolean }) =>
               k.is_active !== false && k.is_online !== false
           );
 
         if (typeof isGateNodeOnline !== 'boolean') {
-          setGateOnline(hasOnlineKiosks);
+          setGateOnline(hasOnlineKiosk);
         }
 
-        const offlineList = kiosks.filter(
+        const offlineList = terminals.filter(
           (k: { is_active?: boolean; is_online?: boolean }) => k.is_active && !k.is_online
         );
 
         if (offlineList.length > 0) {
           generatedAlerts.push({
             id: 'gate-offline-alert',
-            title: 'Gate Scanner Offline',
-            message: `${offlineList.length} gate scanner unit(s) are currently disconnected.`,
-            type: 'KIOSK',
+            title: 'USB QR scanner Offline',
+            message: `${offlineList.length} USB QR scanner unit(s) are currently disconnected.`,
+            type: terminals,
             time: 'Just now',
             targetRole: 'ADMIN',
           });
@@ -265,7 +265,7 @@ export const Header: React.FC<HeaderProps> = ({
         return <BookOpen size={14} color={brand.primary} />;
       case 'SMS':
         return <Send size={14} color={brand.secondary} />;
-      case 'KIOSK':
+      case 'SCANNERS':
         return <Cpu size={14} color={brand.danger} />;
       case 'GATE_PASS':
         return <FileClock size={14} color={brand.warning} />;
@@ -405,15 +405,15 @@ export const Header: React.FC<HeaderProps> = ({
             borderRadius: 9999,
             fontSize: '0.72rem',
             fontWeight: 700,
-            backgroundColor: gateOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-            border: `1px solid ${gateOnline ? 'rgba(16, 185, 129, 0.28)' : 'rgba(239, 68, 68, 0.28)'}`,
-            color: gateOnline ? brand.success : brand.danger,
+            backgroundColor: systemOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+            border: `1px solid ${systemOnline ? 'rgba(16, 185, 129, 0.28)' : 'rgba(239, 68, 68, 0.28)'}`,
+            color: systemOnline ? brand.success : brand.danger,
             whiteSpace: 'nowrap',
             flexShrink: 0,
           }}
         >
-          <Activity size={12} color={gateOnline ? brand.success : brand.danger} />
-          <span>{gateOnline ? 'Gate Online' : 'Gate Offline'}</span>
+          <Activity size={12} color={systemOnline ? brand.success : brand.danger} />
+          <span>{systemOnline ? 'System Online' : 'Gate Offline'}</span>
         </div>
 
         {/* Notifications Icon & Popover */}
@@ -718,7 +718,7 @@ export const Header: React.FC<HeaderProps> = ({
             name: currentUser.full_name || currentUser.username,
             lrn: currentUser.employee_id || currentUser.username,
             photo_url: resolvedPhoto,
-            rfid_uid: currentUser.rfid_uid,
+            qr_token: currentUser.qr_token,
             gender: 'N/A',
             attendance_status: 'PRESENT',
           }}

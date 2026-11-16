@@ -35,8 +35,8 @@ DEPED_PROTECTED_PHRASES = [
 ]
 
 BLACKLISTED_WORDS = {
-    "turnstiles": "kiosks",
-    "turnstile": "kiosk",
+    "turnstiles": 'geofence/status/',
+    "turnstile": 'geofence/status/',
     "rosters": "class lists",
     "roster": "class list",
     "teachers": "faculty",

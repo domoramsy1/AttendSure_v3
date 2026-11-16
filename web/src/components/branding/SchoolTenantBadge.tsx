@@ -1,6 +1,6 @@
 import React from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import appLogoSrc from '../../assets/attendsure-logo.svg';
+import appLogoSrc from '../../assets/AttendSureLogo.png';
 
 export const SchoolTenantBadge: React.FC = () => {
   const { school } = useSchool();

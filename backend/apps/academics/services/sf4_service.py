@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Form 4 (SF4) Optimized Consolidated Service
+AttendSure V3 - School Form 4 (SF4) Consolidated Monthly Attendance Service
 File: backend/apps/academics/services/sf4_service.py
 """
 
@@ -9,10 +9,10 @@ from django.db.models import Q
 from apps.academics.models import (
     AcademicYear,
     DailyAttendanceSummary,
+    SubjectAttendanceLog,
     Enrollment,
     GradeLevel,
     Section,
-    StudentGateLog,
 )
 from apps.api.views.common import get_school_metadata
 
@@ -65,10 +65,7 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
         )
     sections = list(sections_qs.order_by('grade_level__level_order', 'name'))
 
-    all_enr_qs = (
-        Enrollment.objects.filter(section__in=sections)
-        .select_related('student', 'section')
-    )
+    all_enr_qs = Enrollment.objects.filter(section__in=sections, student__is_active=True).select_related('student', 'section')
     if target_ay:
         all_enr_qs = all_enr_qs.filter(Q(academic_year=target_ay) | Q(academic_year__isnull=True))
     all_enrollments = list(all_enr_qs)
@@ -80,88 +77,77 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
             enr_by_section.setdefault(enr.section_id, []).append(enr)
             all_student_ids.add(enr.student_id)
 
-    # High-Performance Batch Prefetching (Replaces 120+ sequential queries)
-    summary_map = set()
+    # Batch-fetch real classroom attendance across the entire school in 2 fast queries
+    present_days_set = set()
     if all_student_ids:
-        summaries = DailyAttendanceSummary.objects.filter(
-            student_id__in=all_student_ids,
-            attendance_date__gte=start_month_date,
-            attendance_date__lte=end_month_date,
-            status__in=['PRESENT', 'P', 'TARDY', 'LATE', 'T', 'CUTTING', 'CUT', 'CC']
-        ).values_list('student_id', 'attendance_date')
-        summary_map = set(summaries)
+        valid_present_codes = ['PRESENT', 'P', 'TARDY', 'LATE', 'T', 'CUTTING', 'CUT', 'CC', 'EXCUSED']
+        present_days_set.update(
+            DailyAttendanceSummary.objects.filter(
+                student_id__in=all_student_ids,
+                attendance_date__gte=start_month_date,
+                attendance_date__lte=end_month_date,
+                status__in=valid_present_codes
+            ).values_list('student_id', 'attendance_date')
+        )
+        present_days_set.update(
+            SubjectAttendanceLog.objects.filter(
+                student_id__in=all_student_ids,
+                attendance_date__gte=start_month_date,
+                attendance_date__lte=end_month_date,
+                status__in=valid_present_codes
+            ).values_list('student_id', 'attendance_date')
+        )
 
-        gate_logs = StudentGateLog.objects.filter(
-            student_id__in=all_student_ids,
-            direction='IN',
-            scan_time__date__gte=start_month_date,
-            scan_time__date__lte=end_month_date
-        ).values_list('student_id', 'scan_time__date')
-        summary_map.update(gate_logs)
-
-    registered_grades = list(
-        GradeLevel.objects.all().order_by('level_order').values_list('name', flat=True)
-    )
+    registered_grades = list(GradeLevel.objects.all().order_by('level_order').values_list('name', flat=True))
     if not registered_grades:
         registered_grades = list(sections_qs.values_list('grade_level__name', flat=True).distinct())
 
     grade_groups_dict = {g: [] for g in registered_grades if g}
-    non_graded_sections = []
 
     for sec in sections:
         grade = str(sec.grade_level.name if sec.grade_level else '').strip()
-        is_non_graded = not grade or "NON-GRADED" in grade.upper()
         adviser_name = sec.adviser.full_name if sec.adviser else "Unassigned"
-
         sec_enrollments = enr_by_section.get(sec.id, [])
-        males_registered, females_registered = 0, 0
-        drop_prev_m, drop_prev_f = 0, 0
-        drop_month_m, drop_month_f = 0, 0
-        tout_prev_m, tout_prev_f = 0, 0
-        tout_month_m, tout_month_f = 0, 0
-        tin_prev_m, tin_prev_f = 0, 0
-        tin_month_m, tin_month_f = 0, 0
-        total_m_daily_attendance, total_f_daily_attendance = 0, 0
+
+        males_registered = females_registered = 0
+        drop_prev_m = drop_prev_f = drop_month_m = drop_month_f = 0
+        tout_prev_m = tout_prev_f = tout_month_m = tout_month_f = 0
+        tin_prev_m = tin_prev_f = tin_month_m = tin_month_f = 0
+        total_m_daily_attendance = total_f_daily_attendance = 0
 
         for enr_rec in sec_enrollments:
             s = enr_rec.student
             if not s:
                 continue
 
-            raw_sex = str(getattr(s, 'sex', '') or '').strip().upper()
-            is_male = raw_sex.startswith('M')
-
-            enr_date = getattr(enr_rec, 'enrollment_date', None) or getattr(s, 'created_at', None)
-            if enr_date and isinstance(enr_date, datetime):
+            is_male = str(s.sex or '').strip().upper().startswith('M')
+            enr_date = enr_rec.enrollment_date or getattr(s, 'created_at', None)
+            if isinstance(enr_date, datetime):
                 enr_date = enr_date.date()
-
             if enr_date and enr_date > end_month_date:
                 continue
 
-            status_val = str(getattr(enr_rec, 'status', '') or '').strip().upper()
-            exit_date = getattr(enr_rec, 'status_date', None)
-            if exit_date and isinstance(exit_date, datetime):
+            status_val = str(enr_rec.status or '').strip().upper()
+            exit_date = enr_rec.status_date
+            if isinstance(exit_date, datetime):
                 exit_date = exit_date.date()
 
-            if 'DROP' in status_val or 'DRP' in status_val:
+            if 'DROP' in status_val:
                 if exit_date and exit_date < start_month_date:
                     if is_male: drop_prev_m += 1
                     else: drop_prev_f += 1
                     continue
-                else:
-                    if is_male: drop_month_m += 1
-                    else: drop_month_f += 1
-
-            elif 'TRANSFERRED OUT' in status_val or status_val == 'TRANSFERRED_OUT':
+                if is_male: drop_month_m += 1
+                else: drop_month_f += 1
+            elif 'TRANSFERRED' in status_val and 'OUT' in status_val:
                 if exit_date and exit_date < start_month_date:
                     if is_male: tout_prev_m += 1
                     else: tout_prev_f += 1
                     continue
-                else:
-                    if is_male: tout_month_m += 1
-                    else: tout_month_f += 1
+                if is_male: tout_month_m += 1
+                else: tout_month_f += 1
 
-            if 'TRANSFERRED IN' in status_val or status_val == 'TRANSFERRED_IN':
+            if 'TRANSFERRED' in status_val and 'IN' in status_val:
                 if enr_date and enr_date < start_month_date:
                     if is_male: tin_prev_m += 1
                     else: tin_prev_f += 1
@@ -170,28 +156,21 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
                     else: tin_month_f += 1
 
             if status_val not in ('DROPPED', 'TRANSFERRED_OUT') or (exit_date and exit_date > end_month_date):
-                if is_male:
-                    males_registered += 1
-                else:
-                    females_registered += 1
+                if is_male: males_registered += 1
+                else: females_registered += 1
 
             for s_day in school_days:
-                if (s.id, s_day) in summary_map:
+                if (s.id, s_day) in present_days_set:
                     if is_male: total_m_daily_attendance += 1
                     else: total_f_daily_attendance += 1
 
         registered_end = make_triplet(males_registered, females_registered)
         dropped_out_prev = make_triplet(drop_prev_m, drop_prev_f)
         dropped_out_month = make_triplet(drop_month_m, drop_month_f)
-        dropped_out_cumulative = add_triplets(dropped_out_prev, dropped_out_month)
-
         transferred_out_prev = make_triplet(tout_prev_m, tout_prev_f)
         transferred_out_month = make_triplet(tout_month_m, tout_month_f)
-        transferred_out_cumulative = add_triplets(transferred_out_prev, transferred_out_month)
-
         transferred_in_prev = make_triplet(tin_prev_m, tin_prev_f)
         transferred_in_month = make_triplet(tin_month_m, tin_month_f)
-        transferred_in_cumulative = add_triplets(transferred_in_prev, transferred_in_month)
 
         ada_m = round(total_m_daily_attendance / num_school_days, 1)
         ada_f = round(total_f_daily_attendance / num_school_days, 1)
@@ -211,32 +190,28 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
             "attendance_percentage": {"m": pct_m, "f": pct_f, "total": pct_total},
             "dropped_out_prev": dropped_out_prev,
             "dropped_out_month": dropped_out_month,
-            "dropped_out_cumulative": dropped_out_cumulative,
+            "dropped_out_cumulative": add_triplets(dropped_out_prev, dropped_out_month),
             "transferred_out_prev": transferred_out_prev,
             "transferred_out_month": transferred_out_month,
-            "transferred_out_cumulative": transferred_out_cumulative,
+            "transferred_out_cumulative": add_triplets(transferred_out_prev, transferred_out_month),
             "transferred_in_prev": transferred_in_prev,
             "transferred_in_month": transferred_in_month,
-            "transferred_in_cumulative": transferred_in_cumulative,
+            "transferred_in_cumulative": add_triplets(transferred_in_prev, transferred_in_month),
         }
-
-        if is_non_graded:
-            non_graded_sections.append(sec_record)
-        else:
-            grade_groups_dict.setdefault(grade, []).append(sec_record)
+        grade_groups_dict.setdefault(grade or "NON-GRADED", []).append(sec_record)
 
     grade_groups = []
-    grand_registered = make_triplet(0, 0)
-    grand_daily_avg = make_triplet(0, 0)
-    grand_drop_prev = make_triplet(0, 0)
-    grand_drop_month = make_triplet(0, 0)
-    grand_drop_cum = make_triplet(0, 0)
-    grand_tout_prev = make_triplet(0, 0)
-    grand_tout_month = make_triplet(0, 0)
-    grand_tout_cum = make_triplet(0, 0)
-    grand_tin_prev = make_triplet(0, 0)
-    grand_tin_month = make_triplet(0, 0)
-    grand_tin_cum = make_triplet(0, 0)
+    grand_reg = make_triplet(0, 0)
+    grand_avg = make_triplet(0, 0)
+    grand_dprev = make_triplet(0, 0)
+    grand_dmonth = make_triplet(0, 0)
+    grand_dcum = make_triplet(0, 0)
+    grand_toprev = make_triplet(0, 0)
+    grand_tomonth = make_triplet(0, 0)
+    grand_tocum = make_triplet(0, 0)
+    grand_tiprev = make_triplet(0, 0)
+    grand_timonth = make_triplet(0, 0)
+    grand_ticum = make_triplet(0, 0)
 
     for grade_label, sec_list in grade_groups_dict.items():
         sub_reg = make_triplet(0, 0)
@@ -264,10 +239,6 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
             sub_timonth = add_triplets(sub_timonth, s["transferred_in_month"])
             sub_ticum = add_triplets(sub_ticum, s["transferred_in_cumulative"])
 
-        sub_pct_m = round((sub_avg["m"] / sub_reg["m"] * 100), 1) if sub_reg["m"] > 0 else 0.0
-        sub_pct_f = round((sub_avg["f"] / sub_reg["f"] * 100), 1) if sub_reg["f"] > 0 else 0.0
-        sub_pct_t = round((sub_avg["total"] / sub_reg["total"] * 100), 1) if sub_reg["total"] > 0 else 0.0
-
         subtotal = {
             "section_id": f"subtotal-{grade_label}",
             "section_name": "SUBTOTAL",
@@ -275,7 +246,11 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
             "adviser_name": "",
             "registered_end": sub_reg,
             "daily_average": sub_avg,
-            "attendance_percentage": {"m": sub_pct_m, "f": sub_pct_f, "total": sub_pct_t},
+            "attendance_percentage": {
+                "m": round((sub_avg["m"] / sub_reg["m"] * 100), 1) if sub_reg["m"] > 0 else 0.0,
+                "f": round((sub_avg["f"] / sub_reg["f"] * 100), 1) if sub_reg["f"] > 0 else 0.0,
+                "total": round((sub_avg["total"] / sub_reg["total"] * 100), 1) if sub_reg["total"] > 0 else 0.0,
+            },
             "dropped_out_prev": sub_dprev,
             "dropped_out_month": sub_dmonth,
             "dropped_out_cumulative": sub_dcum,
@@ -286,46 +261,41 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
             "transferred_in_month": sub_timonth,
             "transferred_in_cumulative": sub_ticum,
         }
+        grade_groups.append({"grade_level": grade_label, "sections": sec_list, "subtotal": subtotal})
 
-        grade_groups.append({
-            "grade_level": grade_label,
-            "sections": sec_list,
-            "subtotal": subtotal
-        })
-
-        grand_registered = add_triplets(grand_registered, sub_reg)
-        grand_daily_avg = add_triplets(grand_daily_avg, sub_avg)
-        grand_drop_prev = add_triplets(grand_drop_prev, sub_dprev)
-        grand_drop_month = add_triplets(grand_drop_month, sub_dmonth)
-        grand_drop_cum = add_triplets(grand_drop_cum, sub_dcum)
-        grand_tout_prev = add_triplets(grand_tout_prev, sub_toprev)
-        grand_tout_month = add_triplets(grand_tout_month, sub_tomonth)
-        grand_tout_cum = add_triplets(grand_tout_cum, sub_tocum)
-        grand_tin_prev = add_triplets(grand_tin_prev, sub_tiprev)
-        grand_tin_month = add_triplets(grand_tin_month, sub_timonth)
-        grand_tin_cum = add_triplets(grand_tin_cum, sub_ticum)
+        grand_reg = add_triplets(grand_reg, sub_reg)
+        grand_avg = add_triplets(grand_avg, sub_avg)
+        grand_dprev = add_triplets(grand_dprev, sub_dprev)
+        grand_dmonth = add_triplets(grand_dmonth, sub_dmonth)
+        grand_dcum = add_triplets(grand_dcum, sub_dcum)
+        grand_toprev = add_triplets(grand_toprev, sub_toprev)
+        grand_tomonth = add_triplets(grand_tomonth, sub_tomonth)
+        grand_tocum = add_triplets(grand_tocum, sub_tocum)
+        grand_tiprev = add_triplets(grand_tiprev, sub_tiprev)
+        grand_timonth = add_triplets(grand_timonth, sub_timonth)
+        grand_ticum = add_triplets(grand_ticum, sub_ticum)
 
     total_summary = {
         "section_id": "grand-total",
         "section_name": "TOTAL",
         "grade_level": "ALL",
         "adviser_name": "",
-        "registered_end": grand_registered,
-        "daily_average": grand_daily_avg,
+        "registered_end": grand_reg,
+        "daily_average": grand_avg,
         "attendance_percentage": {
-            "m": round((grand_daily_avg["m"] / grand_registered["m"] * 100), 1) if grand_registered["m"] > 0 else 0.0,
-            "f": round((grand_daily_avg["f"] / grand_registered["f"] * 100), 1) if grand_registered["f"] > 0 else 0.0,
-            "total": round((grand_daily_avg["total"] / grand_registered["total"] * 100), 1) if grand_registered["total"] > 0 else 0.0,
+            "m": round((grand_avg["m"] / grand_reg["m"] * 100), 1) if grand_reg["m"] > 0 else 0.0,
+            "f": round((grand_avg["f"] / grand_reg["f"] * 100), 1) if grand_reg["f"] > 0 else 0.0,
+            "total": round((grand_avg["total"] / grand_reg["total"] * 100), 1) if grand_reg["total"] > 0 else 0.0,
         },
-        "dropped_out_prev": grand_drop_prev,
-        "dropped_out_month": grand_drop_month,
-        "dropped_out_cumulative": grand_drop_cum,
-        "transferred_out_prev": grand_tout_prev,
-        "transferred_out_month": grand_tout_month,
-        "transferred_out_cumulative": grand_tout_cum,
-        "transferred_in_prev": grand_tin_prev,
-        "transferred_in_month": grand_tin_month,
-        "transferred_in_cumulative": grand_tin_cum,
+        "dropped_out_prev": grand_dprev,
+        "dropped_out_month": grand_dmonth,
+        "dropped_out_cumulative": grand_dcum,
+        "transferred_out_prev": grand_toprev,
+        "transferred_out_month": grand_tomonth,
+        "transferred_out_cumulative": grand_tocum,
+        "transferred_in_prev": grand_tiprev,
+        "transferred_in_month": grand_timonth,
+        "transferred_in_cumulative": grand_ticum,
     }
 
     resolved_sy = (
@@ -340,5 +310,5 @@ def generate_sf4_data(month_name="October", year=2026, school_year=""):
         "year": year,
         "grade_groups": grade_groups,
         "non_graded_summary": None,
-        "total_summary": total_summary
+        "total_summary": total_summary,
     }

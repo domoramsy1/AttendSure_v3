@@ -279,17 +279,17 @@ class Migration(migrations.Migration):
             field=models.CharField(blank=True, default='Primary', help_text='e.g., Primary, Secondary, High School', max_length=20),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='kiosk_code',
             field=models.CharField(help_text='Unique hardware terminal identifier', max_length=50, unique=True),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='location',
-            field=models.CharField(default='Main Gate', help_text='Gate Scanner or gate position', max_length=100),
+            field=models.CharField(default='Main Gate', help_text='USB QR scanner or gate position', max_length=100),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='secret_hash',
             field=models.CharField(help_text='Constant-time hardware authentication secret', max_length=255),
         ),
@@ -344,19 +344,19 @@ class Migration(migrations.Migration):
             field=models.CharField(blank=True, default='', help_text='Optional academic track or program', max_length=150),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='priority',
             field=models.SmallIntegerField(choices=[(1, 'Priority 1 - High (Absence / Emergency)'), (2, 'Priority 2 - Standard (Arrival / Departure)')], default=2),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='status',
             field=models.CharField(choices=[('PENDING', 'Pending Transmission'), ('PROCESSING', 'Processing by Gateway'), ('SENT', 'Sent / Delivered'), ('FAILED', 'Failed / Exhausted Retries')], default='PENDING', max_length=20),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='trigger_event',
-            field=models.CharField(choices=[('CLASS_TAP', 'Classroom Attendance Tap'), ('GATE_TAP', 'Gate Kiosk Tap'), ('GATE_PASS', 'Gate Pass Issuance'), ('LOAFING_ALERT', 'Geofence Perimeter Alert'), ('ABSENCE_WARNING', 'Consecutive Absence Alert'), ('BROADCAST', 'School Announcement')], default='CLASS_TAP', max_length=50),
+            field=models.CharField(choices=[('CLASS_TAP', 'Classroom Attendance Tap'), ('GATE_TAP', 'Gate terminals Tap'), ('GATE_PASS', 'Gate Pass Issuance'), ('LOAFING_ALERT', 'Geofence Perimeter Alert'), ('ABSENCE_WARNING', 'Consecutive Absence Alert'), ('BROADCAST', 'School Announcement')], default='CLASS_TAP', max_length=50),
         ),
         migrations.AlterField(
             model_name='facultygatelog',
@@ -366,7 +366,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='facultygatelog',
             name='scan_method',
-            field=models.CharField(choices=[('RFID', 'RFID Card Tap'), ('QR', 'QR Code Scan')], default='RFID', max_length=10),
+            field=models.CharField(choices=[('QR ID', 'QR ID Card Tap'), ('QR', 'QR Code Scan')], default='QR ID', max_length=10),
         ),
         migrations.AlterField(
             model_name='facultyprofile',
@@ -390,8 +390,8 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name='facultyprofile',
-            name='rfid_uid',
-            field=models.CharField(blank=True, help_text='RFID card UID', max_length=64, null=True, unique=True),
+            name='qr_token',
+            field=models.CharField(blank=True, help_text='QR ID card UID', max_length=64, null=True, unique=True),
         ),
         migrations.AlterField(
             model_name='student',
@@ -461,7 +461,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='studentgatelog',
             name='scan_method',
-            field=models.CharField(choices=[('RFID', 'RFID Card Tap'), ('QR', 'QR Code Scan')], default='RFID', max_length=10),
+            field=models.CharField(choices=[('QR ID', 'QR ID Card Tap'), ('QR', 'QR Code Scan')], default='QR ID', max_length=10),
         ),
         migrations.AlterField(
             model_name='subject',

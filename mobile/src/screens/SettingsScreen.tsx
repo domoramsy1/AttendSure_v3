@@ -230,7 +230,7 @@ export const SettingsScreen: React.FC = () => {
         {/* Digital School Clearance Pass */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Digital Gate Pass</Text>
-          <Text style={styles.cardSubtitle}>Scan this QR code at campus gate kiosks for check-in and check-out.</Text>
+          <Text style={styles.cardSubtitle}>Scan this QR code at campus USB QR scanner for check-in and check-out.</Text>
           <View style={styles.qrContainer}>
             <QRCode value={qrPayload} size={140} color="#004b87" backgroundColor="#ffffff" />
           </View>

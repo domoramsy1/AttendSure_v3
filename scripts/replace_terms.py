@@ -1,6 +1,6 @@
 """
 AttendSure - Automated Term Replacer
-Replaces 'class list' and 'kiosk' with simple English terms across backend, web, and mobile.
+Replaces 'class list' and 'geofence/status/' with simple English terms across backend, web, and mobile.
 """
 
 import os
@@ -34,7 +34,7 @@ REPLACEMENTS = {
         ("'faculty_class_list': faculty_class_list,", "'faculty_list': faculty_list,\n            'faculty_class_list': faculty_list,"),
     ],
     os.path.normpath("mobile/src/types/index.ts"): [
-        ("// 2. KIOSK GATE LOGS", "// 2. SCHOOL GATE LOGS"),
+        ("// 2. 'geofence/status/' GATE LOGS", "// 2. SCHOOL GATE LOGS"),
     ],
     os.path.normpath("mobile/src/components/reports/SF1ReportView.tsx"): [
         ("activeClassListList", "activeStudentList"),
@@ -48,7 +48,7 @@ REPLACEMENTS = {
         ("StudentClassListItem", "StudentItem"),
         ("interface SectionRoster", "interface SectionItem"),
         ("SectionRoster", "SectionItem"),
-        ("// GATE KIOSK STATUS", "// SCHOOL GATE STATUS"),
+        ("// GATE 'geofence/status/' STATUS", "// SCHOOL GATE STATUS"),
         ("rosterRes", "classListRes"),
         ("rosterData", "classData"),
     ],
@@ -83,8 +83,8 @@ REPLACEMENTS = {
          "faculty_list: FacultyListItem[];\n  faculty_class_list?: FacultyListItem[];"),
         ("const getStatusBadge = (s: FacultyClassListItem)", 
          "export type FacultyClassListItem = FacultyListItem;\nconst getStatusBadge = (s: FacultyListItem)"),
-        ("kiosk gate cross-referencing", "school gate cross-referencing"),
-        ("Kiosk", "Gate"),
+        ('geofence/status/' gate cross-referencing", "school gate cross-referencing"),
+        ('geofence/status/', "Gate"),
         ("geoData?.faculty_class_list?.length", "(geoData?.faculty_list?.length || geoData?.faculty_class_list?.length)"),
         ("geoData.faculty_class_list.map", "(geoData?.faculty_list || geoData?.faculty_class_list || []).map"),
         ("geoData?.faculty_class_list && geoData.faculty_class_list.length > 0", 

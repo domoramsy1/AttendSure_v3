@@ -46,7 +46,7 @@ export async function getUnsyncedCount(): Promise<number> {
 }
 
 /**
- * Queues an offline telemetry heartbeat with automatic deduplication.
+ * Queues an offline activity heartbeat with automatic deduplication.
  * Replaces older heartbeats so breadcrumbs do not stack up during long offline periods.
  */
 export async function enqueueOfflineHeartbeat(payload: QueuedTelemetryPayload): Promise<void> {

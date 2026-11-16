@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Student Serializer (Full DepEd SF1 30-Column Schema with Photo Support)
+AttendSure V3 - Student Serializer (Printed QR ID Only, Zero N+1 Queries)
 File: backend/apps/api/serializers/students.py
 """
 
@@ -7,7 +7,7 @@ import base64
 import uuid
 from django.core.files.base import ContentFile
 from rest_framework import serializers
-from apps.academics.models import Student, Section, Enrollment, AcademicYear
+from apps.academics.models import AcademicYear, Enrollment, Student
 
 
 class StudentSerializer(serializers.ModelSerializer):
@@ -18,43 +18,19 @@ class StudentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = [
-            'id',
-            'lrn',
-            'first_name',
-            'middle_name',
-            'last_name',
-            'suffix',
-            'full_name',
-            'sex',
-            'birthdate',
-            'mother_tongue',
-            'ethnic_group',
-            'religion',
-            'house_street_sitio',
-            'barangay',
-            'municipality_city',
-            'province',
-            'father_name',
-            'mother_maiden_name',
-            'guardian_name',
-            'guardian_relationship',
-            'parent_contact',
-            'photo',
-            'rfid_uid',
-            'qr_token',
-            'is_active',
-            'current_section',
-            'section_id',
-            'created_at',
-            'updated_at',
+            'id', 'lrn', 'first_name', 'middle_name', 'last_name', 'suffix',
+            'full_name', 'sex', 'birthdate', 'mother_tongue', 'ethnic_group',
+            'religion', 'house_street_sitio', 'barangay', 'municipality_city',
+            'province', 'father_name', 'mother_maiden_name', 'guardian_name',
+            'guardian_relationship', 'parent_contact', 'photo', 'qr_token',
+            'is_active', 'current_section', 'section_id', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'qr_token', 'created_at', 'updated_at']
 
     def to_internal_value(self, data):
         data = data.copy() if hasattr(data, 'copy') else dict(data)
         photo_val = data.get('photo')
-        
-        # Safely convert base64 image data to an uploadable file
+
         if photo_val and isinstance(photo_val, str) and photo_val.startswith('data:image'):
             try:
                 format_part, img_str = photo_val.split(';base64,')
@@ -65,16 +41,21 @@ class StudentSerializer(serializers.ModelSerializer):
                 )
             except Exception:
                 data.pop('photo', None)
-        elif photo_val == '' or photo_val is None:
+        elif photo_val in ('', None):
             data.pop('photo', None)
 
         return super().to_internal_value(data)
 
     def get_current_section(self, obj):
-        enrollment = obj.enrollments.select_related('section').filter(academic_year__is_active=True).first()
-        if not enrollment:
-            enrollment = obj.enrollments.select_related('section').first()
-        return enrollment.section.name if enrollment and enrollment.section else 'Unassigned'
+        # Uses prefetched enrollments in memory to prevent N+1 SQL queries
+        enrollments = list(obj.enrollments.all())
+        if not enrollments:
+            return 'Unassigned'
+        for enr in enrollments:
+            if getattr(enr, 'academic_year', None) and enr.academic_year.is_active and enr.section:
+                return enr.section.name
+        first_enr = enrollments[0]
+        return first_enr.section.name if getattr(first_enr, 'section', None) else 'Unassigned'
 
     def create(self, validated_data):
         section_id = validated_data.pop('section_id', None)

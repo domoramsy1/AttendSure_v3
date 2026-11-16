@@ -384,10 +384,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           <div className="portal-header">
             <div className="brand-logo-frame">
               <img
-                src="/splash.svg"
+                src="/AttendSureLogo.png"
                 alt="AttendSure Logo"
                 onError={(e) => {
-                  e.currentTarget.src = '/public/splash.svg';
+                  e.currentTarget.src = '/public/AttendSureLogo.png';
                 }}
               />
             </div>

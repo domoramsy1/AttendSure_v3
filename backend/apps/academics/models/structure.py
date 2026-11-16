@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Academic Structure Models (Rooms, Sections, Subjects, Schedules)
+AttendSure V3 - Academic Structure Models (Rooms, Sections, Uniform Subjects, Schedules)
 File: backend/apps/academics/models/structure.py
 """
 
@@ -11,14 +11,10 @@ from .people import Student, FacultyProfile
 
 
 class Room(models.Model):
-    """
-    Classrooms, science laboratories, computer rooms, and lecture halls.
-    Must be created before assigning homerooms and subject schedules.
-    """
     id = models.BigAutoField(primary_key=True)
-    name = models.CharField(max_length=100, unique=True, help_text="e.g. Room 101, Science Lab A")
-    building = models.CharField(max_length=100, blank=True, default='', help_text="e.g. Main Building")
-    capacity = models.PositiveIntegerField(default=45, help_text="Maximum student seating capacity")
+    name = models.CharField(max_length=100, unique=True)
+    building = models.CharField(max_length=100, blank=True, default='')
+    capacity = models.PositiveIntegerField(default=45)
     room_type = models.CharField(
         max_length=50,
         default='LECTURE',
@@ -76,7 +72,8 @@ class Section(models.Model):
     code = models.CharField(max_length=50, blank=True, default='')
     track_strand = models.CharField(max_length=150, blank=True, default='')
     room_number = models.CharField(max_length=50, blank=True, default='')
-    capacity = models.IntegerField(default=0)
+    capacity = models.IntegerField(default=45)
+    is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
         db_table = 'sections'
@@ -125,6 +122,14 @@ class Enrollment(models.Model):
 
 class Subject(models.Model):
     id = models.BigAutoField(primary_key=True)
+    grade_level = models.ForeignKey(
+        GradeLevel,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='uniform_subjects',
+        help_text="Grade level that shares this uniform subject"
+    )
     code = models.CharField(max_length=30, unique=True)
     title = models.CharField(max_length=200)
     tier = models.CharField(max_length=20, blank=True, default='Core')
@@ -163,6 +168,7 @@ class Schedule(models.Model):
     end_time = models.TimeField()
     days_of_week = models.CharField(max_length=50, default='MON-FRI')
     room_number = models.CharField(max_length=50, blank=True, default='')
+    is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
         db_table = 'schedules'

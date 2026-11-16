@@ -56,7 +56,7 @@ class Migration(migrations.Migration):
             field=models.DecimalField(decimal_places=6, default=124.6618, max_digits=9),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='location',
             field=models.CharField(choices=[('Main Entrance Gate', 'Main Campus Entrance Gate (Terminal 1)'), ('Main Exit Gate', 'Main Campus Exit Gate (Terminal 2)'), ('Back Gate', 'Back Secondary Gate'), ('Senior High School Gate', 'Senior High School Building Gate'), ('Faculty Center Entrance', 'Faculty Administration Lobby')], default='Main Entrance Gate', max_length=100),
         ),
@@ -96,19 +96,19 @@ class Migration(migrations.Migration):
             field=models.CharField(blank=True, choices=[('', 'N/A (Junior High School)'), ('STEM', 'STEM - Science, Technology, Engineering and Mathematics'), ('ABM', 'ABM - Accountancy, Business and Management'), ('HUMSS', 'HUMSS - Humanities and Social Sciences'), ('GAS', 'GAS - General Academic Strand'), ('TVL-ICT', 'TVL - Information & Communications Technology'), ('TVL-HE', 'TVL - Home Economics'), ('TVL-IA', 'TVL - Industrial Arts'), ('TVL-AFA', 'TVL - Agri-Fishery Arts'), ('Sports', 'Sports Track'), ('Arts & Design', 'Arts & Design Track')], default='', max_length=150),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='priority',
             field=models.SmallIntegerField(choices=[(1, 'Priority 1 - Urgent (Absence, Cutting, Gate Violation)'), (2, 'Priority 2 - Standard (Regular Present Tap)')], default=2),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='status',
             field=models.CharField(choices=[('PENDING', 'Pending Transmission'), ('PROCESSING', 'Processing by Serial Modem'), ('SENT', 'Sent / Delivered'), ('FAILED', 'Failed / Exhausted Retries')], default='PENDING', max_length=20),
         ),
         migrations.AlterField(
-            model_name='smsoutbox',
+            model_name='AppNotification',
             name='trigger_event',
-            field=models.CharField(choices=[('CLASS_TAP', 'Classroom Attendance Tap'), ('GATE_TAP', 'Gate Kiosk RFID Tap'), ('GATE_PASS', 'Gate Pass Issuance'), ('LOAFING_ALERT', 'Geofence Breach Alert'), ('SARDO_WARNING', 'SARDO (5-Day Consecutive Absence) Alert'), ('MANUAL_ANNOUNCEMENT', 'Institutional School Broadcast')], default='CLASS_TAP', max_length=50),
+            field=models.CharField(choices=[('CLASS_TAP', 'Classroom Attendance Tap'), ('GATE_TAP', 'Gate terminals QR ID Tap'), ('GATE_PASS', 'Gate Pass Issuance'), ('LOAFING_ALERT', 'Geofence Breach Alert'), ('SARDO_WARNING', 'SARDO (5-Day Consecutive Absence) Alert'), ('MANUAL_ANNOUNCEMENT', 'Institutional School Broadcast')], default='CLASS_TAP', max_length=50),
         ),
         migrations.AlterField(
             model_name='facultygatelog',

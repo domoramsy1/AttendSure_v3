@@ -4,7 +4,7 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 
-const LOGO_SOURCE = require('../../assets/attendsure-logo.svg');
+const LOGO_SOURCE = require('../../assets/AttendSureLogo.png');
 
 interface AttendSureLogoProps {
   size?: number;

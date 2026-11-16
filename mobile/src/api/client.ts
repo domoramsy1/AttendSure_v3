@@ -37,7 +37,7 @@ apiClient.interceptors.request.use(
       config.url = `/api/${sanitized}`;
     }
 
-    // 3. Resolve stored authentication token
+    // 3. Resolve stored sign in token
     let token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
     if (!token) {
       for (const legacyKey of LEGACY_TOKEN_KEYS) {

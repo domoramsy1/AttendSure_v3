@@ -46,12 +46,12 @@ class Migration(migrations.Migration):
             field=models.BooleanField(db_index=True, default=True),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='kiosk_code',
             field=models.CharField(help_text='Hardware identifier', max_length=50, unique=True),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='secret_hash',
             field=models.CharField(help_text='Hashed API secret', max_length=255),
         ),

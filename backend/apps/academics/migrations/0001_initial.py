@@ -77,10 +77,10 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.CreateModel(
-            name='IoTKiosk',
+            name='GeofenceSetting',
             fields=[
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
-                ('kiosk_code', models.CharField(help_text='e.g. KIOSK-MAIN-GATE', max_length=50, unique=True)),
+                ('kiosk_code', models.CharField(help_text='e.g. terminals-MAIN-GATE', max_length=50, unique=True)),
                 ('terminal_name', models.CharField(max_length=150)),
                 ('secret_hash', models.CharField(help_text='Hardware authentication key', max_length=255)),
                 ('location', models.CharField(default='Main Gate', max_length=100)),
@@ -88,7 +88,7 @@ class Migration(migrations.Migration):
                 ('last_ping', models.DateTimeField(blank=True, null=True)),
             ],
             options={
-                'db_table': 'iot_kiosks',
+                'db_table': 'geofence_settings',
             },
         ),
         migrations.CreateModel(
@@ -105,7 +105,7 @@ class Migration(migrations.Migration):
                 ('contact_number', models.CharField(blank=True, default='', max_length=50)),
                 ('email', models.EmailField(blank=True, default='', max_length=150)),
                 ('photo', models.ImageField(blank=True, default='faculty/default_avatar.png', upload_to='faculty/')),
-                ('rfid_uid', models.CharField(help_text='Unique RFID card serial number', max_length=64, unique=True)),
+                ('qr_token', models.CharField(help_text='Unique QR ID card serial number', max_length=64, unique=True)),
                 ('is_active', models.BooleanField(default=True)),
             ],
             options={
@@ -147,7 +147,7 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.CreateModel(
-            name='SmsOutbox',
+            name='AppNotification',
             fields=[
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
                 ('recipient_number', models.CharField(max_length=20)),
@@ -160,7 +160,7 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(default=django.utils.timezone.now)),
             ],
             options={
-                'db_table': 'sms_outbox',
+                'db_table': 'app_notifications',
                 'ordering': ['priority', 'created_at'],
                 'indexes': [models.Index(fields=['status', 'priority', 'created_at'], name='idx_sms_queue_fetch')],
             },
@@ -300,8 +300,8 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
                 ('scan_time', models.DateTimeField(default=django.utils.timezone.now)),
                 ('direction', models.CharField(choices=[('IN', 'In'), ('OUT', 'Out')], max_length=10)),
-                ('card_uid', models.CharField(max_length=64)),
-                ('kiosk', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='academics.iotkiosk')),
+                ('qr_token', models.CharField(max_length=64)),
+                ('terminals', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='academics.GeofenceSetting')),
                 ('faculty', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='gate_logs', to='academics.facultyprofile')),
             ],
             options={

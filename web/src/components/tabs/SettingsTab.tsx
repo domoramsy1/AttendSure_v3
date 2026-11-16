@@ -192,8 +192,8 @@ export const SettingsTab: React.FC = () => {
     try {
       const [dbRes, scanRes, smsRes] = await Promise.all([
         apiClient.get('/core/maintenance/db-check/').catch(() => ({ data: { database: 'OFFLINE', latency_ms: 999 } })),
-        apiClient.get('/telemetry/ping-scanners/').catch(() => ({ data: { online_count: 0, total_scanners: 0 } })),
-        apiClient.get('/sms/test-gateway/').catch(() => ({ data: { sent_today: 0, pending_queue: 0, failed_today: 0 } })),
+        apiClient.get('/geofence/status/').catch(() => ({ data: { online_count: 0, total_scanners: 0 } })),
+        apiClient.get('/notifications/').catch(() => ({ data: { sent_today: 0, pending_queue: 0, failed_today: 0 } })),
       ]);
 
       setHealth({
@@ -451,7 +451,7 @@ export const SettingsTab: React.FC = () => {
     }
 
     if (isNaN(radius) || radius < 20 || radius > 2000) {
-      showAlert({ title: 'Invalid Geofence Radius', message: 'Radius must be between 20 and 2000 meters.', type: 'error' });
+      showAlert({ title: 'Invalid Campus Area Radius', message: 'Radius must be between 20 and 2000 meters.', type: 'error' });
       setSaving(false);
       return;
     }
@@ -766,7 +766,7 @@ export const SettingsTab: React.FC = () => {
                 </div>
 
                 <div style={telemetryStatBox(tokens)}>
-                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>GATE SCANNERS</span>
+                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>USB QR scanner</span>
                   <div style={{ fontSize: '1.05rem', fontWeight: 800, color: health.scannersOnline > 0 ? brand.primary : brand.warning }}>
                     {health.scannersOnline} of {health.scannersTotal} Online
                   </div>
@@ -812,7 +812,7 @@ export const SettingsTab: React.FC = () => {
                       'RETRY_SMS',
                       'Retry All Failed SMS Texts',
                       'This will re-queue all failed messages and instruct the GSM modem to send them immediately.',
-                      () => apiClient.post('/sms/test-gateway/', { action: 'RETRY_FAILED' })
+                      () => apiClient.post('/notifications/', { action: 'RETRY_FAILED' })
                     )
                   }
                   style={actionBtnStyle(brand.secondary)}
@@ -862,29 +862,29 @@ export const SettingsTab: React.FC = () => {
                   </div>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
-                      Check Gate Scanners
+                      Check USB QR scanner
                     </h3>
-                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Tests connection to RFID &amp; QR terminals</span>
+                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Tests connection to QR ID &amp; QR terminals</span>
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
-                  Sends a live ping signal to the school gate scanners. Verifies whether RFID card readers and cameras are responding and ready to record learner entries.
+                  Sends a live ping signal to the school USB QR scanner. Verifies whether QR ID card readers and cameras are responding and ready to record learner entries.
                 </p>
                 <button
                   type="button"
                   disabled={actionLoading !== null}
                   onClick={() =>
                     runMaintenanceAction(
-                      'PING_KIOSK',
-                      'Test Gate Scanner Terminals',
-                      'This sends a ping test to all enrolled campus gate scanners.',
-                      () => apiClient.get('/telemetry/ping-scanners/')
+                      'PING_SCANNERS',
+                      'Check Classroom QR & Mobile GPS',
+                      'This sends a ping test to all enrolled campus USB QR scanner.',
+                      () => apiClient.get('/geofence/status/')
                     )
                   }
                   style={actionBtnStyle(brand.success)}
                 >
-                  {actionLoading === 'PING_KIOSK' ? <Loader2 className="animate-spin" size={14} /> : <Radio size={14} />}
-                  <span>{actionLoading === 'PING_KIOSK' ? 'Checking Scanners...' : 'Check Scanner Terminals'}</span>
+                  {actionLoading === 'PING_SCANNERS' ? <Loader2 className="animate-spin" size={14} /> : <Radio size={14} />}
+                  <span>{actionLoading === 'PING_SCANNERS' ? 'Checking Status...' : 'Check System Status'}</span>
                 </button>
               </div>
 
@@ -1006,7 +1006,7 @@ export const SettingsTab: React.FC = () => {
                   <option value="ALL">All Actions</option>
                   <option value="LOGIN">Sign In / Login</option>
                   <option value="LOGOUT">Sign Out / Logout</option>
-                  <option value="SCAN">QR / RFID Scan</option>
+                  <option value="SCAN">QR / QR ID Scan</option>
                   <option value="GATE_PASS">Gate Pass</option>
                   <option value="SECURITY">Security / Reset</option>
                   <option value="PROFILE">Profile Change</option>
@@ -1439,11 +1439,11 @@ export const SettingsTab: React.FC = () => {
               </div>
             </div>
 
-            {/* Subsection D: Campus GPS Geofence Coordinates */}
+            {/* Subsection D: Campus GPS Campus Area Coordinates */}
             <div style={cardStyle}>
               <div style={cardHeaderStyle}>
                 <Compass size={18} color={brand.primary} />
-                <h2 style={cardTitleStyle}>Campus GPS Geofence &amp; Boundary Coordinates</h2>
+                <h2 style={cardTitleStyle}>Campus GPS Campus Area &amp; Boundary Coordinates</h2>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>

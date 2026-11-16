@@ -71,7 +71,7 @@ if (!isRunningInExpoGo) {
 
 /**
  * Registers device push token with the backend.
- * Safely returns null in Expo Go and uses background GPS telemetry instead.
+ * Safely returns null in Expo Go and uses background GPS activity instead.
  */
 export async function registerPushTokenWithBackend(): Promise<string | null> {
   if (isRunningInExpoGo || !Notifications?.getExpoPushTokenAsync) {

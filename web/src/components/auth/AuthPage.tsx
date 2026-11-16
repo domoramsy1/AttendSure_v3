@@ -108,7 +108,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
         setOtpCode('');
         setOtpCooldown(60);
         setActiveTab('2FA');
-        setSuccessMsg(res.data.message || 'Two-Factor Authentication required. A 6-digit OTP code has been dispatched via SMS.');
+        setSuccessMsg(res.data.message || 'Two-Factor Sign In required. A 6-digit OTP code has been dispatched via SMS.');
         return;
       }
 
@@ -339,7 +339,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                 </div>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Dual-Credential Verification</div>
-                  <div style={{ fontSize: '0.78rem', color: '#bae6fd' }}>Fast gate RFID taps with printed QR code failover fallback.</div>
+                  <div style={{ fontSize: '0.78rem', color: '#bae6fd' }}>Fast gate QR ID taps with printed QR code failover fallback.</div>
                 </div>
               </div>
 
@@ -442,7 +442,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                     Security Verification (2FA)
                   </h3>
                   <span style={{ fontSize: '0.74rem', color: theme.colors.textSecondary }}>
-                    AttendSure Two-Factor Authentication
+                    AttendSure Two-Factor Sign In
                   </span>
                 </div>
               </div>

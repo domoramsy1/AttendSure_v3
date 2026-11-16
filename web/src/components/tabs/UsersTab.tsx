@@ -1,17 +1,17 @@
 /**
- * AttendSure - Users & Security Access Management
+ * AttendSure V3 - Users & Security Access Management
  * File: web/src/components/tabs/UsersTab.tsx
  *
- * Cybersecurity & Architecture:
- * 1. Single Point Registration: All staff and faculty are enrolled here.
+ * Architecture & Cybersecurity:
+ * 1. Single Point Registration: All staff, facultys, leadership, and parents are enrolled here.
  * 2. Automated Directory Filtering: Users with "Can Teach" enabled automatically appear
  *    in the Faculty tab; non-teaching users show only in the Users tab.
- * 3. Complete Attribute Ingestion: Employee ID, Name, Department, Position, Contact, and RFID UID.
+ * 3. Mobile App & Portal Integration: Links mobile phone numbers for parent push alerts and app linking.
  * 4. Password Security: Passwords hashed securely on the server with real-time complexity checks.
- * 5. Simple English Terms: Clean labels with Lucide SVG icons (no emojis).
+ * 5. Simple English Terms: Clean labels with Lucide SVG icons (zero mock data).
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient from '../../api/client';
 import { ModuleTableLayout } from './ModuleTableLayout';
 import { Modal } from '../ui/Modal';
@@ -33,7 +33,7 @@ import {
   Phone,
   Briefcase,
   Building,
-  CreditCard,
+  Smartphone,
   GraduationCap,
 } from 'lucide-react';
 
@@ -48,9 +48,9 @@ export interface SystemUser {
   full_name?: string;
   email?: string;
   contact_number?: string;
+  phone_number?: string;
   department?: string;
   position?: string;
-  rfid_uid?: string;
   role?: string;
   current_role?: string;
   is_teaching?: boolean;
@@ -63,12 +63,12 @@ export interface SystemUser {
 }
 
 const RBAC_ROLES = [
-  { value: 'FACULTY', label: 'Classroom Faculty', color: '#004b87', bg: '#e0f2fe' },
-  { value: 'FACULTY_ADMIN', label: 'Faculty / Admin (Dual Role)', color: '#4f46e5', bg: '#eef2ff' },
-  { value: 'ADMIN', label: 'System Administrator', color: '#0f172a', bg: '#f1f5f9' },
-  { value: 'PRINCIPAL', label: 'School Principal', color: '#059669', bg: '#d1fae5' },
-  { value: 'DEPT_HEAD', label: 'Department Head', color: '#0284c7', bg: '#e0f2fe' },
-  { value: 'GUARD', label: 'Gate Security Guard', color: '#d97706', bg: '#fef3c7' },
+  { value: 'FACULTY', label: 'Classroom Faculty' },
+  { value: 'FACULTY_ADMIN', label: 'Faculty / Admin (Dual Role)' },
+  { value: 'ADMIN', label: 'System Administrator' },
+  { value: 'PRINCIPAL', label: 'School Principal' },
+  { value: 'DEPT_HEAD', label: 'Department Head' },
+  { value: 'PARENT', label: 'Parent / Guardian (Mobile App)' },
 ];
 
 const DEPARTMENTS_LIST = [
@@ -83,7 +83,7 @@ const DEPARTMENTS_LIST = [
   'TLE / TVL Department',
   'Values Education (EsP) Department',
   'Office of the Principal / Administration',
-  'Security & Gate Operations',
+  'Parent / Guardian',
 ];
 
 const POSITIONS_LIST = [
@@ -96,8 +96,8 @@ const POSITIONS_LIST = [
   'Head Faculty II',
   'Secondary School Principal IV',
   'Assistant School Principal',
-  'Security Officer',
   'Administrative Assistant',
+  'Parent / Guardian',
 ];
 
 const INITIAL_FORM = {
@@ -111,7 +111,6 @@ const INITIAL_FORM = {
   contact_number: '',
   department: 'Junior High School',
   position: 'Faculty I',
-  rfid_uid: '',
   role: 'FACULTY',
   is_teaching: true,
   is_active: true,
@@ -140,8 +139,6 @@ export const UsersTab: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeAbortController = useRef<AbortController | null>(null);
-  const isInteracting = useRef<boolean>(false);
-  isInteracting.current = isModalOpen;
 
   const [liveErrors, setLiveErrors] = useState<{
     username?: string;
@@ -190,14 +187,14 @@ export const UsersTab: React.FC = () => {
     const timer = setTimeout(async () => {
       try {
         setIsCheckingUsername(true);
-        const res = await apiClient.get('/validate-field/', {
+        const res = await apiClient.get('/auth/validate/', {
           params: {
             field: 'username',
             value: cleanUser,
             exclude_id: editingUser?.id,
           },
         });
-        if (!res.data.valid) {
+        if (res.data?.is_taken) {
           setLiveErrors((prev) => ({ ...prev, username: res.data.message || 'Username already taken.' }));
         } else {
           setLiveErrors((prev) => ({
@@ -237,7 +234,7 @@ export const UsersTab: React.FC = () => {
       setError(null);
 
       const res = await apiClient.get('/users/', {
-        params: { search: query.trim() || undefined },
+        params: { search: query.trim() || undefined, page_size: 'ALL' },
         signal: controller.signal,
       });
 
@@ -306,13 +303,16 @@ export const UsersTab: React.FC = () => {
   const handleOpenEdit = (user: SystemUser) => {
     const rawRole = (user.current_role || user.role || 'FACULTY').toUpperCase();
     const isTeach =
-      user.is_teaching !== undefined
+      rawRole === 'PARENT'
+        ? false
+        : user.is_teaching !== undefined
         ? Boolean(user.is_teaching)
         : user.can_teach !== undefined
         ? Boolean(user.can_teach)
-        : rawRole !== 'GUARD';
+        : true;
 
     const effectiveRole = rawRole === 'ADMIN' && isTeach ? 'FACULTY_ADMIN' : rawRole;
+    const phoneVal = user.phone_number || user.contact_number || '';
 
     setEditingUser(user);
     setLiveErrors({});
@@ -324,10 +324,9 @@ export const UsersTab: React.FC = () => {
       last_name: user.last_name || '',
       suffix: user.suffix || '',
       email: user.email || '',
-      contact_number: user.contact_number || '',
-      department: user.department || 'Junior High School',
-      position: user.position || 'Faculty I',
-      rfid_uid: user.rfid_uid || '',
+      contact_number: phoneVal,
+      department: user.department || (rawRole === 'PARENT' ? 'Parent / Guardian' : 'Junior High School'),
+      position: user.position || (rawRole === 'PARENT' ? 'Parent / Guardian' : 'Faculty I'),
       role: effectiveRole,
       is_teaching: isTeach,
       is_active: user.is_active ?? true,
@@ -370,6 +369,9 @@ export const UsersTab: React.FC = () => {
       return;
     }
 
+    const isParentRole = formData.role === 'PARENT';
+    const cleanPhone = formData.contact_number.trim();
+
     setSaving(true);
     try {
       const payload: Record<string, any> = {
@@ -380,12 +382,12 @@ export const UsersTab: React.FC = () => {
         last_name: formData.last_name.trim(),
         suffix: formData.suffix.trim(),
         email: formData.email.trim().toLowerCase(),
-        contact_number: formData.contact_number.trim(),
-        department: formData.department.trim(),
-        position: formData.position.trim(),
-        rfid_uid: formData.rfid_uid.trim().toUpperCase() || null,
+        contact_number: cleanPhone,
+        phone_number: cleanPhone,
+        department: isParentRole ? 'Parent / Guardian' : formData.department.trim(),
+        position: isParentRole ? 'Parent / Guardian' : formData.position.trim(),
         role: formData.role,
-        is_teaching: formData.is_teaching,
+        is_teaching: isParentRole ? false : formData.is_teaching,
         is_active: formData.is_active,
       };
 
@@ -401,14 +403,18 @@ export const UsersTab: React.FC = () => {
         await apiClient.put(`/users/${editingUser.id}/`, payload);
         showAlert({
           title: 'Account Saved',
-          message: `Saved updates for @${cleanUsername}. Teaching permissions synchronized.`,
+          message: `Saved updates for @${cleanUsername}. Role and permissions are now synced.`,
           type: 'success',
         });
       } else {
         await apiClient.post('/users/', payload);
         showAlert({
           title: 'Account Registered',
-          message: `@${cleanUsername} is registered. ${formData.is_teaching ? 'This faculty member now appears in the Faculty tab.' : 'Non-teaching user stored only in Users tab.'}`,
+          message: `@${cleanUsername} is registered. ${
+            payload.is_teaching
+              ? 'This faculty member now appears in the Faculty tab.'
+              : 'Account is active for mobile or web portal login.'
+          }`,
           type: 'success',
         });
       }
@@ -418,6 +424,7 @@ export const UsersTab: React.FC = () => {
     } catch (err: any) {
       const errMsg =
         err.response?.data?.username?.[0] ||
+        err.response?.data?.employee_id?.[0] ||
         err.response?.data?.error ||
         err.response?.data?.detail ||
         'Failed to save user account.';
@@ -443,7 +450,7 @@ export const UsersTab: React.FC = () => {
 
     showConfirm({
       title: 'Delete User Account',
-      message: `Permanently delete account "@${user.username}"? Associated teaching and class list profiles will also be unlinked.`,
+      message: `Permanently delete account "@${user.username}"? Associated faculty and class list assignments will be unlinked.`,
       confirmLabel: 'Delete Account',
       isDestructive: true,
       onConfirm: async () => {
@@ -466,57 +473,71 @@ export const UsersTab: React.FC = () => {
     });
   };
 
-  const filteredUsers = users.filter((u) => {
+  const filteredUsers = useMemo(() => {
     const q = search.toLowerCase();
-    const name = `${u.first_name || ''} ${u.last_name || ''}`.toLowerCase();
-    const matchesSearch =
-      (u.username || '').toLowerCase().includes(q) ||
-      (u.email || '').toLowerCase().includes(q) ||
-      (u.employee_id || '').toLowerCase().includes(q) ||
-      name.includes(q);
+    return users.filter((u) => {
+      const name = `${u.first_name || ''} ${u.last_name || ''}`.toLowerCase();
+      const phone = (u.phone_number || u.contact_number || '').toLowerCase();
+      const matchesSearch =
+        (u.username || '').toLowerCase().includes(q) ||
+        (u.email || '').toLowerCase().includes(q) ||
+        (u.employee_id || '').toLowerCase().includes(q) ||
+        phone.includes(q) ||
+        name.includes(q);
 
-    const matchesRole = !roleFilter || (u.current_role || u.role || '').toUpperCase() === roleFilter;
+      const matchesRole = !roleFilter || (u.current_role || u.role || '').toUpperCase() === roleFilter;
 
-    let matchesTeaching = true;
-    if (teachingFilter === 'CAN_TEACH') {
-      matchesTeaching = Boolean(u.is_teaching ?? u.can_teach);
-    } else if (teachingFilter === 'CANT_TEACH') {
-      matchesTeaching = !Boolean(u.is_teaching ?? u.can_teach);
+      let matchesTeaching = true;
+      if (teachingFilter === 'CAN_TEACH') {
+        matchesTeaching = Boolean(u.is_teaching ?? u.can_teach);
+      } else if (teachingFilter === 'CANT_TEACH') {
+        matchesTeaching = !Boolean(u.is_teaching ?? u.can_teach);
+      }
+
+      return matchesSearch && matchesRole && matchesTeaching;
+    });
+  }, [users, search, roleFilter, teachingFilter]);
+
+  const { activeCount, canTeachCount, cantTeachCount } = useMemo(() => {
+    let active = 0;
+    let teach = 0;
+    for (const u of users) {
+      if (u.is_active) active += 1;
+      if (u.is_teaching ?? u.can_teach) teach += 1;
     }
-
-    return matchesSearch && matchesRole && matchesTeaching;
-  });
-
-  const activeCount = users.filter((u) => u.is_active).length;
-  const canTeachCount = users.filter((u) => Boolean(u.is_teaching ?? u.can_teach)).length;
-  const cantTeachCount = users.length - canTeachCount;
+    return {
+      activeCount: active,
+      canTeachCount: teach,
+      cantTeachCount: users.length - teach,
+    };
+  }, [users]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2.5vw, 20px)' }}>
-      {/* 1. System Account Telemetry Summary */}
+      {/* 1. System Account Summary */}
       <div style={statsGrid}>
         <div style={statCard}>
           <div style={statLabel}>TOTAL REGISTERED USERS</div>
           <div style={statValue}>{users.length}</div>
-          <div style={statHelp}>System master user accounts</div>
+          <div style={statHelp}>Faculty, leaders &amp; parent accounts</div>
         </div>
 
         <div style={statCard}>
           <div style={statLabel}>CAN TEACH (IN FACULTY TAB)</div>
           <div style={{ ...statValue, color: '#004b87' }}>{canTeachCount}</div>
-          <div style={statHelp}>Visible in Faculty tab &amp; schedules</div>
+          <div style={statHelp}>Visible in Faculty tab &amp; class schedules</div>
         </div>
 
         <div style={statCard}>
-          <div style={statLabel}>CANNOT TEACH (USERS ONLY)</div>
+          <div style={statLabel}>NON-TEACHING &amp; PARENTS</div>
           <div style={{ ...statValue, color: '#64748b' }}>{cantTeachCount}</div>
-          <div style={statHelp}>Staff, guards &amp; admin-only</div>
+          <div style={statHelp}>Parents &amp; non-teaching accounts</div>
         </div>
 
         <div style={statCard}>
           <div style={statLabel}>ACTIVE ACCOUNTS</div>
           <div style={{ ...statValue, color: '#059669' }}>{activeCount}</div>
-          <div style={statHelp}>Authorized for portal login</div>
+          <div style={statHelp}>Authorized for mobile &amp; web login</div>
         </div>
       </div>
 
@@ -543,7 +564,7 @@ export const UsersTab: React.FC = () => {
           >
             <option value="">All Status</option>
             <option value="CAN_TEACH">Can Teach (In Faculty Tab)</option>
-            <option value="CANT_TEACH">Cannot Teach (Users Tab Only)</option>
+            <option value="CANT_TEACH">Non-Teaching / Parent</option>
           </select>
         </div>
 
@@ -564,8 +585,8 @@ export const UsersTab: React.FC = () => {
         <div style={{ overflowX: 'auto' }}>
           <ModuleTableLayout
             title="Users & Access Control"
-            subtitle="All faculty, guards, and leadership are registered here. Enabling 'Can Teach' automatically displays the member in the Faculty tab."
-            searchPlaceholder="Search by username, name, employee ID, or email..."
+            subtitle="All faculty, school leaders, and parents are registered here. Enabling 'Can Teach' automatically displays the member in the Faculty tab."
+            searchPlaceholder="Search by username, name, employee ID, phone, or email..."
             searchValue={search}
             onSearchChange={setSearch}
             loading={loading}
@@ -623,7 +644,7 @@ export const UsersTab: React.FC = () => {
                         }}
                       >
                         {canTeach ? <GraduationCap size={11} /> : <User size={11} />}
-                        {canTeach ? 'Can Teach (In Faculty Tab)' : 'Cannot Teach (Users Only)'}
+                        {canTeach ? 'Can Teach (In Faculty Tab)' : 'Non-Teaching / Parent'}
                       </span>
                     </div>
                   );
@@ -634,7 +655,7 @@ export const UsersTab: React.FC = () => {
                 render: (u) => (
                   <div>
                     <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.80rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Briefcase size={12} color="#004b87" /> {u.position || 'Classroom Faculty'}
+                      <Briefcase size={12} color="#004b87" /> {u.position || 'Faculty I'}
                     </div>
                     <div style={{ fontSize: '0.72rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
                       <Building size={12} color="#94a3b8" /> {u.department || 'Junior High School'}
@@ -643,17 +664,21 @@ export const UsersTab: React.FC = () => {
                 ),
               },
               {
-                header: 'Contact & Gate Card',
-                render: (u) => (
-                  <div>
-                    <div style={{ fontSize: '0.74rem', color: '#334155', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Phone size={11} color="#64748b" /> {u.contact_number || '—'}
+                header: 'Contact & Mobile App',
+                render: (u) => {
+                  const phone = u.phone_number || u.contact_number || '';
+                  const isParent = (u.role || '').toUpperCase() === 'PARENT';
+                  return (
+                    <div>
+                      <div style={{ fontSize: '0.74rem', color: '#334155', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Phone size={11} color="#64748b" /> {phone || '—'}
+                      </div>
+                      <div style={{ fontSize: '0.70rem', color: '#059669', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                        <Smartphone size={11} /> {isParent ? 'Parent Mobile App' : 'Mobile QR & Web Portal'}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.70rem', color: u.rfid_uid ? '#059669' : '#94a3b8', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                      <CreditCard size={11} /> {u.rfid_uid || 'No Card'}
-                    </div>
-                  </div>
-                ),
+                  );
+                },
               },
               {
                 header: 'Status',
@@ -713,7 +738,7 @@ export const UsersTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. Complete Registration & Edit Modal */}
+      {/* 4. Registration & Edit Modal */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
@@ -732,7 +757,7 @@ export const UsersTab: React.FC = () => {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
               <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0f172a' }}>
-                Profile Portrait Picture
+                Profile Picture
               </span>
               <span style={{ fontSize: '0.68rem', color: '#64748b' }}>
                 JPEG, PNG, or WebP under 2.5 MB.
@@ -781,20 +806,20 @@ export const UsersTab: React.FC = () => {
                   ...inputStyle,
                   borderColor: liveErrors.username ? '#dc2626' : formData.username.length >= 3 ? '#059669' : '#cbd5e1',
                 }}
-                placeholder="e.g. maria_santos"
+                placeholder="Enter login username"
               />
               {liveErrors.username && <span style={errorTextStyle}>{liveErrors.username}</span>}
             </div>
 
             <div>
-              <label style={labelStyle}>Employee ID *</label>
+              <label style={labelStyle}>Employee or Account ID *</label>
               <input
                 type="text"
                 required
                 value={formData.employee_id}
                 onChange={(e) => setFormData({ ...formData, employee_id: e.target.value.toUpperCase() })}
                 style={inputStyle}
-                placeholder="e.g. EMP-2026-004"
+                placeholder="Enter employee ID"
               />
             </div>
           </div>
@@ -854,33 +879,36 @@ export const UsersTab: React.FC = () => {
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 style={inputStyle}
-                placeholder="faculty@attendsure.edu.ph"
+                placeholder="Enter email address"
               />
             </div>
             <div>
-              <label style={labelStyle}>Phone Number (For SMS &amp; 2FA)</label>
+              <label style={labelStyle}>Mobile Phone Number (For App Alerts &amp; Parent Linking)</label>
               <input
                 type="text"
                 value={formData.contact_number}
                 onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
                 style={inputStyle}
-                placeholder="09171234567"
+                placeholder="Enter 11-digit mobile number"
               />
             </div>
           </div>
 
           {/* Role & Teaching Clearance */}
           <div>
-            <label style={labelStyle}>RBAC System Role *</label>
+            <label style={labelStyle}>System Role *</label>
             <select
               value={formData.role}
               onChange={(e) => {
                 const newRole = e.target.value;
+                const isParent = newRole === 'PARENT';
                 const canTeachDefault = newRole === 'FACULTY' || newRole === 'FACULTY_ADMIN';
                 setFormData({
                   ...formData,
                   role: newRole,
-                  is_teaching: newRole === 'GUARD' ? false : canTeachDefault ? true : formData.is_teaching,
+                  is_teaching: isParent ? false : canTeachDefault ? true : formData.is_teaching,
+                  department: isParent ? 'Parent / Guardian' : formData.department,
+                  position: isParent ? 'Parent / Guardian' : formData.position,
                 });
               }}
               style={inputStyle}
@@ -893,69 +921,62 @@ export const UsersTab: React.FC = () => {
             </select>
           </div>
 
-          {/* "Can Teach" Checkbox */}
-          <label style={teachingCardStyle(formData.is_teaching)}>
-            <input
-              type="checkbox"
-              checked={formData.is_teaching}
-              onChange={(e) => setFormData({ ...formData, is_teaching: e.target.checked })}
-              style={{ width: 18, height: 18, accentColor: '#004b87', cursor: 'pointer' }}
-            />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span style={{ fontSize: '0.80rem', fontWeight: 800, color: formData.is_teaching ? '#004b87' : '#0f172a' }}>
-                Can Teach Classes (Visible in Faculty Tab &amp; Timetables)
-              </span>
-              <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
-                {formData.is_teaching
-                  ? 'Active: This member will appear in the Faculty tab, advisee sections, and class schedules.'
-                  : 'Inactive: Non-teaching user. Will appear ONLY in the Users tab.'}
-              </span>
-            </div>
-          </label>
+          {/* "Can Teach" Checkbox (Hidden for Parent role) */}
+          {formData.role !== 'PARENT' && (
+            <label style={teachingCardStyle(formData.is_teaching)}>
+              <input
+                type="checkbox"
+                checked={formData.is_teaching}
+                onChange={(e) => setFormData({ ...formData, is_teaching: e.target.checked })}
+                style={{ width: 18, height: 18, accentColor: '#004b87', cursor: 'pointer' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: '0.80rem', fontWeight: 800, color: formData.is_teaching ? '#004b87' : '#0f172a' }}>
+                  Can Teach Classes (Visible in Faculty Tab &amp; Schedules)
+                </span>
+                <span style={{ fontSize: '0.70rem', color: '#64748b' }}>
+                  {formData.is_teaching
+                    ? 'Active: This faculty member will appear in the Faculty tab, sections, and class schedules.'
+                    : 'Inactive: Non-teaching user. Will appear only in the Users tab.'}
+                </span>
+              </div>
+            </label>
+          )}
 
-          {/* Department, Position & RFID */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
-            <div>
-              <label style={labelStyle}>Department</label>
-              <select
-                value={formData.department}
-                onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                style={inputStyle}
-              >
-                {DEPARTMENTS_LIST.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Department & Position */}
+          {formData.role !== 'PARENT' && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
+              <div>
+                <label style={labelStyle}>Department</label>
+                <select
+                  value={formData.department}
+                  onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                  style={inputStyle}
+                >
+                  {DEPARTMENTS_LIST.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div>
-              <label style={labelStyle}>Official Position / Title</label>
-              <select
-                value={formData.position}
-                onChange={(e) => setFormData({ ...formData, position: e.target.value })}
-                style={inputStyle}
-              >
-                {POSITIONS_LIST.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
+              <div>
+                <label style={labelStyle}>Official Position / Title</label>
+                <select
+                  value={formData.position}
+                  onChange={(e) => setFormData({ ...formData, position: e.target.value })}
+                  style={inputStyle}
+                >
+                  {POSITIONS_LIST.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-          </div>
-
-          <div>
-            <label style={labelStyle}>Gate Scanner RFID Card UID</label>
-            <input
-              type="text"
-              placeholder="e.g. 5A92B1C4"
-              value={formData.rfid_uid}
-              onChange={(e) => setFormData({ ...formData, rfid_uid: e.target.value.toUpperCase() })}
-              style={{ ...inputStyle, fontFamily: 'monospace' }}
-            />
-          </div>
+          )}
 
           {/* Password */}
           <div>
@@ -967,7 +988,7 @@ export const UsersTab: React.FC = () => {
                 type={showPassword ? 'text' : 'password'}
                 required={!editingUser}
                 minLength={8}
-                placeholder={editingUser ? 'Leave blank to preserve current password' : 'Minimum 8 characters'}
+                placeholder={editingUser ? 'Leave blank to keep current password' : 'Minimum 8 characters'}
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 style={{ ...inputStyle, paddingRight: 36 }}

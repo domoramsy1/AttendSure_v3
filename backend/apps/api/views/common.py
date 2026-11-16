@@ -1,11 +1,10 @@
 """
-AttendSure - Real Database Common Resolvers & Security Helpers
+AttendSure V3 - Shared Database Resolvers, GPS Boundary Check & Security Helpers
 File: backend/apps/api/views/common.py
 """
 
 import base64
 import hashlib
-import hmac
 import logging
 import math
 import os
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def safe_photo_url(photo_field, request=None):
-    """Returns the real storage URL for an uploaded image file."""
+    """Returns a valid storage URL for student or faculty photos."""
     if not photo_field:
         return None
     try:
@@ -28,9 +27,7 @@ def safe_photo_url(photo_field, request=None):
             if val.startswith(('data:image/', 'http://', 'https://')):
                 return val
             clean_path = val if val.startswith('/') else f'/{val}'
-            if request:
-                return request.build_absolute_uri(clean_path)
-            return clean_path
+            return request.build_absolute_uri(clean_path) if request else clean_path
 
         if hasattr(photo_field, 'name') and photo_field.name:
             val_name = str(photo_field.name).strip()
@@ -39,17 +36,14 @@ def safe_photo_url(photo_field, request=None):
             if val_name.startswith(('data:image/', 'http://', 'https://')):
                 return val_name
             url = photo_field.url
-            if request:
-                return request.build_absolute_uri(url)
-            return url
+            return request.build_absolute_uri(url) if request else url
     except Exception as exc:
-        logger.warning(f"Failed to resolve photo URL: {exc}")
-        return None
+        logger.warning('Failed to resolve photo URL: %s', exc)
     return None
 
 
 def resolve_logo_field(val, request=None):
-    """Loads and returns real institution logos from disk storage."""
+    """Loads school logos from disk storage."""
     if not val:
         return None
     val_str = str(val).strip()
@@ -64,7 +58,7 @@ def resolve_logo_field(val, request=None):
         try:
             if ';base64,' in val_str:
                 format_part, img_str = val_str.split(';base64,', 1)
-                ext = 'jpg' if 'jpeg' in format_part or 'pjpeg' in format_part else format_part.split('/')[-1].split(';')[0].lower()
+                ext = 'jpg' if ('jpeg' in format_part or 'pjpeg' in format_part) else format_part.split('/')[-1].split(';')[0].lower()
             else:
                 img_str, ext = val_str, 'png'
 
@@ -74,7 +68,7 @@ def resolve_logo_field(val, request=None):
             decoded_bytes = base64.b64decode(img_str, validate=True)
             if len(decoded_bytes) <= 5 * 1024 * 1024:
                 file_hash = hashlib.sha256(decoded_bytes).hexdigest()[:16]
-                filename = f"logo_{file_hash}.{ext}"
+                filename = f'logo_{file_hash}.{ext}'
                 target_dir = os.path.join(settings.MEDIA_ROOT, 'school_logos')
                 os.makedirs(target_dir, exist_ok=True)
                 target_path = os.path.join(target_dir, filename)
@@ -83,24 +77,24 @@ def resolve_logo_field(val, request=None):
                     with open(target_path, 'wb') as f:
                         f.write(decoded_bytes)
 
-                media_url = f"{settings.MEDIA_URL}school_logos/{filename}"
+                media_url = f'{settings.MEDIA_URL}school_logos/{filename}'
                 return request.build_absolute_uri(media_url) if request else media_url
         except Exception as exc:
-            logger.error("Failed to decode logo to disk: %s", exc)
+            logger.error('Failed to decode logo to disk: %s', exc)
     return val_str
 
 
 def format_full_student_name(student) -> str:
     """Formats student names directly from database columns."""
     if not student:
-        return ""
+        return ''
     if hasattr(student, 'full_name') and isinstance(student.full_name, str) and student.full_name.strip():
         return student.full_name.strip()
     last = getattr(student, 'last_name', '') or ''
     first = getattr(student, 'first_name', '') or ''
-    mid = f" {student.middle_name[:1]}." if getattr(student, 'middle_name', None) else ""
-    suf = f" {student.suffix}" if getattr(student, 'suffix', None) else ""
-    return f"{last}, {first}{mid}{suf}".strip(" ,")
+    mid = f' {student.middle_name[:1]}.' if getattr(student, 'middle_name', None) else ''
+    suf = f' {student.suffix}' if getattr(student, 'suffix', None) else ''
+    return f'{last}, {first}{mid}{suf}'.strip(' ,')
 
 
 def format_deduped_section_label(grade_name, section_name) -> str:
@@ -108,13 +102,13 @@ def format_deduped_section_label(grade_name, section_name) -> str:
     s = str(section_name or '').strip()
     if not g:
         return s
-    if not s or g.lower().endswith(s.lower()) or f"- {s.lower()}" in g.lower():
+    if not s or g.lower().endswith(s.lower()) or f'- {s.lower()}' in g.lower():
         return g
-    return f"{g} - {s}"
+    return f'{g} - {s}'
 
 
 def get_user_role(user) -> str:
-    """Extracts the actual role assigned in the UserProfile database table."""
+    """Returns the role assigned in UserProfile."""
     if not user or not user.is_authenticated:
         return ''
     if getattr(user, 'is_superuser', False):
@@ -122,16 +116,13 @@ def get_user_role(user) -> str:
     profile = getattr(user, 'profile', None)
     if profile and getattr(profile, 'role', None):
         return str(profile.role).upper()
-    role = getattr(user, 'role', None) or getattr(user, 'system_role', None)
-    if role:
-        return str(role).strip().upper()
     if getattr(user, 'is_staff', False):
         return 'ADMIN'
     return 'FACULTY'
 
 
 def is_regular_faculty(role: str) -> bool:
-    return str(role or '').upper() in {'FACULTY', 'FACULTY', 'EMPLOYEE'}
+    return str(role or '').upper() in {'FACULTY', 'EMPLOYEE'}
 
 
 def is_leadership_role(user) -> bool:
@@ -143,29 +134,20 @@ def is_leadership_role(user) -> bool:
 
 
 def resolve_faculty_for_user(user):
-    """
-    Connects a User to their authentic FacultyProfile database row.
-    Uses account__user to query through UserProfile correctly.
-    """
+    """Connects a Django User to their linked FacultyProfile row cleanly."""
     if not user or not user.is_authenticated:
         return None
 
     from apps.academics.models import FacultyProfile, UserProfile
 
-    # 1. Direct one-to-one link via UserProfile.faculty
-    try:
-        user_prof = getattr(user, 'profile', None) or UserProfile.objects.filter(user=user).first()
-        if user_prof and user_prof.faculty_id and user_prof.faculty:
-            return user_prof.faculty
-    except Exception:
-        pass
+    user_prof = getattr(user, 'profile', None) or UserProfile.objects.filter(user=user).select_related('faculty').first()
+    if user_prof and user_prof.faculty_id and user_prof.faculty:
+        return user_prof.faculty
 
-    # 2. Correct reverse relationship query
     faculty = FacultyProfile.objects.filter(account__user=user, is_active=True).first()
     if faculty:
         return faculty
 
-    # 3. Exact employee ID lookup
     if getattr(user, 'username', None):
         faculty = FacultyProfile.objects.filter(
             Q(employee_id__iexact=user.username) | Q(qr_token__iexact=user.username),
@@ -174,7 +156,6 @@ def resolve_faculty_for_user(user):
         if faculty:
             return faculty
 
-    # 4. Exact institutional email match
     if getattr(user, 'email', None):
         faculty = FacultyProfile.objects.filter(email__iexact=user.email, is_active=True).first()
         if faculty:
@@ -183,10 +164,180 @@ def resolve_faculty_for_user(user):
     return None
 
 
+def _get_active_campus_center():
+    """Returns (latitude, longitude, radius_meters) from active campus settings."""
+    from apps.academics.models import GeofenceSetting, SchoolProfile
+
+    geofence = GeofenceSetting.objects.filter(is_active=True).first()
+    if geofence and geofence.latitude is not None and geofence.longitude is not None:
+        return float(geofence.latitude), float(geofence.longitude), int(geofence.radius_meters or 150)
+
+    school = SchoolProfile.objects.first()
+    if school and school.latitude is not None and school.longitude is not None:
+        return float(school.latitude), float(school.longitude), int(school.geofence_radius_meters or 150)
+
+    return None, None, 150
+
+
+def calculate_distance_meters(lat1, lon1, lat2=None, lon2=None) -> float:
+    """Calculates physical distance in meters using the Haversine formula."""
+    try:
+        u_lat = float(lat1)
+        u_lon = float(lon1)
+        if lat2 is None or lon2 is None:
+            c_lat, c_lon, _ = _get_active_campus_center()
+            if c_lat is None or c_lon is None:
+                return 0.0
+        else:
+            c_lat = float(lat2)
+            c_lon = float(lon2)
+    except (TypeError, ValueError):
+        return float('inf')
+
+    earth_radius = 6371000.0
+    phi1 = math.radians(c_lat)
+    phi2 = math.radians(u_lat)
+    d_phi = math.radians(u_lat - c_lat)
+    d_lambda = math.radians(u_lon - c_lon)
+
+    a = (math.sin(d_phi / 2.0) ** 2) + math.cos(phi1) * math.cos(phi2) * (math.sin(d_lambda / 2.0) ** 2)
+    return earth_radius * (2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a)))
+
+
+def verify_campus_gps(latitude, longitude, accuracy_meters=None, is_mock_location=False) -> dict:
+    """
+    Verifies whether a faculty mobile phone is inside the campus boundary,
+    including anti-spoofing and an indoor GPS drift buffer.
+    """
+    if is_mock_location:
+        return {
+            'is_valid': False,
+            'is_inside': False,
+            'distance_meters': None,
+            'allowed_radius': 0,
+            'reason': 'Fake or mock GPS location detected. Disable mock location apps to proceed.',
+        }
+
+    try:
+        u_lat = float(latitude)
+        u_lon = float(longitude)
+    except (TypeError, ValueError):
+        return {
+            'is_valid': False,
+            'is_inside': False,
+            'distance_meters': None,
+            'allowed_radius': 0,
+            'reason': 'Invalid or missing GPS coordinates.',
+        }
+
+    if not (-90.0 <= u_lat <= 90.0) or not (-180.0 <= u_lon <= 180.0) or (u_lat == 0.0 and u_lon == 0.0):
+        return {
+            'is_valid': False,
+            'is_inside': False,
+            'distance_meters': None,
+            'allowed_radius': 0,
+            'reason': 'GPS coordinates are outside valid earth bounds.',
+        }
+
+    c_lat, c_lon, radius = _get_active_campus_center()
+    if c_lat is None or c_lon is None:
+        return {
+            'is_valid': True,
+            'is_inside': True,
+            'distance_meters': 0.0,
+            'allowed_radius': radius,
+            'reason': 'Campus boundary not yet configured; check allowed.',
+        }
+
+    distance = calculate_distance_meters(u_lat, u_lon, c_lat, c_lon)
+
+    try:
+        drift_buffer = min(max(float(accuracy_meters or 0), 0.0), 35.0)
+    except (TypeError, ValueError):
+        drift_buffer = 0.0
+
+    is_inside = distance <= (radius + drift_buffer)
+    return {
+        'is_valid': True,
+        'is_inside': is_inside,
+        'distance_meters': round(distance, 1),
+        'allowed_radius': radius,
+        'reason': 'Within campus boundary.' if is_inside else f'Outside campus boundary ({round(distance)}m away; limit is {radius}m).',
+    }
+
+
+def is_within_campus_geofence(latitude, longitude, accuracy_meters=None, is_mock_location=False) -> bool:
+    """Boolean shortcut for campus GPS verification."""
+    return verify_campus_gps(latitude, longitude, accuracy_meters, is_mock_location)['is_inside']
+
+
+def get_client_ip(request) -> str:
+    """Safely extracts the client IP from reverse proxy headers or local network."""
+    if not request:
+        return '127.0.0.1'
+    cf_ip = request.META.get('HTTP_CF_CONNECTING_IP')
+    if cf_ip:
+        return cf_ip.strip()
+    xff = request.META.get('HTTP_X_FORWARDED_FOR')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', '127.0.0.1')
+
+
+class IsAcademicManagerPermission(permissions.BasePermission):
+    """
+    Allows authenticated users to view academic records, while restricting
+    create/edit/delete changes to school leadership and registrars.
+    """
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return is_leadership_role(request.user) or get_user_role(request.user) == 'REGISTRAR'
+
+
+class IsSystemAdminRole(permissions.BasePermission):
+    """Restricts access strictly to System Administrators and Superusers."""
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        return bool(
+            request.user.is_superuser
+            or get_user_role(request.user) in {'ADMIN', 'SUPERADMIN'}
+        )
+
+
+IsLeadershipOrReadOnly = IsAcademicManagerPermission
+IsAdminOrReadOnly = IsAcademicManagerPermission
+IsLeadershipUser = IsSystemAdminRole
+IsSchoolAdmin = IsSystemAdminRole
+IsPrincipalOrAdmin = IsAcademicManagerPermission
+
+
+class IsFacultyOrLeadership(permissions.BasePermission):
+    """Allows access to verified faculty, advisers, and school leadership."""
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if is_leadership_role(request.user):
+            return True
+        return resolve_faculty_for_user(request.user) is not None
+
+
+IsFacultyUser = IsFacultyOrLeadership
+
+
+def get_active_academic_year():
+    """Returns the currently active AcademicYear or the latest record."""
+    from apps.academics.models import AcademicYear
+    return AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.first()
+
+
 def get_faculty_section_ids(faculty) -> set:
     if not faculty:
         return set()
-    from apps.academics.models import Section, Schedule
+    from apps.academics.models import Schedule, Section
     advised_ids = set(Section.objects.filter(adviser=faculty).values_list('id', flat=True))
     teaching_ids = set(Schedule.objects.filter(faculty=faculty).values_list('section_id', flat=True))
     return advised_ids | teaching_ids
@@ -200,7 +351,7 @@ def get_faculty_student_ids(faculty) -> set:
     return set(
         Enrollment.objects.filter(
             section_id__in=section_ids,
-            student__is_active=True
+            student__is_active=True,
         )
         .exclude(status__in=['DROPPED', 'TRANSFERRED_OUT', 'INACTIVE'])
         .values_list('student_id', flat=True)
@@ -270,57 +421,3 @@ def get_school_metadata(request=None) -> dict:
         'school_logo': resolve_logo_field(school.school_logo, request),
         'is_configured': bool(school.school_name and school.school_id),
     }
-
-
-def calculate_distance_meters(lat1, lon1, lat2, lon2) -> float:
-    try:
-        u_lat, u_lon = float(lat1), float(lon1)
-        c_lat, c_lon = float(lat2), float(lon2)
-    except (TypeError, ValueError):
-        return float('inf')
-
-    earth_radius_m = 6371000.0
-    phi1 = math.radians(c_lat)
-    phi2 = math.radians(u_lat)
-    delta_phi = math.radians(u_lat - c_lat)
-    delta_lambda = math.radians(u_lon - c_lon)
-
-    a = (
-        math.sin(delta_phi / 2.0) ** 2
-        + math.cos(phi1) * math.cos(phi2) * (math.sin(delta_lambda / 2.0) ** 2)
-    )
-    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-    return earth_radius_m * c
-
-
-def verify_hardware_secret(kiosk, raw_secret: str) -> bool:
-    if not kiosk or not raw_secret or not kiosk.secret_hash:
-        return False
-    clean_secret = str(raw_secret).strip()
-    if hasattr(kiosk, 'verify_secret') and kiosk.secret_hash.startswith(('pbkdf2_', 'argon2', 'bcrypt')):
-        return kiosk.verify_secret(clean_secret)
-    return hmac.compare_digest(
-        str(kiosk.secret_hash).strip().encode('utf-8'),
-        clean_secret.encode('utf-8'),
-    )
-
-
-class IsAcademicManagerPermission(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if not (request.user and request.user.is_authenticated):
-            return False
-        if request.method in permissions.SAFE_METHODS:
-            return True
-        role = get_user_role(request.user)
-        return role in ({'ADMIN', 'PRINCIPAL'} if request.method == 'DELETE' else {'ADMIN', 'PRINCIPAL', 'DEPT_HEAD'})
-
-
-class IsSystemAdminRole(permissions.BasePermission):
-    def has_permission(self, request, view):
-        if not (request.user and request.user.is_authenticated):
-            return False
-        return getattr(request.user, 'is_superuser', False) or get_user_role(request.user) == 'ADMIN'
-# Backward-compatibility aliases for legacy imports
-is_regular_teacher = is_regular_faculty
-get_teacher_section_ids = get_faculty_section_ids
-get_teacher_student_ids = get_faculty_student_ids

@@ -40,7 +40,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       try {
         const results = await Promise.allSettled([
           apiClient.get('/students/metrics/'),
-          apiClient.get('/sms-outbox/metrics/'),
+          apiClient.get('/notifications/'),
         ]);
 
         if (!isMounted) return;
@@ -84,7 +84,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'students', label: 'Students', icon: GraduationCap, badgeKey: 'students' },
     { id: 'faculties', label: 'Faculties', icon: Users, badgeKey: 'faculties' },
     { id: 'schedules', label: 'Schedules', icon: Calendar, badgeKey: 'schedules' },
-    { id: 'sms', label: 'SMS Alerts', icon: MessageSquare, badgeKey: 'sms' },
+    { id: 'sms', label: 'Push Notifications', icon: MessageSquare, badgeKey: 'sms' },
     { id: 'gatepasses', label: 'Gate Passes', icon: Ticket, badgeKey: 'gatepasses' },
     { id: 'scanners', label: 'Scanners', icon: Cpu, badgeKey: 'scanners' },
   ];

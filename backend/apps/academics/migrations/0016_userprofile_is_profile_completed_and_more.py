@@ -46,7 +46,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='facultygatelog',
             name='scan_method',
-            field=models.CharField(choices=[('RFID', 'RFID Card Tap'), ('QR', 'QR Code Scan'), ('MANUAL', 'Manual Override (Security Guard)')], default='RFID', max_length=10),
+            field=models.CharField(choices=[('QR ID', 'QR ID Card Tap'), ('QR', 'QR Code Scan'), ('MANUAL', 'Manual Override (Security Guard)')], default='QR ID', max_length=10),
         ),
         migrations.AlterField(
             model_name='facultygatelog',
@@ -90,7 +90,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name='facultyprofile',
-            name='rfid_uid',
+            name='qr_token',
             field=models.CharField(blank=True, db_index=True, max_length=64, null=True, unique=True),
         ),
         migrations.AlterField(
@@ -114,12 +114,12 @@ class Migration(migrations.Migration):
             field=models.DecimalField(blank=True, decimal_places=7, max_digits=10, null=True),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='kiosk_code',
-            field=models.CharField(help_text='Hardware identifier e.g., KIOSK-GATE-01', max_length=50, unique=True),
+            field=models.CharField(help_text='Hardware identifier e.g., terminals-GATE-01', max_length=50, unique=True),
         ),
         migrations.AlterField(
-            model_name='iotkiosk',
+            model_name='GeofenceSetting',
             name='secret_hash',
             field=models.CharField(help_text='Cryptographically hashed API secret key', max_length=255),
         ),
@@ -160,13 +160,13 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name='student',
-            name='rfid_uid',
+            name='qr_token',
             field=models.CharField(blank=True, db_index=True, max_length=64, null=True, unique=True),
         ),
         migrations.AlterField(
             model_name='studentgatelog',
             name='scan_method',
-            field=models.CharField(choices=[('RFID', 'RFID Card Tap'), ('QR', 'QR Code Scan'), ('MANUAL', 'Manual Override (Security Guard)')], default='RFID', max_length=10),
+            field=models.CharField(choices=[('QR ID', 'QR ID Card Tap'), ('QR', 'QR Code Scan'), ('MANUAL', 'Manual Override (Security Guard)')], default='QR ID', max_length=10),
         ),
         migrations.AlterField(
             model_name='studentgatelog',

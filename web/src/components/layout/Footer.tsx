@@ -144,7 +144,7 @@ export const Footer: React.FC<FooterProps> = ({
           }}
         >
           <ShieldCheck size={13} color={isGateSystemOnline ? brand.primary || '#004b87' : brand.danger || '#dc2626'} />
-          <span>{isGateSystemOnline ? 'Gate Ready' : 'Gate Standby'}</span>
+          <span>{isGateSystemOnline ? 'Scanner Ready' : 'Gate Standby'}</span>
         </div>
 
         {/* Copyright */}

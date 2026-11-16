@@ -1,17 +1,17 @@
 """
-AttendSure V3 - Academic Structure Serializers
+AttendSure V3 - Academic Structure Serializers (Zero N+1 Queries)
 File: backend/apps/api/serializers/academics.py
 """
 
 from rest_framework import serializers
 from apps.academics.models import (
-    Room,
-    GradeLevel,
     AcademicYear,
-    Subject,
-    Section,
-    Schedule,
     Enrollment,
+    GradeLevel,
+    Room,
+    Schedule,
+    Section,
+    Subject,
 )
 from apps.common.utils import format_deduped_section_label
 
@@ -39,7 +39,7 @@ class SubjectSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Subject
-        fields = ['id', 'code', 'title', 'name', 'tier', 'subject_type', 'units']
+        fields = ['id', 'code', 'title', 'name', 'grade_level', 'tier', 'subject_type', 'units']
 
 
 class SectionSerializer(serializers.ModelSerializer):
@@ -124,14 +124,19 @@ class ScheduleSerializer(serializers.ModelSerializer):
         return obj.faculty.full_name if obj.faculty else "Unassigned"
 
     def get_days_of_week(self, obj) -> str:
-        days_qs = obj.days.all().order_by('day_of_week')
-        if not days_qs.exists():
+        # Uses prefetched schedule days in memory to avoid extra SQL queries
+        days_list = sorted(obj.days.all(), key=lambda d: d.day_of_week)
+        if not days_list:
             return obj.days_of_week or "MON-FRI"
-        nums = [d.day_of_week for d in days_qs]
-        if nums == [1, 2, 3, 4, 5]: return "MON-FRI"
-        if nums == [1, 3, 5]: return "MWF"
-        if nums == [2, 4]: return "TTH"
-        if nums == [6]: return "SAT"
+        nums = [d.day_of_week for d in days_list]
+        if nums == [1, 2, 3, 4, 5]:
+            return "MON-FRI"
+        if nums == [1, 3, 5]:
+            return "MWF"
+        if nums == [2, 4]:
+            return "TTH"
+        if nums == [6]:
+            return "SAT"
         labels = {1: 'MON', 2: 'TUE', 3: 'WED', 4: 'THU', 5: 'FRI', 6: 'SAT', 7: 'SUN'}
         return ",".join([labels.get(n, str(n)) for n in nums])
 

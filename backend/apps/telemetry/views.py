@@ -22,7 +22,6 @@ from apps.academics.models import (
     FacultyHeartbeat,
     LoafingIncident,
     FacultyProfile,
-    StudentGateLog,
     GatePass,
 )
 from apps.api.views.common import (

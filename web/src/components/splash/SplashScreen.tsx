@@ -85,11 +85,11 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           }}
         >
           <img
-            src="/splash.svg"
+            src="/AttendSureLogo.png"
             alt="AttendSure Logo"
             style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             onError={(e) => {
-              e.currentTarget.src = '/public/splash.svg';
+              e.currentTarget.src = '/public/AttendSureLogo.png';
             }}
           />
         </div>

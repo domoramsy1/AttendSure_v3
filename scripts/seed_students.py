@@ -35,7 +35,6 @@ def seed():
             'parent_contact': '09173456781',
             'photo': '',
             'qr_token': 'QR-128930491031',
-            'rfid_uid': '8B23C4D5',
             'is_active': True,
         },
         {
@@ -60,7 +59,6 @@ def seed():
             'parent_contact': '09184567892',
             'photo': '',
             'qr_token': 'QR-128930491032',
-            'rfid_uid': '9A12B3C4',
             'is_active': True,
         },
         {
@@ -85,7 +83,6 @@ def seed():
             'parent_contact': '09205678903',
             'photo': '',
             'qr_token': 'QR-128930491033',
-            'rfid_uid': '6D45E6F7',
             'is_active': True,
         },
         {
@@ -110,7 +107,6 @@ def seed():
             'parent_contact': '09226789014',
             'photo': '',
             'qr_token': 'QR-128930491034',
-            'rfid_uid': '7C34D5E6',
             'is_active': True,
         },
         {
@@ -135,7 +131,6 @@ def seed():
             'parent_contact': '09327890125',
             'photo': '',
             'qr_token': 'QR-128930491035',
-            'rfid_uid': '4F67A8B9',
             'is_active': True,
         },
         {
@@ -160,7 +155,6 @@ def seed():
             'parent_contact': '09458901236',
             'photo': '',
             'qr_token': 'QR-128930491036',
-            'rfid_uid': '5E56F7A8',
             'is_active': True,
         },
         {
@@ -185,7 +179,6 @@ def seed():
             'parent_contact': '09569012347',
             'photo': '',
             'qr_token': 'QR-128930491037',
-            'rfid_uid': '2B89C0D1',
             'is_active': True,
         },
         {
@@ -210,7 +203,6 @@ def seed():
             'parent_contact': '09670123458',
             'photo': '',
             'qr_token': 'QR-128930491038',
-            'rfid_uid': '3A78B9C0',
             'is_active': True,
         },
         {
@@ -235,7 +227,6 @@ def seed():
             'parent_contact': '09781234569',
             'photo': '',
             'qr_token': 'QR-128930491039',
-            'rfid_uid': '1C90D1E2',
             'is_active': True,
         },
     ]

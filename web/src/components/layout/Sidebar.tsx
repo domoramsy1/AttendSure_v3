@@ -188,11 +188,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {
         groupTitle: 'GATE & TELEMETRY',
         items: [
-          { key: 'sms', label: 'SMS Alerts', icon: <Send size={20} /> },
+          { key: 'sms', label: 'Push Notifications', icon: <Send size={20} /> },
           { key: 'gate-passes', label: 'Gate Passes', icon: <Ticket size={20} /> },
-          { key: 'scanners', label: 'Gate Kiosks', icon: <Cpu size={20} /> },
+          { key: 'scanners', label: 'USB QR Scanner', icon: <Cpu size={20} /> },
           { key: 'dtr', label: 'DTR', icon: <Clock size={20} /> },
-          { key: 'geofence', label: 'Geofence', icon: <MapPin size={20} /> },
+          { key: 'geofence', label: 'Campus Area', icon: <MapPin size={20} /> },
         ],
       },
       {
@@ -223,7 +223,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             return role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL';
           }
           if (['facultys', 'reports', 'schedules'].includes(item.key)) return isLeadership;
-          if (role === 'GUARD') return ['dashboard', 'gate-logs', 'gate-passes'].includes(item.key);
+          if (role === 'PARENT') return ['dashboard', 'gate-logs', 'gate-passes'].includes(item.key);
           return true;
         }),
       }))

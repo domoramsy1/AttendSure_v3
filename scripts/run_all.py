@@ -17,7 +17,7 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 TARGET_SCRIPTS = [
     "check_db.py",
-    "check_kiosks.py",
+    "check_'geofence/status/'.py",
     "check_gps.py",
     "audit_system.py",
     "inspect_models.py",

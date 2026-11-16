@@ -66,7 +66,7 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
     'SECTIONS' | 'SCHEDULE' | 'ROOMS' | 'SUBJECTS' | 'GRADES' | 'YEARS'
   >(normalizeTab(initialTab));
 
-  const [loading, setLoading] = useState<boolean>(false);
+  const [, setLoading] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);

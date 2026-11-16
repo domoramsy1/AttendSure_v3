@@ -1,3 +1,4 @@
+import { EnterpriseSDGWidget } from './EnterpriseSDGWidget';
 /**
  * AttendSure V3 - School Executive Dashboard & Telemetry Hub
  * File: web/src/components/dashboard/DashboardView.tsx
@@ -49,7 +50,7 @@ interface RecentScan {
   grade_section: string;
   direction: 'IN' | 'OUT';
   scan_time: string;
-  scan_method: 'RFID' | 'QR' | string;
+  scan_method: 'QR ID' | 'QR' | string;
 }
 
 interface CampusNotice {
@@ -120,7 +121,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const effectiveRole = (userRole || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
   const isAdmin = effectiveRole === 'ADMIN' || effectiveRole === 'SUPERADMIN' || effectiveRole === 'PRINCIPAL';
   const isFaculty = effectiveRole === 'FACULTY';
-  const isGuard = effectiveRole === 'GUARD';
+  const isGuard = effectiveRole === 'PARENT';
 
   const [data, setData] = useState<DashboardMetrics>({
     total_students: 0,
@@ -304,7 +305,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return (
       <div style={{ padding: 60, textAlign: 'center', color: tokens.textMuted }}>
         <RefreshCw size={26} className="animate-spin" style={{ margin: '0 auto 10px auto', display: 'block', color: brand.primary }} />
-        <span style={{ fontWeight: 600, fontSize: '0.86rem' }}>Synchronizing school dashboard and hardware telemetry...</span>
+        <span style={{ fontWeight: 600, fontSize: '0.86rem' }}>Synchronizing school dashboard and hardware activity...</span>
       </div>
     );
   }
@@ -319,8 +320,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         boxSizing: 'border-box',
       }}
     >
+      <EnterpriseSDGWidget />
       <div style={{ maxWidth: 1380, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* 1. Telemetry Status Header */}
+        {/* 1. Activity Status Header */}
         <div
           style={{
             display: 'flex',
@@ -362,7 +364,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
                   <Radio size={13} color={brand.primary} />
-                  <span>Kiosks: {data.kiosks_online} of {data.total_kiosks} Online</span>
+                  <span>Scanners: {data.kiosks_online} of {data.total_kiosks} Online</span>
                 </span>
               </>
             )}
@@ -667,8 +669,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <Send size={20} />
                 </div>
                 <div>
-                  <div style={actionTileTitle}>SMS Parent Alert</div>
-                  <div style={actionTileDesc}>Send emergency broadcast to parents</div>
+                  <div style={actionTileTitle}>App Broadcast Alert</div>
+                  <div style={actionTileDesc}>Send real-time mobile push alert to parents</div>
                 </div>
               </button>
             )}
@@ -682,7 +684,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                 <div>
                   <h3 style={sectionCardTitle}>Arrivals by Hour</h3>
-                  <span style={sectionCardSubtitle}>Gate scanner arrivals recorded today</span>
+                  <span style={sectionCardSubtitle}>USB QR scanner arrivals recorded today</span>
                 </div>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 6, backgroundColor: tokens.primaryLight, color: brand.primary, fontSize: '0.68rem', fontWeight: 700 }}>
                   <TrendingUp size={12} color={brand.primary} />
@@ -717,7 +719,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <div style={emptyCardBox}>
                   <Inbox size={26} color={tokens.textMuted} />
                   <span style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
-                    No Gate Scans Recorded Today
+                    No Classroom Scans Recorded Today
                   </span>
                 </div>
               )}
@@ -726,7 +728,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div style={sectionCardStyle}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                 <div>
-                  <h3 style={sectionCardTitle}>Recent Gate Taps</h3>
+                  <h3 style={sectionCardTitle}>Recent Attendance Scans</h3>
                   <span style={sectionCardSubtitle}>Real-time campus entrance &amp; exit feed</span>
                 </div>
                 <button
@@ -781,7 +783,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <div style={emptyCardBox}>
                   <Inbox size={26} color={tokens.textMuted} />
                   <span style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
-                    No Gate Taps Recorded Yet
+                    No Attendance Scans Recorded Yet
                   </span>
                 </div>
               )}

@@ -21,7 +21,7 @@ interface UserFormData {
   position: string;
   role: string;
   is_teaching: boolean;
-  rfid_uid: string;
+  qr_token: string;
   password?: string;
 }
 
@@ -129,7 +129,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
               <option value="ADMIN">System Administrator</option>
               <option value="PRINCIPAL">School Principal</option>
               <option value="DEPT_HEAD">Department Head</option>
-              <option value="GUARD">Security Guard</option>
+              <option value="PARENT">Parent / Guardian</option>
             </select>
           </div>
           <div>
@@ -145,12 +145,12 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <div>
-            <label style={labelStyle}>RFID Card UID</label>
+            <label style={labelStyle}>Student QR Token</label>
             <input
               type="text"
               placeholder="e.g. 8A3F29C1"
-              value={formData.rfid_uid}
-              onChange={(e) => onChange('rfid_uid', e.target.value.toUpperCase())}
+              value={formData.qr_token}
+              onChange={(e) => onChange('qr_token', e.target.value.toUpperCase())}
               style={{ ...inputStyle, fontFamily: 'monospace' }}
             />
           </div>

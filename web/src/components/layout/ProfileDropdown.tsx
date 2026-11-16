@@ -276,7 +276,7 @@ export const ProfileDropdown: React.FC<ProfileDropdownProps> = ({
           </div>
           <div style={{ flex: 1, textAlign: 'left' }}>
             <div style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textPrimary }}>School Settings</div>
-            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Emblem, seals &amp; geofence</div>
+            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Emblem, seals &amp; campus area</div>
           </div>
         </button>
       </div>

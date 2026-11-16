@@ -1,179 +1,160 @@
 """
-AttendSure - System Maintenance & Real Hardware Utility Views
+AttendSure V3 - School Settings, Calendar Status, Database Health & Cache Maintenance
 File: backend/apps/api/views/utils.py
 """
 
 import time
-from datetime import timedelta
 from django.core.cache import cache
-from django.db import connection
+from django.db import connection, transaction
 from django.utils import timezone
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, permissions
+from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from .common import IsSystemAdminRole, resolve_logo_field
-from apps.academics.models import SchoolProfile, IoTKiosk, SmsOutbox
+from apps.academics.models import AcademicYear, AuditLog, GeofenceSetting, SchoolProfile
 from apps.api.serializers import SchoolProfileSerializer
+from .common import IsAcademicManagerPermission, get_client_ip, get_school_metadata, is_leadership_role
 
 
 class SchoolSettingsAPIView(APIView):
-    def get_permissions(self):
-        if self.request.method in permissions.SAFE_METHODS:
-            return [permissions.AllowAny()]
-        return [IsSystemAdminRole()]
+    """Reads and updates school profile and campus GPS boundary settings."""
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def _get_or_create_school(self):
+        school = SchoolProfile.objects.select_related('principal_faculty').first()
+        if not school:
+            ay = AcademicYear.objects.filter(is_active=True).first()
+            school = SchoolProfile.objects.create(
+                school_id='304145',
+                school_name='Macasandig National High School',
+                region='Region X',
+                division='Cagayan de Oro City',
+                district='District II',
+                academic_year=ay.code if ay else '2026-2027',
+                address='Macasandig, Cagayan de Oro City',
+                latitude=8.4632000,
+                longitude=124.6428000,
+                geofence_radius_meters=150,
+            )
+        return school
 
     def get(self, request):
-        cache_key = "attendsure_school_settings_fast_payload"
-        cached = cache.get(cache_key)
-        if cached:
-            return Response(cached, status=status.HTTP_200_OK)
-
-        profile = SchoolProfile.objects.first()
-        if not profile:
-            return Response({
-                'school_id': '',
-                'school_name': '',
-                'is_configured': False,
-            }, status=status.HTTP_200_OK)
-
-        data = dict(SchoolProfileSerializer(profile, context={'request': request}).data)
-        data['is_configured'] = bool(profile.school_name and profile.school_id)
-
-        for key in ('school_logo', 'left_logo', 'right_logo'):
-            if data.get(key):
-                data[key] = resolve_logo_field(data[key], request)
-
-        cache.set(cache_key, data, timeout=300)
+        school = self._get_or_create_school()
+        serializer = SchoolProfileSerializer(school, context={'request': request})
+        data = dict(serializer.data)
+        meta = get_school_metadata(request)
+        data.update({
+            'left_logo': meta['left_logo'],
+            'right_logo': meta['right_logo'],
+            'school_logo': meta['school_logo'],
+            'school_head': meta['school_head'],
+        })
         return Response(data, status=status.HTTP_200_OK)
 
+    @transaction.atomic
+    def post(self, request):
+        return self._update_school(request)
+
+    @transaction.atomic
     def put(self, request):
-        profile = SchoolProfile.objects.first()
-        if not profile:
-            serializer = SchoolProfileSerializer(data=request.data, context={'request': request})
-        else:
-            serializer = SchoolProfileSerializer(profile, data=request.data, partial=True, context={'request': request})
+        return self._update_school(request)
 
-        if serializer.is_valid():
-            serializer.save()
-            cache.delete("attendsure_school_settings_fast_payload")
-            cache.delete("attendsure_campus_geofence_config")
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+    @transaction.atomic
     def patch(self, request):
-        return self.put(request)
+        return self._update_school(request)
+
+    def _update_school(self, request):
+        school = self._get_or_create_school()
+        serializer = SchoolProfileSerializer(
+            school,
+            data=request.data,
+            partial=True,
+            context={'request': request},
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        updated_school = serializer.save()
+
+        if updated_school.latitude is not None and updated_school.longitude is not None:
+            GeofenceSetting.objects.update_or_create(
+                is_active=True,
+                defaults={
+                    'name': f'{updated_school.school_name} Boundary',
+                    'latitude': updated_school.latitude,
+                    'longitude': updated_school.longitude,
+                    'radius_meters': updated_school.geofence_radius_meters or 150,
+                },
+            )
+
+        AuditLog.objects.create(
+            table_name='attendsure_school_profile',
+            record_id=updated_school.id,
+            action='UPDATE',
+            performed_by=request.user if request.user.is_authenticated else None,
+            client_ip=get_client_ip(request),
+            user_agent=str(request.META.get('HTTP_USER_AGENT', ''))[:255],
+        )
+        cache.clear()
+        return self.get(request)
 
 
 class CalendarExceptionAPIView(APIView):
+    """Returns current school calendar day status."""
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        cached = cache.get("attendsure_calendar_exceptions") or []
-        return Response(cached, status=status.HTTP_200_OK)
-
-    def post(self, request):
-        cache.set("attendsure_calendar_exceptions", request.data, timeout=86400)
-        return Response({'success': True, 'message': 'Calendar exceptions saved.'}, status=status.HTTP_201_CREATED)
-
-
-@api_view(['GET', 'POST'])
-@permission_classes([permissions.IsAuthenticated])
-def ping_scanners(request):
-    """Checks the live online status of active hardware kiosks."""
-    start_time = time.perf_counter()
-    now = timezone.now()
-    online_cutoff = now - timedelta(minutes=5)
-
-    kiosks = list(IoTKiosk.objects.filter(is_active=True).only(
-        'id', 'kiosk_code', 'terminal_name', 'location', 'last_ping'
-    ))
-
-    online_count = sum(1 for k in kiosks if k.last_ping and k.last_ping >= online_cutoff)
-    offline_count = len(kiosks) - online_count
-    latency_ms = max(1, round((time.perf_counter() - start_time) * 1000))
-
-    kiosk_details = [
-        {
-            'kiosk_code': k.kiosk_code,
-            'name': k.terminal_name,
-            'location': k.location,
-            'status': 'ONLINE' if (k.last_ping and k.last_ping >= online_cutoff) else 'OFFLINE',
-            'last_seen': timezone.localtime(k.last_ping).strftime('%I:%M:%S %p') if k.last_ping else 'Never',
-        }
-        for k in kiosks
-    ]
-
-    return Response({
-        'status': 'ONLINE' if online_count > 0 or len(kiosks) == 0 else 'WARNING',
-        'message': f"Gate scanner ping completed in {latency_ms}ms.",
-        'total_scanners': len(kiosks),
-        'online_count': online_count,
-        'offline_count': offline_count,
-        'latency_ms': latency_ms,
-        'scanners': kiosk_details,
-        'checked_at': timezone.localtime(now).strftime('%I:%M:%S %p'),
-    }, status=status.HTTP_200_OK)
+        today = timezone.localdate()
+        is_weekend = today.weekday() >= 5
+        ay = AcademicYear.objects.filter(is_active=True).first()
+        return Response({
+            'date': today.strftime('%Y-%m-%d'),
+            'weekday': today.strftime('%A'),
+            'is_school_day': not is_weekend,
+            'is_holiday': False,
+            'academic_year': ay.code if ay else '2026-2027',
+            'status': 'WEEKEND' if is_weekend else 'REGULAR_CLASSES',
+        }, status=status.HTTP_200_OK)
 
 
-@api_view(['GET', 'POST'])
-@permission_classes([permissions.IsAuthenticated])
-def test_sms_gateway(request):
-    """Pulls genuine counts from the SMS outbox database table."""
-    today = timezone.localdate()
-    today_start = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time()))
-    today_end = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.max.time()))
-
-    sent_count = SmsOutbox.objects.filter(status='SENT', created_at__gte=today_start, created_at__lte=today_end).count()
-    pending_count = SmsOutbox.objects.filter(status='PENDING').count()
-    failed_count = SmsOutbox.objects.filter(status='FAILED', created_at__gte=today_start, created_at__lte=today_end).count()
-
-    return Response({
-        'status': 'ONLINE',
-        'message': 'SMS Gateway service active.',
-        'sent_today': sent_count,
-        'pending_queue': pending_count,
-        'failed_today': failed_count,
-    }, status=status.HTTP_200_OK)
-
-
-@api_view(['GET', 'POST'])
+@api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def db_check(request):
-    """Executes a real SQL query to verify PostgreSQL latency."""
-    start_time = time.perf_counter()
+    """Verifies live PostgreSQL connection and response latency."""
+    t0 = time.perf_counter()
     try:
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1;")
             cursor.fetchone()
-
-        latency_ms = max(1, round((time.perf_counter() - start_time) * 1000))
-
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         return Response({
-            'database': 'CONNECTED',
-            'status': 'HEALTHY',
-            'engine': connection.vendor.upper(),
+            'db': True,
+            'status': 'CONNECTED',
             'latency_ms': latency_ms,
-            'message': f"Database connection responsive ({latency_ms}ms).",
-            'timestamp': timezone.localtime().strftime('%I:%M:%S %p'),
         }, status=status.HTTP_200_OK)
     except Exception as exc:
-        latency_ms = max(1, round((time.perf_counter() - start_time) * 1000))
         return Response({
-            'database': 'ERROR',
-            'status': 'UNHEALTHY',
-            'latency_ms': latency_ms,
+            'db': False,
+            'status': 'ERROR',
             'error': str(exc),
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsSystemAdminRole])
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
 def flush_cache(request):
-    """Clears system application cache. Restricted to verified system administrators."""
+    """Clears server cache for school leadership and administrators."""
+    if not (request.user.is_superuser or is_leadership_role(request.user)):
+        return Response(
+            {'error': 'Only school administrators can flush the server cache.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     cache.clear()
     return Response({
         'success': True,
-        'message': 'Application cache cleared successfully.',
+        'message': 'Server cache cleared.',
     }, status=status.HTTP_200_OK)

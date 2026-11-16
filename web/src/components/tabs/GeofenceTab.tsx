@@ -233,7 +233,7 @@ export const GeofenceTab: React.FC = () => {
         if (!silent) {
           showAlert({
             title: 'Connection Notice',
-            message: 'Unable to reach the school server for telemetry updates.',
+            message: 'Unable to reach the school server for activity updates.',
             type: 'warning',
           });
         }
@@ -823,10 +823,10 @@ export const GeofenceTab: React.FC = () => {
             }}
           >
             <Building2 size={20} color="#004b87" />
-            <span>Geofence Boundary &amp; Location Audit</span>
+            <span>Campus Area Boundary &amp; Location Audit</span>
           </h2>
           <p style={{ fontSize: '0.76rem', color: '#64748b', margin: '3px 0 0 0' }}>
-            Live GPS telemetry: 1-minute check-ins, IP &amp; MAC address records, and boundary tracking.
+            Live GPS activity: 1-minute check-ins, IP &amp; MAC address records, and boundary tracking.
           </p>
         </div>
 
@@ -1583,7 +1583,7 @@ export const GeofenceTab: React.FC = () => {
                 ) : (
                   <tr>
                     <td colSpan={8} style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
-                      {auditLoading ? 'Loading geofence logs...' : 'No geofence logs found matching your filters.'}
+                      {auditLoading ? 'Loading campus area logs...' : 'No geofence logs found matching your filters.'}
                     </td>
                   </tr>
                 )}

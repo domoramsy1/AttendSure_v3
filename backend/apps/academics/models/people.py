@@ -1,5 +1,5 @@
 """
-AttendSure V3 - People and User Profiles
+AttendSure V3 - Faculty, Parent & Student Profiles (Printed QR ID Only)
 File: backend/apps/academics/models/people.py
 """
 
@@ -10,6 +10,18 @@ from django.utils import timezone
 from .base import SUFFIX_CHOICES, SEX_CHOICES, USER_ROLE_CHOICES
 
 User = get_user_model()
+
+
+def normalize_ph_phone(raw_phone: str) -> str:
+    """Normalizes Philippine mobile numbers to +639XXXXXXXXX for parent linking."""
+    digits = ''.join(c for c in str(raw_phone or '') if c.isdigit())
+    if digits.startswith('639') and len(digits) == 12:
+        return f'+{digits}'
+    if digits.startswith('09') and len(digits) == 11:
+        return f'+63{digits[1:]}'
+    if digits.startswith('9') and len(digits) == 10:
+        return f'+63{digits}'
+    return f'+{digits}' if digits else ''
 
 
 class FacultyProfile(models.Model):
@@ -28,7 +40,6 @@ class FacultyProfile(models.Model):
     photo_updated_at = models.DateTimeField(null=True, blank=True)
     can_teach = models.BooleanField(default=True, db_index=True)
 
-    rfid_uid = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
     qr_token = models.CharField(max_length=128, unique=True, null=True, blank=True, db_index=True)
     is_active = models.BooleanField(default=True)
 
@@ -52,24 +63,22 @@ class FacultyProfile(models.Model):
         name = f"{self.first_name}{mid} {self.last_name}{suf}".strip()
         return name or f"{self.last_name}, {self.first_name}".strip()
 
+    @property
+    def user(self):
+        if hasattr(self, 'account') and self.account:
+            return self.account.user
+        return None
+
     def clean(self):
-        if self.rfid_uid:
-            self.rfid_uid = self.rfid_uid.strip().upper()
-        if not self.rfid_uid:
-            self.rfid_uid = None
-        if self.bound_device_id:
-            self.bound_device_id = self.bound_device_id.strip()
-        if not self.bound_device_id:
-            self.bound_device_id = None
-        if self.qr_token:
-            self.qr_token = self.qr_token.strip()
-        if not self.qr_token:
-            self.qr_token = None
+        self.bound_device_id = self.bound_device_id.strip() if self.bound_device_id and self.bound_device_id.strip() else None
+        self.qr_token = self.qr_token.strip() if self.qr_token and self.qr_token.strip() else None
+        if self.contact_number:
+            self.contact_number = normalize_ph_phone(self.contact_number)
 
     def save(self, *args, **kwargs):
         self.clean()
         if not self.qr_token:
-            self.qr_token = secrets.token_urlsafe(32)
+            self.qr_token = secrets.token_urlsafe(24)
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -87,8 +96,9 @@ class UserProfile(models.Model):
         related_name='account'
     )
     role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default='FACULTY')
+    phone_number = models.CharField(max_length=30, blank=True, default='', db_index=True)
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
-    push_token = models.CharField(max_length=255, blank=True, null=True, help_text="Expo Push Notification Token")
+    push_token = models.CharField(max_length=255, blank=True, null=True)
     is_teaching = models.BooleanField(default=True)
     is_profile_completed = models.BooleanField(default=False)
     failed_attempts = models.PositiveIntegerField(default=0)
@@ -96,6 +106,21 @@ class UserProfile(models.Model):
 
     class Meta:
         db_table = 'user_profiles'
+
+    def save(self, *args, **kwargs):
+        if self.phone_number:
+            self.phone_number = normalize_ph_phone(self.phone_number)
+        if self.role == 'PARENT':
+            self.is_teaching = False
+        super().save(*args, **kwargs)
+
+    @property
+    def can_teach(self) -> bool:
+        if self.role == 'PARENT':
+            return False
+        if self.faculty:
+            return self.is_teaching and self.faculty.is_active and self.faculty.can_teach
+        return self.is_teaching
 
     def is_locked(self) -> bool:
         return bool(self.locked_until and timezone.now() < self.locked_until)
@@ -140,12 +165,18 @@ class Student(models.Model):
     guardian_name = models.CharField(max_length=200, blank=True, default='')
     guardian_relationship = models.CharField(max_length=50, blank=True, default='')
     parent_contact = models.CharField(max_length=50, db_index=True)
+    parent_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='children',
+    )
 
     photo = models.ImageField(upload_to='students/', null=True, blank=True)
     photo_thumbnail = models.CharField(max_length=255, null=True, blank=True)
     photo_updated_at = models.DateTimeField(null=True, blank=True)
 
-    rfid_uid = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
     qr_token = models.CharField(max_length=128, unique=True, db_index=True)
     is_active = models.BooleanField(default=True)
 
@@ -173,15 +204,20 @@ class Student(models.Model):
         self.sex = value
 
     def clean(self):
-        if self.rfid_uid:
-            self.rfid_uid = self.rfid_uid.strip().upper()
-        if not self.rfid_uid:
-            self.rfid_uid = None
+        if self.parent_contact:
+            self.parent_contact = normalize_ph_phone(self.parent_contact)
 
     def save(self, *args, **kwargs):
         self.clean()
         if not self.qr_token:
-            self.qr_token = secrets.token_urlsafe(32)
+            self.qr_token = secrets.token_urlsafe(24)
+        if not self.parent_user_id and self.parent_contact:
+            matched_profile = UserProfile.objects.filter(
+                role='PARENT',
+                phone_number=self.parent_contact
+            ).select_related('user').first()
+            if matched_profile:
+                self.parent_user = matched_profile.user
         super().save(*args, **kwargs)
 
     def __str__(self):

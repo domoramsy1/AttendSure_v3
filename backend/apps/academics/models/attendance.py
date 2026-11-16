@@ -1,71 +1,13 @@
 """
-AttendSure V3 - Attendance Logging & Verification Models
+AttendSure V3 - Classroom QR Attendance Models
 File: backend/apps/academics/models/attendance.py
 """
 
 from django.db import models
-from django.conf import settings
 from django.utils import timezone
-from .base import DIRECTION_CHOICES, SCAN_METHOD_CHOICES, ATTENDANCE_STATUS_CHOICES
+from .base import SCAN_METHOD_CHOICES, ATTENDANCE_STATUS_CHOICES
 from .people import Student, FacultyProfile
-from .institution import IoTKiosk
 from .structure import Section, Schedule
-
-
-class FacultyGateLog(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='gate_logs')
-    kiosk = models.ForeignKey(IoTKiosk, on_delete=models.SET_NULL, null=True, blank=True)
-    scan_time = models.DateTimeField(default=timezone.now, db_index=True)
-    direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES)
-    scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default='RFID')
-    raw_identifier = models.CharField(max_length=128)
-    snapshot = models.ImageField(upload_to='gate_snapshots/faculty/%Y/%m/%d/', null=True, blank=True)
-    is_violation = models.BooleanField(default=False)
-    violation_type = models.CharField(max_length=64, blank=True, default='')
-    remarks = models.TextField(blank=True, default='')
-    is_excused_by_principal = models.BooleanField(default=False)
-    excused_at = models.DateTimeField(null=True, blank=True)
-    excused_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='excused_faculty_gate_violations'
-    )
-
-    class Meta:
-        db_table = 'faculty_gate_logs'
-        ordering = ['-scan_time']
-        indexes = [
-            models.Index(fields=['faculty', 'scan_time']),
-            models.Index(fields=['scan_time', 'is_violation']),
-        ]
-
-    def __str__(self):
-        return f"{self.faculty} - {self.direction} at {self.scan_time}"
-
-
-class StudentGateLog(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='gate_logs')
-    kiosk = models.ForeignKey(IoTKiosk, on_delete=models.SET_NULL, null=True, blank=True)
-    scan_time = models.DateTimeField(default=timezone.now, db_index=True)
-    direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES)
-    scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default='RFID')
-    raw_identifier = models.CharField(max_length=128)
-    snapshot = models.ImageField(upload_to='gate_snapshots/students/%Y/%m/%d/', null=True, blank=True)
-
-    class Meta:
-        db_table = 'student_gate_logs_partitioned'
-        ordering = ['-scan_time']
-        indexes = [
-            models.Index(fields=['student', 'scan_time']),
-            models.Index(fields=['scan_time', 'direction']),
-        ]
-
-    def __str__(self):
-        return f"{self.student.lrn} - {self.direction} ({self.scan_time})"
 
 
 class SubjectAttendanceLog(models.Model):
@@ -75,6 +17,7 @@ class SubjectAttendanceLog(models.Model):
     faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='submitted_attendance')
     attendance_date = models.DateField(default=timezone.now, db_index=True)
     scanned_at = models.DateTimeField(default=timezone.now)
+    scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default='QR')
     status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default='PRESENT')
 
     class Meta:

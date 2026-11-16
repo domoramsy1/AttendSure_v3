@@ -92,7 +92,7 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
       const res = await apiClient.put('/me/', payload);
       showAlert({
         title: 'Profile Completed',
-        message: 'Your official faculty record is now active and synchronized.',
+        message: 'Your official faculty record is now active and synced.',
         type: 'success',
       });
       onCompleted(res.data);

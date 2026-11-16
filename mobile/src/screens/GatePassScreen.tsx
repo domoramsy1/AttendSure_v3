@@ -51,7 +51,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
   const { user } = useAuth();
   const userRole = String(user?.role || user?.system_role || 'EMPLOYEE').toUpperCase();
   const isPrincipalOrAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
-  const isGuard = ['GUARD', 'SECURITY'].includes(userRole);
+  const isGuard = ['PARENT', 'SECURITY'].includes(userRole);
 
   const [passes, setPasses] = useState<GatePassItem[]>([]);
   const [loading, setLoading] = useState(true);

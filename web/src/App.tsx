@@ -37,7 +37,6 @@ import {
   GeofenceTab,
   UsersTab,
   SettingsTab,
-  SmsTab,
 } from './components/tabs';
 import { MyAssignedClassesTab } from './components/tabs/MyAssignedClassesTab';
 import { ClassroomScanner } from './components/scanner/ClassroomScanner';
@@ -354,7 +353,7 @@ const AppContent: React.FC = () => {
       case 'schedules': return 'Class Schedules & Sections';
       case 'dtr': return 'Daily Time Records (DTR)';
       case 'geofence': return 'Campus Boundary';
-      case 'sms': return 'Parent Text Messages (SMS)';
+      case 'sms': return 'Parent Mobile Push Alerts';
       case 'reports':
         if (selectedReport === 'sf1') return 'School Register (Form 1)';
         if (selectedReport === 'sf2') return 'Daily Attendance Register (Form 2)';
@@ -425,7 +424,6 @@ const AppContent: React.FC = () => {
       case 'students': return <StudentsTab />;
       case 'facultys': return <FacultyTab />;
       case 'dtr': return <DTRTab />;
-      case 'sms': return <SmsTab />;
       case 'gate-passes': return <GatePassesTab />;
       case 'schedules': return <SchedulesTab />;
       case 'geofence': return <GeofenceTab />;
