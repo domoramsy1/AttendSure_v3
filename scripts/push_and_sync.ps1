@@ -17,13 +17,18 @@ if (-not (Test-Path $SourceDir)) {
 Set-Location $SourceDir
 
 Write-Host "--- Step 1: Saving and pushing project changes to GitHub ---" -ForegroundColor Cyan
+$CurrentBranch = (git rev-parse --abbrev-ref HEAD 2>$null).Trim()
+if ($CurrentBranch -ne "main") {
+    git checkout main
+}
+
 git add -A
 
 $PendingChanges = git status --porcelain
 if ($PendingChanges) {
     git commit -m "$CommitMessage"
 } else {
-    Write-Host "No new file changes to commit. Proceeding with branch push and version tagging..." -ForegroundColor Yellow
+    Write-Host "No new file changes to commit. Proceeding with push and version tagging..." -ForegroundColor Yellow
 }
 
 git push origin main
@@ -31,7 +36,7 @@ git push origin main
 Write-Host "--- Step 2: Incrementing GitHub version tag ---" -ForegroundColor Cyan
 git fetch --tags --force 2>$null
 
-# Get the highest semantic version tag (e.g., v3.0.26)
+# Get the highest semantic version tag (e.g., v3.0.28)
 $LatestTag = (git tag -l "v*" --sort=-v:refname | Select-Object -First 1)
 if (-not $LatestTag) {
     $LatestTag = git describe --tags --abbrev=0 2>$null
@@ -50,11 +55,10 @@ if (-not $LatestTag) {
         $Patch = [int]$Matches[3] + 1
         $NewTag = "v$Major.$Minor.$Patch"
     } else {
-        $NewTag = "v3.0.27"
+        $NewTag = "v3.0.29"
     }
 }
 
-# Ensure we do not collide with an already existing tag
 while ((git tag -l "$NewTag") -eq $NewTag) {
     if ($NewTag -match '^v(\d+)\.(\d+)\.(\d+)$') {
         $Major = [int]$Matches[1]
@@ -66,8 +70,7 @@ while ((git tag -l "$NewTag") -eq $NewTag) {
 
 Write-Host "Creating and pushing new version tag: $NewTag" -ForegroundColor Green
 git tag -a $NewTag -m "Release $NewTag - $CommitMessage"
-git push origin main
-git push origin $NewTag
+git push origin main --tags
 
 Write-Host "--- Step 3: Backing up full project to $VersionBaseDir\$NewTag ---" -ForegroundColor Cyan
 $TargetVersionDir = Join-Path $VersionBaseDir $NewTag
