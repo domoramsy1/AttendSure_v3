@@ -1,6 +1,4 @@
-﻿# ==============================================================================
-# 1. ENVIRONMENT VARIABLES & SENSITIVE CREDENTIALS (CYBERSECURITY)
-# ==============================================================================
+
 .env
 .env.*
 *.env
@@ -8,102 +6,27 @@
 backend/.env
 mobile/.env
 web/.env
-local_settings.py
-
-# Mobile Keystores, Certificates & Private Keys
-*.keystore
-*.jks
-*.p12
-*.pfx
-*.pem
-*.key
-*.crt
-*.cert
-
-# Cloud Provider Service Accounts
-google-services.json
-GoogleService-Info.plist
-*-credentials.json
-*service-account*.json
-firebase*.json
-
-# ==============================================================================
-# 2. LOCAL DATABASES & BACKUPS
-# ==============================================================================
+db.sqlite3
 *.sqlite3
 *.db
-db.sqlite3
-backend/db.sqlite3
-*.sql
-*.dump
-*.tar.gz
-
-# ==============================================================================
-# 3. CODEBASE EXPORTS & AUDIT DUMPS (PREVENTS LARGE REPO BLOAT)
-# ==============================================================================
-*codebase*.txt
 all_source_codes.txt
 project_files.txt
-backend_codebase_export.txt
-web_codebase_export.txt
-attendsure_codebase.txt
-save_codebase.py
-
-# ==============================================================================
-# 4. PYTHON / DJANGO ARTIFACTS
-# ==============================================================================
+*.keystore
+*.jks
+*.pem
+*.key
+*.p12
+*.pfx
+google-services.json
+GoogleService-Info.plist
+node_modules/
 __pycache__/
-*.py[cod]
-*$py.class
 *.pyc
-*.bak
-
-# Virtual Environments
 venv/
 env/
 .venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Test coverage
-.pytest_cache/
-htmlcov/
-.coverage
-
-# ==============================================================================
-# 5. NODE / VITE / EXPO / REACT NATIVE
-# ==============================================================================
-node_modules/
 dist/
-dist-ssr/
 build/
 .expo/
-.expo-shared/
-web-build/
-*.local
-
-# Expo / Metro bundler cache
-.metro-health-check*
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# ==============================================================================
-# 6. LOGS & USER UPLOADS
-# ==============================================================================
-*.log
-backend/logs/
-logs/
-media/
-backend/media/
-!backend/media/.gitkeep
-
-# ==============================================================================
-# 7. OPERATING SYSTEM & IDE ARTIFACTS
-# ==============================================================================
 .vscode/
-.idea/
-.DS_Store
-Thumbs.db
-desktop.ini
+*.log

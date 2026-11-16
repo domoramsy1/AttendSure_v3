@@ -1,0 +1,19 @@
+{
+  "14": {
+    "faculty_id": 14,
+    "employee_id": "FACULTY",
+    "latitude": 8.48005,
+    "longitude": 124.65003,
+    "distance_meters": 6.5,
+    "distance_display": "6.5m",
+    "accuracy": 6.0,
+    "gps_accuracy_meters": 6.0,
+    "battery_level": 85,
+    "is_mock_location": false,
+    "presence_status": "VERIFIED_INSIDE",
+    "status": "VERIFIED_INSIDE",
+    "device_id": "DEV-IPHONE14-PRO-55555",
+    "device_model": "Apple iPhone 14 Pro",
+    "timestamp": "2026-10-26T00:50:02.236779+00:00"
+  }
+}
