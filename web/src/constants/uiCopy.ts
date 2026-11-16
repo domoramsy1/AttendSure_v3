@@ -69,7 +69,7 @@ export const UI_TEXT = {
     schedules: "Classes & Sections",
     dtr: "Faculty DTR (DTR)",
     geofence: "Campus Boundary",
-    scanners: "Gate Scanners",
+    scanners: "USB QR & Campus GPS",
     reports: "Reports (SF1, SF2)",
   },
 } as const;

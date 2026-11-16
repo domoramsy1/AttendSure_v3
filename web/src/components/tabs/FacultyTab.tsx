@@ -51,7 +51,7 @@ interface PaginatedResponse<T> {
 
 const FACULTY_POSITIONS = [
   {
-    category: 'Classroom Faculty',
+    category: 'Classroom Teachers',
     ranks: [
       'Faculty I',
       'Faculty II',
@@ -1024,7 +1024,7 @@ export const FacultyTab: React.FC = () => {
             >
               <div style={{ backgroundColor: brand.primary, color: '#ffffff', padding: '12px 14px' }}>
                 <div style={{ fontSize: '0.80rem', fontWeight: 800 }}>ATTENDSURE FACULTY PASS</div>
-                <div style={{ fontSize: '0.64rem', color: '#e0f2fe' }}>Lapasan National High School</div>
+                <div style={{ fontSize: '0.64rem', color: '#e0f2fe' }}>Macasandig National High School</div>
               </div>
 
               <div style={{ padding: '16px 14px' }}>

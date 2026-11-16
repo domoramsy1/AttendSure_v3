@@ -1,5 +1,3 @@
-// D:\AttendSure_V3\mobile\src\navigation\MainTabNavigator.tsx
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
@@ -16,91 +14,96 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
-import { useAuth } from '../context/AuthContext';
-import { COLORS } from '../constants/theme';
+import { useThemeMode } from '../context/ThemeContext';
 
-// Standalone Screens
 import DashboardScreen from '../screens/DashboardScreen';
 import CalendarScreen from '../screens/CalendarScreen';
 import ScannerScreen from '../screens/ScannerScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import MenuScreen from '../screens/MenuScreen';
 import SettingsScreen from '../screens/SettingsScreen';
-import SmsLogsScreen from '../screens/SmsLogsScreen';
 import GatePassScreen from '../screens/GatePassScreen';
-
-// Reports
+import ChatScreen from '../screens/ChatScreen';
+import AdvisoryMatrixScreen from '../screens/AdvisoryMatrixScreen';
 import DTRReportView, { DTRReportData } from '../components/reports/DTRReportView';
 
 export type TabType =
   | 'home'
+  | 'class_list'
   | 'gate_pass'
+  | 'chat'
+  | 'menu'
   | 'scanner'
   | 'reports'
   | 'calendar'
-  | 'menu'
   | 'settings'
-  | 'sms'
-  | 'class_list'
   | 'dtr'
   | 'dept_monitor'
-  | 'gate_feed'
+  | 'qr_feed'
   | 'device_approval'
-  | 'kiosk_health';
+  | 'system_status';
 
 export const MainTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { palette } = useThemeMode();
   const [activeTab, setActiveTab] = useState<TabType>('home');
 
-  // Direct DTR State
   const [dtrMonth, setDtrMonth] = useState<number>(new Date().getMonth() + 1);
   const [dtrYear, setDtrYear] = useState<number>(new Date().getFullYear());
   const [dtrData, setDtrData] = useState<DTRReportData | null>(null);
   const [dtrLoading, setDtrLoading] = useState<boolean>(false);
   const [dtrSubmitting, setDtrSubmitting] = useState<boolean>(false);
+
   const isMounted = useRef<boolean>(true);
+  const dtrAbortRef = useRef<AbortController | null>(null);
 
-  const fetchDTR = useCallback(async (silent = false) => {
-    if (!silent) setDtrLoading(true);
-    const cacheKey = `attendsure_dtr_menu_${dtrMonth}_${dtrYear}`;
+  const fetchDTR = useCallback(
+    async (silent = false) => {
+      dtrAbortRef.current?.abort();
+      const controller = new AbortController();
+      dtrAbortRef.current = controller;
 
-    try {
-      const cached = await AsyncStorage.getItem(cacheKey);
-      if (cached && isMounted.current) {
-        setDtrData(JSON.parse(cached));
-      }
-    } catch {}
+      if (!silent) setDtrLoading(true);
+      const cacheKey = `attendsure_dtr_menu_${dtrMonth}_${dtrYear}`;
 
-    try {
-      const res = await apiClient.get<DTRReportData>('reports/dtr/', {
-        params: { month: dtrMonth, year: dtrYear },
-      });
-      if (isMounted.current) {
-        setDtrData(res.data);
-        await AsyncStorage.setItem(cacheKey, JSON.stringify(res.data));
+      try {
+        const cached = await AsyncStorage.getItem(cacheKey);
+        if (cached && isMounted.current) {
+          setDtrData(JSON.parse(cached));
+        }
+      } catch {}
+
+      try {
+        const res = await apiClient.get<DTRReportData>('reports/dtr/', {
+          params: { month: dtrMonth, year: dtrYear },
+          signal: controller.signal,
+        });
+        if (isMounted.current) {
+          setDtrData(res.data);
+          await AsyncStorage.setItem(cacheKey, JSON.stringify(res.data));
+        }
+      } catch (err: any) {
+        if (err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+      } finally {
+        if (isMounted.current && !silent) {
+          setDtrLoading(false);
+        }
       }
-    } catch {
-      // Retain cached state
-    } finally {
-      if (isMounted.current && !silent) {
-        setDtrLoading(false);
-      }
-    }
-  }, [dtrMonth, dtrYear]);
+    },
+    [dtrMonth, dtrYear]
+  );
 
   useEffect(() => {
     isMounted.current = true;
-    if (activeTab === 'dtr') {
-      fetchDTR(false);
-    }
+    if (activeTab === 'dtr') fetchDTR(false);
     return () => {
       isMounted.current = false;
+      dtrAbortRef.current?.abort();
     };
   }, [activeTab, fetchDTR]);
 
   const handleSubmitDtr = async () => {
-    if (!dtrData) return;
+    if (!dtrData || dtrSubmitting) return;
     setDtrSubmitting(true);
     try {
       await apiClient.post(`reports/dtr/${dtrData.faculty_id}/`, {
@@ -111,76 +114,81 @@ export const MainTabNavigator: React.FC = () => {
         regular_days_hours: dtrData.regular_days_hours,
         saturdays_hours: dtrData.saturdays_hours,
       });
-      Alert.alert('Success', 'DTR submitted to your Department Head.');
+      Alert.alert('Submitted', 'Your Daily Time Record has been sent to your Department Head.');
       fetchDTR(true);
     } catch (err: any) {
-      Alert.alert('Error', err?.response?.data?.error || 'Failed to submit DTR.');
+      Alert.alert('Unable to Submit', err?.response?.data?.error || 'Could not submit DTR right now.');
     } finally {
       if (isMounted.current) setDtrSubmitting(false);
     }
   };
 
-  // Reusable sub-header with Back Arrow Button for all Menu tabs
-  const renderSubHeader = (title: string, onBackAction?: () => void) => (
-    <View style={[styles.subScreenHeader, { paddingTop: Math.max(insets.top, 12) }]}>
-      <TouchableOpacity
-        style={styles.backBtn}
-        onPress={onBackAction || (() => setActiveTab('menu'))}
-        activeOpacity={0.7}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-      >
-        <Ionicons name="arrow-back" size={22} color="#004b87" />
-        <Text style={styles.backBtnText}>Menu</Text>
-      </TouchableOpacity>
-      <Text style={styles.subScreenTitle} numberOfLines={1}>
-        {title}
-      </Text>
-      <View style={{ width: 68 }} />
+  const renderRoyalSubHeader = (title: string, subtitle: string, backTarget: TabType = 'menu') => (
+    <View style={[styles.royalHeader, { backgroundColor: palette.headerBg, paddingTop: Math.max(insets.top, 14) }]}>
+      <View style={styles.royalHeaderTop}>
+        <TouchableOpacity
+          style={styles.royalBackCircle}
+          onPress={() => setActiveTab(backTarget)}
+          activeOpacity={0.75}
+        >
+          <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={styles.royalEyebrow}>PROFILE &amp; OPERATIONS</Text>
+          <Text style={styles.royalTitle} numberOfLines={1}>{title}</Text>
+          <Text style={styles.royalSub} numberOfLines={1}>{subtitle}</Text>
+        </View>
+      </View>
     </View>
   );
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.screenContainer}>
-        {/* Core Screen: Dashboard */}
-        {activeTab === 'home' && <DashboardScreen />}
+  const navItems: Array<{
+    key: TabType;
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    activeIcon: keyof typeof Ionicons.glyphMap;
+  }> = [
+    { key: 'home', label: 'Home', icon: 'home-outline', activeIcon: 'home' },
+    { key: 'class_list', label: 'Classes', icon: 'book-outline', activeIcon: 'book' },
+    { key: 'gate_pass', label: 'Clearances', icon: 'clipboard-outline', activeIcon: 'clipboard' },
+    { key: 'chat', label: 'Messages', icon: 'chatbubble-outline', activeIcon: 'chatbubble' },
+    { key: 'menu', label: 'Profile', icon: 'person-outline', activeIcon: 'person' },
+  ];
 
-        {/* Menu Tab 1: Gate Passes & Exit Clearance */}
-        {activeTab === 'gate_pass' && (
+  const resolvedNavKey: TabType = ['menu', 'settings', 'calendar', 'dtr', 'reports', 'scanner', 'dept_monitor', 'qr_feed', 'device_approval', 'system_status'].includes(activeTab)
+    ? 'menu'
+    : activeTab;
+
+  return (
+    <View style={[styles.container, { backgroundColor: palette.background }]}>
+      <View style={styles.screenContainer}>
+        {activeTab === 'home' && <DashboardScreen onNavigate={setActiveTab} />}
+        {activeTab === 'class_list' && <AdvisoryMatrixScreen />}
+        {activeTab === 'gate_pass' && <GatePassScreen onBack={() => setActiveTab('home')} />}
+        {activeTab === 'chat' && <ChatScreen />}
+        {activeTab === 'menu' && <MenuScreen onSelectScreen={setActiveTab} />}
+        {activeTab === 'scanner' && <ScannerScreen onBack={() => setActiveTab('menu')} />}
+        {activeTab === 'reports' && (
           <View style={{ flex: 1 }}>
-            <GatePassScreen onBack={() => setActiveTab('menu')} />
+            {renderRoyalSubHeader('School Reports', 'SF1, SF2, SF4 and Form 48 exports', 'menu')}
+            <ReportsScreen />
           </View>
         )}
-
-        {/* Core Screen: Scanner */}
-        {activeTab === 'scanner' && <ScannerScreen />}
-
-        {/* Core Screen: Reports */}
-        {activeTab === 'reports' && <ReportsScreen />}
-
-        {/* Menu Screen */}
-        {activeTab === 'menu' && <MenuScreen onSelectScreen={setActiveTab} />}
-
-        {/* Menu Tab 2: Academic Calendar */}
         {activeTab === 'calendar' && (
           <View style={{ flex: 1 }}>
-            {renderSubHeader('Academic Calendar')}
+            {renderRoyalSubHeader('School Calendar', 'Suspensions, holidays and schedules', 'menu')}
             <CalendarScreen />
           </View>
         )}
-
-        {/* Menu Tab 3: Profile Settings */}
         {activeTab === 'settings' && (
           <View style={{ flex: 1 }}>
-            {renderSubHeader('Profile Settings')}
+            {renderRoyalSubHeader('Settings', 'Account protection, dark mode and preferences', 'menu')}
             <SettingsScreen />
           </View>
         )}
-
-        {/* Menu Tab 4: Civil Service Form No. 48 (DTR) */}
         {activeTab === 'dtr' && (
           <View style={{ flex: 1 }}>
-            {renderSubHeader('Civil Service Form No. 48')}
+            {renderRoyalSubHeader('Daily Time Record', 'Civil Service Form No. 48', 'menu')}
             <ScrollView
               contentContainerStyle={styles.subScreenScroll}
               showsVerticalScrollIndicator={false}
@@ -188,14 +196,14 @@ export const MainTabNavigator: React.FC = () => {
                 <RefreshControl
                   refreshing={dtrLoading}
                   onRefresh={() => fetchDTR(false)}
-                  colors={[COLORS.primary]}
+                  colors={[palette.primary]}
                 />
               }
             >
               {dtrLoading && !dtrData ? (
                 <View style={styles.loadingBox}>
-                  <ActivityIndicator size="small" color={COLORS.primary} />
-                  <Text style={styles.loadingText}>Loading DTR records...</Text>
+                  <ActivityIndicator size="small" color={palette.primary} />
+                  <Text style={[styles.loadingText, { color: palette.textMuted }]}>Loading attendance records...</Text>
                 </View>
               ) : (
                 <DTRReportView
@@ -214,325 +222,100 @@ export const MainTabNavigator: React.FC = () => {
             </ScrollView>
           </View>
         )}
-
-        {/* Menu Tab 5: SMS Delivery Logs */}
-        {activeTab === 'sms' && (
-          <View style={{ flex: 1 }}>
-            {renderSubHeader('SMS Delivery Logs')}
-            <SmsLogsScreen />
-          </View>
-        )}
-
-        {/* Menu Tab 6: Class List */}
-        {activeTab === 'class_list' && (
-          <View style={styles.placeholderContainer}>
-            {renderSubHeader('Class List')}
-            <View style={styles.placeholderBody}>
-              <Ionicons name="people-circle-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Class List</Text>
-              <Text style={styles.placeholderText}>
-                Active learners, guardian contacts, and classroom attendance.
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* Menu Tab 7: Department Employee Attendance */}
-        {activeTab === 'dept_monitor' && (
-          <View style={styles.placeholderContainer}>
-            {renderSubHeader('Employee Attendance')}
-            <View style={styles.placeholderBody}>
-              <Ionicons name="analytics-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Employee Attendance</Text>
-              <Text style={styles.placeholderText}>
-                Department employee attendance inside campus geofence.
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* Menu Tab 8: Gate Scanner Feed */}
-        {activeTab === 'gate_feed' && (
-          <View style={styles.placeholderContainer}>
-            {renderSubHeader('Gate Scanner Feed')}
-            <View style={styles.placeholderBody}>
-              <Ionicons name="videocam-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Gate Scanner Feed</Text>
-              <Text style={styles.placeholderText}>
-                Live RFID and QR taps at Campus Gate Kiosks.
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* Menu Tab 9: Device Approvals */}
-        {activeTab === 'device_approval' && (
-          <View style={styles.placeholderContainer}>
-            {renderSubHeader('Device Approvals')}
-            <View style={styles.placeholderBody}>
-              <Ionicons name="shield-checkmark-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Device Approvals</Text>
-              <Text style={styles.placeholderText}>
-                Manage verified employee mobile devices.
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* Menu Tab 10: Gate Kiosk Health */}
-        {activeTab === 'kiosk_health' && (
-          <View style={styles.placeholderContainer}>
-            {renderSubHeader('Gate Kiosk Health')}
-            <View style={styles.placeholderBody}>
-              <Ionicons name="hardware-chip-outline" size={64} color="#004b87" />
-              <Text style={styles.placeholderTitle}>Gate Kiosk Health</Text>
-              <Text style={styles.placeholderText}>
-                Scanner online status, ping latency, and offline queue logs.
-              </Text>
-            </View>
-          </View>
-        )}
       </View>
 
-      {/* Bottom Navigation Bar */}
+      {/* Floating Pill Bottom Navigation Dock */}
       <View
         style={[
-          styles.bottomBar,
-          {
-            paddingBottom: Math.max(insets.bottom, 8),
-            height: 60 + Math.max(insets.bottom, 8),
-          },
+          styles.floatingDockWrapper,
+          { paddingBottom: Math.max(insets.bottom, 10) },
         ]}
+        pointerEvents="box-none"
       >
-        <TouchableOpacity
-          style={styles.tabItem}
-          onPress={() => setActiveTab('home')}
-          activeOpacity={0.7}
+        <View
+          style={[
+            styles.floatingDock,
+            {
+              backgroundColor: palette.surface,
+              borderColor: palette.border,
+            },
+          ]}
         >
-          <Ionicons
-            name={activeTab === 'home' ? 'grid' : 'grid-outline'}
-            size={20}
-            color={activeTab === 'home' ? COLORS.primary : COLORS.textMuted}
-          />
-          <Text
-            style={[styles.tabLabel, activeTab === 'home' && styles.tabLabelActive]}
-            numberOfLines={1}
-          >
-            Dashboard
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.tabItem}
-          onPress={() => setActiveTab('gate_pass')}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name={activeTab === 'gate_pass' ? 'ticket' : 'ticket-outline'}
-            size={20}
-            color={activeTab === 'gate_pass' ? COLORS.primary : COLORS.textMuted}
-          />
-          <Text
-            style={[styles.tabLabel, activeTab === 'gate_pass' && styles.tabLabelActive]}
-            numberOfLines={1}
-          >
-            Gate Pass
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.centerFab}
-          onPress={() => setActiveTab('scanner')}
-          activeOpacity={0.85}
-        >
-          <View style={[styles.fabBox, activeTab === 'scanner' && styles.fabBoxActive]}>
-            <Ionicons name="qr-code" size={24} color="#ffffff" />
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.tabItem}
-          onPress={() => setActiveTab('reports')}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name={activeTab === 'reports' ? 'document-text' : 'document-text-outline'}
-            size={20}
-            color={activeTab === 'reports' ? COLORS.primary : COLORS.textMuted}
-          />
-          <Text
-            style={[styles.tabLabel, activeTab === 'reports' && styles.tabLabelActive]}
-            numberOfLines={1}
-          >
-            Reports
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.tabItem}
-          onPress={() => setActiveTab('menu')}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name={
-              [
-                'menu',
-                'settings',
-                'sms',
-                'calendar',
-                'class_list',
-                'dtr',
-                'dept_monitor',
-                'gate_feed',
-                'device_approval',
-                'kiosk_health',
-              ].includes(activeTab)
-                ? 'menu'
-                : 'menu-outline'
-            }
-            size={22}
-            color={
-              [
-                'menu',
-                'settings',
-                'sms',
-                'calendar',
-                'class_list',
-                'dtr',
-                'dept_monitor',
-                'gate_feed',
-                'device_approval',
-                'kiosk_health',
-              ].includes(activeTab)
-                ? COLORS.primary
-                : COLORS.textMuted
-            }
-          />
-          <Text
-            style={[
-              styles.tabLabel,
-              [
-                'menu',
-                'settings',
-                'sms',
-                'calendar',
-                'class_list',
-                'dtr',
-                'dept_monitor',
-                'gate_feed',
-                'device_approval',
-                'kiosk_health',
-              ].includes(activeTab) && styles.tabLabelActive,
-            ]}
-            numberOfLines={1}
-          >
-            Menu
-          </Text>
-        </TouchableOpacity>
+          {navItems.map((item) => {
+            const isFocused = resolvedNavKey === item.key;
+            return (
+              <TouchableOpacity
+                key={item.key}
+                onPress={() => setActiveTab(item.key)}
+                activeOpacity={0.8}
+                style={[
+                  styles.navPillBtn,
+                  isFocused && [
+                    styles.navPillBtnActive,
+                    { backgroundColor: palette.primarySoft },
+                  ],
+                ]}
+              >
+                <Ionicons
+                  name={isFocused ? item.activeIcon : item.icon}
+                  size={20}
+                  color={isFocused ? palette.primary : palette.textMuted}
+                />
+                {isFocused && (
+                  <Text style={[styles.navPillText, { color: palette.primary }]} numberOfLines={1}>
+                    {item.label}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1 },
   screenContainer: { flex: 1 },
-  bottomBar: {
+  royalHeader: {
+    paddingHorizontal: 18,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+  },
+  royalHeaderTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.surface,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingTop: 6,
-    paddingHorizontal: 4,
-    ...Platform.select({
-      ios: {
-        shadowColor: COLORS.primaryDark,
-        shadowOffset: { width: 0, height: -3 },
-        shadowOpacity: 0.08,
-        shadowRadius: 8,
-      },
-      android: { elevation: 10 },
-    }),
   },
-  tabItem: {
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flex: 1,
-    paddingHorizontal: 2,
-  },
-  tabLabel: {
-    fontSize: 9.5,
-    fontWeight: '600',
-    color: COLORS.textMuted,
-    marginTop: 3,
-  },
-  tabLabelActive: {
-    color: COLORS.primary,
-    fontWeight: '800',
-  },
-  centerFab: {
-    top: -14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 56,
-  },
-  fabBox: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.35,
-        shadowRadius: 10,
-      },
-      android: { elevation: 8 },
-    }),
-  },
-  fabBoxActive: {
-    backgroundColor: COLORS.primaryDark,
-    transform: [{ scale: 1.05 }],
-  },
-  subScreenHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingBottom: 10,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+  royalBackCircle: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    backgroundColor: '#f1f5f9',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  backBtnText: {
-    fontSize: 13,
+  royalEyebrow: {
+    fontSize: 10.5,
     fontWeight: '700',
-    color: '#004b87',
+    color: '#DBE4FF',
+    letterSpacing: 0.8,
   },
-  subScreenTitle: {
-    fontSize: 15,
+  royalTitle: {
+    fontSize: 24,
     fontWeight: '800',
-    color: '#0f172a',
-    flex: 1,
-    textAlign: 'center',
+    color: '#FFFFFF',
+    marginTop: 2,
+  },
+  royalSub: {
+    fontSize: 13,
+    color: '#E0E7FF',
+    marginTop: 2,
   },
   subScreenScroll: {
-    padding: 12,
-    paddingBottom: 110,
+    padding: 14,
+    paddingBottom: 120,
   },
   loadingBox: {
     alignItems: 'center',
@@ -540,32 +323,50 @@ const styles = StyleSheet.create({
     paddingVertical: 40,
   },
   loadingText: {
-    fontSize: 11,
-    color: '#64748b',
-    marginTop: 6,
+    fontSize: 12,
+    marginTop: 8,
   },
-  placeholderContainer: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
+  floatingDockWrapper: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 0,
+    alignItems: 'center',
   },
-  placeholderBody: {
-    flex: 1,
+  floatingDock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    borderRadius: 32,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.12,
+        shadowRadius: 16,
+      },
+      android: { elevation: 12 },
+    }),
+  },
+  navPillBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 30,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 22,
+    gap: 6,
   },
-  placeholderTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#0f172a',
-    marginTop: 14,
+  navPillBtnActive: {
+    paddingHorizontal: 16,
   },
-  placeholderText: {
+  navPillText: {
     fontSize: 13,
-    color: '#64748b',
-    textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 18,
+    fontWeight: '800',
   },
 });
 

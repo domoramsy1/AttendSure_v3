@@ -1,8 +1,55 @@
+"""
+AttendSure V3 - Mobile Push Notifications, GPS Heartbeats, Exit Passes & Audit Logs
+File: backend/apps/academics/models/telemetry.py
+"""
+
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from .base import GATE_PASS_STATUS_CHOICES
 from .people import Student, FacultyProfile
+
+
+class AppNotification(models.Model):
+    """Stores mobile push and in-app alerts sent to Parent and Faculty apps."""
+    CATEGORY_CHOICES = [
+        ('ATTENDANCE', 'Classroom Attendance'),
+        ('CUTTING_ALERT', 'Cutting Class Alert'),
+        ('GATE_PASS', 'Exit Pass Update'),
+        ('GEOFENCE', 'Campus Boundary Alert'),
+        ('ANNOUNCEMENT', 'School Announcement'),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='app_notifications',
+        db_index=True,
+    )
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='parent_notifications',
+    )
+    title = models.CharField(max_length=150)
+    message = models.TextField()
+    category = models.CharField(max_length=25, choices=CATEGORY_CHOICES, default='ATTENDANCE', db_index=True)
+    is_read = models.BooleanField(default=False, db_index=True)
+    is_pushed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        db_table = 'app_notifications'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['recipient', 'is_read', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"[{self.category}] {self.title} -> {self.recipient.username}"
 
 
 class FacultyHeartbeat(models.Model):
@@ -56,47 +103,6 @@ class GatePass(models.Model):
         return f"Pass #{self.pass_number} [{self.status}]"
 
 
-class SmsOutbox(models.Model):
-    PRIORITY_CHOICES = [
-        ('HIGH', 'High Priority (Gate Entry/Exit)'),
-        ('NORMAL', 'Normal Priority (Class Attendance)'),
-        ('LOW', 'Low Priority (Announcements)'),
-    ]
-    TRIGGER_EVENT_CHOICES = [
-        ('GATE_IN', 'Gate Entry Notice'),
-        ('GATE_OUT', 'Gate Exit Notice'),
-        ('CLASS_ABSENT', 'Class Absence'),
-        ('EMERGENCY', 'School Broadcast'),
-        ('TEST', 'Modem Signal Test'),
-    ]
-    STATUS_CHOICES = [
-        ('PENDING', 'Pending Dispatch'),
-        ('SENT', 'Delivered'),
-        ('FAILED', 'Failed / No Signal'),
-    ]
-
-    id = models.BigAutoField(primary_key=True)
-    recipient_name = models.CharField(max_length=150, blank=True, default='')
-    recipient_number = models.CharField(max_length=25, db_index=True)
-    message_body = models.TextField()
-    trigger_event = models.CharField(max_length=30, choices=TRIGGER_EVENT_CHOICES, default='GATE_IN', db_index=True)
-    category = models.CharField(max_length=30, choices=TRIGGER_EVENT_CHOICES, default='GATE_IN', blank=True)
-    priority = models.CharField(max_length=15, choices=PRIORITY_CHOICES, default='HIGH', db_index=True)
-    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='PENDING', db_index=True)
-    retry_count = models.PositiveIntegerField(default=0)
-    error_message = models.TextField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
-    sent_at = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        db_table = 'sms_outbox'
-        ordering = ['-created_at']
-        indexes = [models.Index(fields=['status', 'priority', 'created_at'])]
-
-    def __str__(self):
-        return f"SMS to {self.recipient_number} [{self.status}]"
-
-
 class AuditLog(models.Model):
     id = models.BigAutoField(primary_key=True)
     table_name = models.CharField(max_length=64)
@@ -118,8 +124,8 @@ class AuditLog(models.Model):
 
 class FacultyMonthlyDTR(models.Model):
     faculty = models.ForeignKey(FacultyProfile, on_delete=models.CASCADE, related_name='monthly_dtrs')
-    month = models.PositiveSmallIntegerField(help_text="Month number (1-12)")
-    year = models.PositiveSmallIntegerField(help_text="Year (e.g., 2026)")
+    month = models.PositiveSmallIntegerField()
+    year = models.PositiveSmallIntegerField()
     is_submitted = models.BooleanField(default=False)
     submitted_at = models.DateTimeField(null=True, blank=True)
     is_dept_head_approved = models.BooleanField(default=False)
@@ -138,3 +144,45 @@ class FacultyMonthlyDTR(models.Model):
 
     def __str__(self):
         return f"{self.faculty} - DTR {self.month}/{self.year}"
+
+
+class ParentFacultyMessage(models.Model):
+    """Stores direct chat messages between parents and faculty about a student."""
+    id = models.BigAutoField(primary_key=True)
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name='chat_messages',
+        db_index=True,
+    )
+    faculty = models.ForeignKey(
+        FacultyProfile,
+        on_delete=models.CASCADE,
+        related_name='chat_messages',
+        db_index=True,
+    )
+    parent = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='parent_chat_messages',
+        db_index=True,
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='sent_chat_messages',
+    )
+    body = models.TextField()
+    is_read = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        db_table = 'parent_faculty_messages'
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['student', 'faculty', 'created_at']),
+            models.Index(fields=['parent', 'is_read']),
+        ]
+
+    def __str__(self):
+        return f"Chat ({self.student.lrn}) - {self.sender.username}: {self.body[:30]}"

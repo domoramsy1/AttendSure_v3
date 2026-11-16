@@ -192,8 +192,8 @@ export const SettingsTab: React.FC = () => {
     try {
       const [dbRes, scanRes, smsRes] = await Promise.all([
         apiClient.get('/core/maintenance/db-check/').catch(() => ({ data: { database: 'OFFLINE', latency_ms: 999 } })),
-        apiClient.get('/telemetry/ping-scanners/').catch(() => ({ data: { online_count: 0, total_scanners: 0 } })),
-        apiClient.get('/sms/test-gateway/').catch(() => ({ data: { sent_today: 0, pending_queue: 0, failed_today: 0 } })),
+        apiClient.get('/system/status/').catch(() => ({ data: { online_count: 0, total_scanners: 0 } })),
+        apiClient.get('/system/status/').catch(() => ({ data: { sent_today: 0, pending_queue: 0, failed_today: 0 } })),
       ]);
 
       setHealth({
@@ -766,21 +766,21 @@ export const SettingsTab: React.FC = () => {
                 </div>
 
                 <div style={telemetryStatBox(tokens)}>
-                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>GATE SCANNERS</span>
+                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>USB QR & CAMPUS GPS</span>
                   <div style={{ fontSize: '1.05rem', fontWeight: 800, color: health.scannersOnline > 0 ? brand.primary : brand.warning }}>
                     {health.scannersOnline} of {health.scannersTotal} Online
                   </div>
                 </div>
 
                 <div style={telemetryStatBox(tokens)}>
-                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>TEXTS SENT TODAY</span>
+                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>PUSH ALERTS TODAY</span>
                   <div style={{ fontSize: '1.05rem', fontWeight: 800, color: brand.success }}>
                     {health.smsSentToday.toLocaleString()} Delivered
                   </div>
                 </div>
 
                 <div style={telemetryStatBox(tokens)}>
-                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>FAILED / QUEUED TEXTS</span>
+                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>PENDING PUSH ALERTS</span>
                   <div style={{ fontSize: '1.05rem', fontWeight: 800, color: health.smsFailed > 0 ? brand.danger : brand.primary }}>
                     {health.smsFailed} Failed / {health.smsPending} Waiting
                   </div>
@@ -796,13 +796,13 @@ export const SettingsTab: React.FC = () => {
                   </div>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
-                      Retry Failed Parent Texts
+                      Sync Parent Push Alerts
                     </h3>
-                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Fixes messages blocked by signal drops</span>
+                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Delivers pending mobile app notifications</span>
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
-                  If parents are not receiving gate entry or exit notifications due to temporary SIM signal loss, click here to restart the queue and re-send all failed texts automatically.
+                  Refreshes the mobile push notification service so parents immediately receive classroom attendance and exit pass alerts on the AttendSure mobile app.
                 </p>
                 <button
                   type="button"
@@ -812,13 +812,13 @@ export const SettingsTab: React.FC = () => {
                       'RETRY_SMS',
                       'Retry All Failed SMS Texts',
                       'This will re-queue all failed messages and instruct the GSM modem to send them immediately.',
-                      () => apiClient.post('/sms/test-gateway/', { action: 'RETRY_FAILED' })
+                      () => apiClient.post('/system/status/', { action: 'RETRY_FAILED' })
                     )
                   }
                   style={actionBtnStyle(brand.secondary)}
                 >
                   {actionLoading === 'RETRY_SMS' ? <Loader2 className="animate-spin" size={14} /> : <RotateCcw size={14} />}
-                  <span>{actionLoading === 'RETRY_SMS' ? 'Sending Texts...' : 'Retry All Failed Texts'}</span>
+                  <span>{actionLoading === 'RETRY_SMS' ? 'Sending Texts...' : 'Sync Push Alerts Now'}</span>
                 </button>
               </div>
 
@@ -862,13 +862,13 @@ export const SettingsTab: React.FC = () => {
                   </div>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
-                      Check Gate Scanners
+                      Check USB QR & Campus GPS
                     </h3>
                     <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Tests connection to RFID &amp; QR terminals</span>
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
-                  Sends a live ping signal to the school gate scanners. Verifies whether RFID card readers and cameras are responding and ready to record learner entries.
+                  Verifies that classroom USB QR code scanning and faculty mobile facial recognition & campus GPS check-ins are online and connected to PostgreSQL.
                 </p>
                 <button
                   type="button"
@@ -878,13 +878,13 @@ export const SettingsTab: React.FC = () => {
                       'PING_KIOSK',
                       'Test Gate Scanner Terminals',
                       'This sends a ping test to all enrolled campus gate scanners.',
-                      () => apiClient.get('/telemetry/ping-scanners/')
+                      () => apiClient.get('/system/status/')
                     )
                   }
                   style={actionBtnStyle(brand.success)}
                 >
                   {actionLoading === 'PING_KIOSK' ? <Loader2 className="animate-spin" size={14} /> : <Radio size={14} />}
-                  <span>{actionLoading === 'PING_KIOSK' ? 'Checking Scanners...' : 'Check Scanner Terminals'}</span>
+                  <span>{actionLoading === 'PING_KIOSK' ? 'Checking Scanners...' : 'Verify Software Stations'}</span>
                 </button>
               </div>
 
@@ -895,7 +895,7 @@ export const SettingsTab: React.FC = () => {
                   </div>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
-                      Unlock Staff Accounts
+                      Unlock Faculty Accounts
                     </h3>
                     <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Unfreezes accounts locked by wrong passwords</span>
                   </div>
@@ -917,7 +917,7 @@ export const SettingsTab: React.FC = () => {
                   style={actionBtnStyle(brand.secondary)}
                 >
                   {actionLoading === 'UNLOCK_ACCOUNTS' ? <Loader2 className="animate-spin" size={14} /> : <KeyRound size={14} />}
-                  <span>{actionLoading === 'UNLOCK_ACCOUNTS' ? 'Unlocking...' : 'Unlock Staff Accounts'}</span>
+                  <span>{actionLoading === 'UNLOCK_ACCOUNTS' ? 'Unlocking...' : 'Unlock Faculty Accounts'}</span>
                 </button>
               </div>
             </div>
@@ -1302,7 +1302,7 @@ export const SettingsTab: React.FC = () => {
                     required
                     value={formData.school_name}
                     onChange={(e) => setFormData({ ...formData, school_name: e.target.value })}
-                    placeholder="e.g. Lapasan National High School"
+                    placeholder="e.g. Macasandig National High School"
                     style={inputStyle}
                   />
                 </div>
@@ -1386,7 +1386,7 @@ export const SettingsTab: React.FC = () => {
                       required
                       value={formData.address}
                       onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                      placeholder="e.g. Lapasan, Cagayan de Oro City"
+                      placeholder="e.g. Macasandig, Cagayan de Oro City"
                       style={inputStyle}
                     />
                     <MapPin size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10 }} />

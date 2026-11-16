@@ -1,197 +1,182 @@
 """
-AttendSure V3 - Unified API Routing
+AttendSure V3 - Unified API URL Router (Pure Software Architecture)
 File: backend/apps/api/urls.py
 """
 
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from apps.api.views.auth import (
-    DatabaseLoginView,
-    CurrentUserView,
-    LiveFieldValidationAPIView,
-    RegisterPushTokenAPIView,
-)
-from apps.api.views.classroom import (
-    ClassListAPIView,
-    FacultyClassroomListAPIView,
-    ClassroomBatchScanAPIView,
-    ClassroomStudentScanAPIView,
-    UserDeviceRegisterAPIView,
+from apps.api.views import (
+    ActivityLogAPIView,
+    ActivityLogViewSet,
+    AdviserMatrixAPIView,
     AdviserSectionMatrixAPIView,
-)
-from apps.api.views.dashboard import DashboardOverviewAPIView
-from apps.api.views.gate import (
-    GateLogsAPIView,
-    KioskScanAPIView,
-    GatePassViewSet,
-)
-from apps.api.views.geofence import (
-    GeofenceStatusAPIView,
-    GeofenceCheckInAPIView,
-    GeofenceAuditHistoryAPIView,
-    FacultyDeviceResetAPIView,
-)
-from apps.api.views.reports import (
-    DepEdSF1DataAPIView,
-    DepEdSF2DataAPIView,
-    DepEdSF4DataAPIView,
-    DTRListAPIView,
-    UnifiedReportExportAPIView,
-    ReportAuditLogAPIView,
-)
-from apps.api.views.sections import SectionListAPIView, SectionDetailAPIView
-from apps.api.views.sms import (
-    PendingSmsDispatchAPIView,
-    BulkSmsStatusAPIView,
-    MarkSmsStatusAPIView,
-)
-from apps.api.views.utils import (
-    SchoolSettingsAPIView,
+    AppNotificationViewSet,
     CalendarExceptionAPIView,
-    ping_scanners,
-    test_sms_gateway,
+    ChatMessagesAPIView,
+    ChatThreadsAPIView,
+    ClassListAPIView,
+    ClassroomAttendanceCRUDAPIView,
+    ClassroomBatchScanAPIView,
+    ClassroomScanAPIView,
+    ClassroomStudentScanAPIView,
+    CurrentUserProfileView,
+    CurrentUserView,
+    DashboardOverviewAPIView,
+    DatabaseLoginView,
+    DepEdSF4DataAPIView,
+    EdFiOpenStandardExportAPIView,
+    EmergencyCampusRollCallAPIView,
+    EnrollmentViewSet,
+    EnterpriseSDGImpactAPIView,
+    FacultyClassroomClassListAPIView,
+    FacultyClassroomListAPIView,
+    FacultyDeviceResetAPIView,
+    FacultyProfileViewSet,
+    GatePassViewSet,
+    GeofenceAuditAPIView,
+    GeofenceCheckInAPIView,
+    GeofenceManagementAPIView,
+    GeofenceStatusAPIView,
+    GradeLevelViewSet,
+    LiveFieldValidationAPIView,
+    LoafingMonitoringAPIView,
+    LoginAPIView,
+    MarkNotificationsReadAPIView,
+    MyAssignedClassesAPIView,
+    OfflineQRBatchSyncAPIView,
+    ParentPortalAPIView,
+    RegisterPushTokenAPIView,
+    ReportAuditLogAPIView,
+    RoomViewSet,
+    SARDOEarlyWarningAPIView,
+    ScheduleViewSet,
+    SchoolSettingsAPIView,
+    SectionDetailAPIView,
+    SectionListAPIView,
+    SectionViewSet,
+    SignedStudentQRCardAPIView,
+    StudentListAPIView,
+    StudentQRCardAPIView,
+    StudentViewSet,
+    SubjectViewSet,
+    UnifiedReportExportAPIView,
+    UnifiedReportPrintAPIView,
+    UserActivityLogsAPIView,
+    UserManagementViewSet,
     db_check,
     flush_cache,
 )
-from apps.api.views.viewsets import (
-    RoomViewSet,
-    GradeLevelViewSet,
-    SubjectViewSet,
-    SectionViewSet,
-    ScheduleViewSet,
-    StudentViewSet,
-    FacultyProfileViewSet,
-    IoTKioskViewSet,
-    SmsOutboxViewSet,
-    UserManagementViewSet,
-    AcademicYearViewSet,
-    EnrollmentViewSet,
+from apps.api.views.utils import (
+    FlexibleDTRReportAPIView,
+    FlexibleSF1ReportAPIView,
+    FlexibleSF2ReportAPIView,
+    SystemStatusAPIView,
+    UnifiedGeofenceRootAPIView,
 )
-from apps.api.views.monitoring import (
-    LoafingMonitoringAPIView,
-    DTRLockCheckAPIView,
-    LoafingReconciliationAPIView,
-)
-from apps.api.views.activity import UserActivityLogsAPIView
 
 router = DefaultRouter()
-router.register(r'rooms', RoomViewSet, basename='room')
-router.register(r'grade-levels', GradeLevelViewSet, basename='grade-level')
-router.register(r'subjects', SubjectViewSet, basename='subject')
-router.register(r'sections', SectionViewSet, basename='section')
-router.register(r'schedules', ScheduleViewSet, basename='schedule')
-router.register(r'students', StudentViewSet, basename='student')
+router.register(r'students', StudentViewSet, basename='students')
 router.register(r'faculty', FacultyProfileViewSet, basename='faculty')
 router.register(r'facultys', FacultyProfileViewSet, basename='facultys')
-router.register(r'kiosks', IoTKioskViewSet, basename='kiosk')
-router.register(r'scanners', IoTKioskViewSet, basename='scanner')
-router.register(r'gate-passes', GatePassViewSet, basename='gate-pass')
-router.register(r'sms-outbox', SmsOutboxViewSet, basename='sms-outbox')
-router.register(r'users', UserManagementViewSet, basename='user')
-router.register(r'academic-years', AcademicYearViewSet, basename='academic-year')
-router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
+router.register(r'users', UserManagementViewSet, basename='users')
+router.register(r'sections', SectionViewSet, basename='sections')
+router.register(r'grade-levels', GradeLevelViewSet, basename='grade-levels')
+router.register(r'rooms', RoomViewSet, basename='rooms')
+router.register(r'subjects', SubjectViewSet, basename='subjects')
+router.register(r'schedules', ScheduleViewSet, basename='schedules')
+router.register(r'enrollments', EnrollmentViewSet, basename='enrollments')
+router.register(r'gate-passes', GatePassViewSet, basename='gate-passes')
+router.register(r'exit-passes', GatePassViewSet, basename='exit-passes')
+router.register(r'notifications', AppNotificationViewSet, basename='notifications')
+router.register(r'activity-logs', ActivityLogViewSet, basename='activity-logs')
 
 urlpatterns = [
-    # Direct fallbacks for SMS actions to ensure instant resolution
-    path(
-        'sms-outbox/clear-pending/',
-        SmsOutboxViewSet.as_view({'delete': 'clear_pending', 'post': 'clear_pending'}),
-        name='sms-outbox-clear-pending'
-    ),
-    path(
-        'sms-outbox/delete-delivered/',
-        SmsOutboxViewSet.as_view({'delete': 'delete_delivered', 'post': 'delete_delivered'}),
-        name='sms-outbox-delete-delivered'
-    ),
-    path(
-        'sms-outbox/retry-all-failed/',
-        SmsOutboxViewSet.as_view({'post': 'retry_all_failed'}),
-        name='sms-outbox-retry-all'
-    ),
-    path(
-        'sms-outbox/metrics/',
-        SmsOutboxViewSet.as_view({'get': 'metrics'}),
-        name='sms-outbox-metrics'
-    ),
-    path(
-        'sms-outbox/broadcast/',
-        SmsOutboxViewSet.as_view({'post': 'broadcast_announcement'}),
-        name='sms-outbox-broadcast'
-    ),
-
-    # Router endpoints
-    path('', include(router.urls)),
-
-    # Authentication & User Profile
+    # Authentication & Personal Profile CRUD
     path('auth/login/', DatabaseLoginView.as_view(), name='auth-login'),
-    path('auth/me/', CurrentUserView.as_view(), name='auth-current-user'),
-    path('me/', CurrentUserView.as_view(), name='current-user-alias'),
-    path('auth/validate-field/', LiveFieldValidationAPIView.as_view(), name='auth-validate-field'),
-    path('auth/push-token/', RegisterPushTokenAPIView.as_view(), name='auth-push-token'),
+    path('login/', LoginAPIView.as_view(), name='login-alias'),
+    path('auth/me/', CurrentUserView.as_view(), name='auth-me'),
+    path('me/', CurrentUserProfileView.as_view(), name='me-alias'),
+    path('profile/', CurrentUserView.as_view(), name='profile-alias'),
+    path('auth/validate-field/', LiveFieldValidationAPIView.as_view(), name='validate-field'),
+    path('validate-field/', LiveFieldValidationAPIView.as_view(), name='validate-field-alias'),
+    path('auth/register-push-token/', RegisterPushTokenAPIView.as_view(), name='register-push-token'),
+    path('register-push-token/', RegisterPushTokenAPIView.as_view(), name='register-push-token-alias'),
 
-    # Classroom Attendance & Scanner (Web Laptop / Mobile OTG Barcode Gun & Camera)
-    path('classroom/class_list/', ClassListAPIView.as_view(), name='classroom-class-list'),
-    path('classroom/my-classes/', ClassListAPIView.as_view(), name='classroom-my-classes'),
-    path('classroom/student_list/', FacultyClassroomListAPIView.as_view(), name='classroom-student-list'),
-    path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='classroom-batch-scan'),
-    path('classroom/scan/', ClassroomStudentScanAPIView.as_view(), name='classroom-single-scan'),
-    path('academics/classroom-scan/', ClassroomStudentScanAPIView.as_view(), name='academics-classroom-scan'),
-    path('classroom/adviser-matrix/', AdviserSectionMatrixAPIView.as_view(), name='adviser-section-matrix'),
-
-    # Hardware & Mobile Device Registration (For Geofencing Compliance)
-    path('devices/register/', UserDeviceRegisterAPIView.as_view(), name='devices-register'),
-    path('hardware/register-device/', UserDeviceRegisterAPIView.as_view(), name='hardware-register-device'),
-
-    # Dashboard Overview
+    # Dashboard & System Health
     path('dashboard/overview/', DashboardOverviewAPIView.as_view(), name='dashboard-overview'),
-
-    # Gate & Scanners
-    path('gate/logs/', GateLogsAPIView.as_view(), name='gate-logs'),
-    path('gate/scan/', KioskScanAPIView.as_view(), name='gate-scan'),
-    path('kiosk/scan/', KioskScanAPIView.as_view(), name='kiosk-scan'),
-
-    # Geofence, Hardware Telemetry & Device Protection
-    path('geofence/', GeofenceStatusAPIView.as_view(), name='geofence-status'),
-    path('geofence/checkin/', GeofenceCheckInAPIView.as_view(), name='geofence-checkin'),
-    path('geofence/audit/', GeofenceAuditHistoryAPIView.as_view(), name='geofence-audit-history'),
-    path('geofence/reset-device/<int:pk>/', FacultyDeviceResetAPIView.as_view(), name='geofence-reset-device'),
-    path('faculty/<int:pk>/reset-device/', FacultyDeviceResetAPIView.as_view(), name='faculty-reset-device-alias'),
-    path('telemetry/heartbeat/', GeofenceCheckInAPIView.as_view(), name='telemetry-heartbeat'),
-
-    # DepEd Reports & Civil Service Form 48 (DTR)
-    path('reports/sf1/<int:section_id>/', DepEdSF1DataAPIView.as_view(), name='reports-sf1'),
-    path('reports/sf2/<int:section_id>/', DepEdSF2DataAPIView.as_view(), name='reports-sf2'),
-    path('reports/sf4/', DepEdSF4DataAPIView.as_view(), name='reports-sf4'),
-    path('reports/export/', UnifiedReportExportAPIView.as_view(), name='reports-export'),
-    path('reports/audit/', ReportAuditLogAPIView.as_view(), name='reports-audit'),
-    path('dtr/', DTRListAPIView.as_view(), name='dtr-list'),
-    path('dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='dtr-faculty'),
-    path('reports/dtr/', DTRListAPIView.as_view(), name='reports-dtr-list'),
-    path('reports/dtr/<int:faculty_id>/', DTRListAPIView.as_view(), name='reports-dtr-detail'),
-
-    # Loafing Monitoring, DTR Print/Download Lock & Defense Reconciliation
-    path('monitoring/loafing/', LoafingMonitoringAPIView.as_view(), name='monitoring-loafing'),
-    path('monitoring/dtr-lock-check/', DTRLockCheckAPIView.as_view(), name='monitoring-dtr-lock-check'),
-    path('dtr/lock-check/', DTRLockCheckAPIView.as_view(), name='dtr-lock-check'),
-    path('monitoring/reconciliation/', LoafingReconciliationAPIView.as_view(), name='monitoring-reconciliation'),
-    path('monitoring/loafing/reconcile/', LoafingReconciliationAPIView.as_view(), name='monitoring-loafing-reconcile'),
-
-    # Hardware SMS Daemon
-    path('sms/pending/', PendingSmsDispatchAPIView.as_view(), name='sms-pending'),
-    path('sms/bulk-status/', BulkSmsStatusAPIView.as_view(), name='sms-bulk-status'),
-    path('sms/mark-status/<int:pk>/', MarkSmsStatusAPIView.as_view(), name='sms-mark-status'),
-    path('sms/test-gateway/', test_sms_gateway, name='sms-test-gateway'),
-
-    # Telemetry Scanners
-    path('telemetry/ping-scanners/', ping_scanners, name='telemetry-ping-scanners'),
-
-    # Core Maintenance
+    path('dashboard/', DashboardOverviewAPIView.as_view(), name='dashboard-alias'),
+    path('system/status/', SystemStatusAPIView.as_view(), name='system-status'),
+    path('health/db/', db_check, name='db-check'),
     path('core/maintenance/db-check/', db_check, name='core-maintenance-db-check'),
+    path('cache/flush/', flush_cache, name='flush-cache'),
     path('core/maintenance/flush-cache/', flush_cache, name='core-maintenance-flush-cache'),
 
-    # Settings & Audit Trails
-    path('settings/school/', SchoolSettingsAPIView.as_view(), name='settings-school'),
-    path('calendar/exceptions/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions'),
-    path('activity-logs/', UserActivityLogsAPIView.as_view(), name='user-activity-logs'),
+    # Classroom USB QR Scanning, Offline Queue Sync & Attendance CRUD
+    path('classroom/scan/', ClassroomStudentScanAPIView.as_view(), name='classroom-scan'),
+    path('classroom/student-scan/', ClassroomScanAPIView.as_view(), name='classroom-student-scan'),
+    path('classroom/batch-scan/', ClassroomBatchScanAPIView.as_view(), name='classroom-batch-scan'),
+    path('classroom/offline-sync/', OfflineQRBatchSyncAPIView.as_view(), name='classroom-offline-sync'),
+    path('classroom/sync-offline/', OfflineQRBatchSyncAPIView.as_view(), name='classroom-sync-offline'),
+    path('classroom/attendance/', ClassroomAttendanceCRUDAPIView.as_view(), name='classroom-attendance-crud'),
+    path('attendance-logs/', ClassroomAttendanceCRUDAPIView.as_view(), name='attendance-logs-crud'),
+    path('classroom/qr-cards/', StudentQRCardAPIView.as_view(), name='classroom-qr-cards'),
+    path('classroom/signed-qr-cards/', SignedStudentQRCardAPIView.as_view(), name='classroom-signed-qr-cards'),
+    path('classroom/classes/', ClassListAPIView.as_view(), name='classroom-classes'),
+    path('classroom/class-list/', ClassListAPIView.as_view(), name='classroom-class-list'),
+    path('classroom/class_list/', ClassListAPIView.as_view(), name='classroom-class-list-underscore'),
+    path('my-classes/', MyAssignedClassesAPIView.as_view(), name='my-classes'),
+    path('classroom/students/', FacultyClassroomListAPIView.as_view(), name='classroom-students'),
+    path('classroom/student-list/', FacultyClassroomListAPIView.as_view(), name='classroom-student-list'),
+    path('classroom/student_list/', FacultyClassroomListAPIView.as_view(), name='classroom-student-list-underscore'),
+    path('student-list/', StudentListAPIView.as_view(), name='student-list-alias'),
+    path('classroom/adviser-matrix/', AdviserSectionMatrixAPIView.as_view(), name='adviser-section-matrix'),
+    path('adviser-matrix/', AdviserMatrixAPIView.as_view(), name='adviser-matrix-alias'),
+
+    # Faculty Mobile Facial Recognition & Campus GPS Boundary
+    path('geofence/', UnifiedGeofenceRootAPIView.as_view(), name='geofence-root'),
+    path('geofence/check-in/', GeofenceCheckInAPIView.as_view(), name='geofence-check-in'),
+    path('telemetry/heartbeat/', GeofenceCheckInAPIView.as_view(), name='telemetry-heartbeat-alias'),
+    path('geofence/status/', GeofenceStatusAPIView.as_view(), name='geofence-status'),
+    path('geofence/manage/', GeofenceManagementAPIView.as_view(), name='geofence-manage'),
+    path('geofence/audit/', GeofenceAuditAPIView.as_view(), name='geofence-audit'),
+    path('geofence/reset-device/', FacultyDeviceResetAPIView.as_view(), name='geofence-reset-device'),
+    path('monitoring/loafing/', LoafingMonitoringAPIView.as_view(), name='loafing-monitoring'),
+
+    # Parent Portal & Direct Parent-Faculty Chat CRUD
+    path('parent/portal/', ParentPortalAPIView.as_view(), name='parent-portal'),
+    path('parent/children/', ParentPortalAPIView.as_view(), name='parent-children'),
+    path('parent/notifications/read/', MarkNotificationsReadAPIView.as_view(), name='parent-notifications-read'),
+    path('notifications/mark-read/', MarkNotificationsReadAPIView.as_view(), name='notifications-mark-read'),
+    path('chat/threads/', ChatThreadsAPIView.as_view(), name='chat-threads'),
+    path('chat/messages/', ChatMessagesAPIView.as_view(), name='chat-messages'),
+
+    # Institutional Settings & Sections
+    path('settings/school/', SchoolSettingsAPIView.as_view(), name='school-settings'),
+    path('settings/calendar-exceptions/', CalendarExceptionAPIView.as_view(), name='calendar-exceptions'),
+    path('user-activity-logs/', UserActivityLogsAPIView.as_view(), name='user-activity-logs'),
+    path('audit-logs/', ActivityLogAPIView.as_view(), name='audit-logs-alias'),
+    path('sections-list/', SectionListAPIView.as_view(), name='sections-list'),
+    path('sections-detail/<int:pk>/', SectionDetailAPIView.as_view(), name='sections-detail'),
+
+    # Official Forms & Reports (Supports both query params and path IDs)
+    path('reports/dtr/', FlexibleDTRReportAPIView.as_view(), name='reports-dtr'),
+    path('reports/dtr/<int:pk>/', FlexibleDTRReportAPIView.as_view(), name='reports-dtr-detail'),
+    path('reports/sf1/', FlexibleSF1ReportAPIView.as_view(), name='reports-sf1'),
+    path('reports/sf1/<int:pk>/', FlexibleSF1ReportAPIView.as_view(), name='reports-sf1-detail'),
+    path('reports/sf2/', FlexibleSF2ReportAPIView.as_view(), name='reports-sf2'),
+    path('reports/sf2/<int:pk>/', FlexibleSF2ReportAPIView.as_view(), name='reports-sf2-detail'),
+    path('reports/sf4/', DepEdSF4DataAPIView.as_view(), name='reports-sf4'),
+    path('reports/audit-log/', ReportAuditLogAPIView.as_view(), name='reports-audit-log'),
+    path('reports/export/', UnifiedReportExportAPIView.as_view(), name='reports-export'),
+    path('reports/print/', UnifiedReportPrintAPIView.as_view(), name='reports-print'),
+
+    # Enterprise Analytics & SARDO Early Warning
+    path('enterprise/sardo-early-warning/', SARDOEarlyWarningAPIView.as_view(), name='sardo-early-warning'),
+    path('enterprise/emergency-roll-call/', EmergencyCampusRollCallAPIView.as_view(), name='emergency-roll-call'),
+    path('enterprise/edfi-export/', EdFiOpenStandardExportAPIView.as_view(), name='edfi-export'),
+    path('enterprise/sdg-impact/', EnterpriseSDGImpactAPIView.as_view(), name='sdg-impact'),
+
+    # ViewSet CRUD Routes
+    path('', include(router.urls)),
 ]

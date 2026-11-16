@@ -1,1258 +1,640 @@
 /**
- * AttendSure - IoT Management
- * File: frontend/src/components/tabs/ScannersTab.tsx
- *
- * Key Highlights:
- * 1. MODERN ALERTS: Uses showConfirm and showAlert from AlertContext instead of window.alert/confirm.
- * 2. LIVE DATABASE POLLING: Silent 3-second heartbeat tracks real-time terminal online/offline statuses.
- * 3. INTERACTION GUARD: Polling pauses automatically while modals and live verification tests run.
- * 4. DUAL-MODE HARDWARE INSPECTOR: Simulates live RFID taps and optical QR scans against backend endpoints.
- * 5. SERVER PAGINATION & TELEMETRY: Overview cards for online hardware and items-per-page selection.
+ * AttendSure V3 - Classroom USB QR Scanner Station (Offline-First & Auto-Sync)
+ * File: web/src/components/tabs/ScannersTab.tsx
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import apiClient from '../../api/client';
-import { ModuleTableLayout } from './ModuleTableLayout';
-import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
-import { useAlert } from '../../context/AlertContext';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Cpu,
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  CloudUpload,
+  Laptop,
+  QrCode,
+  RefreshCw,
+  Smartphone,
+  Trash2,
   Wifi,
   WifiOff,
-  Key,
-  Pencil,
-  Trash2,
-  Loader2,
-  Copy,
-  Check,
-  ShieldCheck,
-  ShieldAlert,
-  MapPin,
-  RefreshCw,
-  Eye,
-  EyeOff,
-  Terminal,
-  Radio,
-  Server,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-  Send,
-  Play,
-  Plus,
-  User,
 } from 'lucide-react';
+import apiClient from '../../api/client';
+import { useApiResource } from '../../hooks/useApiResource';
 
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
-
-interface IoTKiosk {
+interface ScheduleOption {
   id: number;
-  kiosk_code: string;
-  terminal_name: string;
-  location: string;
-  secret_key?: string;
-  is_active: boolean;
-  last_ping: string | null;
-  is_online?: boolean;
-  created_at?: string;
-  updated_at?: string;
+  section_name: string;
+  subject_code: string;
+  subject_title: string;
+  start_time: string;
+  end_time: string;
 }
 
-interface TestSubject {
-  id: number;
-  name: string;
-  type: 'STUDENT' | 'STAFF';
-  rfid_uid?: string;
-  qr_token?: string;
+interface QueuedQRScan {
+  id: string;
+  qr_token: string;
+  schedule_id: number | null;
+  schedule_label: string;
+  scanned_at: string;
+  display_time: string;
 }
 
-interface PaginatedResponse<T> {
-  count: number;
-  total_pages?: number;
-  current_page?: number;
-  results: T[];
+interface ScanHistoryItem {
+  student_name: string;
+  lrn: string;
+  section: string;
+  status: string;
+  scanned_at: string;
+  attendance_note: string;
+  is_offline?: boolean;
 }
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
+const OFFLINE_QUEUE_KEY = 'attendsure_offline_qr_queue_v3';
+
+function loadSavedQueue(): QueuedQRScan[] {
+  try {
+    const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveQueueToStorage(items: QueuedQRScan[]): void {
+  try {
+    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(items));
+  } catch {}
+}
 
 export const ScannersTab: React.FC = () => {
-  const { showAlert, showConfirm } = useAlert();
+  const { data: rawSchedules, reload: reloadSchedules } = useApiResource<any>('/schedules/', []);
+  const { data: geofenceStatus, reload: reloadGeofence } = useApiResource<any>('/geofence/status/', { heartbeats: [] });
 
-  const [scanners, setScanners] = useState<IoTKiosk[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  const schedules: ScheduleOption[] = useMemo(() => {
+    if (Array.isArray(rawSchedules)) return rawSchedules;
+    if (Array.isArray(rawSchedules?.results)) return rawSchedules.results;
+    return [];
+  }, [rawSchedules]);
 
-  // Pagination State
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(25);
-  const [totalPages, setTotalPages] = useState<number>(1);
-  const [totalCount, setTotalCount] = useState<number>(0);
+  const activeFacultyCount = useMemo(() => {
+    return Array.isArray(geofenceStatus?.heartbeats) ? geofenceStatus.heartbeats.length : 0;
+  }, [geofenceStatus]);
 
-  // Security & Modal States
-  const [revealedSecrets, setRevealedSecrets] = useState<Record<number, boolean>>({});
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [inspectedScanner, setInspectedScanner] = useState<IoTKiosk | null>(null);
+  const [selectedScheduleId, setSelectedScheduleId] = useState<string>('');
+  const [qrInput, setQrInput] = useState<string>('');
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [syncing, setSyncing] = useState<boolean>(false);
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
-  // Dynamic Live Test State
-  const [testSubjects, setTestSubjects] = useState<TestSubject[]>([]);
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string>('');
-  const [activeTestMode, setActiveTestMode] = useState<'RFID' | 'QR'>('RFID');
-  const [testExecuting, setTestExecuting] = useState(false);
-  const [testResult, setTestResult] = useState<any | null>(null);
+  const [offlineQueue, setOfflineQueue] = useState<QueuedQRScan[]>(loadSavedQueue);
+  const [lastScan, setLastScan] = useState<ScanHistoryItem | null>(null);
+  const [scanMessage, setScanMessage] = useState<{ text: string; type: 'error' | 'warning' | 'success' } | null>(null);
+  const [recentScans, setRecentScans] = useState<ScanHistoryItem[]>([]);
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingScanner, setEditingScanner] = useState<IoTKiosk | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [formData, setFormData] = useState({
-    kiosk_code: '',
-    terminal_name: '',
-    location: '',
-    secret_key: '',
-    is_active: true,
-  });
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const lastTokenTimeRef = useRef<{ token: string; ts: number }>({ token: '', ts: 0 });
 
-  // Guard flag: prevents silent background polling from interrupting open dialogs
-  const isInteracting = useRef(false);
-  isInteracting.current = isModalOpen || Boolean(inspectedScanner) || saving || testExecuting;
-
-  // ============================================================================
-  // DATABASE DATA FETCHING & LIVE POLLING
-  // ============================================================================
-
-  const fetchScanners = useCallback(
-    async (page = 1, size = 25, query = '', silent = false) => {
-      try {
-        if (!silent) setLoading(true);
-        setError(null);
-        const res = await apiClient.get<PaginatedResponse<IoTKiosk> | IoTKiosk[]>('/scanners/', {
-          params: {
-            page,
-            page_size: size,
-            search: query.trim() || undefined,
-          },
-        });
-
-        if (res.data && 'results' in res.data) {
-          setScanners(res.data.results);
-          setTotalCount(res.data.count);
-          setTotalPages(res.data.total_pages || Math.ceil(res.data.count / size) || 1);
-          setCurrentPage(res.data.current_page || page);
-        } else if (Array.isArray(res.data)) {
-          setScanners(res.data);
-          setTotalCount(res.data.length);
-          setTotalPages(1);
-          setCurrentPage(1);
-        }
-      } catch (err: any) {
-        if (!silent) {
-          setError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to load scanner terminals from database.');
-        }
-      } finally {
-        if (!silent) setLoading(false);
-      }
-    },
-    []
-  );
-
-  // Debounced search watcher
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setCurrentPage(1);
-      fetchScanners(1, pageSize, search, false);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [search, pageSize, fetchScanners]);
+    if (schedules.length > 0 && !selectedScheduleId) {
+      setSelectedScheduleId(String(schedules[0].id));
+    }
+  }, [schedules, selectedScheduleId]);
 
-  // LIVE ZERO-REFRESH POLLING: Syncs hardware online/standby pings every 3 seconds
   useEffect(() => {
-    const liveInterval = setInterval(() => {
-      if (!isInteracting.current) {
-        fetchScanners(currentPage, pageSize, search, true);
-      }
-    }, 3000);
+    saveQueueToStorage(offlineQueue);
+  }, [offlineQueue]);
 
-    return () => clearInterval(liveInterval);
-  }, [currentPage, pageSize, search, fetchScanners]);
+  const syncOfflineQueue = useCallback(async () => {
+    const currentQueue = loadSavedQueue();
+    if (currentQueue.length === 0 || syncing) return;
 
-  // Dynamically load real registered records for dual-mode verification
-  const loadDynamicTestSubjects = async () => {
+    setSyncing(true);
     try {
-      const [stuRes, facRes] = await Promise.all([
-        apiClient.get('/students/?page_size=15'),
-        apiClient.get('/facultys/?page_size=15'),
-      ]);
-
-      const stuList = (Array.isArray(stuRes.data) ? stuRes.data : stuRes.data?.results || []).map((s: any) => ({
-        id: s.id,
-        name: `${s.first_name} ${s.last_name} (LRN: ${s.lrn})`,
-        type: 'STUDENT' as const,
-        rfid_uid: s.rfid_uid || '',
-        qr_token: s.qr_token || '',
-      }));
-
-      const facList = (Array.isArray(facRes.data) ? facRes.data : facRes.data?.results || []).map((f: any) => ({
-        id: f.id + 100000,
-        name: `${f.first_name} ${f.last_name} (${f.position || 'Faculty'})`,
-        type: 'STAFF' as const,
-        rfid_uid: f.rfid_uid || '',
-        qr_token: f.qr_token || '',
-      }));
-
-      const combined = [...stuList, ...facList];
-      setTestSubjects(combined);
-      if (combined.length > 0) {
-        setSelectedSubjectId(String(combined[0].id));
-      }
-    } catch (err) {
-      console.error('Failed to load active identity subjects:', err);
-    }
-  };
-
-  const handleOpenInspector = (scanner: IoTKiosk) => {
-    setInspectedScanner(scanner);
-    setTestResult(null);
-    loadDynamicTestSubjects();
-  };
-
-  const handlePageChange = (newPage: number) => {
-    if (newPage < 1 || newPage > totalPages) return;
-    setCurrentPage(newPage);
-    fetchScanners(newPage, pageSize, search, false);
-  };
-
-  const handlePageSizeChange = (newSize: number) => {
-    setPageSize(newSize);
-    setCurrentPage(1);
-    fetchScanners(1, newSize, search, false);
-  };
-
-  const getDeviceHealth = (lastPing: string | null, isActive: boolean) => {
-    if (!isActive) {
-      return { status: 'DISABLED', label: 'Disabled', color: '#64748b', bg: '#f1f5f9', border: '#cbd5e1' };
-    }
-    if (!lastPing) {
-      return { status: 'STANDBY', label: 'Standby / No Taps', color: '#d97706', bg: '#fffbeb', border: '#fcd34d' };
-    }
-
-    const diffMinutes = (Date.now() - new Date(lastPing).getTime()) / (1000 * 60);
-    if (diffMinutes <= 5) {
-      return { status: 'ONLINE', label: 'Online', color: '#059669', bg: '#ecfdf5', border: '#a7f3d0' };
-    }
-    return { status: 'OFFLINE', label: 'Offline', color: '#dc2626', bg: '#fef2f2', border: '#fecaca' };
-  };
-
-  const metrics = useMemo(() => {
-    const online = scanners.filter((s) => s.is_active && getDeviceHealth(s.last_ping, s.is_active).status === 'ONLINE').length;
-    const active = scanners.filter((s) => s.is_active).length;
-    const inactiveOrOffline = scanners.length - online;
-    return { online, active, inactiveOrOffline };
-  }, [scanners]);
-
-  const createSecureToken = () => {
-    try {
-      const randomBuffer = new Uint8Array(12);
-      window.crypto.getRandomValues(randomBuffer);
-      const token = Array.from(randomBuffer, (byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
-      return `SEC-${token.slice(0, 4)}-${token.slice(4, 8)}-${token.slice(8, 12)}-${token.slice(12, 16)}`;
-    } catch {
-      return `SEC-${Date.now().toString(36).toUpperCase()}`;
-    }
-  };
-
-  const handleCopy = async (text: string, id: string) => {
-    let success = false;
-    if (navigator.clipboard && window.isSecureContext) {
-      try {
-        await navigator.clipboard.writeText(text);
-        success = true;
-      } catch {
-        success = false;
-      }
-    }
-    if (!success) {
-      try {
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        success = document.execCommand('copy');
-        textArea.remove();
-      } catch (err) {
-        console.error('Copy fallback failed:', err);
-      }
-    }
-    if (success) {
-      setCopiedKey(id);
-      setTimeout(() => setCopiedKey(null), 2000);
-    }
-  };
-
-  // ============================================================================
-  // CRUD ACTIONS
-  // ============================================================================
-
-  const handleOpenCreate = () => {
-    setEditingScanner(null);
-    setFormData({
-      kiosk_code: '',
-      terminal_name: '',
-      location: '',
-      secret_key: createSecureToken(),
-      is_active: true,
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleOpenEdit = (scanner: IoTKiosk) => {
-    setEditingScanner(scanner);
-    setFormData({
-      kiosk_code: scanner.kiosk_code,
-      terminal_name: scanner.terminal_name,
-      location: scanner.location,
-      secret_key: scanner.secret_key || '',
-      is_active: scanner.is_active,
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const payload: any = {
-        kiosk_code: formData.kiosk_code.trim(),
-        terminal_name: formData.terminal_name.trim(),
-        location: formData.location.trim(),
-        is_active: formData.is_active,
+      const payload = {
+        scans: currentQueue.map((item) => ({
+          qr_token: item.qr_token,
+          schedule_id: item.schedule_id,
+          scanned_at: item.scanned_at,
+        })),
       };
+      const res = await apiClient.post('/classroom/offline-sync/', payload);
+      const synced = Number(res.data?.synced_count || 0);
+      const dupes = Number(res.data?.duplicate_count || 0);
+      const rejected = Number(res.data?.rejected_count || 0);
 
-      if (formData.secret_key.trim()) {
-        payload.secret_key = formData.secret_key.trim();
-      }
-
-      if (editingScanner) {
-        await apiClient.put(`/scanners/${editingScanner.id}/`, payload);
-        showAlert({
-          title: 'Terminal Updated',
-          message: `Scanner terminal "${formData.terminal_name}" updated successfully.`,
-          type: 'success',
-        });
-      } else {
-        await apiClient.post('/scanners/', payload);
-        showAlert({
-          title: 'Terminal Registered',
-          message: `Scanner terminal "${formData.terminal_name}" (${formData.kiosk_code}) registered.`,
-          type: 'success',
-        });
-      }
-
-      setIsModalOpen(false);
-      fetchScanners(currentPage, pageSize, search, true);
-    } catch (err: any) {
-      showAlert({
-        title: 'Save Error',
-        message: err?.response?.data?.detail || err?.response?.data?.error || 'Failed to save scanner terminal to database.',
-        type: 'error',
+      setOfflineQueue([]);
+      saveQueueToStorage([]);
+      setScanMessage({
+        text: `Offline queue synced: ${synced} recorded, ${dupes} duplicate(s), ${rejected} invalid.`,
+        type: 'success',
       });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDelete = (scanner: IoTKiosk) => {
-    showConfirm({
-      title: 'Delete Scanner Terminal',
-      message: `Permanently delete "${scanner.terminal_name}" (${scanner.kiosk_code})? Any gate card or QR code scans attempted at this terminal will be rejected immediately.`,
-      confirmLabel: 'Delete Terminal',
-      isDestructive: true,
-      onConfirm: async () => {
-        try {
-          await apiClient.delete(`/scanners/${scanner.id}/`);
-          showAlert({
-            title: 'Terminal Deleted',
-            message: `Terminal ${scanner.kiosk_code} has been removed.`,
-            type: 'info',
-          });
-          fetchScanners(currentPage, pageSize, search, true);
-        } catch (err: any) {
-          showAlert({
-            title: 'Delete Failed',
-            message: err?.response?.data?.detail || 'Failed to delete scanner terminal.',
-            type: 'error',
-          });
-        }
-      },
-    });
-  };
-
-  // Resolve active testing target from database
-  const activeSubject = testSubjects.find((s) => String(s.id) === String(selectedSubjectId));
-  const activeIdentifier =
-    activeTestMode === 'RFID'
-      ? activeSubject?.rfid_uid || ''
-      : activeSubject?.qr_token || '';
-
-  const dynamicApiOrigin = window.location.origin;
-
-  // Execute authentic live test against backend
-  const handleExecuteLiveTest = async () => {
-    if (!inspectedScanner) return;
-    if (!activeIdentifier) {
-      showAlert({
-        title: 'Missing Identifier',
-        message: `The selected record (${activeSubject?.name}) does not have an active ${activeTestMode} identifier stored in the database.`,
+    } catch {
+      setScanMessage({
+        text: 'Still offline or server unreachable. Queued scans remain safely stored on this PC.',
         type: 'warning',
       });
+    } finally {
+      setSyncing(false);
+      inputRef.current?.focus();
+    }
+  }, [syncing]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      syncOfflineQueue();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [syncOfflineQueue]);
+
+  const queueScanLocally = (cleanToken: string) => {
+    const now = new Date();
+    const matchedSched = schedules.find((s) => String(s.id) === selectedScheduleId);
+    const schedLabel = matchedSched ? `${matchedSched.section_name} (${matchedSched.subject_code})` : 'Auto-Detect Class';
+    const timeLabel = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const queuedItem: QueuedQRScan = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      qr_token: cleanToken,
+      schedule_id: selectedScheduleId ? Number(selectedScheduleId) : null,
+      schedule_label: schedLabel,
+      scanned_at: now.toISOString(),
+      display_time: timeLabel,
+    };
+
+    setOfflineQueue((prev) => [queuedItem, ...prev]);
+
+    const offlineRecord: ScanHistoryItem = {
+      student_name: 'Queued Student ID',
+      lrn: cleanToken.slice(0, 24),
+      section: schedLabel,
+      status: 'QUEUED OFFLINE',
+      scanned_at: timeLabel,
+      attendance_note: 'Saved locally on this PC. Will auto-sync when internet returns.',
+      is_offline: true,
+    };
+    setLastScan(offlineRecord);
+    setRecentScans((prev) => [offlineRecord, ...prev.slice(0, 14)]);
+    setScanMessage({
+      text: 'No internet connection. Scan saved offline and will sync automatically when reconnected.',
+      type: 'warning',
+    });
+  };
+
+  const handleUsbQrScan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanToken = qrInput.trim().slice(0, 128);
+    if (!cleanToken || submitting) return;
+
+    // Prevent accidental double-scans of the same ID within 5 seconds
+    const nowMs = Date.now();
+    if (lastTokenTimeRef.current.token === cleanToken && nowMs - lastTokenTimeRef.current.ts < 5000) {
+      setQrInput('');
+      inputRef.current?.focus();
+      return;
+    }
+    lastTokenTimeRef.current = { token: cleanToken, ts: nowMs };
+
+    setQrInput('');
+    setScanMessage(null);
+
+    if (!isOnline) {
+      queueScanLocally(cleanToken);
+      inputRef.current?.focus();
       return;
     }
 
-    setTestExecuting(true);
-    setTestResult(null);
-
+    setSubmitting(true);
     try {
-      const res = await apiClient.post('/gate/scan/', {
-        kiosk_code: inspectedScanner.kiosk_code,
-        secret_key: inspectedScanner.secret_key || '',
-        raw_identifier: activeIdentifier,
-        scan_method: activeTestMode,
-      });
-      setTestResult({ success: true, data: res.data });
-      fetchScanners(currentPage, pageSize, search, true);
+      const payload: Record<string, any> = { qr_token: cleanToken };
+      if (selectedScheduleId) {
+        payload.schedule_id = Number(selectedScheduleId);
+      }
+
+      const res = await apiClient.post('/classroom/scan/', payload);
+      const record: ScanHistoryItem = {
+        student_name: res.data.student_name,
+        lrn: res.data.lrn,
+        section: res.data.section,
+        status: res.data.status,
+        scanned_at: res.data.scanned_at,
+        attendance_note: res.data.attendance_note,
+        is_offline: false,
+      };
+      setLastScan(record);
+      setRecentScans((prev) => [record, ...prev.slice(0, 14)]);
+
+      if (offlineQueue.length > 0) {
+        syncOfflineQueue();
+      }
     } catch (err: any) {
-      setTestResult({
-        success: false,
-        error: err?.response?.data || { detail: 'Request failed. Verify terminal secret key.' },
-      });
+      // If network error (no server response), fall back to offline queue automatically
+      if (!err.response) {
+        setIsOnline(false);
+        queueScanLocally(cleanToken);
+      } else {
+        setScanMessage({
+          text:
+            err.response?.data?.error ||
+            err.response?.data?.detail ||
+            'Unrecognized QR ID card or student is not enrolled in this class.',
+          type: 'error',
+        });
+      }
     } finally {
-      setTestExecuting(false);
+      setSubmitting(false);
+      inputRef.current?.focus();
     }
   };
 
-  const startRecord = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
-  const endRecord = Math.min(currentPage * pageSize, totalCount);
+  const handleRefreshAll = () => {
+    reloadSchedules(false);
+    reloadGeofence(false);
+    inputRef.current?.focus();
+  };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* 1. Hardware Metrics Overview */}
-      <div style={statsGrid}>
-        <div style={statCard}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>TOTAL TERMINALS</span>
-            <Server size={18} color="#0284c7" />
-          </div>
-          <div style={statVal}>{totalCount}</div>
-          <div style={statSub}>Registered database devices</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>ACTIVE HARDWARE</span>
-            <ShieldCheck size={18} color="#059669" />
-          </div>
-          <div style={{ ...statVal, color: '#059669' }}>{metrics.active}</div>
-          <div style={statSub}>Authorized for gate entry/exit</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>ONLINE ON THIS PAGE</span>
-            <Radio size={18} color="#0284c7" />
-          </div>
-          <div style={{ ...statVal, color: '#0284c7' }}>{metrics.online}</div>
-          <div style={statSub}>Tapped or pinged within 5 minutes</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={statLabel}>STANDBY / OFFLINE</span>
-            <WifiOff size={18} color={metrics.inactiveOrOffline > 0 ? '#d97706' : '#64748b'} />
-          </div>
-          <div style={{ ...statVal, color: metrics.inactiveOrOffline > 0 ? '#d97706' : '#059669' }}>
-            {metrics.inactiveOrOffline}
-          </div>
-          <div style={statSub}>Idle or waiting for connection</div>
-        </div>
-      </div>
-
-      {/* 2. Main Hardware List Table */}
-      <div style={{ backgroundColor: '#ffffff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-        <ModuleTableLayout
-          title="IoT"
-          subtitle="Manage campus gate scanners, RFID readers, and microcontrollers registered in the database."
-          searchPlaceholder="Search terminal code, name, or location..."
-          searchValue={search}
-          onSearchChange={setSearch}
-          addButtonLabel="Register Terminal"
-          onAdd={handleOpenCreate}
-          loading={loading}
-          error={error}
-          data={scanners}
-          keyExtractor={(s) => s.id}
-          columns={[
-            {
-              header: 'Terminal Info',
-              render: (s) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={terminalIconBox}>
-                    <Cpu size={18} color="#0284c7" />
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.88rem' }}>
-                      {s.terminal_name}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                      <span style={codeBadge}>{s.kiosk_code}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopy(s.kiosk_code, `code-${s.id}`)}
-                        title="Copy Kiosk Code"
-                        style={copyMiniBtn}
-                      >
-                        {copiedKey === `code-${s.id}` ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ),
-            },
-            {
-              header: 'Location',
-              render: (s) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', color: '#334155' }}>
-                  <MapPin size={14} color="#64748b" />
-                  <span style={{ fontWeight: 600 }}>{s.location || 'Unassigned'}</span>
-                </div>
-              ),
-            },
-            {
-              header: 'Connection Status',
-              render: (s) => {
-                const health = getDeviceHealth(s.last_ping, s.is_active);
-                return (
-                  <div>
-                    <div
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        padding: '3px 8px',
-                        borderRadius: 12,
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        backgroundColor: health.bg,
-                        color: health.color,
-                        border: `1px solid ${health.border}`,
-                      }}
-                    >
-                      {health.status === 'ONLINE' ? <Wifi size={12} /> : <WifiOff size={12} />}
-                      <span>{health.label}</span>
-                    </div>
-                    <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: 3 }}>
-                      {s.last_ping
-                        ? `Last tap: ${new Date(s.last_ping).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
-                        : 'No scans recorded today'}
-                    </div>
-                  </div>
-                );
-              },
-            },
-            {
-              header: 'Secret Key',
-              render: (s) => {
-                const isRevealed = Boolean(revealedSecrets[s.id]);
-                const displayKey = isRevealed ? (s.secret_key || 'PROTECTED-IN-DATABASE') : '••••••••••••••••';
-                return (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <div style={secretBox}>
-                      <Key size={12} color="#0284c7" />
-                      <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 700, color: '#334155' }}>
-                        {displayKey}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => setRevealedSecrets((prev) => ({ ...prev, [s.id]: !prev[s.id] }))}
-                      title={isRevealed ? 'Hide Secret Key' : 'Reveal Secret Key'}
-                      style={iconBtn}
-                    >
-                      {isRevealed ? <EyeOff size={13} color="#64748b" /> : <Eye size={13} color="#64748b" />}
-                    </button>
-
-                    {s.secret_key && (
-                      <button
-                        type="button"
-                        onClick={() => handleCopy(s.secret_key!, `sec-${s.id}`)}
-                        title="Copy Secret Key"
-                        style={iconBtn}
-                      >
-                        {copiedKey === `sec-${s.id}` ? <Check size={13} color="#059669" /> : <Copy size={13} color="#64748b" />}
-                      </button>
-                    )}
-                  </div>
-                );
-              },
-            },
-            {
-              header: 'Gate Access',
-              render: (s) => (
-                <span
-                  style={{
-                    padding: '3px 8px',
-                    borderRadius: 12,
-                    fontSize: '0.68rem',
-                    fontWeight: 800,
-                    backgroundColor: s.is_active ? '#ecfdf5' : '#fef2f2',
-                    color: s.is_active ? '#059669' : '#dc2626',
-                  }}
-                >
-                  {s.is_active ? 'ENABLED' : 'BLOCKED'}
-                </span>
-              ),
-            },
-            {
-              header: 'Actions',
-              align: 'right',
-              render: (s) => (
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    onClick={() => handleOpenInspector(s)}
-                    title="Live Dual-Mode Inspector & Hardware Config"
-                    style={{ ...actionBtn, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}
-                  >
-                    <Terminal size={13} color="#0284c7" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleOpenEdit(s)}
-                    title="Edit Terminal Settings"
-                    style={actionBtn}
-                  >
-                    <Pencil size={13} color="#475569" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(s)}
-                    title="Delete Terminal"
-                    style={{ ...actionBtn, backgroundColor: '#fff1f2', borderColor: '#fee2e2' }}
-                  >
-                    <Trash2 size={13} color="#dc2626" />
-                  </button>
-                </div>
-              ),
-            },
-          ]}
-        />
-
-        {/* Server Pagination Bar */}
-        <div style={paginationContainer}>
-          <div style={{ fontSize: '0.80rem', color: '#475569' }}>
-            {totalCount > 0 ? (
-              <>
-                Showing <strong>{startRecord}</strong> to <strong>{endRecord}</strong> of{' '}
-                <strong>{totalCount}</strong> terminals
-              </>
-            ) : (
-              'No terminals found'
-            )}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 8 }}>
-              <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Per page:</span>
-              <select
-                value={pageSize}
-                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                style={paginationSelect}
-              >
-                <option value={15}>15</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-            </div>
-
-            <button
-              onClick={() => handlePageChange(1)}
-              disabled={currentPage <= 1 || loading}
-              style={{ ...paginationBtn, opacity: currentPage <= 1 || loading ? 0.35 : 1 }}
-              title="First Page"
-              type="button"
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 20 }}>
+      {/* Header & Connection Status */}
+      <div style={headerCardStyle}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Laptop size={18} color="#004b87" /> Classroom USB QR Scanner Station (PC / Laptop)
+            </h2>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '3px 10px',
+                borderRadius: 12,
+                fontSize: '0.72rem',
+                fontWeight: 800,
+                backgroundColor: isOnline ? '#ecfdf5' : '#fef3c7',
+                color: isOnline ? '#047857' : '#b45309',
+                border: `1px solid ${isOnline ? '#a7f3d0' : '#fde68a'}`,
+              }}
             >
-              <ChevronsLeft size={16} />
-            </button>
-
-            <button
-              onClick={() => handlePageChange(currentPage - 1)}
-              disabled={currentPage <= 1 || loading}
-              style={{ ...paginationBtn, opacity: currentPage <= 1 || loading ? 0.35 : 1 }}
-              title="Previous Page"
-              type="button"
-            >
-              <ChevronLeft size={16} />
-            </button>
-
-            <span style={{ fontSize: '0.80rem', fontWeight: 600, padding: '0 8px', color: '#0f172a' }}>
-              Page {currentPage} of {Math.max(1, totalPages)}
+              {isOnline ? <Wifi size={13} /> : <WifiOff size={13} />}
+              {isOnline ? 'Online & Synced' : 'Offline Mode Active'}
             </span>
-
-            <button
-              onClick={() => handlePageChange(currentPage + 1)}
-              disabled={currentPage >= totalPages || loading}
-              style={{ ...paginationBtn, opacity: currentPage >= totalPages || loading ? 0.35 : 1 }}
-              title="Next Page"
-              type="button"
-            >
-              <ChevronRight size={16} />
-            </button>
-
-            <button
-              onClick={() => handlePageChange(totalPages)}
-              disabled={currentPage >= totalPages || loading}
-              style={{ ...paginationBtn, opacity: currentPage >= totalPages || loading ? 0.35 : 1 }}
-              title="Last Page"
-              type="button"
-            >
-              <ChevronsRight size={16} />
-            </button>
           </div>
+          <p style={{ margin: '4px 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+            Plug your USB QR code scanner into this PC or laptop. Scans save offline automatically if Wi-Fi drops. Faculty attendance uses mobile facial recognition.
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {offlineQueue.length > 0 && (
+            <button
+              type="button"
+              onClick={syncOfflineQueue}
+              disabled={syncing}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '8px 14px',
+                borderRadius: 8,
+                border: 'none',
+                backgroundColor: '#d97706',
+                color: '#ffffff',
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: '0.78rem',
+              }}
+            >
+              <CloudUpload size={14} />
+              {syncing ? 'Syncing...' : `Sync Offline Queue (${offlineQueue.length})`}
+            </button>
+          )}
+
+          <button type="button" onClick={handleRefreshAll} style={secondaryBtnStyle}>
+            <RefreshCw size={14} /> Refresh
+          </button>
         </div>
       </div>
 
-      {/* 3. Register / Edit Modal */}
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title={editingScanner ? 'Edit Scanner Terminal' : 'Register New Scanner Terminal'}
-      >
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={infoBox}>
-            <ShieldAlert size={18} color="#0284c7" style={{ flexShrink: 0, marginTop: 2 }} />
-            <div style={{ fontSize: '0.74rem', color: '#1e293b', lineHeight: 1.35 }}>
-              Each device needs a unique <strong>Kiosk Code</strong> and <strong>Secret Key</strong>. Gate taps without a matching secret key will be rejected by the server.
-            </div>
+      {/* Main USB QR Input Form */}
+      <form onSubmit={handleUsbQrScan} style={scannerFormStyle}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+          <div>
+            <label style={labelStyle}>Active Class Schedule</label>
+            <select
+              value={selectedScheduleId}
+              onChange={(e) => {
+                setSelectedScheduleId(e.target.value);
+                inputRef.current?.focus();
+              }}
+              style={inputFieldStyle}
+            >
+              <option value="">Auto-Detect Student Section Schedule</option>
+              {schedules.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.section_name} — {s.subject_code} ({s.start_time?.slice(0, 5)} - {s.end_time?.slice(0, 5)})
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
-            <label style={labelStyle}>Terminal Device Code *</label>
-            <input
-              type="text"
-              required
-              value={formData.kiosk_code}
-              onChange={(e) => setFormData({ ...formData, kiosk_code: e.target.value })}
-              style={inputStyle}
-              placeholder="Enter unique terminal code (e.g. KIOSK-MAIN-01)"
-            />
-          </div>
-
-          <div>
-            <label style={labelStyle}>Terminal Friendly Name *</label>
-            <input
-              type="text"
-              required
-              value={formData.terminal_name}
-              onChange={(e) => setFormData({ ...formData, terminal_name: e.target.value })}
-              style={inputStyle}
-              placeholder="e.g. Main Gate Entrance Scanner"
-            />
-          </div>
-
-          <div>
-            <label style={labelStyle}>Installation Location *</label>
-            <input
-              type="text"
-              required
-              value={formData.location}
-              onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-              style={inputStyle}
-              placeholder="e.g. Senior High Building Gate"
-            />
-          </div>
-
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <label style={{ ...labelStyle, marginBottom: 0 }}>
-                Device Secret Key {editingScanner ? '(Leave blank to keep current)' : '*'}
-              </label>
+            <label style={{ ...labelStyle, color: '#004b87' }}>
+              USB QR Scanner Input (Keep Cursor Here &amp; Scan Student ID)
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                ref={inputRef}
+                type="text"
+                autoFocus
+                value={qrInput}
+                onChange={(e) => setQrInput(e.target.value)}
+                placeholder="Scan student QR ID card..."
+                style={{
+                  ...inputFieldStyle,
+                  flex: 1,
+                  border: '1.5px solid #004b87',
+                  fontFamily: 'monospace',
+                }}
+              />
               <button
-                type="button"
-                onClick={() => setFormData({ ...formData, secret_key: createSecureToken() })}
-                style={regenBtn}
+                type="submit"
+                disabled={submitting || !qrInput.trim()}
+                style={primaryBtnStyle}
               >
-                <RefreshCw size={11} />
-                <span>Generate Key</span>
+                {submitting ? 'Saving...' : 'Record'}
               </button>
             </div>
-            <div style={{ position: 'relative' }}>
-              <input
-                type="text"
-                required={!editingScanner}
-                value={formData.secret_key}
-                onChange={(e) => setFormData({ ...formData, secret_key: e.target.value })}
-                style={{ ...inputStyle, fontFamily: 'monospace', fontWeight: 600, paddingRight: 36 }}
-                placeholder={editingScanner ? '•••••••••••••••• (Unchanged)' : 'Enter or generate hardware secret key'}
-              />
-              {formData.secret_key && (
-                <button
-                  type="button"
-                  onClick={() => handleCopy(formData.secret_key, 'modal-key')}
-                  title="Copy Secret Key"
-                  style={{
-                    position: 'absolute',
-                    right: 8,
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color: '#64748b',
-                  }}
-                >
-                  {copiedKey === 'modal-key' ? <Check size={14} color="#059669" /> : <Copy size={14} />}
-                </button>
+          </div>
+        </div>
+
+        {scanMessage && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 12px',
+              borderRadius: 8,
+              backgroundColor:
+                scanMessage.type === 'error'
+                  ? '#fef2f2'
+                  : scanMessage.type === 'warning'
+                  ? '#fffbeb'
+                  : '#ecfdf5',
+              color:
+                scanMessage.type === 'error'
+                  ? '#dc2626'
+                  : scanMessage.type === 'warning'
+                  ? '#b45309'
+                  : '#047857',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+            }}
+          >
+            <AlertCircle size={16} /> {scanMessage.text}
+          </div>
+        )}
+
+        {lastScan && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 14px',
+              borderRadius: 8,
+              backgroundColor: lastScan.is_offline ? '#fffbeb' : '#ecfdf5',
+              border: `1px solid ${lastScan.is_offline ? '#fde68a' : '#a7f3d0'}`,
+              flexWrap: 'wrap',
+              gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {lastScan.is_offline ? (
+                <Clock size={18} color="#d97706" />
+              ) : (
+                <CheckCircle2 size={18} color="#059669" />
               )}
-            </div>
-            <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: 4 }}>
-              Flash this secret token into your ESP32 or Raspberry Pi attendance firmware.
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', backgroundColor: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <input
-              type="checkbox"
-              id="is_active_check"
-              checked={formData.is_active}
-              onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-              style={{ width: 16, height: 16, cursor: 'pointer' }}
-            />
-            <div>
-              <label htmlFor="is_active_check" style={{ fontSize: '0.80rem', fontWeight: 700, color: '#0f172a', cursor: 'pointer' }}>
-                Allow Gate Attendance Scans
-              </label>
-              <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
-                When checked, RFID and QR scans from this terminal are validated and recorded.
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-            <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" size="md" type="submit" disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
-              {editingScanner ? 'Save Changes' : 'Register Terminal'}
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* 4. Strictly Dynamic Dual-Mode Live Inspector */}
-      {inspectedScanner && (
-        <Modal
-          isOpen={Boolean(inspectedScanner)}
-          onClose={() => setInspectedScanner(null)}
-          title={`Dual-Mode Verification: ${inspectedScanner.terminal_name}`}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {/* Real Identity Selector with Neutral Avatar */}
-            <div style={{ padding: '10px 12px', backgroundColor: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                <User size={15} color="#0284c7" />
-                <label style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0f172a' }}>
-                  Select Active Database Record:
-                </label>
-              </div>
-
-              <select
-                value={selectedSubjectId}
-                onChange={(e) => setSelectedSubjectId(e.target.value)}
-                style={{ ...inputStyle, backgroundColor: '#ffffff' }}
-              >
-                {testSubjects.map((sub) => (
-                  <option key={sub.id} value={sub.id}>
-                    [{sub.type}] {sub.name}
-                  </option>
-                ))}
-              </select>
-
-              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <button
-                  type="button"
-                  onClick={() => setActiveTestMode('RFID')}
+              <div>
+                <div
                   style={{
-                    flex: 1,
-                    padding: '6px 10px',
-                    borderRadius: 6,
-                    border: '1px solid',
-                    borderColor: activeTestMode === 'RFID' ? '#0284c7' : '#cbd5e1',
-                    backgroundColor: activeTestMode === 'RFID' ? '#f0f9ff' : '#ffffff',
-                    color: activeTestMode === 'RFID' ? '#0284c7' : '#475569',
-                    fontSize: '0.76rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
+                    fontWeight: 800,
+                    color: lastScan.is_offline ? '#92400e' : '#065f46',
+                    fontSize: '0.9rem',
                   }}
                 >
-                  Mode 1: RFID Chip Tap
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTestMode('QR')}
-                  style={{
-                    flex: 1,
-                    padding: '6px 10px',
-                    borderRadius: 6,
-                    border: '1px solid',
-                    borderColor: activeTestMode === 'QR' ? '#059669' : '#cbd5e1',
-                    backgroundColor: activeTestMode === 'QR' ? '#ecfdf5' : '#ffffff',
-                    color: activeTestMode === 'QR' ? '#059669' : '#475569',
-                    fontSize: '0.76rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Mode 2: Printed QR Scan
-                </button>
+                  {lastScan.student_name} ({lastScan.lrn}) — {lastScan.status}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: lastScan.is_offline ? '#b45309' : '#047857' }}>
+                  {lastScan.section} • {lastScan.scanned_at} • {lastScan.attendance_note}
+                </div>
               </div>
             </div>
+          </div>
+        )}
+      </form>
 
-            {/* Dynamic Hardware Payload Box */}
-            <div style={codeBox}>
-              <div style={codeHeader}>
-                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#38bdf8' }}>
-                  {activeTestMode === 'RFID' ? 'HARDWARE RFID SCAN PAYLOAD' : 'OPTICAL QR SCAN PAYLOAD'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleCopy(
-                      JSON.stringify(
-                        {
-                          kiosk_code: inspectedScanner.kiosk_code,
-                          secret_key: inspectedScanner.secret_key || '',
-                          raw_identifier: activeIdentifier || '(NO_IDENTIFIER_ASSIGNED)',
-                          scan_method: activeTestMode,
-                        },
-                        null,
-                        2
-                      ),
-                      'payload-copy'
-                    )
-                  }
-                  style={copyBtn}
-                >
-                  {copiedKey === 'payload-copy' ? <Check size={12} color="#10b981" /> : <Copy size={12} color="#cbd5e1" />}
-                  <span>{copiedKey === 'payload-copy' ? 'Copied' : 'Copy Payload'}</span>
-                </button>
-              </div>
-              <pre style={codeText}>
-{JSON.stringify(
-  {
-    kiosk_code: inspectedScanner.kiosk_code,
-    secret_key: inspectedScanner.secret_key || '(Protected)',
-    raw_identifier: activeIdentifier || 'No UID registered for this record',
-    scan_method: activeTestMode,
-  },
-  null,
-  2
-)}
-              </pre>
-            </div>
+      {/* Status Summary Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 12 }}>
+        <div style={statCardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', fontWeight: 800, color: '#004b87' }}>
+            <QrCode size={15} /> STUDENT ATTENDANCE SETUP
+          </div>
+          <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#0f172a', marginTop: 6 }}>
+            USB QR Scanner on Faculty PC / Laptop
+          </div>
+        </div>
 
-            {/* Dynamic cURL Command */}
-            <div style={codeBox}>
-              <div style={codeHeader}>
-                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fcd34d' }}>
-                  LIVE CURL TERMINAL COMMAND
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleCopy(
-                      `curl -X POST ${dynamicApiOrigin}/api/gate/scan/ \\\n -H "Content-Type: application/json" \\\n -d '{"kiosk_code":"${inspectedScanner.kiosk_code}","secret_key":"${inspectedScanner.secret_key || ''}","raw_identifier":"${activeIdentifier}","scan_method":"${activeTestMode}"}'`,
-                      'curl-copy'
-                    )
-                  }
-                  style={copyBtn}
-                >
-                  {copiedKey === 'curl-copy' ? <Check size={12} color="#10b981" /> : <Send size={12} color="#cbd5e1" />}
-                  <span>{copiedKey === 'curl-copy' ? 'Copied' : 'Copy cURL'}</span>
-                </button>
-              </div>
-              <pre style={{ ...codeText, color: '#fef08a' }}>
-{`curl -X POST ${dynamicApiOrigin}/api/gate/scan/ \\
- -H "Content-Type: application/json" \\
- -d '{"kiosk_code":"${inspectedScanner.kiosk_code}","secret_key":"${inspectedScanner.secret_key || ''}","raw_identifier":"${activeIdentifier || 'UNDEFINED'}","scan_method":"${activeTestMode}"}'`}
-              </pre>
-            </div>
+        <div style={statCardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', fontWeight: 800, color: '#059669' }}>
+            <Smartphone size={15} /> FACULTY MOBILE FACIAL RECOGNITION
+          </div>
+          <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#059669', marginTop: 6 }}>
+            {activeFacultyCount} Faculty Verified Today via Mobile App
+          </div>
+        </div>
 
-            {/* Live Server Response Display */}
-            {testResult && (
+        <div style={statCardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', fontWeight: 800, color: '#d97706' }}>
+            <CloudUpload size={15} /> OFFLINE QUEUE BUFFER
+          </div>
+          <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#0f172a', marginTop: 6 }}>
+            {offlineQueue.length} Scan(s) Waiting to Sync
+          </div>
+        </div>
+      </div>
+
+      {/* Offline Queue List (Shown when scans are waiting to sync) */}
+      {offlineQueue.length > 0 && (
+        <div style={sectionBoxStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <h3 style={{ margin: 0, fontSize: '0.88rem', fontWeight: 800, color: '#92400e' }}>
+              Offline Local Queue ({offlineQueue.length} Pending)
+            </h3>
+            <button
+              type="button"
+              onClick={() => setOfflineQueue([])}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '4px 8px',
+                borderRadius: 6,
+                border: '1px solid #fecaca',
+                backgroundColor: '#fef2f2',
+                color: '#dc2626',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              <Trash2 size={12} /> Clear Queue
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {offlineQueue.map((item) => (
               <div
+                key={item.id}
                 style={{
-                  padding: '10px 12px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  padding: '8px 10px',
+                  backgroundColor: '#fffbeb',
                   borderRadius: 6,
-                  border: '1px solid',
-                  borderColor: testResult.success ? '#a7f3d0' : '#fecaca',
-                  backgroundColor: testResult.success ? '#ecfdf5' : '#fef2f2',
+                  fontSize: '0.78rem',
                 }}
               >
-                <div style={{ fontSize: '0.76rem', fontWeight: 800, color: testResult.success ? '#059669' : '#dc2626' }}>
-                  {testResult.success ? '✓ Scan Accepted by Server' : '✗ Server Rejected Scan'}
-                </div>
-                <pre style={{ margin: 0, marginTop: 4, fontSize: '0.70rem', color: '#1e293b', whiteSpace: 'pre-wrap' }}>
-                  {JSON.stringify(testResult.data || testResult.error, null, 2)}
-                </pre>
+                <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{item.qr_token}</span>
+                <span>
+                  {item.schedule_label} • {item.display_time}
+                </span>
               </div>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-              <Button
-                variant="primary"
-                size="md"
-                type="button"
-                onClick={handleExecuteLiveTest}
-                disabled={testExecuting || !activeIdentifier}
-                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-              >
-                {testExecuting ? <Loader2 className="animate-spin" size={15} /> : <Play size={15} />}
-                Test Live Tap in Database
-              </Button>
-
-              <Button variant="secondary" size="md" type="button" onClick={() => setInspectedScanner(null)}>
-                Close
-              </Button>
-            </div>
+            ))}
           </div>
-        </Modal>
+        </div>
+      )}
+
+      {/* Recent Scans in Current Session */}
+      {recentScans.length > 0 && (
+        <div style={sectionBoxStyle}>
+          <h3 style={{ margin: '0 0 10px', fontSize: '0.88rem', fontWeight: 800, color: '#0f172a' }}>
+            Recent Student Scans in This Session ({recentScans.length})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {recentScans.map((item, idx) => (
+              <div
+                key={idx}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  padding: '8px 10px',
+                  backgroundColor: '#f8fafc',
+                  borderRadius: 6,
+                  fontSize: '0.8rem',
+                }}
+              >
+                <strong>
+                  {item.student_name} ({item.lrn})
+                </strong>
+                <span>
+                  {item.section} • {item.status} • {item.scanned_at}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
 };
 
-export default ScannersTab;
-
-// ============================================================================
-// STYLES
-// ============================================================================
-
-const statsGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
-  gap: 14,
-};
-
-const statCard: React.CSSProperties = {
+const headerCardStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
   backgroundColor: '#ffffff',
-  borderRadius: 10,
+  padding: 16,
+  borderRadius: 12,
   border: '1px solid #e2e8f0',
-  padding: '16px 18px',
-  boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+  flexWrap: 'wrap',
+  gap: 12,
 };
 
-const statLabel: React.CSSProperties = {
-  fontSize: '0.68rem',
-  fontWeight: 700,
-  color: '#64748b',
-  letterSpacing: '0.3px',
-};
-
-const statVal: React.CSSProperties = {
-  fontSize: '1.50rem',
-  fontWeight: 800,
-  color: '#0f172a',
-  lineHeight: 1.1,
-  marginTop: 6,
-};
-
-const statSub: React.CSSProperties = {
-  fontSize: '0.70rem',
-  color: '#94a3b8',
-  marginTop: 4,
-};
-
-const terminalIconBox: React.CSSProperties = {
-  width: 38,
-  height: 38,
-  borderRadius: 8,
-  backgroundColor: '#f0f9ff',
-  border: '1px solid #bae6fd',
+const scannerFormStyle: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  padding: 18,
+  borderRadius: 12,
+  border: '2px solid #004b87',
   display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-};
-
-const codeBadge: React.CSSProperties = {
-  fontFamily: 'monospace',
-  fontSize: '0.70rem',
-  fontWeight: 700,
-  color: '#0284c7',
-  backgroundColor: '#eff6ff',
-  padding: '1px 6px',
-  borderRadius: 4,
-  border: '1px solid #bfdbfe',
-};
-
-const copyMiniBtn: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  padding: 1,
-  display: 'flex',
-  alignItems: 'center',
-};
-
-const secretBox: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '4px 8px',
-  borderRadius: 6,
-  backgroundColor: '#f8fafc',
-  border: '1px solid #e2e8f0',
-};
-
-const iconBtn: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  padding: 4,
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const actionBtn: React.CSSProperties = {
-  background: '#f8fafc',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  padding: '6px 8px',
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const infoBox: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: 10,
-  padding: '10px 14px',
-  backgroundColor: '#f0f9ff',
-  border: '1px solid #bae6fd',
-  borderRadius: 8,
+  flexDirection: 'column',
+  gap: 12,
 };
 
 const labelStyle: React.CSSProperties = {
   display: 'block',
-  fontSize: '0.78rem',
-  fontWeight: 700,
+  fontSize: '0.75rem',
+  fontWeight: 800,
   color: '#334155',
   marginBottom: 4,
 };
 
-const inputStyle: React.CSSProperties = {
+const inputFieldStyle: React.CSSProperties = {
   width: '100%',
-  padding: '8px 12px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.84rem',
-  outline: 'none',
-  boxSizing: 'border-box',
-  color: '#0f172a',
-};
-
-const regenBtn: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  fontSize: '0.70rem',
-  color: '#0284c7',
-  fontWeight: 700,
-  padding: 0,
-};
-
-const codeBox: React.CSSProperties = {
-  backgroundColor: '#0f172a',
+  padding: '9px 12px',
   borderRadius: 8,
-  overflow: 'hidden',
-  border: '1px solid #1e293b',
-};
-
-const codeHeader: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  padding: '8px 12px',
-  backgroundColor: '#1e293b',
-  borderBottom: '1px solid #334155',
-};
-
-const copyBtn: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontSize: '0.70rem',
-  color: '#cbd5e1',
-};
-
-const codeText: React.CSSProperties = {
-  margin: 0,
-  padding: '12px 14px',
-  fontFamily: "'Fira Code', Consolas, monospace",
-  fontSize: '0.74rem',
-  color: '#38bdf8',
-  overflowX: 'auto',
-  lineHeight: 1.4,
-};
-
-const paginationContainer: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '12px 18px',
-  backgroundColor: '#ffffff',
-  borderTop: '1px solid #e2e8f0',
+  border: '1px solid #cbd5e1',
+  fontSize: '0.85rem',
+  fontWeight: 600,
   boxSizing: 'border-box',
 };
 
-const paginationBtn: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '6px',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  backgroundColor: '#ffffff',
-  color: '#334155',
+const primaryBtnStyle: React.CSSProperties = {
+  padding: '9px 16px',
+  borderRadius: 8,
+  border: 'none',
+  backgroundColor: '#004b87',
+  color: '#ffffff',
+  fontWeight: 700,
+  fontSize: '0.82rem',
   cursor: 'pointer',
 };
 
-const paginationSelect: React.CSSProperties = {
-  padding: '4px 6px',
-  borderRadius: 6,
+const secondaryBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 14px',
+  borderRadius: 8,
   border: '1px solid #cbd5e1',
+  backgroundColor: '#f8fafc',
+  cursor: 'pointer',
+  fontWeight: 700,
   fontSize: '0.78rem',
-  color: '#0f172a',
-  backgroundColor: '#ffffff',
 };
+
+const statCardStyle: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  padding: 14,
+  borderRadius: 10,
+  border: '1px solid #e2e8f0',
+};
+
+const sectionBoxStyle: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  padding: 16,
+  borderRadius: 12,
+  border: '1px solid #e2e8f0',
+};
+
+export default ScannersTab;

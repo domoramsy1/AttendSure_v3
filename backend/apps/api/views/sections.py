@@ -1,139 +1,140 @@
 """
-AttendSure - Section Management & Advisory Isolation
+AttendSure V3 - Section & Class List Views
 File: backend/apps/api/views/sections.py
 """
 
-from rest_framework.views import APIView
+from django.db.models import Count, Q
+from rest_framework import permissions, status
 from rest_framework.response import Response
-from rest_framework import status
-from apps.academics.models import Section, AcademicYear, GradeLevel, FacultyProfile
+from rest_framework.views import APIView
+
+from apps.academics.models import Enrollment, Schedule, Section
 from .common import (
-    IsAcademicManagerPermission,
-    get_user_role,
-    resolve_faculty_for_user,
     format_deduped_section_label,
+    format_full_student_name,
+    get_faculty_section_ids,
+    is_leadership_role,
+    resolve_faculty_for_user,
+    safe_photo_url,
 )
 
 
 class SectionListAPIView(APIView):
-    permission_classes = [IsAcademicManagerPermission]
+    """Returns active sections with enrolled student counts in a single batch query."""
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        user_role = get_user_role(user)
-        faculty = resolve_faculty_for_user(user)
-        is_admin = user.is_superuser or user_role in ('ADMIN', 'PRINCIPAL')
-        advisory_only = str(request.query_params.get('advisory_only', '')).lower() in ('true', '1')
-
-        sections = (
-            Section.objects.select_related('grade_level', 'academic_year', 'adviser')
-            .filter(academic_year__is_active=True)
+        qs = (
+            Section.objects.filter(is_active=True)
+            .select_related('grade_level', 'academic_year', 'adviser', 'room')
+            .annotate(
+                enrolled_count=Count(
+                    'enrollments',
+                    filter=Q(enrollments__status='ENROLLED', enrollments__student__is_active=True),
+                    distinct=True,
+                )
+            )
             .order_by('grade_level__level_order', 'name')
         )
-        if not sections.exists():
-            sections = (
-                Section.objects.select_related('grade_level', 'academic_year', 'adviser')
-                .all()
-                .order_by('grade_level__level_order', 'name')
-            )
 
-        if (not is_admin or advisory_only) and faculty:
-            sections = sections.filter(adviser=faculty)
+        if not (user.is_superuser or is_leadership_role(user)):
+            faculty = resolve_faculty_for_user(user)
+            if faculty:
+                qs = qs.filter(id__in=get_faculty_section_ids(faculty))
+            else:
+                qs = qs.none()
 
-        data = [
-            {
-                'id': s.id,
-                'name': s.name,
-                'grade_level': s.grade_level.name if s.grade_level else '',
-                'grade_level_id': s.grade_level_id,
-                'academic_year': s.academic_year.code if s.academic_year else '',
-                'adviser_name': s.adviser.full_name if s.adviser else '',
-                'adviser_id': s.adviser_id,
-                'is_my_advisory': bool(faculty and s.adviser_id == faculty.id),
-                'room_number': s.room_number,
-                'capacity': s.capacity,
-                'display_label': format_deduped_section_label(
-                    s.grade_level.name if s.grade_level else '', s.name
-                ),
-            }
-            for s in sections
-        ]
-        return Response(data, status=status.HTTP_200_OK)
+        results = []
+        for sec in qs:
+            grade_name = sec.grade_level.name if sec.grade_level else ''
+            results.append({
+                'id': sec.id,
+                'name': sec.name,
+                'grade_level': grade_name,
+                'grade_level_id': sec.grade_level_id,
+                'academic_year': sec.academic_year.code if sec.academic_year else '',
+                'adviser_id': sec.adviser_id,
+                'adviser_name': sec.adviser.full_name if sec.adviser else 'Unassigned',
+                'room_name': sec.room.name if sec.room else sec.room_number,
+                'capacity': sec.capacity,
+                'enrolled_count': sec.enrolled_count,
+                'display_label': format_deduped_section_label(grade_name, sec.name),
+            })
 
-    def post(self, request):
-        data = request.data
-        name = str(data.get('name', '')).strip()
-        grade_id = data.get('grade_level_id') or data.get('grade_level')
-        if not name or not grade_id:
-            return Response({'error': 'Name and Grade Level required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.first()
-        gl = GradeLevel.objects.filter(id=grade_id).first()
-        adv_id = data.get('adviser_id') or data.get('adviser')
-        adv = FacultyProfile.objects.filter(id=adv_id).first() if adv_id else None
-
-        sec = Section.objects.create(
-            name=name,
-            grade_level=gl,
-            academic_year=ay,
-            adviser=adv,
-            room_number=data.get('room_number', ''),
-            capacity=int(data.get('capacity', 45)),
-        )
-        return Response({'id': sec.id, 'name': sec.name}, status=status.HTTP_201_CREATED)
+        return Response(results, status=status.HTTP_200_OK)
 
 
 class SectionDetailAPIView(APIView):
-    permission_classes = [IsAcademicManagerPermission]
+    """Returns a section's details, uniform subject schedules, and enrolled class list."""
+    permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request, pk):
-        sec = Section.objects.select_related('grade_level', 'academic_year', 'adviser').filter(pk=pk).first()
+    def get(self, request, pk: int):
+        user = request.user
+        sec = (
+            Section.objects.select_related('grade_level', 'academic_year', 'adviser', 'room')
+            .filter(id=pk)
+            .first()
+        )
         if not sec:
             return Response({'error': 'Section not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not (user.is_superuser or is_leadership_role(user)):
+            faculty = resolve_faculty_for_user(user)
+            if not faculty or sec.id not in get_faculty_section_ids(faculty):
+                return Response({'error': 'Access denied to this section.'}, status=status.HTTP_403_FORBIDDEN)
+
+        enrollments = (
+            Enrollment.objects.filter(section=sec, status='ENROLLED', student__is_active=True)
+            .select_related('student')
+            .order_by('student__last_name', 'student__first_name')
+        )
+        class_list = [
+            {
+                'id': enr.student.id,
+                'lrn': enr.student.lrn,
+                'full_name': format_full_student_name(enr.student),
+                'sex': enr.student.sex,
+                'parent_contact': enr.student.parent_contact,
+                'qr_token': enr.student.qr_token,
+                'photo_url': safe_photo_url(enr.student.photo, request),
+            }
+            for enr in enrollments if enr.student
+        ]
+
+        schedules = (
+            Schedule.objects.filter(section=sec, is_active=True)
+            .select_related('subject', 'faculty', 'room')
+            .order_by('start_time')
+        )
+        schedule_items = [
+            {
+                'id': s.id,
+                'subject_id': s.subject_id,
+                'subject_code': s.subject.code if s.subject else '',
+                'subject_title': s.subject.title if s.subject else '',
+                'faculty_id': s.faculty_id,
+                'faculty_name': s.faculty.full_name if s.faculty else 'Unassigned',
+                'room_name': s.room.name if s.room else s.room_number,
+                'start_time': str(s.start_time)[:5] if s.start_time else '',
+                'end_time': str(s.end_time)[:5] if s.end_time else '',
+            }
+            for s in schedules
+        ]
+
+        grade_name = sec.grade_level.name if sec.grade_level else ''
         return Response({
             'id': sec.id,
             'name': sec.name,
-            'grade_level': sec.grade_level.name if sec.grade_level else '',
-            'grade_level_id': sec.grade_level_id,
-            'adviser_name': sec.adviser.full_name if sec.adviser else '',
+            'grade_level': grade_name,
+            'academic_year': sec.academic_year.code if sec.academic_year else '',
             'adviser_id': sec.adviser_id,
-            'room_number': sec.room_number,
+            'adviser_name': sec.adviser.full_name if sec.adviser else 'Unassigned',
+            'room_name': sec.room.name if sec.room else sec.room_number,
             'capacity': sec.capacity,
+            'display_label': format_deduped_section_label(grade_name, sec.name),
+            'total_students': len(class_list),
+            'class_list': class_list,
+            'students': class_list,
+            'schedules': schedule_items,
         }, status=status.HTTP_200_OK)
-
-    def put(self, request, pk):
-        sec = Section.objects.filter(pk=pk).first()
-        if not sec:
-            return Response({'error': 'Section not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        data = request.data
-        if 'name' in data:
-            sec.name = str(data.get('name')).strip()
-        if 'room_number' in data:
-            sec.room_number = str(data.get('room_number')).strip()
-        if 'capacity' in data:
-            sec.capacity = int(data.get('capacity', 45))
-
-        grade_id = data.get('grade_level_id') or data.get('grade_level')
-        if grade_id:
-            sec.grade_level_id = int(grade_id)
-
-        adv_id = data.get('adviser_id') or data.get('adviser')
-        if adv_id:
-            sec.adviser_id = int(adv_id)
-
-        sec.save()
-        return Response({
-            'id': sec.id,
-            'name': sec.name,
-            'adviser_id': sec.adviser_id,
-            'grade_level_id': sec.grade_level_id,
-            'room_number': sec.room_number,
-        }, status=status.HTTP_200_OK)
-
-    def patch(self, request, pk):
-        return self.put(request, pk)
-
-    def delete(self, request, pk):
-        Section.objects.filter(pk=pk).delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)

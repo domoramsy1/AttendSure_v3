@@ -1,7 +1,5 @@
 /**
- * AttendSure V3 - Collapsible Sidebar Navigation
- * Supports icons-only mode and expanded mode with tab names.
- * Displays school abbreviation and School ID directly above the logo.
+ * AttendSure V3 - Collapsible Sidebar Navigation (Pure Software Architecture)
  * File: web/src/components/layout/Sidebar.tsx
  */
 
@@ -11,28 +9,28 @@ import type { UserSession } from '../../types/section';
 import type { TabBadgeCounts } from './Header';
 import {
   LayoutDashboard,
-  Scan,
   Users,
   GraduationCap,
   CalendarDays,
   FileSpreadsheet,
   Settings,
-  Send,
+  Bell,
   Ticket,
   Clock,
   MapPin,
-  Cpu,
   UserCheck,
   BookOpen,
   ChevronLeft,
   ChevronRight,
   QrCode,
+  LayoutGrid,
 } from 'lucide-react';
 
 export type NavItemKey =
   | 'dashboard'
   | 'classroom-scanner'
   | 'my-classes'
+  | 'advisory-monitor'
   | 'gate-logs'
   | 'students'
   | 'facultys'
@@ -43,6 +41,7 @@ export type NavItemKey =
   | 'geofence'
   | 'scanners'
   | 'sms'
+  | 'notifications'
   | 'reports'
   | 'settings';
 
@@ -95,9 +94,9 @@ const isSafeImageUrl = (url?: string | null): boolean => {
   );
 };
 
-// Generates school initials abbreviation (e.g., "Lapasan National High School" -> "LNHS")
+// Generates school initials abbreviation (e.g., "Macasandig National High School" -> "MNHS")
 const getSchoolAbbreviation = (name?: string): string => {
-  if (!name || !name.trim()) return 'AS';
+  if (!name || !name.trim()) return 'MNHS';
   const clean = name.trim();
   const ignoreWords = new Set(['of', 'the', 'and', 'in', 'at', 'for', 'to', 'ng', 'mga', 'sa']);
   const words = clean.split(/\s+/).filter((w) => !ignoreWords.has(w.toLowerCase()));
@@ -119,7 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userPhoto,
   isCollapsed: controlledCollapsed,
   onToggleCollapse,
-  schoolName = 'Lapasan National High School',
+  schoolName = 'Macasandig National High School',
   schoolId = '55555',
   schoolLogo,
   canTeach = false,
@@ -130,7 +129,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [liveBadges, setLiveBadges] = useState<TabBadgeCounts>({});
   const [tooltip, setTooltip] = useState<HoverTooltipState | null>(null);
 
-  // Persistent sidebar collapse state (icons-only vs tab names)
   const [internalCollapsed, setInternalCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('attendsure_sidebar_collapsed') === 'true';
   });
@@ -169,27 +167,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
         groupTitle: 'OVERVIEW',
         items: [
           { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
-          { key: 'gate-logs', label: 'Gate Logs', icon: <Scan size={20} /> },
         ],
       },
       {
         groupTitle: 'ACADEMICS',
         items: [
-          { key: 'classroom-scanner', label: 'Attendance Scanner', icon: <QrCode size={20} /> },
+          { key: 'classroom-scanner', label: 'USB QR Scanner', icon: <QrCode size={20} /> },
           { key: 'my-classes', label: 'Classes', icon: <BookOpen size={20} /> },
+          { key: 'advisory-monitor', label: 'Advisory Matrix', icon: <LayoutGrid size={20} /> },
           { key: 'students', label: 'Students', icon: <GraduationCap size={20} /> },
-          { key: 'facultys', label: 'Faculties', icon: <Users size={20} /> },
+          { key: 'facultys', label: 'Faculty', icon: <Users size={20} /> },
           { key: 'schedules', label: 'Schedules', icon: <CalendarDays size={20} /> },
         ],
       },
       {
-        groupTitle: 'GATE & TELEMETRY',
+        groupTitle: 'ATTENDANCE & ALERTS',
         items: [
-          { key: 'sms', label: 'SMS Alerts', icon: <Send size={20} /> },
-          { key: 'gate-passes', label: 'Gate Passes', icon: <Ticket size={20} /> },
-          { key: 'scanners', label: 'Gate Kiosks', icon: <Cpu size={20} /> },
-          { key: 'dtr', label: 'DTR', icon: <Clock size={20} /> },
-          { key: 'geofence', label: 'Geofence', icon: <MapPin size={20} /> },
+          { key: 'sms', label: 'Push Alerts', icon: <Bell size={20} /> },
+          { key: 'gate-passes', label: 'Exit Passes', icon: <Ticket size={20} /> },
+          { key: 'dtr', label: 'Faculty DTR', icon: <Clock size={20} /> },
+          { key: 'geofence', label: 'Campus GPS', icon: <MapPin size={20} /> },
         ],
       },
       {
@@ -214,12 +211,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }
           if (item.key === 'classroom-scanner') return canTeach || isLeadership;
           if (item.key === 'my-classes') return canTeach;
+          if (item.key === 'advisory-monitor') return canTeach || isLeadership;
           if (item.key === 'users') return role === 'ADMIN' || role === 'SUPERADMIN';
-          if (['settings', 'sms', 'scanners', 'geofence'].includes(item.key)) {
+          if (['settings', 'sms', 'notifications', 'geofence'].includes(item.key)) {
             return role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL';
           }
           if (['facultys', 'reports', 'schedules'].includes(item.key)) return isLeadership;
-          if (role === 'GUARD') return ['dashboard', 'gate-logs', 'gate-passes'].includes(item.key);
           return true;
         }),
       }))
@@ -264,7 +261,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             position: 'relative',
           }}
         >
-          {/* Collapse/Expand Toggle Button */}
           <button
             type="button"
             onClick={handleToggle}
@@ -291,7 +287,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
           </button>
 
-          {/* School Abbreviation & School ID */}
           <div
             style={{
               textAlign: 'center',
@@ -332,7 +327,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
 
-          {/* School Logo */}
           <div
             style={{
               display: 'flex',
@@ -652,7 +646,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </aside>
 
-      {/* Floating Hover Tooltip (Icons-only mode) */}
       {tooltip && isCollapsed && (
         <div
           style={{

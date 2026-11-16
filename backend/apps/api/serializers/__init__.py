@@ -15,13 +15,12 @@ from .academics import (
     ScheduleSerializer,
     EnrollmentSerializer,
 )
-from .hardware import (
-    IoTKioskSerializer,
+from .operations import (
     GatePassSerializer,
-    SmsOutboxSerializer,
-    GateScanSerializer,
+    AppNotificationSerializer,
     SingleClassroomScanItemSerializer,
     ClassroomBatchScanSerializer,
+    FacultyMobileCheckInSerializer,
     TelemetryHeartbeatSerializer,
 )
 from .users import SchoolProfileSerializer, UserManagementSerializer
@@ -41,12 +40,11 @@ __all__ = [
     'SectionSerializer',
     'ScheduleSerializer',
     'EnrollmentSerializer',
-    'IoTKioskSerializer',
     'GatePassSerializer',
-    'SmsOutboxSerializer',
-    'GateScanSerializer',
+    'AppNotificationSerializer',
     'SingleClassroomScanItemSerializer',
     'ClassroomBatchScanSerializer',
+    'FacultyMobileCheckInSerializer',
     'TelemetryHeartbeatSerializer',
     'SchoolProfileSerializer',
     'UserManagementSerializer',

@@ -29,7 +29,7 @@ export const SchoolTenantBadge: React.FC = () => {
         style={{ objectFit: 'contain', borderRadius: '50%' }}
       />
       <span style={{ fontSize: '0.86rem', fontWeight: 700, color: '#0A1F3D' }}>
-        {school.school_name || 'Lapasan National High School'}
+        {school.school_name || 'Macasandig National High School'}
       </span>
       <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
         • {school.division ? `Division of ${school.division}` : 'DepEd Region X'}

@@ -13,7 +13,7 @@ def sync_real_data():
         school = SchoolProfile()
 
     school.school_id = '304033'
-    school.school_name = 'Lapasan National High School'
+    school.school_name = 'Macasandig National High School'
     school.region = 'Region X'
     school.division = 'Cagayan de Oro City'
     school.district = 'District II'

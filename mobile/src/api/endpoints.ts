@@ -10,13 +10,14 @@ export const ENDPOINTS = {
   TELEMETRY_HEARTBEAT: 'telemetry/heartbeat/',
   CAMPUS_GEOFENCE: 'geofence/',
 
-  // Campus Gate Scanners
+  // Campus USB QR & Campus GPS
   GATE_LOGS: 'gate/logs/',
   GATE_SCAN: 'gate/scan/',
 
   // Classroom Mobile Scans
   CLASS_LIST: 'classroom/class_list/',
   CLASSROOM_BATCH_SCAN: 'classroom/batch-scan/',
-  SMS_OUTBOX: 'sms-outbox/',
+  NOTIFICATIONS: 'notifications/',
+  SYSTEM_STATUS: 'system/status/',
   EMPLOYEE_DTR: 'dtr/',
 };

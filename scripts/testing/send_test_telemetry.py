@@ -41,7 +41,7 @@ def send_telemetry(mode="campus"):
 
     # 1. Choose coordinates
     if mode == "campus":
-        # Inside Lapasan National High School (~6 meters from center)
+        # Inside Macasandig National High School (~6 meters from center)
         lat = 8.480050
         lon = 124.650030
         accuracy = 6.0

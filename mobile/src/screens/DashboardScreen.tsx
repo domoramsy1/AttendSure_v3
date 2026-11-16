@@ -27,6 +27,7 @@ import { getUnsyncedCount, syncOfflineQueue } from '../services/offlineQueue';
 import { sendLiveHeartbeat, format12HourTime } from '../services/telemetryService';
 import { startPassivePresenceTracking } from '../services/backgroundLocation';
 import { COLORS } from '../constants/theme';
+import { TabType } from '../navigation/MainTabNavigator';
 
 const fallbackLogo = require('../../assets/attendsure-logo.svg');
 
@@ -60,7 +61,6 @@ interface StudentItem {
   id: number;
   lrn: string;
   qr_token?: string;
-  rfid_uid?: string;
   full_name: string;
   gender?: string;
   attendance_status: string;
@@ -142,6 +142,10 @@ interface LiveGpsCoords {
   timestamp: string;
 }
 
+interface DashboardProps {
+  onNavigate?: (tab: TabType) => void;
+}
+
 const getLocalTodayStr = (): string => {
   const now = new Date();
   const y = now.getFullYear();
@@ -170,7 +174,7 @@ const getMindfulGreeting = (): { greeting: string; thought: string } => {
   };
 };
 
-export const DashboardScreen: React.FC = () => {
+export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const { user, refreshUser } = useAuth();
 
   const [sections, setSections] = useState<SectionItem[]>([]);
@@ -200,7 +204,6 @@ export const DashboardScreen: React.FC = () => {
   const isMounted = useRef(true);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Stationary Deadband Anchor: locks coordinates when phone is still (<6m drift)
   const anchorCoordsRef = useRef<LiveGpsCoords | null>(null);
   const lastHeartbeatSent = useRef<number>(0);
 
@@ -272,7 +275,6 @@ export const DashboardScreen: React.FC = () => {
       raw.longitude
     );
 
-    // If movement is under 6 meters, lock coordinate to eliminate jitter
     if (displacement < 6) {
       return {
         latitude: anchor.latitude,
@@ -463,7 +465,7 @@ export const DashboardScreen: React.FC = () => {
     ? hasTappedOutToday
       ? 'DONE FOR TODAY'
       : 'ACTIVE ON DUTY'
-    : 'NO GATE SCAN';
+    : 'NO CHECK-IN';
 
   const dutyStatusColor = hasTappedInToday
     ? hasTappedOutToday
@@ -575,7 +577,7 @@ export const DashboardScreen: React.FC = () => {
         .catch(() => apiClient.get('classroom/student_list/', { signal: controller.signal, timeout: 5000 }))
         .catch(() => apiClient.get('sections/', { signal: controller.signal, timeout: 5000 })),
       apiClient.get('settings/school/', { signal: controller.signal, timeout: 5000 }),
-      apiClient.get(`dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal, timeout: 5000 }),
+      apiClient.get(`reports/dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal, timeout: 5000 }),
       apiClient.get('geofence/', { signal: controller.signal, timeout: 5000 }),
       apiClient.get('calendar/exceptions/', { signal: controller.signal, timeout: 5000 }),
     ]);
@@ -821,58 +823,135 @@ export const DashboardScreen: React.FC = () => {
           </View>
         )}
 
-        {/* 1. Educator Identity Card */}
-        <View style={styles.educatorDignityCard}>
-          <View style={styles.educatorHeaderRow}>
-            <View style={styles.avatarContainer}>
-              <View style={styles.avatarWrap}>
-                {resolvedUserPhoto && !avatarFailed ? (
-                  <Image
-                    source={{ uri: resolvedUserPhoto }}
-                    style={styles.educatorAvatar}
-                    contentFit="cover"
-                    onError={() => setAvatarFailed(true)}
-                  />
-                ) : (
-                  <View style={styles.avatarFallback}>
-                    <Ionicons name="person" size={20} color="#004b87" />
-                  </View>
-                )}
-              </View>
-
-              <View
-                style={[
-                  styles.onlineStatusDot,
-                  { backgroundColor: isOnline ? '#16a34a' : '#94a3b8' },
-                ]}
-              />
+        {/* 1. Pastel Welcome Banner Card */}
+        <View style={styles.welcomeCard}>
+          <View style={styles.welcomeHeader}>
+            <View>
+              <Text style={styles.welcomeSub}>{mindfulQuote.greeting},</Text>
+              <Text style={styles.welcomeTitle} numberOfLines={1}>{displayName}</Text>
             </View>
-
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.greetingGreeting}>{mindfulQuote.greeting},</Text>
-              <Text style={styles.educatorFullName} numberOfLines={1}>
-                {displayName}
-              </Text>
-              <Text style={styles.educatorDesignation}>
-                {employeeId ? `ID: ${employeeId}` : 'Faculty'} • <Text style={{ color: isOnline ? '#16a34a' : '#64748b', fontWeight: '800' }}>{isOnline ? 'Online' : 'Offline'}</Text>
-              </Text>
-            </View>
-
-            <View style={[styles.dutyStatusPill, { backgroundColor: dutyStatusBg }]}>
-              <View style={[styles.activeDot, { backgroundColor: dutyStatusColor }]} />
-              <Text style={[styles.dutyStatusPillText, { color: dutyStatusColor }]}>
-                {dutyStatusLabel}
-              </Text>
+            <View style={styles.avatarBox}>
+              {resolvedUserPhoto && !avatarFailed ? (
+                <Image
+                  source={{ uri: resolvedUserPhoto }}
+                  style={styles.avatarImg}
+                  contentFit="cover"
+                  onError={() => setAvatarFailed(true)}
+                />
+              ) : (
+                <Ionicons name="person" size={22} color={COLORS.primary} />
+              )}
             </View>
           </View>
 
-          <View style={styles.quoteSeparator} />
-          <Text style={styles.mindfulQuoteText}>
-            "{mindfulQuote.thought}"
-          </Text>
+          {/* Status / Level Progress Bar */}
+          <View style={styles.progressContainer}>
+            <View style={styles.progressTopRow}>
+              <Text style={styles.progressBadgeText}>{employeeId ? `ID: ${employeeId}` : 'Faculty'}</Text>
+              <Text style={styles.progressPercent}>{overallRate}% Attendance Today</Text>
+            </View>
+            <View style={styles.progressBarTrack}>
+              <View style={[styles.progressBarFill, { width: `${Math.min(100, Math.max(5, overallRate))}%` }]} />
+            </View>
+          </View>
         </View>
 
-        {/* 2. School Campus Location Card in 12-Hour AM/PM Format */}
+        {/* 2. Primary Status / Classroom Summary Card */}
+        <TouchableOpacity
+          style={styles.primaryStatusCard}
+          onPress={() => onNavigate?.('class_list')}
+          activeOpacity={0.9}
+        >
+          <View style={styles.statusTopRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.statusCardEyebrow}>TODAY'S CLASS SUMMARY</Text>
+              <Text style={styles.statusCardTitle}>
+                {totalPresent} of {totalStudentsEnrolled} Learners Present
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#ffffff" />
+          </View>
+          <View style={styles.statusFooterRow}>
+            <View style={styles.statusPill}>
+              <Text style={styles.statusPillText}>Needs Review: {totalNeedsReview}</Text>
+            </View>
+            <View style={[styles.statusPill, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
+              <Text style={styles.statusPillText}>GPS Verified: {isInsideCampusPerimeter ? 'On Campus' : 'Away'}</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {/* 3. Quick Links Pastel Grid */}
+        <Text style={styles.sectionHeader}>Quick Actions</Text>
+        <View style={styles.gridContainer}>
+          <TouchableOpacity
+            style={[styles.gridCard, { backgroundColor: '#fff7ed' }]}
+            onPress={() => onNavigate?.('scanner')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.gridIconBox, { backgroundColor: '#ffedd5' }]}>
+              <Ionicons name="scan-outline" size={20} color="#c2410c" />
+            </View>
+            <Text style={[styles.gridCardTitle, { color: '#9a3412' }]}>Face Check</Text>
+            <Text style={styles.gridCardSub}>GPS &amp; Biometric</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.gridCard, { backgroundColor: '#eff6ff' }]}
+            onPress={() => onNavigate?.('gate_pass')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.gridIconBox, { backgroundColor: '#dbeafe' }]}>
+              <Ionicons name="ticket-outline" size={20} color="#1d4ed8" />
+            </View>
+            <Text style={[styles.gridCardTitle, { color: '#1e40af' }]}>Exit Pass</Text>
+            <Text style={styles.gridCardSub}>Gate Clearances</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.gridCard, { backgroundColor: '#f5f3ff' }]}
+            onPress={() => onNavigate?.('class_list')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.gridIconBox, { backgroundColor: '#ede9fe' }]}>
+              <Ionicons name="people-outline" size={20} color="#6d28d9" />
+            </View>
+            <Text style={[styles.gridCardTitle, { color: '#5b21b6' }]}>Class List</Text>
+            <Text style={styles.gridCardSub}>Enrolled Learners</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.gridCard, { backgroundColor: '#ecfdf5' }]}
+            onPress={() => onNavigate?.('settings')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.gridIconBox, { backgroundColor: '#d1fae5' }]}>
+              <Ionicons name="notifications-outline" size={20} color="#047857" />
+            </View>
+            <Text style={[styles.gridCardTitle, { color: '#065f46' }]}>Push Alerts</Text>
+            <Text style={styles.gridCardSub}>Parent Broadcasts</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* 4. More Tools Expansion Card */}
+        <TouchableOpacity
+          style={styles.moreToolsCard}
+          onPress={() => onNavigate?.('menu')}
+          activeOpacity={0.85}
+        >
+          <View style={styles.moreToolsLeft}>
+            <View style={styles.moreToolsIconBox}>
+              <Ionicons name="grid-outline" size={20} color={COLORS.primary} />
+            </View>
+            <View>
+              <Text style={styles.moreToolsTitle}>More School Tools</Text>
+              <Text style={styles.moreToolsSub}>DTR, Calendar, SARDO Risk Reports &amp; Settings</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#64748b" />
+        </TouchableOpacity>
+
+        {/* School Campus Location Card */}
         <View style={styles.presenceShieldCard}>
           <View style={styles.presenceCardHeader}>
             <View style={styles.presenceHeaderLeft}>
@@ -949,23 +1028,9 @@ export const DashboardScreen: React.FC = () => {
               </View>
             )}
           </View>
-
-          <View style={styles.presenceFooterRow}>
-            <View style={styles.presenceFooterCol}>
-              <Ionicons name="shield-checkmark-outline" size={12} color="#004b87" />
-              <Text style={styles.presenceFooterText}>Account Protected</Text>
-            </View>
-
-            <View style={styles.presenceFooterCol}>
-              <Ionicons name="radio-outline" size={12} color="#64748b" />
-              <Text style={styles.presenceFooterText}>
-                GPS Accuracy: {liveCoords?.accuracy ? `±${Math.round(liveCoords.accuracy)}m` : 'Measuring...'}
-              </Text>
-            </View>
-          </View>
         </View>
 
-        {/* 3. Offline Buffer Banner */}
+        {/* Offline Buffer Banner */}
         {offlineCount > 0 && (
           <TouchableOpacity
             style={styles.offlineBufferBanner}
@@ -1027,7 +1092,7 @@ export const DashboardScreen: React.FC = () => {
           </View>
         ) : null}
 
-        {/* 4. DTR Card */}
+        {/* DTR Card */}
         {dtrData && (
           <>
             <View style={styles.sectionHeaderRow}>
@@ -1086,7 +1151,7 @@ export const DashboardScreen: React.FC = () => {
           </>
         )}
 
-        {/* 5. Student Attendance Today */}
+        {/* Attendance Breakdown Tiles */}
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionHeaderTitle}>Student Attendance Today</Text>
           {lastSyncTime ? (
@@ -1094,44 +1159,6 @@ export const DashboardScreen: React.FC = () => {
           ) : null}
         </View>
 
-        <View style={styles.analyticsCard}>
-          <View style={styles.analyticsHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.analyticsTitle}>Class Attendance Rate</Text>
-              <Text style={styles.analyticsSub}>
-                {totalAttended} of {totalStudentsEnrolled} students present across {totalClasses} class{totalClasses === 1 ? '' : 'es'}
-              </Text>
-            </View>
-            <Text style={styles.analyticsRateLarge}>{overallRate}%</Text>
-          </View>
-
-          <View style={styles.analyticsProgressBarTrack}>
-            <View style={[styles.analyticsProgressBarFill, { width: `${Math.min(overallRate, 100)}%` }]} />
-          </View>
-
-          {totalStudentsEnrolled > 0 && (
-            <View style={styles.genderMetricsRow}>
-              <View style={styles.genderMetricChip}>
-                <Ionicons name="male" size={12} color="#004b87" />
-                <Text style={styles.genderMetricText}>
-                  Male: {totalMalePresent}/{totalMaleEnrolled}
-                </Text>
-              </View>
-              <View style={styles.genderMetricChip}>
-                <Ionicons name="female" size={12} color="#db2777" />
-                <Text style={styles.genderMetricText}>
-                  Female: {totalFemalePresent}/{totalFemaleEnrolled}
-                </Text>
-              </View>
-              <View style={styles.genderMetricChip}>
-                <Ionicons name="time-outline" size={12} color="#64748b" />
-                <Text style={styles.genderMetricText}>Not Scanned: {totalUnscanned}</Text>
-              </View>
-            </View>
-          )}
-        </View>
-
-        {/* Attendance Breakdown Tiles */}
         <View style={styles.kpiTileGrid}>
           <View style={styles.kpiTile}>
             <View style={[styles.kpiIconWrap, { backgroundColor: '#ecfdf5' }]}>
@@ -1165,101 +1192,6 @@ export const DashboardScreen: React.FC = () => {
             <Text style={styles.kpiLabelText}>Review</Text>
           </View>
         </View>
-
-        {/* 6. Today's Classes List */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionHeaderTitle}>My Classes Today</Text>
-          <Text style={styles.sectionCountText}>{sections.length} Assigned</Text>
-        </View>
-
-        {loading && sections.length === 0 ? (
-          <View style={styles.emptyStateCard}>
-            <ActivityIndicator size="small" color="#004b87" />
-            <Text style={styles.emptyStateText}>Loading class schedule...</Text>
-          </View>
-        ) : sections.length === 0 ? (
-          <View style={styles.emptyStateCard}>
-            <Ionicons name="school-outline" size={32} color="#94a3b8" />
-            <Text style={styles.emptyStateTitle}>No Classes Scheduled</Text>
-            <Text style={styles.emptyStateText}>
-              There are no classroom teaching schedules assigned to your account today.
-            </Text>
-          </View>
-        ) : (
-          safeSections.map((sec) => {
-            const students = Array.isArray(sec?.students) ? sec.students : [];
-            const classPresent = students.filter((s) => s.attendance_status === 'PRESENT').length;
-            const classLate = students.filter((s) =>
-              ['LATE', 'TARDY'].includes(String(s.attendance_status).toUpperCase())
-            ).length;
-            const classFlagged = students.filter((s) =>
-              ['CUTTING', 'UNVERIFIED'].includes(String(s.attendance_status).toUpperCase())
-            ).length;
-            const classUnscanned = students.filter(
-              (s) => String(s.attendance_status || 'UNSCANNED').toUpperCase() === 'UNSCANNED'
-            ).length;
-
-            const enrolledCount = students.length;
-            const classRate =
-              enrolledCount > 0 ? Math.round(((classPresent + classLate) / enrolledCount) * 100) : 0;
-
-            const timeRange =
-              sec.start_time && sec.end_time ? `${sec.start_time} - ${sec.end_time}` : '';
-            const roomAndTime = [sec.room, timeRange].filter(Boolean).join(' • ');
-
-            return (
-              <View key={String(sec.schedule_id)} style={styles.sessionCard}>
-                <View style={styles.sessionCardHeader}>
-                  <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={styles.sessionSubjectTitle}>
-                      {[sec.subject_name, sec.section_name].filter(Boolean).join(' • ')}
-                    </Text>
-                    {roomAndTime ? (
-                      <Text style={styles.sessionRoomMeta}>{roomAndTime}</Text>
-                    ) : null}
-                  </View>
-
-                  <View style={styles.sessionRatePill}>
-                    <Text style={styles.sessionRatePillText}>{classRate}% checked</Text>
-                  </View>
-                </View>
-
-                <View style={styles.sessionProgressTrack}>
-                  <View style={[styles.sessionProgressFill, { width: `${Math.min(classRate, 100)}%` }]} />
-                </View>
-
-                <View style={styles.sessionMetricsRow}>
-                  <View style={styles.sessionMetricCol}>
-                    <Text style={styles.sessionMetricLabel}>ENROLLED</Text>
-                    <Text style={styles.sessionMetricVal}>{enrolledCount}</Text>
-                  </View>
-
-                  <View style={styles.sessionMetricCol}>
-                    <Text style={[styles.sessionMetricLabel, { color: '#059669' }]}>PRESENT</Text>
-                    <Text style={[styles.sessionMetricVal, { color: '#059669' }]}>{classPresent}</Text>
-                  </View>
-
-                  <View style={styles.sessionMetricCol}>
-                    <Text style={[styles.sessionMetricLabel, { color: '#d97706' }]}>LATE</Text>
-                    <Text style={[styles.sessionMetricVal, { color: '#d97706' }]}>{classLate}</Text>
-                  </View>
-
-                  <View style={styles.sessionMetricCol}>
-                    <Text style={[styles.sessionMetricLabel, { color: '#64748b' }]}>REVIEW</Text>
-                    <Text style={[styles.sessionMetricVal, { color: '#475569' }]}>{classFlagged}</Text>
-                  </View>
-
-                  <View style={styles.sessionMetricCol}>
-                    <Text style={[styles.sessionMetricLabel, { color: '#dc2626' }]}>PENDING</Text>
-                    <Text style={[styles.sessionMetricVal, { color: '#dc2626' }]}>
-                      {classUnscanned}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            );
-          })
-        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -1295,7 +1227,7 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
   },
   scrollArea: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 110 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.75)',
@@ -1311,10 +1243,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#cbd5e1',
-    ...Platform.select({
-      ios: { shadowColor: '#003460', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 },
-      android: { elevation: 6 },
-    }),
   },
   modalIconWrap: {
     width: 54,
@@ -1363,93 +1291,94 @@ const styles = StyleSheet.create({
     borderColor: '#fca5a5',
     borderRadius: 10,
     padding: 10,
-    marginBottom: 10,
+    marginBottom: 12,
     gap: 8,
   },
   securityAlertTitle: { fontSize: 11.5, fontWeight: '800', color: '#991b1b' },
   securityAlertBody: { fontSize: 10.5, color: '#b91c1c', marginTop: 2, lineHeight: 14 },
-  educatorDignityCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 10,
+  welcomeCard: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 14,
+    ...Platform.select({
+      ios: {
+        shadowColor: COLORS.primaryDark,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+      },
+      android: { elevation: 6 },
+    }),
   },
-  educatorHeaderRow: {
+  welcomeHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 14,
   },
-  avatarContainer: {
-    position: 'relative',
-    width: 44,
-    height: 44,
-  },
-  avatarWrap: {
+  welcomeSub: { fontSize: 13, color: '#e0f2fe', fontWeight: '600' },
+  welcomeTitle: { fontSize: 20, fontWeight: '800', color: '#ffffff', marginTop: 2 },
+  avatarBox: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1.5,
-    borderColor: '#004b87',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
     overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
-  educatorAvatar: {
-    width: '100%',
-    height: '100%',
+  avatarImg: { width: '100%', height: '100%' },
+  progressContainer: { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, padding: 12 },
+  progressTopRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  progressBadgeText: { fontSize: 11, fontWeight: '700', color: '#ffffff' },
+  progressPercent: { fontSize: 11, fontWeight: '800', color: '#fef08a' },
+  progressBarTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 3, overflow: 'hidden' },
+  progressBarFill: { height: '100%', backgroundColor: '#fef08a', borderRadius: 3 },
+  primaryStatusCard: {
+    backgroundColor: '#0ea5e9',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 16,
+    ...Platform.select({
+      ios: { shadowColor: '#0ea5e9', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8 },
+      android: { elevation: 4 },
+    }),
   },
-  avatarFallback: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#e0f2fe',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  onlineStatusDot: {
-    position: 'absolute',
-    bottom: -1,
-    right: -1,
-    width: 13,
-    height: 13,
-    borderRadius: 6.5,
-    borderWidth: 2,
-    borderColor: '#ffffff',
-    zIndex: 10,
-    elevation: 3,
-  },
-  greetingGreeting: { fontSize: 11, color: '#64748b', fontWeight: '600' },
-  educatorFullName: { fontSize: 15, fontWeight: '800', color: '#0f172a', marginTop: 1 },
-  educatorDesignation: { fontSize: 11, color: '#475569', fontWeight: '600', marginTop: 1 },
-  dutyStatusPill: {
+  statusTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+  statusCardEyebrow: { fontSize: 10, fontWeight: '800', color: '#e0f2fe', letterSpacing: 0.5 },
+  statusCardTitle: { fontSize: 16, fontWeight: '800', color: '#ffffff', marginTop: 2 },
+  statusFooterRow: { flexDirection: 'row', gap: 8 },
+  statusPill: { backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  statusPillText: { fontSize: 11, fontWeight: '700', color: '#ffffff' },
+  sectionHeader: { fontSize: 15, fontWeight: '800', color: '#0f172a', marginBottom: 10, marginLeft: 2 },
+  gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  gridCard: { width: '48%', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#e2e8f0', gap: 6 },
+  gridIconBox: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  gridCardTitle: { fontSize: 14, fontWeight: '800' },
+  gridCardSub: { fontSize: 11, color: '#64748b', fontWeight: '600' },
+  moreToolsCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    marginLeft: 6,
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 14,
   },
-  dutyStatusPillText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 },
-  quoteSeparator: {
-    height: 1,
-    backgroundColor: '#f1f5f9',
-    marginVertical: 10,
-  },
-  mindfulQuoteText: {
-    fontSize: 11,
-    fontStyle: 'italic',
-    color: '#475569',
-    lineHeight: 15,
-  },
+  moreToolsLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  moreToolsIconBox: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
+  moreToolsTitle: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
+  moreToolsSub: { fontSize: 11, color: '#64748b', marginTop: 2 },
   presenceShieldCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
     padding: 14,
     borderWidth: 1.5,
     borderColor: '#e0f2fe',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   presenceCardHeader: {
     flexDirection: 'row',
@@ -1493,17 +1422,6 @@ const styles = StyleSheet.create({
   perimeterRadiusMeta: { fontSize: 10.5, color: '#64748b', fontWeight: '600' },
   acquiringFixBox: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
   acquiringFixText: { fontSize: 11.5, color: '#64748b', fontWeight: '600' },
-  presenceFooterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-  },
-  presenceFooterCol: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  presenceFooterText: { fontSize: 9.5, color: '#475569', fontWeight: '600' },
   offlineBufferBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1511,7 +1429,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fffbeb',
     borderRadius: 10,
     padding: 10,
-    marginBottom: 10,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#fde68a',
   },
@@ -1531,7 +1449,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#eff6ff',
     borderRadius: 10,
     padding: 10,
-    marginBottom: 10,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#bfdbfe',
     gap: 8,
@@ -1547,7 +1465,6 @@ const styles = StyleSheet.create({
   },
   sectionHeaderTitle: { fontSize: 12.5, fontWeight: '800', color: '#334155' },
   sectionHeaderSub: { fontSize: 10, fontWeight: '600', color: '#64748b' },
-  sectionCountText: { fontSize: 10.5, fontWeight: '700', color: '#004b87' },
   dtrIntegrityCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
@@ -1575,37 +1492,6 @@ const styles = StyleSheet.create({
   },
   dtrFooterMeta: { fontSize: 10.5, color: '#475569', fontWeight: '600' },
   dtrApprovalBadge: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.2 },
-  analyticsCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 10,
-  },
-  analyticsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  analyticsTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
-  analyticsSub: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
-  analyticsRateLarge: { fontSize: 24, fontWeight: '900', color: '#004b87', marginLeft: 8 },
-  analyticsProgressBarTrack: {
-    height: 5,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 2.5,
-    overflow: 'hidden',
-    marginTop: 8,
-  },
-  analyticsProgressBarFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2.5 },
-  genderMetricsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-  },
-  genderMetricChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  genderMetricText: { fontSize: 10.5, fontWeight: '700', color: '#334155' },
   kpiTileGrid: { flexDirection: 'row', gap: 6, marginBottom: 4 },
   kpiTile: {
     flex: 1,
@@ -1626,61 +1512,6 @@ const styles = StyleSheet.create({
   },
   kpiValueText: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
   kpiLabelText: { fontSize: 8.5, fontWeight: '700', color: '#64748b', marginTop: 1, textAlign: 'center' },
-  sessionCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 8,
-  },
-  sessionCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sessionSubjectTitle: { fontSize: 12.5, fontWeight: '800', color: '#0f172a' },
-  sessionRoomMeta: { fontSize: 10, color: '#64748b', marginTop: 1 },
-  sessionRatePill: {
-    backgroundColor: '#ecfdf5',
-    paddingVertical: 2.5,
-    paddingHorizontal: 7,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-  },
-  sessionRatePillText: { fontSize: 9.5, fontWeight: '800', color: '#047857' },
-  sessionProgressTrack: {
-    height: 4,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginVertical: 8,
-  },
-  sessionProgressFill: { height: '100%', backgroundColor: '#004b87', borderRadius: 2 },
-  sessionMetricsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#f8fafc',
-    borderRadius: 6,
-    padding: 6,
-  },
-  sessionMetricCol: { alignItems: 'center' },
-  sessionMetricLabel: { fontSize: 7.5, fontWeight: '800', color: '#64748b' },
-  sessionMetricVal: { fontSize: 11.5, fontWeight: '800', color: '#0f172a', marginTop: 1 },
-  emptyStateCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 24,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  emptyStateTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginTop: 6 },
-  emptyStateText: {
-    fontSize: 11,
-    color: '#64748b',
-    textAlign: 'center',
-    marginTop: 2,
-    lineHeight: 15,
-  },
 });
 
 export default DashboardScreen;

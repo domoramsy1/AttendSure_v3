@@ -1,5 +1,5 @@
 /**
- * AttendSure - Unified Digital ID & Gate Kiosk Pass Modal
+ * AttendSure - Unified Digital ID & Gate Turnstile Pass Modal
  * Supports both Student and Faculty identification credentials.
  * File: web/src/components/modals/StudentIdPassModal.tsx
  */
@@ -52,7 +52,7 @@ export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({
   };
 
   return (
-    <Modal isOpen={Boolean(student)} onClose={onClose} title="Digital Pass & Gate Kiosk QR">
+    <Modal isOpen={Boolean(student)} onClose={onClose} title="Digital Pass & Gate Turnstile QR">
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '6px 0' }}>
         <div
           id="printable-id-card"
@@ -73,7 +73,7 @@ export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({
               <span>ATTENDSURE OFFICIAL PASS</span>
             </div>
             <div style={{ fontSize: '0.60rem', color: '#E0F2FE', marginTop: 2 }}>
-              Lapasan National High School &bull; Gate Clearance
+              Macasandig National High School &bull; Gate Clearance
             </div>
           </div>
 
@@ -137,7 +137,7 @@ export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({
               {copied ? <Check size={11} color="#10B981" /> : <Copy size={11} color="#94A3B8" />}
             </div>
 
-            {/* High-Contrast QR Code for Gate Kiosks */}
+            {/* High-Contrast QR Code for Classroom USB QR Scanner */}
             <div
               style={{
                 margin: '8px auto',

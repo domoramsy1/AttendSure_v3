@@ -1,5 +1,5 @@
 /**
- * AttendSure - Campus Gate Passes & Exit Clearances
+ * AttendSure - Campus Exit Passes & Exit Clearances
  * File: web/src/components/tabs/GatePassesTab.tsx
  */
 
@@ -274,7 +274,7 @@ export const GatePassesTab: React.FC = () => {
 
       {/* Main Table */}
       <ModuleTableLayout
-        title="Campus Gate Passes & Exit Clearances"
+        title="Campus Exit Passes & Exit Clearances"
         subtitle="Adviser student permits and official faculty travel authorizations."
         searchPlaceholder="Search pass #, student, faculty, reason..."
         searchValue={search}

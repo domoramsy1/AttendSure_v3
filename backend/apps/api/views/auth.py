@@ -20,7 +20,7 @@ from rest_framework.views import APIView
 
 from apps.academics.models import FacultyProfile, Schedule, SchoolProfile, UserProfile
 from apps.common.utils import get_user_role, is_regular_faculty, safe_photo_url
-from .common import resolve_faculty_for_user
+from .common import resolve_faculty_for_user, resolve_logo_field
 
 User = get_user_model()
 
@@ -105,10 +105,13 @@ def build_authenticated_user_payload(user, request=None):
         'contact_number': getattr(faculty, 'contact_number', '') if faculty else '',
         'position': getattr(faculty, 'position', '') if faculty else '',
         'department': getattr(faculty, 'department', '') if faculty else '',
-        'rfid_uid': getattr(faculty, 'rfid_uid', '') if faculty else '',
         'photo': photo_url,
         'photo_url': photo_url,
         'school_name': getattr(school, 'school_name', '') if school else '',
+        'school_id': getattr(school, 'school_id', '') if school else '',
+        'school_logo': resolve_logo_field(getattr(school, 'school_logo', None), request) if school else None,
+        'left_logo': resolve_logo_field(getattr(school, 'left_logo', None), request) if school else None,
+        'right_logo': resolve_logo_field(getattr(school, 'right_logo', None), request) if school else None,
         'role': assigned_role,
         'system_role': assigned_role,
         'is_profile_completed': bool(profile and getattr(profile, 'is_profile_completed', True)),

@@ -321,7 +321,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess }) => {
                 <School size={18} color="#ffffff" />
               )}
               <span style={{ fontSize: '0.85rem', fontWeight: 600, letterSpacing: '0.5px' }}>
-                {school.school_name || 'Lapasan National High School'}
+                {school.school_name || 'Macasandig National High School'}
               </span>
             </div>
 

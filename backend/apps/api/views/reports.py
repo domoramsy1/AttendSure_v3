@@ -1,468 +1,286 @@
 """
-AttendSure V3 - Official DepEd & Institutional Reports
+AttendSure V3 - DepEd SF1, SF2, SF4, Faculty DTR & Audit Report Views (Batch Optimized)
 File: backend/apps/api/views/reports.py
 """
 
 import calendar
 from datetime import date
+from django.db.models import Count
+from django.shortcuts import render
 from django.utils import timezone
-from django.utils.html import escape
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.academics.models import (
     AuditLog,
-    FacultyGateLog,
+    FacultyHeartbeat,
     FacultyMonthlyDTR,
     FacultyProfile,
-    SchoolProfile,
+    Section,
 )
 from apps.academics.services.sf1_service import get_sf1_data
 from apps.academics.services.sf2_service import generate_sf2_data
 from apps.academics.services.sf4_service import generate_sf4_data
-from apps.common.utils import is_leadership_role
 from .common import (
+    get_faculty_section_ids,
     get_school_metadata,
+    is_leadership_role,
     resolve_faculty_for_user,
-    resolve_logo_field,
 )
-
-MONTH_NAMES = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
-]
 
 
 class IsLeadershipOrAssignedFaculty(permissions.BasePermission):
-    """
-    Grants access if the user is a superuser, leadership role,
-    or verified faculty/faculty member.
-    """
     def has_permission(self, request, view):
-        user = request.user
-        if not (user and user.is_authenticated):
+        if not request.user or not request.user.is_authenticated:
             return False
-        if user.is_superuser or user.is_staff or is_leadership_role(user):
-            return True
-        return resolve_faculty_for_user(user) is not None
+        return bool(
+            request.user.is_superuser
+            or is_leadership_role(request.user)
+            or resolve_faculty_for_user(request.user)
+        )
 
 
 class IsLeadershipOnly(permissions.BasePermission):
     def has_permission(self, request, view):
-        user = request.user
-        return bool(user and user.is_authenticated and (is_leadership_role(user) or user.is_superuser))
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and (request.user.is_superuser or is_leadership_role(request.user))
+        )
 
 
 class DepEdSF1DataAPIView(APIView):
-    permission_classes = [IsLeadershipOrAssignedFaculty]
+    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrAssignedFaculty]
 
-    def get(self, request, section_id):
+    def get(self, request, section_id=None):
+        raw_section_id = section_id or request.query_params.get('section_id')
+        if not raw_section_id or not str(raw_section_id).isdigit():
+            return Response({'error': 'Valid section_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        sec_id = int(raw_section_id)
+        if not (request.user.is_superuser or is_leadership_role(request.user)):
+            fac = resolve_faculty_for_user(request.user)
+            if not fac or sec_id not in get_faculty_section_ids(fac):
+                return Response({'error': 'You do not have access to this section.'}, status=status.HTTP_403_FORBIDDEN)
+
         try:
-            school_year = request.query_params.get('school_year')
-            data = get_sf1_data(section_id, school_year=school_year)
-
-            user_full_name = request.user.get_full_name().strip()
-            role = str(getattr(request.user, 'role', '') or '').upper()
-            if role in ['FACULTY', 'FACULTY'] and user_full_name:
-                data['adviser_name'] = user_full_name
-            elif not data.get('adviser_name'):
-                data['adviser_name'] = user_full_name or 'Class Adviser'
-
-            data.update(get_school_metadata(request))
+            data = get_sf1_data(sec_id, school_year=request.query_params.get('school_year'))
             return Response(data, status=status.HTTP_200_OK)
-        except Exception as exc:
-            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_404_NOT_FOUND)
 
 
 class DepEdSF2DataAPIView(APIView):
-    permission_classes = [IsLeadershipOrAssignedFaculty]
+    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrAssignedFaculty]
 
-    def get(self, request, section_id):
-        m = request.query_params.get('month', 'October')
-        y = request.query_params.get('year', 2026)
+    def get(self, request, section_id=None):
+        raw_section_id = section_id or request.query_params.get('section_id')
+        if not raw_section_id or not str(raw_section_id).isdigit():
+            return Response({'error': 'Valid section_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        sec_id = int(raw_section_id)
+        if not (request.user.is_superuser or is_leadership_role(request.user)):
+            fac = resolve_faculty_for_user(request.user)
+            if not fac or sec_id not in get_faculty_section_ids(fac):
+                return Response({'error': 'You do not have access to this section.'}, status=status.HTTP_403_FORBIDDEN)
+
+        month = request.query_params.get('month', 'October')
+        year = request.query_params.get('year', timezone.localdate().year)
         try:
-            data = generate_sf2_data(section_id, month_name=m, year=y)
-
-            user_full_name = request.user.get_full_name().strip()
-            role = str(getattr(request.user, 'role', '') or '').upper()
-            if role in ['FACULTY', 'FACULTY'] and user_full_name:
-                data['adviser_name'] = user_full_name
-            elif not data.get('adviser_name'):
-                data['adviser_name'] = user_full_name or 'Class Adviser'
-
-            data.update(get_school_metadata(request))
+            data = generate_sf2_data(sec_id, month_name=month, year=int(year))
             return Response(data, status=status.HTTP_200_OK)
-        except Exception as exc:
-            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_404_NOT_FOUND)
 
 
 class DepEdSF4DataAPIView(APIView):
-    permission_classes = [IsLeadershipOnly]
+    permission_classes = [permissions.IsAuthenticated, IsLeadershipOnly]
 
     def get(self, request):
-        m = request.query_params.get('month', 'October')
-        y = request.query_params.get('year', 2026)
-        sy = request.query_params.get('school_year', '')
-        try:
-            data = generate_sf4_data(month_name=m, year=y, school_year=sy)
-            data.update(get_school_metadata(request))
-            return Response(data, status=status.HTTP_200_OK)
-        except Exception as exc:
-            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        month = request.query_params.get('month', 'October')
+        year = request.query_params.get('year', timezone.localdate().year)
+        school_year = request.query_params.get('school_year', '')
+        data = generate_sf4_data(month_name=month, year=int(year), school_year=school_year)
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class DTRListAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    """Generates faculty monthly DTR records from mobile GPS campus check-ins using batch queries."""
+    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrAssignedFaculty]
+
+    def _build_daily_logs(self, fac, year: int, month: int):
+        _, num_days = calendar.monthrange(year, month)
+        heartbeats = FacultyHeartbeat.objects.filter(
+            faculty=fac,
+            recorded_at__year=year,
+            recorded_at__month=month,
+            is_inside_geofence=True,
+        ).order_by('recorded_at')
+
+        pings_by_day = {}
+        for hb in heartbeats:
+            local_dt = timezone.localtime(hb.recorded_at)
+            pings_by_day.setdefault(local_dt.day, []).append(local_dt)
+
+        days = []
+        for day_num in range(1, num_days + 1):
+            dt_obj = date(year, month, day_num)
+            day_pings = pings_by_day.get(day_num, [])
+            am_in = day_pings[0].strftime('%I:%M %p') if day_pings else ''
+            pm_out = day_pings[-1].strftime('%I:%M %p') if len(day_pings) > 1 else ''
+            days.append({
+                'day': day_num,
+                'date': dt_obj.strftime('%Y-%m-%d'),
+                'weekday': dt_obj.strftime('%a'),
+                'am_arrival': am_in,
+                'am_departure': '12:00 PM' if am_in else '',
+                'pm_arrival': '01:00 PM' if pm_out else '',
+                'pm_departure': pm_out,
+                'status': 'PRESENT' if day_pings else ('WEEKEND' if dt_obj.weekday() >= 5 else 'NO_LOG'),
+            })
+        return days
 
     def get(self, request, faculty_id=None):
         user = request.user
-        target_faculty = None
+        month = int(request.query_params.get('month', timezone.localdate().month))
+        year = int(request.query_params.get('year', timezone.localdate().year))
+        target_fac_id = faculty_id or request.query_params.get('faculty_id')
 
-        if is_leadership_role(user) and faculty_id:
-            target_faculty = FacultyProfile.objects.filter(id=faculty_id).first()
-        if not target_faculty:
-            target_faculty = resolve_faculty_for_user(user)
+        is_leader = bool(user.is_superuser or is_leadership_role(user))
+        own_fac = resolve_faculty_for_user(user)
 
-        if not target_faculty:
-            return Response({'error': 'Employee profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if target_fac_id and str(target_fac_id).isdigit():
+            fac_pk = int(target_fac_id)
+            if not is_leader and (not own_fac or own_fac.id != fac_pk):
+                return Response({'error': 'You can only view your own DTR record.'}, status=status.HTTP_403_FORBIDDEN)
+            fac = FacultyProfile.objects.filter(id=fac_pk).first()
+            if not fac:
+                return Response({'error': 'Faculty profile not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        raw_month = request.query_params.get('month', 10)
-        if str(raw_month).isdigit():
-            month = max(1, min(12, int(raw_month)))
+            dtr_obj, _ = FacultyMonthlyDTR.objects.get_or_create(faculty=fac, month=month, year=year)
+            daily_logs = self._build_daily_logs(fac, year, month)
+            days_present = sum(1 for d in daily_logs if d['status'] == 'PRESENT')
+
+            return Response({
+                'id': dtr_obj.id,
+                'faculty_id': fac.id,
+                'employee_id': fac.employee_id,
+                'faculty_name': fac.full_name,
+                'position': fac.position,
+                'department': fac.department,
+                'month': month,
+                'year': year,
+                'days_present': days_present,
+                'is_submitted': dtr_obj.is_submitted,
+                'is_dept_head_approved': dtr_obj.is_dept_head_approved,
+                'regular_hours': dtr_obj.regular_hours,
+                'saturday_hours': dtr_obj.saturday_hours,
+                'daily_logs': daily_logs,
+                'school': get_school_metadata(request),
+            }, status=status.HTTP_200_OK)
+
+        if is_leader:
+            faculty_list = list(FacultyProfile.objects.filter(is_active=True).order_by('last_name', 'first_name'))
         else:
-            cap_m = str(raw_month).capitalize()
-            month = MONTH_NAMES.index(cap_m) + 1 if cap_m in MONTH_NAMES else 10
+            faculty_list = [own_fac] if own_fac else []
 
-        try:
-            year = int(request.query_params.get('year', 2026))
-        except (ValueError, TypeError):
-            year = 2026
+        fac_ids = [f.id for f in faculty_list]
+        existing_dtrs = {
+            d.faculty_id: d
+            for d in FacultyMonthlyDTR.objects.filter(faculty_id__in=fac_ids, month=month, year=year)
+        }
+        missing_dtrs = [
+            FacultyMonthlyDTR(faculty_id=f.id, month=month, year=year)
+            for f in faculty_list if f.id not in existing_dtrs
+        ]
+        if missing_dtrs:
+            FacultyMonthlyDTR.objects.bulk_create(missing_dtrs, ignore_conflicts=True)
+            existing_dtrs = {
+                d.faculty_id: d
+                for d in FacultyMonthlyDTR.objects.filter(faculty_id__in=fac_ids, month=month, year=year)
+            }
 
-        _, num_days = calendar.monthrange(year, month)
-        school = SchoolProfile.objects.first()
-        dtr_rec = FacultyMonthlyDTR.objects.filter(faculty=target_faculty, month=month, year=year).first()
-
-        logs = (
-            FacultyGateLog.objects.filter(
-                faculty=target_faculty,
-                scan_time__year=year,
-                scan_time__month=month,
+        present_counts = dict(
+            FacultyHeartbeat.objects.filter(
+                faculty_id__in=fac_ids,
+                recorded_at__year=year,
+                recorded_at__month=month,
+                is_inside_geofence=True,
             )
-            .order_by('scan_time')
+            .values('faculty_id')
+            .annotate(days=Count('recorded_at__date', distinct=True))
+            .values_list('faculty_id', 'days')
         )
 
-        logs_by_day = {}
-        for log in logs:
-            local_dt = timezone.localtime(log.scan_time)
-            logs_by_day.setdefault(local_dt.day, []).append((local_dt, log))
-
-        rows = []
-        days_present = 0
-
-        for day in range(1, 32):
-            if day > num_days:
-                rows.append({
-                    'day': day,
-                    'am_arrival': '', 'am_departure': '',
-                    'pm_arrival': '', 'pm_departure': '',
-                    'undertime_hours': '', 'undertime_minutes': '',
-                    'is_weekend': False, 'is_loafing': False,
-                })
-                continue
-
-            cur_date = date(year, month, day)
-            is_weekend = cur_date.weekday() >= 5
-            day_events = logs_by_day.get(day, [])
-
-            am_in, am_out, pm_in, pm_out = '', '', '', ''
-            is_loafing = False
-
-            for dt_val, log_obj in day_events:
-                t_str = dt_val.strftime('%I:%M')
-                if getattr(log_obj, 'is_violation', False) and not getattr(log_obj, 'is_excused_by_principal', False):
-                    is_loafing = True
-                if dt_val.hour < 12:
-                    if log_obj.direction == 'IN' and not am_in:
-                        am_in = t_str
-                    elif log_obj.direction == 'OUT':
-                        am_out = t_str
-                else:
-                    if log_obj.direction == 'IN' and not pm_in:
-                        pm_in = t_str
-                    elif log_obj.direction == 'OUT':
-                        pm_out = t_str
-
-            if am_in or pm_in:
-                days_present += 1
-
-            rows.append({
-                'day': day,
-                'am_arrival': am_in,
-                'am_departure': am_out,
-                'pm_arrival': pm_in,
-                'pm_departure': pm_out,
-                'undertime_hours': '',
-                'undertime_minutes': '',
-                'is_weekend': is_weekend,
-                'is_loafing': is_loafing,
+        dtr_records = []
+        for fac in faculty_list:
+            dtr_obj = existing_dtrs.get(fac.id)
+            dtr_records.append({
+                'id': dtr_obj.id if dtr_obj else fac.id,
+                'faculty_id': fac.id,
+                'employee_id': fac.employee_id,
+                'faculty_name': fac.full_name,
+                'position': fac.position,
+                'department': fac.department,
+                'month': month,
+                'year': year,
+                'days_present': present_counts.get(fac.id, 0),
+                'is_submitted': bool(dtr_obj and dtr_obj.is_submitted),
+                'is_dept_head_approved': bool(dtr_obj and dtr_obj.is_dept_head_approved),
             })
 
-        return Response({
-            'faculty_id': target_faculty.id,
-            'faculty_name': target_faculty.full_name,
-            'employee_id': target_faculty.employee_id,
-            'month': MONTH_NAMES[month - 1],
-            'month_number': month,
-            'year': year,
-            'regular_days_hours': dtr_rec.regular_hours if dtr_rec else '8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM',
-            'saturdays_hours': dtr_rec.saturday_hours if dtr_rec else 'As Required',
-            'school_head': str(getattr(school, 'principal_name', '') or '').upper() if school else '',
-            'dtr_submitted': dtr_rec.is_submitted if dtr_rec else False,
-            'dept_head_approved': dtr_rec.is_dept_head_approved if dtr_rec else False,
-            'rows': rows,
-            'total_undertime_hours': 0,
-            'total_undertime_minutes': 0,
-            'days_present': days_present,
-        }, status=status.HTTP_200_OK)
-
-    def post(self, request, faculty_id=None):
-        action = request.data.get('action')
-        try:
-            month = int(request.data.get('month', 10))
-            year = int(request.data.get('year', 2026))
-        except (ValueError, TypeError):
-            month, year = 10, 2026
-
-        target_faculty = (
-            FacultyProfile.objects.filter(id=faculty_id).first()
-            if (faculty_id and is_leadership_role(request.user))
-            else resolve_faculty_for_user(request.user)
-        )
-        if not target_faculty:
-            return Response({'error': 'Employee profile not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        dtr, _ = FacultyMonthlyDTR.objects.get_or_create(faculty=target_faculty, month=month, year=year)
-
-        if action == 'SUBMIT_DTR':
-            dtr.is_submitted = True
-            dtr.submitted_at = timezone.now()
-            dtr.save(update_fields=['is_submitted', 'submitted_at'])
-            return Response({'success': True, 'message': 'DTR submitted successfully.'}, status=status.HTTP_200_OK)
-
-        elif action == 'APPROVE_DEPT_HEAD' and is_leadership_role(request.user):
-            dtr.is_dept_head_approved = True
-            dtr.dept_head_approved_at = timezone.now()
-            dtr.approved_by = request.user
-            dtr.save(update_fields=['is_dept_head_approved', 'dept_head_approved_at', 'approved_by'])
-            return Response({'success': True, 'message': 'DTR approved.'}, status=status.HTTP_200_OK)
-
-        return Response({'success': True}, status=status.HTTP_200_OK)
+        return Response({'month': month, 'year': year, 'records': dtr_records}, status=status.HTTP_200_OK)
 
 
 class UnifiedReportExportAPIView(APIView):
-    """
-    Renders official DMOS-compliant HTML templates for SF1, SF2, and SF4 forms.
-    """
-    permission_classes = [IsLeadershipOrAssignedFaculty]
-
-    def post(self, request):
-        return self._handle(request, request.data)
+    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrAssignedFaculty]
 
     def get(self, request):
-        return self._handle(request, request.query_params)
+        form_type = str(request.query_params.get('form', 'SF2')).upper()
+        section_id = request.query_params.get('section_id')
+        month = request.query_params.get('month', 'October')
+        year = int(request.query_params.get('year', timezone.localdate().year))
 
-    def _handle(self, request, params):
-        rep = escape(str(params.get('report_type', 'REPORT')).strip().upper())
-        sec = escape(str(params.get('section_id') or 'N/A').strip())
-        m = escape(str(params.get('month', 'October')).strip())
-        y = escape(str(params.get('year', 2026)).strip())
-
-        if rep == 'SF4' and not (is_leadership_role(request.user) or request.user.is_superuser):
-            return Response({'error': 'Permission denied. SF4 is restricted to administrators.'}, status=status.HTTP_403_FORBIDDEN)
-
-        meta = get_school_metadata(request)
-        faculty_name = escape(request.user.get_full_name() or request.user.username)
-        title = f"AttendSure_{rep}_Report_{m}_{y}"
-
-        html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>{title}</title>
-  <style>
-    @page {{
-      size: legal landscape;
-      margin: 0.35in;
-    }}
-    body {{
-      font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 0;
-      color: #000;
-    }}
-    .dmos-header {{
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      width: 100%;
-      margin-bottom: 6px;
-    }}
-    .dmos-header-center {{
-      text-align: center;
-      flex-grow: 1;
-    }}
-    .dmos-republic {{
-      font-family: "Old English Text MT", "Cloister Black", serif;
-      font-size: 12pt;
-      font-weight: bold;
-      margin: 0;
-    }}
-    .dmos-deped {{
-      font-family: "Old English Text MT", "Cloister Black", serif;
-      font-size: 18pt;
-      font-weight: bold;
-      margin: 1px 0 0 0;
-      line-height: 1.1;
-    }}
-    .dmos-office {{
-      font-family: Tahoma, Arial, sans-serif;
-      font-size: 10pt;
-      font-weight: bold;
-      margin: 1px 0 0 0;
-    }}
-    .dmos-title {{
-      font-family: Arial, sans-serif;
-      font-size: 12pt;
-      font-weight: bold;
-      margin-top: 4px;
-      text-transform: uppercase;
-    }}
-    .meta-table {{
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 8px;
-      font-size: 8.5pt;
-      border: 1px solid #000;
-    }}
-    .meta-table td {{
-      padding: 3px 6px;
-      border: 1px solid #000;
-    }}
-    .sign-table {{
-      width: 100%;
-      margin-top: 18px;
-      font-size: 8.5pt;
-      border: none;
-    }}
-    .sign-table td {{
-      border: none;
-      text-align: center;
-      vertical-align: bottom;
-    }}
-    .sign-line {{
-      border-bottom: 1px solid #000;
-      width: 70%;
-      margin: 0 auto 3px auto;
-    }}
-    .dmos-footer {{
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      border-top: 1px solid #000;
-      margin-top: 12px;
-      padding-top: 4px;
-      font-family: Calibri, "Segoe UI", sans-serif;
-      font-size: 10pt;
-    }}
-  </style>
-</head>
-<body>
-  <div class="dmos-header">
-    <div style="width:0.76in; height:0.76in;"></div>
-    <div class="dmos-header-center">
-      <div class="dmos-republic">Republic of the Philippines</div>
-      <div class="dmos-deped">Department of Education</div>
-      <div class="dmos-office">{meta['region']}</div>
-      <div class="dmos-office">{meta['division']}</div>
-      <div class="dmos-title">School Form {rep[2:] if rep.startswith('SF') else rep} Document</div>
-    </div>
-    <div style="width:0.76in; height:0.76in;"></div>
-  </div>
-
-  <table class="meta-table">
-    <tr>
-      <td><strong>School ID:</strong> {meta['school_id']}</td>
-      <td><strong>School Name:</strong> {meta['school_name']}</td>
-      <td><strong>Month:</strong> {m} {y}</td>
-      <td><strong>Section:</strong> {sec}</td>
-    </tr>
-  </table>
-
-  <div style="min-height: 250px; padding: 20px 0; text-align: center; font-size: 10pt; color: #475569;">
-    Official DepEd {rep} attendance and enrollment matrix loaded directly from database records.
-  </div>
-
-  <table class="sign-table">
-    <tr>
-      <td style="width: 50%;">
-        <div class="sign-line"><strong>{faculty_name.upper()}</strong></div>
-        <div>(Signature of Faculty / Adviser over Printed Name)</div>
-      </td>
-      <td style="width: 50%;">
-        <div class="sign-line"><strong>{meta['school_head']}</strong></div>
-        <div>Attested by: (Signature of School Head over Printed Name)</div>
-      </td>
-    </tr>
-  </table>
-
-  <div class="dmos-footer">
-    <div style="width:0.76in;"></div>
-    <div>
-      <strong>Address:</strong> {meta['school_address']}<br>
-      <strong>Contact No.:</strong> {meta['school_contact']} &bull; <strong>Email:</strong> {meta['school_email']}
-    </div>
-  </div>
-</body>
-</html>"""
-
-        return Response({'title': title, 'html': html_content, 'status': 'ready'}, status=status.HTTP_200_OK)
+        if form_type == 'SF1' and section_id and str(section_id).isdigit():
+            return Response(get_sf1_data(int(section_id)), status=status.HTTP_200_OK)
+        if form_type == 'SF4':
+            return Response(generate_sf4_data(month_name=month, year=year), status=status.HTTP_200_OK)
+        if section_id and str(section_id).isdigit():
+            return Response(generate_sf2_data(int(section_id), month_name=month, year=year), status=status.HTTP_200_OK)
+        return Response({'error': 'Valid section_id is required for SF1/SF2.'}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class UnifiedReportPrintAPIView(UnifiedReportExportAPIView):
-    pass
+class UnifiedReportPrintAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrAssignedFaculty]
+
+    def get(self, request):
+        section_id = request.query_params.get('section_id')
+        if not section_id or not str(section_id).isdigit():
+            return Response({'error': 'Valid section_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        section = Section.objects.select_related('grade_level', 'academic_year', 'adviser').filter(id=int(section_id)).first()
+        if not section:
+            return Response({'error': 'Section not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return render(request, 'reports/sf1_template.html', {
+            'school': get_school_metadata(request),
+            'section': section,
+        })
 
 
 class ReportAuditLogAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        try:
-            rec_id = request.data.get('record_id') or 0
-            AuditLog.objects.create(
-                performed_by=request.user,
-                action=str(request.data.get('action', 'REPORT_VIEW'))[:10],
-                table_name=str(request.data.get('table_name', 'Reports'))[:64],
-                record_id=int(rec_id),
-                new_data={'details': request.data.get('details', '')},
-            )
-        except Exception:
-            pass
-        return Response({'success': True}, status=status.HTTP_201_CREATED)
+    permission_classes = [permissions.IsAuthenticated, IsLeadershipOnly]
 
     def get(self, request):
-        if not (is_leadership_role(request.user) or request.user.is_superuser):
-            return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
-        logs = AuditLog.objects.all().order_by('-created_at')[:50]
-        data = [
-            {
-                'id': l.id,
-                'table_name': l.table_name,
-                'action': l.action,
-                'record_id': l.record_id,
-                'performed_by': str(l.performed_by) if l.performed_by else 'System',
-                'created_at': l.created_at.isoformat() if l.created_at else '',
-            }
-            for l in logs
-        ]
-        return Response(data, status=status.HTTP_200_OK)
+        logs = AuditLog.objects.select_related('performed_by').order_by('-created_at')[:100]
+        return Response({
+            'results': [
+                {
+                    'id': item.id,
+                    'table_name': item.table_name,
+                    'record_id': item.record_id,
+                    'user': item.performed_by.username if item.performed_by else 'System',
+                    'created_at': timezone.localtime(item.created_at).strftime('%Y-%m-%d %I:%M %p'),
+                }
+                for item in logs
+            ]
+        }, status=status.HTTP_200_OK)

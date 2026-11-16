@@ -1,3 +1,8 @@
+"""
+AttendSure V3 - Shared Choice Constants
+File: backend/apps/academics/models/base.py
+"""
+
 SUFFIX_CHOICES = [
     ('', 'None'),
     ('Jr.', 'Jr.'),
@@ -14,14 +19,8 @@ SEX_CHOICES = [
 ]
 
 SCAN_METHOD_CHOICES = [
-    ('RFID', 'RFID Card Tap'),
-    ('QR', 'QR Code Scan'),
-    ('MANUAL', 'Manual Override (Security Guard)'),
-]
-
-DIRECTION_CHOICES = [
-    ('IN', 'Entry'),
-    ('OUT', 'Exit'),
+    ('QR', 'Printed QR ID Scan'),
+    ('MANUAL', 'Manual Class List Entry'),
 ]
 
 ATTENDANCE_STATUS_CHOICES = [
@@ -52,7 +51,7 @@ USER_ROLE_CHOICES = [
     ('PRINCIPAL', 'School Principal'),
     ('DEPT_HEAD', 'Department Head'),
     ('FACULTY', 'Faculty / Adviser'),
-    ('GUARD', 'Security Guard'),
+    ('PARENT', 'Parent / Guardian'),
 ]
 
 GATE_PASS_STATUS_CHOICES = [

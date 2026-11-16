@@ -58,7 +58,7 @@ def ensure_user_profile_columns():
 
 
 def safe_photo_url(photo_field, request=None):
-    """Converts image references safely into readable web URLs."""
+    """Converts image references safely into readable web URLs with media prefixes."""
     if not photo_field:
         return None
     try:
@@ -68,22 +68,22 @@ def safe_photo_url(photo_field, request=None):
                 return None
             if val.startswith(('http://', 'https://', 'data:image/')):
                 return val
-            if val.startswith('/media/') and request:
+            if not val.startswith('/media/'):
+                val = f"/media/{val.lstrip('/')}"
+            if request:
                 return request.build_absolute_uri(val)
             return val
 
-        if hasattr(photo_field, 'name') and photo_field.name:
-            val_name = str(photo_field.name).strip()
-            if val_name.startswith(('data:image/', 'http://', 'https://')):
-                return val_name
+        if hasattr(photo_field, 'url'):
             url = photo_field.url
+            if not url.startswith(('http://', 'https://', '/media/')):
+                url = f"/media/{url.lstrip('/')}"
             if request:
                 return request.build_absolute_uri(url)
             return url
     except Exception:
         return None
     return None
-
 
 class FlexibleImageField(serializers.Field):
     """Sanitizes incoming Base64 image files and rejects malicious payloads."""

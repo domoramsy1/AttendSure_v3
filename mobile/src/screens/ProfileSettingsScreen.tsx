@@ -163,7 +163,7 @@ export const ProfileSettingsScreen: React.FC = () => {
             <Text style={styles.qrCardTitle}>Official Gate Clearance Pass</Text>
           </View>
           <Text style={styles.qrSubtitle}>
-            Present this dynamic QR code to campus gate kiosks for physical check-in and check-out.
+            Verify your attendance using on-device facial recognition and campus GPS check-in.
           </Text>
 
           <View style={styles.qrWrapper}>

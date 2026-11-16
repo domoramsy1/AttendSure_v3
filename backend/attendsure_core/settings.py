@@ -63,7 +63,7 @@ else:
     ALLOWED_HOSTS = []
 
 REQUIRED_HOSTS = [
-    'lapasan.attendsure.com.ph',
+    'macasandig.attendsure.com.ph',
     '.attendsure.com.ph',
     '.trycloudflare.com',
     '10.16.115.49',
@@ -92,10 +92,10 @@ USE_X_FORWARDED_PORT = True
 CSRF_TRUSTED_ORIGINS = [
     'https://*.trycloudflare.com',
     'http://*.trycloudflare.com',
-    'http://lapasan.attendsure.com.ph:8000',
-    'http://lapasan.attendsure.com.ph:5173',
-    'http://lapasan.attendsure.com.ph',
-    'https://lapasan.attendsure.com.ph',
+    'http://macasandig.attendsure.com.ph:8000',
+    'http://macasandig.attendsure.com.ph:5173',
+    'http://macasandig.attendsure.com.ph',
+    'https://macasandig.attendsure.com.ph',
     'http://10.16.115.49:8000',
     'http://10.16.115.49:8081',
     'http://10.16.115.49',
@@ -276,10 +276,10 @@ if DEBUG:
 else:
     CORS_ALLOW_ALL_ORIGINS = False
     CORS_ALLOWED_ORIGINS = [
-        'http://lapasan.attendsure.com.ph',
-        'https://lapasan.attendsure.com.ph',
-        'http://lapasan.attendsure.com.ph:5173',
-        'http://lapasan.attendsure.com.ph:8000',
+        'http://macasandig.attendsure.com.ph',
+        'https://macasandig.attendsure.com.ph',
+        'http://macasandig.attendsure.com.ph:5173',
+        'http://macasandig.attendsure.com.ph:8000',
         'http://10.16.115.49:8000',
         'http://10.16.115.49:8081',
         'http://10.16.115.49',

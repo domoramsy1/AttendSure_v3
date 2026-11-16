@@ -1,75 +1,77 @@
 @echo off
-setlocal
-cd /d "%~dp0\..\.."
+setlocal EnableDelayedExpansion
 
-set "SOURCE_DIR=%cd%\backend"
-set "OUTPUT_DIR=%cd%\scripts\results"
-set "OUTPUT_FILE=%OUTPUT_DIR%\backend_code_export.txt"
+title AttendSure V3 - Project Code Exporter
+echo ========================================================
+echo       AttendSure V3 - Exporting All Project Codes
+echo ========================================================
+echo.
 
-echo ===================================================
-echo AttendSure V3 - Backend Codebase and Tree Exporter
-echo Source: %SOURCE_DIR%
-echo Output: %OUTPUT_FILE%
-echo ===================================================
+set "OUTPUT_FILE=%~dp0all_codes_export.txt"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$source = '%SOURCE_DIR%';" ^
-    "$outDir = '%OUTPUT_DIR%';" ^
-    "$out = '%OUTPUT_FILE%';" ^
-    "$skipDirs = @('venv', 'env', '.venv', '__pycache__', '.git', '.vscode', 'logs', 'staticfiles', 'media');" ^
-    "$codeExts = @('*.py', '*.html', '*.css', '*.js', '*.json', '*.sql', '*.bat', '*.md');" ^
-    "if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null };" ^
-    "if (Test-Path $out) { Remove-Item $out -Force };" ^
-    "$utf8 = New-Object System.Text.UTF8Encoding($false);" ^
-    "$allFiles = Get-ChildItem -Path $source -Recurse -File | Where-Object {" ^
-    "    $path = $_.FullName;" ^
-    "    $skip = $false;" ^
-    "    foreach ($d in $skipDirs) {" ^
-    "        if ($path -match '[\\/]' + [regex]::Escape($d) + '[\\/]') { $skip = $true; break }" ^
-    "    };" ^
-    "    -not $skip" ^
-    "};" ^
-    "$codeFiles = $allFiles | Where-Object {" ^
-    "    $f = $_;" ^
-    "    $match = $false;" ^
-    "    foreach ($ext in $codeExts) {" ^
-    "        if ($f.Name -like $ext) { $match = $true; break }" ^
-    "    };" ^
-    "    $match" ^
-    "};" ^
-    "$header = '================================================================================' + [Environment]::NewLine;" ^
-    "$header += 'ATTENDSURE V3 - BACKEND FILE STRUCTURE & SOURCE CODE EXPORT' + [Environment]::NewLine;" ^
-    "$header += 'Date: ' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + [Environment]::NewLine;" ^
-    "$header += 'Total Backend Files: ' + $codeFiles.Count + [Environment]::NewLine;" ^
-    "$header += '================================================================================' + [Environment]::NewLine + [Environment]::NewLine;" ^
-    "$header += 'PART 1: FILE AND FOLDER STRUCTURE TREE' + [Environment]::NewLine;" ^
-    "$header += '--------------------------------------------------------------------------------' + [Environment]::NewLine;" ^
-    "[System.IO.File]::AppendAllText($out, $header, $utf8);" ^
-    "foreach ($f in ($allFiles | Sort-Object FullName)) {" ^
-    "    $relative = 'backend' + $f.FullName.Substring($source.Length);" ^
-    "    [System.IO.File]::AppendAllText($out, '  [FILE] ' + $relative + [Environment]::NewLine, $utf8);" ^
-    "};" ^
-    "$part2 = [Environment]::NewLine + '================================================================================' + [Environment]::NewLine;" ^
-    "$part2 += 'PART 2: COMPLETE SOURCE CODE CONTENTS' + [Environment]::NewLine;" ^
-    "$part2 += '================================================================================' + [Environment]::NewLine + [Environment]::NewLine;" ^
-    "[System.IO.File]::AppendAllText($out, $part2, $utf8);" ^
-    "$count = 0;" ^
-    "foreach ($f in $codeFiles) {" ^
-    "    $relPath = 'backend' + $f.FullName.Substring($source.Length);" ^
-    "    Write-Host ('Exporting [' + ($count + 1) + '/' + $codeFiles.Count + ']: ' + $relPath);" ^
-    "    $fileBanner = [Environment]::NewLine + ('=' * 80) + [Environment]::NewLine;" ^
-    "    $fileBanner += 'FILE: ' + $relPath + [Environment]::NewLine;" ^
-    "    $fileBanner += ('=' * 80) + [Environment]::NewLine;" ^
-    "    [System.IO.File]::AppendAllText($out, $fileBanner, $utf8);" ^
-    "    try {" ^
-    "        $body = [System.IO.File]::ReadAllText($f.FullName, $utf8);" ^
-    "        [System.IO.File]::AppendAllText($out, $body + [Environment]::NewLine, $utf8);" ^
-    "        $count++;" ^
-    "    } catch {" ^
-    "        [System.IO.File]::AppendAllText($out, '/* Error reading file: ' + $_.Exception.Message + ' */' + [Environment]::NewLine, $utf8);" ^
-    "    }" ^
-    "};" ^
-    "Write-Host '' ;" ^
-    "Write-Host ('Successfully exported ' + $count + ' code files to: ' + $out) -ForegroundColor Green;"
+if exist "%OUTPUT_FILE%" (
+    echo Removing previous export file...
+    del /f /q "%OUTPUT_FILE%"
+)
 
+echo Scanning main project folders and collecting source code...
+echo Skipping libraries, modules, virtual environments, scripts, and secret files.
+echo.
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$scriptDir = '%~dp0'.TrimEnd('\'); " ^
+    "$folderName = Split-Path $scriptDir -Leaf; " ^
+    "if ($folderName -eq 'utilities') { $root = (Resolve-Path (Join-Path $scriptDir '..\..')).Path } " ^
+    "elseif ($folderName -eq 'scripts') { $root = (Resolve-Path (Join-Path $scriptDir '..')).Path } " ^
+    "else { $root = $scriptDir } " ^
+    "$out = '%OUTPUT_FILE%'; " ^
+    "$exts = @('*.py', '*.ts', '*.tsx', '*.js', '*.jsx', '*.json', '*.html', '*.css', '*.sql'); " ^
+    "$skipFolders = @( " ^
+    "    '.git', '.github', '.vscode', '.idea', " ^
+    "    'node_modules', '.expo', '.next', 'dist', 'build', 'coverage', " ^
+    "    'venv', '.venv', 'env', '__pycache__', '.pytest_cache', '.mypy_cache', 'site-packages', " ^
+    "    'scripts', 'media', 'staticfiles' " ^
+    "); " ^
+    "$skipFiles = @('all_codes_export.txt', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock'); " ^
+    "$files = Get-ChildItem -Path $root -Recurse -File -Include $exts | Where-Object { " ^
+    "    $name = $_.Name; " ^
+    "    $skip = $false; " ^
+    "    if ($skipFiles -contains $name) { $skip = $true } " ^
+    "    if (-not $skip -and $name -match '(?i)(secret|credential|firebase|google-services|\.env)') { $skip = $true } " ^
+    "    if (-not $skip) { " ^
+    "        $relPath = $_.FullName.Substring($root.Length).TrimStart('\', '/'); " ^
+    "        $parts = $relPath -split '[\\/]'; " ^
+    "        if ($parts.Length -gt 1) { " ^
+    "            foreach ($part in $parts[0..($parts.Length - 2)]) { " ^
+    "                if ($skipFolders -contains $part) { $skip = $true; break } " ^
+    "            } " ^
+    "        } " ^
+    "    } " ^
+    "    -not $skip " ^
+    "}; " ^
+    "$count = $files.Count; " ^
+    "Write-Host ('Project Root: ' + $root) -ForegroundColor Yellow; " ^
+    "Write-Host ('Found ' + $count + ' source code files to export.') -ForegroundColor Cyan; " ^
+    "$utf8NoBom = New-Object System.Text.UTF8Encoding($false); " ^
+    "$writer = New-Object System.IO.StreamWriter($out, $false, $utf8NoBom); " ^
+    "try { " ^
+    "    foreach ($f in $files) { " ^
+    "        $rel = $f.FullName.Substring($root.Length).TrimStart('\', '/'); " ^
+    "        $writer.WriteLine(''); " ^
+    "        $writer.WriteLine('========================================================'); " ^
+    "        $writer.WriteLine('File: ' + $rel); " ^
+    "        $writer.WriteLine('========================================================'); " ^
+    "        $writer.WriteLine([System.IO.File]::ReadAllText($f.FullName)); " ^
+    "    } " ^
+    "} finally { " ^
+    "    $writer.Close(); " ^
+    "} " ^
+    "Write-Host 'Export finished successfully!' -ForegroundColor Green"
+
+echo.
+echo ========================================================
+echo Done! All project code is saved in:
+echo %OUTPUT_FILE%
+echo ========================================================
+echo.
 pause

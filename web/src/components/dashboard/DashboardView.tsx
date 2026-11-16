@@ -78,8 +78,8 @@ interface DashboardMetrics {
   sms_sent_today: number;
   sms_pending_count: number;
   sms_failed_count?: number;
-  kiosks_online: number;
-  total_kiosks: number;
+  push_alerts_today: number;
+  mobile_parents_connected: number;
   hourly_scans: HourlyScanItem[];
   grade_levels: GradeBreakdown[];
   recent_scans: RecentScan[];
@@ -134,8 +134,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     sms_sent_today: 0,
     sms_pending_count: 0,
     sms_failed_count: 0,
-    kiosks_online: 0,
-    total_kiosks: 0,
+    push_alerts_today: 0,
+    mobile_parents_connected: 0,
     hourly_scans: [],
     grade_levels: [],
     recent_scans: [],
@@ -207,8 +207,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             sms_sent_today: Number(res.data.sms_sent_today) || 0,
             sms_pending_count: Number(res.data.sms_pending_count) || 0,
             sms_failed_count: Number(res.data.sms_failed_count) || 0,
-            kiosks_online: Number(res.data.kiosks_online) || 0,
-            total_kiosks: Number(res.data.total_kiosks) || 0,
+            push_alerts_today: Number(res.data.push_alerts_today) || 0,
+            mobile_parents_connected: Number(res.data.mobile_parents_connected) || 0,
             hourly_scans: normalizedHourly,
             grade_levels: Array.isArray(res.data.grade_levels) ? res.data.grade_levels : [],
             recent_scans: Array.isArray(res.data.recent_scans) ? res.data.recent_scans : [],
@@ -227,7 +227,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           );
 
           if (onGateStatusChange) {
-            onGateStatusChange((Number(res.data.kiosks_online) || 0) > 0);
+            onGateStatusChange(true);
           }
         }
       } catch (err: unknown) {
@@ -351,18 +351,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               }}
             >
               <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: isOnline ? brand.success : brand.danger }} />
-              {isOnline ? 'DATABASE CONNECTED' : 'DATABASE OFFLINE'}
+              {isOnline ? 'ONLINE' : 'OFFLINE'}
             </span>
 
             {isAdmin && (
               <>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
                   <Database size={13} color={brand.primary} />
-                  <span>PostgreSQL: {isOnline ? 'Active' : 'Offline'}</span>
+                  <span>Server: {isOnline ? 'Active' : 'Offline'}</span>
                 </span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
                   <Radio size={13} color={brand.primary} />
-                  <span>Kiosks: {data.kiosks_online} of {data.total_kiosks} Online</span>
+                  <span>Push Alerts Today: {data.push_alerts_today} • Parents Connected: {data.mobile_parents_connected}</span>
                 </span>
               </>
             )}
@@ -461,7 +461,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
             </div>
             <div style={kpiFooterStyle}>
-              <span style={{ color: brand.primary, fontWeight: 700 }}>{data.active_gate_passes} Active Gate Passes</span>
+              <span style={{ color: brand.primary, fontWeight: 700 }}>{data.active_gate_passes} Active Exit Passes</span>
             </div>
           </div>
         </div>
@@ -543,7 +543,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <Ticket size={20} />
               </div>
               <div>
-                <div style={actionTileTitle}>{isFaculty ? 'Issue Student Permit' : 'Gate Passes'}</div>
+                <div style={actionTileTitle}>{isFaculty ? 'Issue Student Permit' : 'Exit Passes'}</div>
                 <div style={actionTileDesc}>Student exit &amp; faculty travel</div>
               </div>
             </button>
@@ -667,7 +667,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <Send size={20} />
                 </div>
                 <div>
-                  <div style={actionTileTitle}>SMS Parent Alert</div>
+                  <div style={actionTileTitle}>Push Notifications</div>
                   <div style={actionTileDesc}>Send emergency broadcast to parents</div>
                 </div>
               </button>

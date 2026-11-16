@@ -287,7 +287,7 @@ export const LoginScreen: React.FC = () => {
               />
             </View>
             <Text style={styles.schoolNameText}>
-              {schoolInfo?.school_name || 'Lapasan National High School'}
+              {schoolInfo?.school_name || 'Macasandig National High School'}
             </Text>
             <Text style={styles.schoolSubText}>
               {[

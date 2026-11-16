@@ -403,7 +403,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                   style={{ objectFit: 'contain', borderRadius: '50%' }}
                 />
               )}
-              <span>{school.school_name || 'Lapasan National High School'}</span>
+              <span>{school.school_name || 'Macasandig National High School'}</span>
             </div>
           </div>
 

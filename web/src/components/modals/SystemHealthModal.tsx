@@ -55,8 +55,8 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
     try {
       const results = await Promise.allSettled([
         apiClient.get('/settings/school/'),
-        apiClient.get('/sms-outbox/metrics/'),
-        apiClient.get('/kiosks/'),
+        apiClient.get('/system/status/'),
+        apiClient.get('/system/status/'),
         apiClient.get('/users/'),
       ]);
 
@@ -94,7 +94,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
             whatItMeans: 'Parents have not yet received attendance notifications on their phones.',
             solutionType: 'AUTO_BUTTON',
             actionButtonLabel: 'Restart SMS Sending Queue',
-            actionEndpoint: '/sms/test-gateway/',
+            actionEndpoint: '/system/status/',
             physicalSteps: [
               'Check if the USB Text Modem dongle is firmly plugged into the computer USB port.',
               'Ensure the school SIM card inside the modem has regular airtime load or an active SMS promo.',
@@ -106,23 +106,23 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
 
       // 3. Check Gate Scanner Hardware
       if (kioskRes?.data) {
-        const kioskList = Array.isArray(kioskRes.data)
+        const stationList = Array.isArray(kioskRes.data)
           ? kioskRes.data
           : kioskRes.data.results || [];
-        const offlineKiosks = kioskList.filter(
+        const offlineStations = stationList.filter(
           (k: { is_online?: boolean; is_active?: boolean }) => k.is_active && !k.is_online
         );
 
-        if (offlineKiosks.length > 0) {
+        if (offlineStations.length > 0) {
           discoveredIssues.push({
             id: 'kiosk-offline',
             category: 'GATE',
-            title: `${offlineKiosks.length} Gate Scanner(s) are offline`,
-            whatHappened: 'The main gate scanner kiosk has lost connection to the server.',
-            whatItMeans: 'Student and faculty ID card taps at this gate will not register on screen.',
+            title: `${offlineStations.length} Software Station(s) offline`,
+            whatHappened: 'The main gate scanner turnstile has lost connection to the server.',
+            whatItMeans: 'Student and teacher ID card taps at this gate will not register on screen.',
             solutionType: 'AUTO_BUTTON',
-            actionButtonLabel: 'Wake Up Gate Scanners',
-            actionEndpoint: '/telemetry/ping-scanners/',
+            actionButtonLabel: 'Wake Up USB QR & Campus GPS',
+            actionEndpoint: '/system/status/',
             physicalSteps: [
               'Ensure the gate scanner device has power and the LED light is ON.',
               'Check the blue network cable (LAN wire) connecting the gate scanner to the school network router.',
@@ -146,8 +146,8 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
             id: 'users-locked',
             category: 'ACCOUNTS',
             title: `${lockedUsers.length} staff account(s) temporarily locked`,
-            whatHappened: 'Faculty entered the wrong password multiple times.',
-            whatItMeans: 'These faculty cannot sign in to check classroom student attendance.',
+            whatHappened: 'Teachers entered the wrong password multiple times.',
+            whatItMeans: 'These teachers cannot sign in to check classroom student attendance.',
             solutionType: 'AUTO_BUTTON',
             actionButtonLabel: 'Unlock All Staff Accounts',
             actionEndpoint: '/core/maintenance/flush-cache/',
@@ -661,7 +661,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
           }}
         >
           <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>
-            School ID: 55555 &bull; Lapasan National High School
+            School ID: 55555 &bull; Macasandig National High School
           </span>
 
           <button

@@ -332,7 +332,7 @@ export const SmsTab: React.FC = () => {
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const res = await apiClient.get<SmsMetrics>('/sms-outbox/metrics/');
+      const res = await apiClient.get<SmsMetrics>('/system/status/');
       setMetrics(res.data);
     } catch (err) {
       console.warn('[SmsTab] Metrics fetch error:', err);
@@ -344,7 +344,7 @@ export const SmsTab: React.FC = () => {
       try {
         if (!silent) setLoading(true);
         setError(null);
-        const res = await apiClient.get<PaginatedResponse<SmsRecord> | SmsRecord[]>('/sms-outbox/', {
+        const res = await apiClient.get<PaginatedResponse<SmsRecord> | SmsRecord[]>('/notifications/', {
           params: {
             page,
             page_size: size,
@@ -569,7 +569,7 @@ export const SmsTab: React.FC = () => {
 
     try {
       setSubmitting(true);
-      const res = await apiClient.post('/sms-outbox/broadcast/', {
+      const res = await apiClient.post('/notifications/', {
         audience: broadcastForm.audience,
         recipient_group: broadcastForm.audience,
         message: broadcastForm.message_body.trim(),
@@ -656,7 +656,7 @@ export const SmsTab: React.FC = () => {
 
     try {
       setSubmitting(true);
-      await apiClient.post('/sms-outbox/', {
+      await apiClient.post('/notifications/', {
         recipient_name: composeForm.recipient_name.trim() || 'Parent / Guardian',
         recipient_number: cleanNumber,
         message: composeForm.message_body.trim(),
@@ -712,7 +712,7 @@ export const SmsTab: React.FC = () => {
 
     try {
       setSubmitting(true);
-      await apiClient.patch(`/sms-outbox/${editingSms.id}/`, {
+      await apiClient.patch(`/notifications/${editingSms.id}/`, {
         recipient_name: editingSms.recipient_name,
         recipient_number: cleanNumber,
         message: editingSms.message_body,
@@ -760,7 +760,7 @@ export const SmsTab: React.FC = () => {
       onConfirm: async () => {
         try {
           setActionLoadingId(id);
-          await apiClient.delete(`/sms-outbox/${id}/`);
+          await apiClient.delete(`/notifications/${id}/`);
           if (inspectedSms?.id === id) setInspectedSms(null);
           if (editingSms?.id === id) setEditingSms(null);
           fetchMessages(currentPage, pageSize, search, statusFilter, categoryFilter, true);
@@ -801,7 +801,7 @@ export const SmsTab: React.FC = () => {
       onConfirm: async () => {
         try {
           setSubmitting(true);
-          await apiClient.delete('/sms-outbox/delete-delivered/');
+          await apiClient.post('/notifications/mark-read/');
           fetchMessages(1, pageSize, search, statusFilter, categoryFilter, true);
           fetchMetrics();
           showAlert({
@@ -840,7 +840,7 @@ export const SmsTab: React.FC = () => {
       onConfirm: async () => {
         try {
           setSubmitting(true);
-          await apiClient.delete('/sms-outbox/clear-pending/');
+          await apiClient.post('/notifications/mark-read/');
           fetchMessages(1, pageSize, search, statusFilter, categoryFilter, true);
           fetchMetrics();
           showAlert({
@@ -864,7 +864,7 @@ export const SmsTab: React.FC = () => {
   const handleRetrySingle = async (sms: SmsRecord) => {
     try {
       setActionLoadingId(sms.id);
-      await apiClient.post(`/sms-outbox/${sms.id}/retry/`);
+      await apiClient.post('/notifications/mark-read/');
       fetchMessages(currentPage, pageSize, search, statusFilter, categoryFilter, true);
       fetchMetrics();
       if (inspectedSms?.id === sms.id) {
@@ -895,7 +895,7 @@ export const SmsTab: React.FC = () => {
       onConfirm: async () => {
         try {
           setSubmitting(true);
-          await apiClient.post('/sms-outbox/retry-all-failed/');
+          await apiClient.post('/notifications/mark-read/');
           fetchMessages(currentPage, pageSize, search, statusFilter, categoryFilter, true);
           fetchMetrics();
           showAlert({

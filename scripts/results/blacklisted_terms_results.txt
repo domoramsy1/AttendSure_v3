@@ -1,1 +1,47 @@
-CLEAN: 0 violations found.
+web\src\components\modals\StudentIdPassModal.tsx:2:43: error: Disallowed word 'Turnstile' found. Use 'Geofence/status/' instead.
+web\src\components\modals\StudentIdPassModal.tsx:55:83: error: Disallowed word 'Turnstile' found. Use 'Geofence/status/' instead.
+web\src\components\modals\SystemHealthModal.tsx:121:50: error: Disallowed word 'turnstile' found. Use 'geofence/status/' instead.
+web\src\components\modals\SystemHealthModal.tsx:149:28: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.
+web\src\components\modals\SystemHealthModal.tsx:150:33: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+web\src\components\modals\UserFormModal.tsx:128:49: error: Disallowed word 'Teacher' found. Use 'Faculty' instead.
+web\src\components\tabs\DTRTab.tsx:185:46: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+web\src\components\tabs\FacultyTab.tsx:54:26: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.
+web\src\components\tabs\MyAssignedClassesTab.tsx:282:40: error: Disallowed word 'ROSTER' found. Use 'CLASS LIST' instead.
+web\src\components\tabs\MyAssignedClassesTab.tsx:370:27: error: Disallowed word 'Roster' found. Use 'Class List' instead.
+web\src\components\tabs\MyAssignedClassesTab.tsx:390:99: error: Disallowed word 'rosters' found. Use 'class lists' instead.
+web\src\components\tabs\MyAssignedClassesTab.tsx:416:83: error: Disallowed word 'roster' found. Use 'class list' instead.
+web\src\components\tabs\MyAssignedClassesTab.tsx:601:67: error: Disallowed word 'Roster' found. Use 'Class List' instead.
+web\src\components\tabs\StudentsTab.tsx:535:44: error: Disallowed word 'ROSTER' found. Use 'CLASS LIST' instead.
+web\src\components\tabs\StudentsTab.tsx:551:54: error: Disallowed word 'rosters' found. Use 'class lists' instead.
+web\src\components\tabs\StudentsTab.tsx:692:35: error: Disallowed word 'Roster' found. Use 'Class List' instead.
+web\src\components\tabs\UsersTab.tsx:6:45: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+mobile\src\components\reports\DTRReportView.tsx:463:42: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+mobile\src\components\reports\SF1ReportView.tsx:51:54: error: Disallowed word 'Teacher' found. Use 'Faculty' instead.
+mobile\src\components\reports\SF1ReportView.tsx:65:28: error: Disallowed word 'TEACHER' found. Use 'FACULTY' instead.
+mobile\src\components\reports\SF2ReportView.tsx:40:17: error: Disallowed word 'Teacher' found. Use 'Faculty' instead.
+mobile\src\components\reports\SF2ReportView.tsx:53:28: error: Disallowed word 'TEACHER' found. Use 'FACULTY' instead.
+mobile\src\screens\ReportsScreen.tsx:98:23: error: Disallowed word 'TEACHER' found. Use 'FACULTY' instead.
+mobile\src\types\index.ts:21:7: error: Disallowed word 'TURNSTILE' found. Use 'GEOFENCE/STATUS/' instead.
+backend\apps\academics\models.py:253:6: error: Disallowed word 'TEACHERS' found. Use 'FACULTY' instead.
+backend\apps\academics\models.py:443:35: error: Disallowed word 'roster' found. Use 'class list' instead.
+backend\apps\api\views.py:7:4: error: Disallowed word 'Teacher' found. Use 'Faculty' instead.
+backend\apps\api\views.py:7:37: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+backend\apps\api\views.py:336:41: error: Disallowed word 'TEACHER' found. Use 'FACULTY' instead.
+backend\apps\api\views.py:385:30: error: Disallowed word 'Teacher' found. Use 'Faculty' instead.
+backend\apps\api\views.py:420:58: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+backend\apps\api\views.py:583:13: error: Disallowed word 'ROSTER' found. Use 'CLASS LIST' instead.
+backend\apps\api\views.py:775:17: error: Disallowed word 'teacher' found. Use 'faculty' instead.
+backend\apps\api\views.py:776:31: error: Disallowed word 'teacher' found. Use 'faculty' instead.
+backend\apps\api\views.py:1005:29: error: Disallowed word 'TEACHER' found. Use 'FACULTY' instead.
+backend\apps\api\views.py:1094:40: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+backend\apps\api\views.py:1592:36: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.
+backend\apps\api\views.py:1622:36: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.
+backend\apps\api\views.py:2092:42: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+backend\apps\api\views.py:2822:42: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+backend\apps\api\views.py:2825:15: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.
+backend\apps\api\views.py:2857:21: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+backend\apps\api\views.py:2896:41: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.
+backend\apps\api\views.py:2919:15: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.
+backend\apps\api\views.py:2959:23: error: Disallowed word 'teachers' found. Use 'faculty' instead.
+backend\apps\api\views.py:2964:41: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.
+backend\apps\api\views.py:2979:15: error: Disallowed word 'Teachers' found. Use 'Faculty' instead.

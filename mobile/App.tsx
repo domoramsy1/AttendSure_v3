@@ -1,53 +1,29 @@
-// D:\AttendSure_V3\mobile\App.tsx
-
-import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import React, { useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import * as NativeSplashScreen from 'expo-splash-screen';
-
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './src/context/AuthContext';
+import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
-import { SplashScreen } from './src/components/SplashScreen';
-import { resolveFastestServer } from './src/services/configService';
-
-// Hold native splash screen so the app doesn't flash white before JS runs
-if (Platform.OS !== 'web') {
-  NativeSplashScreen.preventAutoHideAsync().catch(() => {});
-}
+import SplashScreen from './src/components/SplashScreen';
 
 export default function App() {
-  const [showSplash, setShowSplash] = useState<boolean>(true);
-
-  useEffect(() => {
-    // Faster Data Fetching: Pre-warm backend connection while radar animation plays
-    resolveFastestServer().catch(() => {});
-  }, []);
-
-  const handleSplashFinish = () => {
-    setShowSplash(false);
-  };
+  const [splashDone, setSplashDone] = useState(false);
 
   return (
     <SafeAreaProvider>
-      <View style={styles.container}>
+      <ThemeProvider>
         <AuthProvider>
-          {showSplash ? (
-            <SplashScreen onFinish={handleSplashFinish} />
-          ) : (
-            <NavigationContainer>
-              <AppNavigator />
-            </NavigationContainer>
-          )}
+          <NavigationContainer>
+            <AppNavigator />
+            {!splashDone && (
+              <SplashScreen
+                minDurationMs={700}
+                onFinish={() => setSplashDone(true)}
+              />
+            )}
+          </NavigationContainer>
         </AuthProvider>
-      </View>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-  },
-});

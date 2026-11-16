@@ -21,7 +21,7 @@ export default defineConfig({
     strictPort: true,
     // Protect against host-header injection and unauthorized tunnels
     allowedHosts: [
-      'lapasan.attendsure.com.ph',
+      'macasandig.attendsure.com.ph',
       '.attendsure.com.ph',
       '.trycloudflare.com',
       'localhost',

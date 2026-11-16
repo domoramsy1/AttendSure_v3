@@ -1,9 +1,9 @@
 /**
- * AttendSure V3 - Class Adviser Subject Attendance Monitor
+ * AttendSure V3 - Class Adviser Subject Attendance & Loafing Monitor
  * File: web/src/components/advisory/AdvisorySubjectMonitor.tsx
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import apiClient from '../../api/client';
 import { useTheme } from '../../context/ThemeContext';
 import {
@@ -13,8 +13,16 @@ import {
   BookOpen,
   CheckCircle2,
   Clock,
-  User,
+  Info,
+  ChevronDown,
 } from 'lucide-react';
+
+interface AvailableSection {
+  id: number;
+  name: string;
+  grade_level: string;
+  is_adviser: boolean;
+}
 
 interface SubjectHeader {
   schedule_id: number;
@@ -37,14 +45,30 @@ interface StudentMatrixRow {
   student_name: string;
   lrn: string;
   photo_url?: string | null;
-  gate_status: string;
-  gate_direction: 'IN' | 'OUT' | 'NONE';
+  campus_status: string;
+  presence_state: 'ACTIVE' | 'NONE';
   attended_count: number;
   cutting_count: number;
   total_subjects: number;
   compliance_rate: number;
   subjects: StudentSubjectStatus[];
 }
+
+// Security check: blocks unsafe image URLs
+const isSafeImageUrl = (url?: string | null): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.trim().toLowerCase();
+  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
+  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
+  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) return false;
+  return (
+    clean.startsWith('http://') ||
+    clean.startsWith('https://') ||
+    clean.startsWith('/') ||
+    clean.startsWith('data:image/') ||
+    clean.startsWith('blob:')
+  );
+};
 
 export const AdvisorySubjectMonitor: React.FC = () => {
   const { tokens, brand } = useTheme();
@@ -54,41 +78,88 @@ export const AdvisorySubjectMonitor: React.FC = () => {
   const [search, setSearch] = useState('');
   const [filterMode, setFilterMode] = useState<'ALL' | 'CUTTING' | 'ABSENT'>('ALL');
 
-  const [sectionName, setSectionName] = useState('');
-  const [gradeLevel, setGradeLevel] = useState('');
+  const [hasAdvisoryClass, setHasAdvisoryClass] = useState(false);
+  const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+  const [availableSections, setAvailableSections] = useState<AvailableSection[]>([]);
+  const [isAdviserOfSection, setIsAdviserOfSection] = useState(false);
   const [schedules, setSchedules] = useState<SubjectHeader[]>([]);
   const [matrix, setMatrix] = useState<StudentMatrixRow[]>([]);
 
-  const fetchMatrixData = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    else setRefreshing(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-    try {
-      const res = await apiClient.get('/classroom/adviser-matrix/');
-      if (res.data?.has_advisory_class) {
-        setSectionName(res.data.section_name);
-        setGradeLevel(res.data.grade_level);
-        setSchedules(res.data.schedules || []);
-        setMatrix(res.data.matrix || []);
+  const fetchMatrixData = useCallback(
+    async (targetSectionId?: number | null, silent = false) => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
       }
-    } catch (err) {
-      console.error('Failed to load adviser attendance matrix:', err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+      abortControllerRef.current = new AbortController();
+
+      if (!silent) setLoading(true);
+      else setRefreshing(true);
+
+      try {
+        const params: Record<string, any> = {};
+        if (targetSectionId) {
+          params.section_id = targetSectionId;
+        }
+
+        const res = await apiClient.get('classroom/adviser-matrix/', {
+          params,
+          signal: abortControllerRef.current.signal,
+        });
+
+        if (res.data) {
+          const sectionsList: AvailableSection[] = res.data.available_sections || [];
+          setAvailableSections(sectionsList);
+
+          if (res.data.has_advisory_class) {
+            setHasAdvisoryClass(true);
+            setSelectedSectionId(res.data.section_id || null);
+            setIsAdviserOfSection(Boolean(res.data.is_adviser));
+            setSchedules(res.data.schedules || []);
+            setMatrix(res.data.matrix || []);
+          } else {
+            setHasAdvisoryClass(false);
+            setMatrix([]);
+            setSchedules([]);
+          }
+        }
+      } catch (err: any) {
+        if (err.name !== 'CanceledError' && err.code !== 'ERR_CANCELED') {
+          console.error('Failed to load subject attendance matrix:', err);
+        }
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    fetchMatrixData();
+    fetchMatrixData(null);
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [fetchMatrixData]);
 
-  // Filter matrix by student name / LRN and status tabs
+  const handleSectionChange = (newSectionId: number) => {
+    setSelectedSectionId(newSectionId);
+    fetchMatrixData(newSectionId, false);
+  };
+
+  const sanitizedSearch = useMemo(() => {
+    return search.trim().toLowerCase().slice(0, 50);
+  }, [search]);
+
   const filteredMatrix = useMemo(() => {
     return matrix.filter((row) => {
       const matchSearch =
-        row.student_name.toLowerCase().includes(search.toLowerCase()) ||
-        row.lrn.includes(search);
+        sanitizedSearch === '' ||
+        row.student_name.toLowerCase().includes(sanitizedSearch) ||
+        row.lrn.includes(sanitizedSearch);
 
       if (!matchSearch) return false;
 
@@ -100,62 +171,148 @@ export const AdvisorySubjectMonitor: React.FC = () => {
       }
       return true;
     });
-  }, [matrix, search, filterMode]);
+  }, [matrix, sanitizedSearch, filterMode]);
 
   const summaryMetrics = useMemo(() => {
     const total = matrix.length;
     const cutting = matrix.filter((m) => m.cutting_count > 0).length;
-    const perfect = matrix.filter((m) => m.attended_count === m.total_subjects && m.total_subjects > 0).length;
-    return { total, cutting, perfect };
+    const complete = matrix.filter(
+      (m) => m.attended_count === m.total_subjects && m.total_subjects > 0
+    ).length;
+    return { total, cutting, complete };
   }, [matrix]);
+
+  const getInitials = (name: string) => {
+    const parts = name.replace(/,/g, '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  };
 
   const renderStatusPill = (status: string, time: string) => {
     switch (status) {
       case 'PRESENT':
         return (
-          <span style={{ ...badgeStyle, backgroundColor: 'rgba(16, 185, 129, 0.12)', color: brand.success }} title={time || 'Present'}>
+          <span
+            style={{
+              ...badgeStyle,
+              backgroundColor: 'rgba(16, 185, 129, 0.12)',
+              color: brand.success,
+            }}
+            title={time ? `Scanned at ${time}` : 'Present'}
+          >
             <CheckCircle2 size={11} /> Present
           </span>
         );
       case 'LATE':
         return (
-          <span style={{ ...badgeStyle, backgroundColor: 'rgba(245, 158, 11, 0.12)', color: brand.warning }} title={time || 'Late'}>
+          <span
+            style={{
+              ...badgeStyle,
+              backgroundColor: 'rgba(245, 158, 11, 0.12)',
+              color: brand.warning,
+            }}
+            title={time ? `Late at ${time}` : 'Late'}
+          >
             <Clock size={11} /> Late
           </span>
         );
       case 'CUTTING':
         return (
-          <span style={{ ...badgeStyle, backgroundColor: 'rgba(239, 68, 68, 0.14)', color: brand.danger, fontWeight: 900 }} title="Flagged: Missing from subject">
-            <AlertTriangle size={11} /> Cutting
-          </span>
-        );
-      case 'UNVERIFIED':
-        return (
-          <span style={{ ...badgeStyle, backgroundColor: '#f1f5f9', color: '#64748b' }} title="No Gate Entrance Logged">
-            Unverified
+          <span
+            style={{
+              ...badgeStyle,
+              backgroundColor: 'rgba(239, 68, 68, 0.14)',
+              color: brand.danger,
+              fontWeight: 900,
+            }}
+            title="Loafing Alert: Student attended another subject today but missed this period"
+          >
+            <AlertTriangle size={11} /> Loafing / Cutting
           </span>
         );
       default:
         return (
-          <span style={{ ...badgeStyle, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textMuted }}>
+          <span
+            style={{
+              ...badgeStyle,
+              backgroundColor: tokens.bgSurfaceSubtle,
+              color: tokens.textMuted,
+            }}
+            title="Not scanned in this period"
+          >
             —
           </span>
         );
     }
   };
 
-  if (loading) {
+  if (loading && !refreshing) {
     return (
       <div style={{ padding: 48, textAlign: 'center', color: tokens.textMuted }}>
-        <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 8px auto', display: 'block', color: brand.primary }} />
-        <span>Loading adviser subject attendance matrix...</span>
+        <RefreshCw
+          size={24}
+          className="animate-spin"
+          style={{ margin: '0 auto 8px auto', display: 'block', color: brand.primary }}
+        />
+        <span style={{ fontSize: '0.86rem', fontWeight: 600 }}>
+          Loading class list attendance and loafing monitor...
+        </span>
+      </div>
+    );
+  }
+
+  if (!hasAdvisoryClass && availableSections.length === 0) {
+    return (
+      <div
+        style={{
+          backgroundColor: tokens.bgSurface,
+          borderRadius: 14,
+          border: `1px dashed ${tokens.borderStrong}`,
+          padding: 48,
+          textAlign: 'center',
+        }}
+      >
+        <Info size={36} color={tokens.textMuted} style={{ margin: '0 auto 12px auto' }} />
+        <h3 style={{ fontSize: '1rem', fontWeight: 800, color: tokens.textPrimary, margin: 0 }}>
+          No Assigned Class Section Found
+        </h3>
+        <p
+          style={{
+            fontSize: '0.78rem',
+            color: tokens.textSecondary,
+            maxWidth: 420,
+            margin: '6px auto 16px auto',
+          }}
+        >
+          Your account is not registered as a Class Adviser or assigned to any subject
+          schedules. Contact your school administrator to link your faculty account to a
+          section.
+        </p>
+        <button
+          type="button"
+          onClick={() => fetchMatrixData(null, false)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '8px 16px',
+            backgroundColor: brand.primary,
+            color: '#ffffff',
+            borderRadius: 8,
+            border: 'none',
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          <RefreshCw size={14} /> Refresh Class Assignment
+        </button>
       </div>
     );
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, width: '100%' }}>
-      {/* 1. Header Toolbar */}
+      {/* 1. Header Toolbar with Section Selector */}
       <div
         style={{
           display: 'flex',
@@ -170,52 +327,126 @@ export const AdvisorySubjectMonitor: React.FC = () => {
           boxShadow: tokens.cardShadow,
         }}
       >
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: tokens.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <BookOpen size={18} color={brand.primary} />
-            </div>
-            <div>
-              <h2 style={{ fontSize: '1rem', fontWeight: 800, color: tokens.textPrimary, margin: 0 }}>
-                Advisory Subject Attendance Monitor
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              backgroundColor: tokens.primaryLight,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <BookOpen size={18} color={brand.primary} />
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h2
+                style={{
+                  fontSize: '1.02rem',
+                  fontWeight: 800,
+                  color: tokens.textPrimary,
+                  margin: 0,
+                }}
+              >
+                Classroom Attendance &amp; Loafing Monitor
               </h2>
-              <span style={{ fontSize: '0.72rem', color: tokens.textSecondary }}>
-                Advisory Class: <strong>{gradeLevel} - {sectionName}</strong> ({summaryMetrics.total} Enrolled Learners)
-              </span>
+              {isAdviserOfSection && (
+                <span
+                  style={{
+                    fontSize: '0.66rem',
+                    fontWeight: 800,
+                    padding: '2px 8px',
+                    borderRadius: 6,
+                    backgroundColor: 'rgba(0, 75, 135, 0.1)',
+                    color: brand.primary,
+                  }}
+                >
+                  Class Adviser
+                </span>
+              )}
             </div>
+
+            {/* Section Selector Dropdown */}
+            {availableSections.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <span style={{ fontSize: '0.72rem', color: tokens.textSecondary }}>Section:</span>
+                <div style={{ position: 'relative', display: 'inline-block' }}>
+                  <select
+                    value={selectedSectionId || ''}
+                    onChange={(e) => handleSectionChange(Number(e.target.value))}
+                    style={{
+                      appearance: 'none',
+                      WebkitAppearance: 'none',
+                      padding: '3px 24px 3px 8px',
+                      borderRadius: 6,
+                      border: `1px solid ${tokens.borderStrong}`,
+                      backgroundColor: tokens.bgSurfaceSubtle,
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      color: tokens.textPrimary,
+                      cursor: 'pointer',
+                      outline: 'none',
+                    }}
+                  >
+                    {availableSections.map((sec) => (
+                      <option key={sec.id} value={sec.id}>
+                        {sec.grade_level} - {sec.name} {sec.is_adviser ? '(Advisory)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    size={12}
+                    color={tokens.textMuted}
+                    style={{
+                      position: 'absolute',
+                      right: 6,
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                </div>
+                <span style={{ fontSize: '0.70rem', color: tokens.textMuted }}>
+                  &bull; Class List: <strong>{summaryMetrics.total}</strong> students
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Status Filter Tabs */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* Filter Buttons & Sync */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => setFilterMode('ALL')}
             style={filterBtn(filterMode === 'ALL', brand.primary, tokens)}
           >
-            All Advisees ({summaryMetrics.total})
+            All Students ({summaryMetrics.total})
           </button>
           <button
             type="button"
             onClick={() => setFilterMode('CUTTING')}
             style={filterBtn(filterMode === 'CUTTING', brand.danger, tokens)}
           >
-            Cutting Subjects ({summaryMetrics.cutting})
+            Loafing / Cutting ({summaryMetrics.cutting})
           </button>
           <button
             type="button"
-            onClick={() => fetchMatrixData(true)}
+            onClick={() => fetchMatrixData(selectedSectionId, true)}
             disabled={refreshing}
             style={refreshBtn(tokens)}
-            title="Refresh Subject Attendance"
+            title="Refresh Attendance"
           >
             <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
-            <span>Sync</span>
+            <span>Refresh</span>
           </button>
         </div>
       </div>
 
-      {/* 2. Search & Overview Metric Strip */}
+      {/* 2. Search & Summary Badges */}
       <div
         style={{
           display: 'flex',
@@ -225,30 +456,39 @@ export const AdvisorySubjectMonitor: React.FC = () => {
           flexWrap: 'wrap',
         }}
       >
-        <div style={{ position: 'relative', width: 280 }}>
-          <Search size={14} color={tokens.textMuted} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
+        <div style={{ position: 'relative', width: '100%', maxWidth: 280 }}>
+          <Search
+            size={14}
+            color={tokens.textMuted}
+            style={{
+              position: 'absolute',
+              left: 10,
+              top: '50%',
+              transform: 'translateY(-50%)',
+            }}
+          />
           <input
             type="text"
-            placeholder="Search advisee name or LRN..."
+            placeholder="Search student name or LRN..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={searchInput(tokens)}
           />
         </div>
 
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <span style={statBadge(brand.success)}>
-            {summaryMetrics.perfect} Complete Attendance Today
+            {summaryMetrics.complete} Complete Attendance Today
           </span>
           {summaryMetrics.cutting > 0 && (
             <span style={statBadge(brand.danger)}>
-              {summaryMetrics.cutting} Flagged Skipping Class
+              {summaryMetrics.cutting} Flagged Loafing / Cutting
             </span>
           )}
         </div>
       </div>
 
-      {/* 3. Comprehensive Subject Attendance Matrix Table */}
+      {/* 3. Cross-Subject Attendance & Loafing Matrix Table */}
       <div
         style={{
           backgroundColor: tokens.bgSurface,
@@ -258,20 +498,29 @@ export const AdvisorySubjectMonitor: React.FC = () => {
           overflowX: 'auto',
         }}
       >
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: 840 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: 860 }}>
           <thead>
-            <tr style={{ backgroundColor: tokens.bgSurfaceSubtle, borderBottom: `1px solid ${tokens.borderSubtle}` }}>
+            <tr
+              style={{
+                backgroundColor: tokens.bgSurfaceSubtle,
+                borderBottom: `1px solid ${tokens.borderSubtle}`,
+              }}
+            >
               <th style={{ ...thStyle, width: 44, textAlign: 'center' }}>#</th>
-              <th style={{ ...thStyle, width: 220 }}>Advisee Information</th>
-              <th style={{ ...thStyle, width: 140 }}>Campus Gate</th>
+              <th style={{ ...thStyle, width: 220 }}>Student</th>
+              <th style={{ ...thStyle, width: 150 }}>First Seen Today</th>
               {schedules.map((sched) => (
                 <th key={sched.schedule_id} style={{ ...thStyle, textAlign: 'center' }}>
                   <div style={{ fontWeight: 800, color: brand.primary }}>{sched.subject_code}</div>
-                  <div style={{ fontSize: '0.62rem', color: tokens.textMuted, fontWeight: 500 }}>{sched.time_window}</div>
-                  <div style={{ fontSize: '0.58rem', color: tokens.textSecondary }}>{sched.faculty_name}</div>
+                  <div style={{ fontSize: '0.62rem', color: tokens.textMuted, fontWeight: 500 }}>
+                    {sched.time_window}
+                  </div>
+                  <div style={{ fontSize: '0.58rem', color: tokens.textSecondary }}>
+                    {sched.faculty_name}
+                  </div>
                 </th>
               ))}
-              <th style={{ ...thStyle, width: 110, textAlign: 'center' }}>Compliance</th>
+              <th style={{ ...thStyle, width: 110, textAlign: 'center' }}>Attendance</th>
             </tr>
           </thead>
           <tbody>
@@ -281,58 +530,95 @@ export const AdvisorySubjectMonitor: React.FC = () => {
                   key={row.student_id}
                   style={{
                     borderBottom: `1px solid ${tokens.borderSubtle}`,
-                    backgroundColor: row.cutting_count > 0 ? 'rgba(239, 68, 68, 0.02)' : 'transparent',
+                    backgroundColor:
+                      row.cutting_count > 0 ? 'rgba(239, 68, 68, 0.03)' : 'transparent',
                   }}
                 >
-                  {/* Sequence Number */}
-                  <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 800, color: tokens.textMuted }}>
+                  <td
+                    style={{
+                      ...tdStyle,
+                      textAlign: 'center',
+                      fontWeight: 800,
+                      color: tokens.textMuted,
+                      fontFamily: 'monospace',
+                    }}
+                  >
                     {row.number}
                   </td>
 
-                  {/* Student Details with Photo */}
                   <td style={tdStyle}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={avatarCircle}>
-                        {row.photo_url ? (
-                          <img src={row.photo_url} alt={row.student_name} style={avatarImg} />
+                        {isSafeImageUrl(row.photo_url) ? (
+                          <img
+                            src={row.photo_url!}
+                            alt={row.student_name}
+                            style={avatarImg}
+                          />
                         ) : (
-                          <User size={18} color="#004b87" />
+                          <span
+                            style={{
+                              fontSize: '0.72rem',
+                              fontWeight: 800,
+                              color: brand.primary,
+                            }}
+                          >
+                            {getInitials(row.student_name)}
+                          </span>
                         )}
                       </div>
                       <div style={{ minWidth: 0 }}>
-                        <strong style={{ fontSize: '0.82rem', color: tokens.textPrimary, display: 'block' }}>
+                        <strong
+                          style={{
+                            fontSize: '0.82rem',
+                            color: tokens.textPrimary,
+                            display: 'block',
+                          }}
+                        >
                           {row.student_name}
                         </strong>
-                        <span style={{ fontSize: '0.68rem', color: tokens.textMuted, fontFamily: 'monospace' }}>
+                        <span
+                          style={{
+                            fontSize: '0.68rem',
+                            color: tokens.textMuted,
+                            fontFamily: 'monospace',
+                          }}
+                        >
                           LRN: {row.lrn}
                         </span>
                       </div>
                     </div>
                   </td>
 
-                  {/* Campus Gate Entry/Exit Status */}
                   <td style={tdStyle}>
                     <span
                       style={{
                         fontSize: '0.70rem',
                         fontWeight: 700,
-                        color: row.gate_direction === 'IN' ? brand.success : (row.gate_direction === 'OUT' ? brand.danger : tokens.textMuted),
+                        color:
+                          row.presence_state === 'ACTIVE'
+                            ? brand.success
+                            : tokens.textMuted,
                       }}
                     >
-                      {row.gate_status}
+                      {row.campus_status}
                     </span>
                   </td>
 
-                  {/* Dynamic Subject Status Columns */}
                   {row.subjects.map((sub) => (
                     <td key={sub.schedule_id} style={{ ...tdStyle, textAlign: 'center' }}>
                       {renderStatusPill(sub.status, sub.time)}
                     </td>
                   ))}
 
-                  {/* Overall Class Compliance Progress */}
                   <td style={{ ...tdStyle, textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.78rem', fontWeight: 800, color: row.compliance_rate >= 80 ? brand.success : brand.danger }}>
+                    <div
+                      style={{
+                        fontSize: '0.78rem',
+                        fontWeight: 800,
+                        color: row.compliance_rate >= 80 ? brand.success : brand.danger,
+                      }}
+                    >
                       {row.attended_count} / {row.total_subjects}
                     </div>
                     <div style={{ fontSize: '0.62rem', color: tokens.textMuted }}>
@@ -343,8 +629,16 @@ export const AdvisorySubjectMonitor: React.FC = () => {
               ))
             ) : (
               <tr>
-                <td colSpan={4 + schedules.length} style={{ padding: 36, textAlign: 'center', color: tokens.textMuted, fontSize: '0.80rem' }}>
-                  No advisee attendance records match the selected filter.
+                <td
+                  colSpan={4 + schedules.length}
+                  style={{
+                    padding: 36,
+                    textAlign: 'center',
+                    color: tokens.textMuted,
+                    fontSize: '0.80rem',
+                  }}
+                >
+                  No student records match the current filter.
                 </td>
               </tr>
             )}
