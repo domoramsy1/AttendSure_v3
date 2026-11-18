@@ -1,6 +1,6 @@
 import React from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import appLogoSrc from '../../assets/attendsure-logo.svg';
+import { BRAND_ASSETS } from './BrandAssets';
 
 export const SchoolTenantBadge: React.FC = () => {
   const { school } = useSchool();
@@ -19,12 +19,12 @@ export const SchoolTenantBadge: React.FC = () => {
       }}
     >
       <img
-        src={school.school_logo || appLogoSrc}
+        src={school.school_logo || BRAND_ASSETS.attendsureLogo}
         alt="School Seal"
         width={26}
         height={26}
         onError={(e) => {
-          (e.target as HTMLImageElement).src = appLogoSrc;
+          (e.target as HTMLImageElement).src = BRAND_ASSETS.attendsureLogo;
         }}
         style={{ objectFit: 'contain', borderRadius: '50%' }}
       />

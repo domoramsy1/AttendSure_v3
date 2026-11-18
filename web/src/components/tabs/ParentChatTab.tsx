@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Web Portal Parent & Faculty Direct Chat
+ * AttendSure - Web Portal Parent & Faculty Direct Chat
  * File: web/src/components/tabs/ParentChatTab.tsx
  */
 

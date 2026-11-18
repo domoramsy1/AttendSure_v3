@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Image & School Emblem Serializer Fields
+AttendSure - Image & School Emblem Serializer Fields
 File: backend/apps/api/serializers/base.py
 """
 

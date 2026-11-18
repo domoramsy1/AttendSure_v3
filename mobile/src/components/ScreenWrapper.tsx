@@ -1,8 +1,8 @@
 import React from 'react';
-import { StyleSheet, View, ViewStyle } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { View, ViewStyle } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { theme } from '../constants/theme';
+import { useThemeMode } from '../context/ThemeContext';
 
 interface ScreenWrapperProps {
   children: React.ReactNode;
@@ -10,23 +10,12 @@ interface ScreenWrapperProps {
 }
 
 export function ScreenWrapper({ children, style }: ScreenWrapperProps) {
-  const insets = useSafeAreaInsets();
+  const { palette, spacing, isDark } = useThemeMode();
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      <StatusBar style="dark" />
-      <View style={[styles.container, style]}>{children}</View>
+    <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }} edges={['top', 'left', 'right']}>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <View style={[{ flex: 1, paddingHorizontal: spacing.md }, style]}>{children}</View>
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  container: {
-    flex: 1,
-    paddingHorizontal: theme.spacing.md,
-  },
-});

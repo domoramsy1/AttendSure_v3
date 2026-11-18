@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Classroom Timetable & Student List Tests
+AttendSure - Classroom Timetable & Student List Tests
 File: D:\\AttendSure_V3\\scripts\\test_classroom.py
 """
 

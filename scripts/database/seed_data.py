@@ -38,7 +38,7 @@ Subject = get_model('academics', 'Subject')
 Schedule = get_model('academics', 'Schedule')
 Student = get_model('academics', 'Student')
 Enrollment = get_model('academics', 'Enrollment')
-StaffProfile = get_model('academics', 'StaffProfile') or get_model('academics', 'FacultyProfile')
+FacultyProfile = get_model('academics', 'FacultyProfile') or get_model('academics', 'FacultyProfile')
 
 AttendanceModel = get_model('academics', 'DailyAttendanceSummary') or get_model('academics', 'AttendanceRecord') or get_model('academics', 'Attendance')
 
@@ -165,7 +165,7 @@ def get_or_create_faculty_user(first, last, TargetAdviserModel):
 
 def run_seed():
     print("==========================================================")
-    print("  ATTENDSURE V3: SEEDING 40 STUDENTS PER SECTION (ALL LEVELS)")
+    print("  ATTENDSURE : SEEDING 40 STUDENTS PER SECTION (ALL LEVELS)")
     print("==========================================================")
 
     admin_user = User.objects.filter(is_superuser=True).first() or User.objects.first()

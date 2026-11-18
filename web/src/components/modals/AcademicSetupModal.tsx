@@ -1,5 +1,5 @@
 /**
- * AttendSure - Academic Structure Setup Modal
+ * AttendSure - Academic Structure Setup Modal (Themed)
  * File: web/src/components/modals/AcademicSetupModal.tsx
  * Allows management of Sections, Advisers, Schedules, and Subject Faculty.
  */
@@ -66,7 +66,7 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
     'SECTIONS' | 'SCHEDULE' | 'ROOMS' | 'SUBJECTS' | 'GRADES' | 'YEARS'
   >(normalizeTab(initialTab));
 
-  const [loading, setLoading] = useState<boolean>(false);
+  const [, setLoading] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -165,7 +165,6 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
           });
         }
       } else {
-        // Reset to clean states
         setSectionForm({ id: null, name: '', grade_level: '', adviser_id: '', room_number: '', capacity: 45 });
         setScheduleForm({ id: null, section_id: '', subject_id: '', faculty_id: '', room_id: '', start_time: '07:30', end_time: '08:30', days_of_week: 'MON-FRI' });
       }
@@ -428,14 +427,14 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
 
         {/* Status Alerts */}
         {error && (
-          <div style={alertBoxStyle('rgba(239, 68, 68, 0.12)', brand.danger)}>
+          <div style={alertBoxStyle(tokens.dangerLight, brand.danger)}>
             <AlertCircle size={15} />
             <span>{error}</span>
           </div>
         )}
 
         {successMessage && (
-          <div style={alertBoxStyle('rgba(16, 185, 129, 0.12)', brand.success)}>
+          <div style={alertBoxStyle(tokens.successLight, brand.success)}>
             <CheckCircle2 size={15} />
             <span>{successMessage}</span>
           </div>

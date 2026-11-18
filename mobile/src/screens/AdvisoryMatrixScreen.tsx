@@ -1,24 +1,16 @@
 /**
- * AttendSure V3 - Mobile Advisory Subject Attendance Monitor
+ * AttendSure - Mobile Advisory Subject Attendance Monitor (Themed & Compact)
  * File: mobile/src/screens/AdvisoryMatrixScreen.tsx
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-  RefreshControl,
-} from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { apiClient } from '../api/client';
-import { COLORS } from '../constants/theme';
+import { useThemeMode } from '../context/ThemeContext';
+import { isSafeUrl } from '../constants/theme';
 
 interface SubjectStatus {
   schedule_id: number;
@@ -43,16 +35,15 @@ interface AdviseeRow {
 }
 
 export const AdvisoryMatrixScreen: React.FC = () => {
+  const { palette, ui, fonts } = useThemeMode();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [filterMode, setFilterMode] = useState<'ALL' | 'CUTTING'>('ALL');
-
   const [hasAdvisoryClass, setHasAdvisoryClass] = useState(false);
   const [sectionName, setSectionName] = useState('');
   const [gradeLevel, setGradeLevel] = useState('');
   const [matrix, setMatrix] = useState<AdviseeRow[]>([]);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const fetchMatrixData = useCallback(async () => {
     try {
@@ -61,12 +52,11 @@ export const AdvisoryMatrixScreen: React.FC = () => {
         setHasAdvisoryClass(true);
         setSectionName(res.data.section_name || '');
         setGradeLevel(res.data.grade_level || '');
-        setMatrix(res.data.matrix || []);
+        setMatrix(Array.isArray(res.data.matrix) ? res.data.matrix : []);
       } else {
         setHasAdvisoryClass(false);
       }
-    } catch (err) {
-      console.error('Failed to load mobile advisory matrix:', err);
+    } catch {
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -77,316 +67,152 @@ export const AdvisoryMatrixScreen: React.FC = () => {
     fetchMatrixData();
   }, [fetchMatrixData]);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchMatrixData();
-  };
-
   const filteredMatrix = useMemo(() => {
+    const q = search.trim().toLowerCase();
     return matrix.filter((row) => {
-      const matchSearch =
-        row.student_name.toLowerCase().includes(search.toLowerCase()) ||
-        row.lrn.includes(search);
-
+      const matchSearch = !q || row.student_name.toLowerCase().includes(q) || row.lrn.includes(q);
       if (!matchSearch) return false;
-      if (filterMode === 'CUTTING') return row.cutting_count > 0;
-      return true;
+      return filterMode === 'CUTTING' ? row.cutting_count > 0 : true;
     });
   }, [matrix, search, filterMode]);
 
-  const summary = useMemo(() => {
-    const total = matrix.length;
-    const cutting = matrix.filter((m) => m.cutting_count > 0).length;
-    return { total, cutting };
-  }, [matrix]);
+  const cuttingTotal = useMemo(() => matrix.filter((m) => m.cutting_count > 0).length, [matrix]);
 
   const getInitials = (name: string) => {
-    const parts = name.replace(/,/g, '').trim().split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-    return name.slice(0, 2).toUpperCase();
-  };
-
-  const renderSubjectBadge = (item: SubjectStatus) => {
-    let bg = '#f1f5f9';
-    let textCol = '#64748b';
-
-    if (item.status === 'PRESENT') {
-      bg = '#ecfdf5';
-      textCol = '#059669';
-    } else if (item.status === 'LATE') {
-      bg = '#fffbeb';
-      textCol = '#d97706';
-    } else if (item.status === 'CUTTING') {
-      bg = '#fef2f2';
-      textCol = '#dc2626';
-    }
-
-    return (
-      <View key={item.schedule_id} style={[styles.subPill, { backgroundColor: bg }]}>
-        <Text style={[styles.subCode, { color: textCol }]}>{item.subject_code}</Text>
-        <Text style={[styles.subStatus, { color: textCol }]}>
-          {item.status === 'UNSCANNED' ? '—' : item.status}
-        </Text>
-      </View>
-    );
+    const parts = String(name || '').replace(/,/g, '').trim().split(/\s+/).filter(Boolean);
+    return parts.length >= 2 ? `${parts[0][0]}${parts[1][0]}`.toUpperCase() : String(name || 'ST').slice(0, 2).toUpperCase();
   };
 
   if (loading) {
     return (
-      <View style={styles.centerBox}>
-        <ActivityIndicator size="small" color={COLORS.primary} />
-        <Text style={styles.loadingText}>Loading advisory records...</Text>
+      <View style={ui.centerBox}>
+        <ActivityIndicator size="small" color={palette.primary} />
+        <Text style={[ui.subtitle, { marginTop: 8 }]}>Loading class list...</Text>
       </View>
     );
   }
 
   if (!hasAdvisoryClass) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.emptyStateBox}>
-          <Ionicons name="information-circle-outline" size={48} color="#94a3b8" />
-          <Text style={styles.emptyTitle}>No Advisory Section</Text>
-          <Text style={styles.emptySub}>
-            Your faculty account is not registered as an official Class Adviser.
-          </Text>
-        </View>
+      <SafeAreaView style={ui.centerBox}>
+        <Ionicons name="information-circle-outline" size={44} color={palette.textMuted} />
+        <Text style={[ui.title, { marginTop: 8 }]}>No Advisory Section</Text>
+        <Text style={[ui.subtitle, { textAlign: 'center', marginTop: 4 }]}>
+          Your faculty account is not assigned as a Class Adviser yet.
+        </Text>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header Strip */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Advisory Subject Monitor</Text>
-          <Text style={styles.headerSubtitle}>
-            {gradeLevel} - {sectionName} &bull; {summary.total} Advisees
-          </Text>
-        </View>
+    <SafeAreaView style={ui.screen} edges={['top']}>
+      {/* Header */}
+      <View style={{ padding: 14, backgroundColor: palette.surface, borderBottomWidth: 1, borderBottomColor: palette.border }}>
+        <Text style={ui.title}>Class List &amp; Cutting Monitor</Text>
+        <Text style={ui.subtitle}>{gradeLevel} - {sectionName} • {matrix.length} Students</Text>
 
-        <View style={styles.filterRow}>
+        <View style={[ui.rowCenter, { marginTop: 10 }]}>
           <TouchableOpacity
-            style={[styles.filterChip, filterMode === 'ALL' && styles.filterChipActive]}
             onPress={() => setFilterMode('ALL')}
+            style={[ui.badge, { backgroundColor: filterMode === 'ALL' ? palette.primary : palette.surfaceSubtle, paddingVertical: 6, paddingHorizontal: 12 }]}
           >
-            <Text style={[styles.filterText, filterMode === 'ALL' && styles.filterTextActive]}>
-              All ({summary.total})
+            <Text style={{ fontSize: fonts.size.xs, fontWeight: fonts.weight.bold, color: filterMode === 'ALL' ? '#fff' : palette.textSecondary }}>
+              All ({matrix.length})
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.filterChip, filterMode === 'CUTTING' && styles.filterChipDangerActive]}
             onPress={() => setFilterMode('CUTTING')}
+            style={[ui.badge, { backgroundColor: filterMode === 'CUTTING' ? palette.danger : palette.surfaceSubtle, paddingVertical: 6, paddingHorizontal: 12 }]}
           >
-            <Text style={[styles.filterText, filterMode === 'CUTTING' && styles.filterTextDangerActive]}>
-              Cutting ({summary.cutting})
+            <Text style={{ fontSize: fonts.size.xs, fontWeight: fonts.weight.bold, color: filterMode === 'CUTTING' ? '#fff' : palette.textSecondary }}>
+              Cutting ({cuttingTotal})
             </Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Search Field */}
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={16} color="#94a3b8" style={{ marginRight: 6 }} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search advisee name or LRN..."
-          value={search}
-          onChangeText={setSearch}
-        />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch('')}>
-            <Ionicons name="close-circle" size={18} color="#94a3b8" />
-          </TouchableOpacity>
-        )}
+      {/* Search Bar */}
+      <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
+        <View style={[ui.input, ui.rowCenter, { height: 40 }]}>
+          <Ionicons name="search" size={16} color={palette.textMuted} />
+          <TextInput
+            style={{ flex: 1, fontSize: fonts.size.sm, color: palette.textPrimary }}
+            placeholder="Search student name or LRN..."
+            placeholderTextColor={palette.textMuted}
+            value={search}
+            onChangeText={setSearch}
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch('')}>
+              <Ionicons name="close-circle" size={18} color={palette.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
-      {/* Advisee List */}
+      {/* Class List */}
       <FlatList
         data={filteredMatrix}
         keyExtractor={(item) => String(item.student_id)}
-        contentContainerStyle={{ padding: 12, paddingBottom: 28 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        contentContainerStyle={{ padding: 12, paddingBottom: 110 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchMatrixData(); }} colors={[palette.primary]} />}
         renderItem={({ item }) => {
-          const isExpanded = expandedId === item.student_id;
           const isCutting = item.cutting_count > 0;
+          const safePhoto = isSafeUrl(item.photo_url) ? item.photo_url : undefined;
 
           return (
-            <TouchableOpacity
-              style={[styles.card, isCutting && styles.cardCutting]}
-              activeOpacity={0.8}
-              onPress={() => setExpandedId(isExpanded ? null : item.student_id)}
-            >
-              <View style={styles.cardHeader}>
-                {/* Number Badge */}
-                <View style={styles.numberBadge}>
-                  <Text style={styles.numberText}>{item.number}</Text>
+            <View style={[ui.card, isCutting && { borderColor: palette.danger }]}>
+              <View style={ui.rowBetween}>
+                <View style={[ui.rowCenter, { flex: 1 }]}>
+                  <View style={[ui.subtleBox, { paddingVertical: 3, paddingHorizontal: 7 }]}>
+                    <Text style={{ fontSize: fonts.size.xs, fontWeight: fonts.weight.extrabold, color: palette.textSecondary }}>{item.number}</Text>
+                  </View>
+
+                  <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                    {safePhoto ? (
+                      <Image source={{ uri: safePhoto }} style={{ width: 38, height: 38 }} />
+                    ) : (
+                      <Text style={{ fontSize: fonts.size.sm, fontWeight: fonts.weight.extrabold, color: palette.primary }}>{getInitials(item.student_name)}</Text>
+                    )}
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: fonts.size.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary }} numberOfLines={1}>
+                      {item.student_name}
+                    </Text>
+                    <Text style={ui.subtitle}>LRN: {item.lrn}</Text>
+                  </View>
                 </View>
 
-                {/* Profile Photo */}
-                <View style={styles.avatarWrap}>
-                  {item.photo_url ? (
-                    <Image source={{ uri: item.photo_url }} style={styles.avatarImg} />
-                  ) : (
-                    <Text style={styles.initialsText}>{getInitials(item.student_name)}</Text>
-                  )}
-                </View>
-
-                {/* Name & LRN */}
-                <View style={{ flex: 1, marginLeft: 8 }}>
-                  <Text style={styles.nameText} numberOfLines={1}>
-                    {item.student_name}
-                  </Text>
-                  <Text style={styles.lrnText}>LRN: {item.lrn}</Text>
-                  <Text style={styles.gateText}>
-                    Gate: <Text style={{ fontWeight: '700', color: item.gate_direction === 'IN' ? '#059669' : '#dc2626' }}>{item.gate_status}</Text>
-                  </Text>
-                </View>
-
-                {/* Compliance Badge */}
-                <View style={styles.complianceBadge}>
-                  <Text style={[styles.complianceText, { color: item.compliance_rate >= 80 ? '#059669' : '#dc2626' }]}>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ fontSize: fonts.size.md, fontWeight: fonts.weight.extrabold, color: item.compliance_rate >= 80 ? palette.success : palette.danger }}>
                     {item.attended_count}/{item.total_subjects}
                   </Text>
-                  <Text style={styles.complianceSub}>{item.compliance_rate}%</Text>
+                  <Text style={ui.subtitle}>{item.compliance_rate}%</Text>
                 </View>
               </View>
 
-              {/* Subject Badges Summary */}
-              <View style={styles.subjectsStrip}>
-                {item.subjects.map((sub) => renderSubjectBadge(sub))}
+              {/* Subject Status Pills */}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: palette.border }}>
+                {item.subjects.map((sub) => {
+                  const sColor = sub.status === 'PRESENT' ? palette.success : sub.status === 'LATE' ? palette.warning : sub.status === 'CUTTING' ? palette.danger : palette.textMuted;
+                  const sBg = sub.status === 'PRESENT' ? palette.successLight : sub.status === 'LATE' ? palette.warningLight : sub.status === 'CUTTING' ? palette.dangerLight : palette.surfaceSubtle;
+                  return (
+                    <View key={sub.schedule_id} style={[ui.badge, { backgroundColor: sBg }]}>
+                      <Text style={{ fontSize: fonts.size.xxs, fontWeight: fonts.weight.extrabold, color: sColor }}>
+                        {sub.subject_code}: {sub.status === 'UNSCANNED' ? '—' : sub.status}
+                      </Text>
+                    </View>
+                  );
+                })}
               </View>
-
-              {/* Expand Hint */}
-              {isCutting && (
-                <View style={styles.warningStrip}>
-                  <Ionicons name="warning" size={13} color="#dc2626" />
-                  <Text style={styles.warningText}>
-                    Missing {item.cutting_count} subject period(s) today
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
+            </View>
           );
         }}
-        ListEmptyComponent={
-          <View style={styles.emptyListBox}>
-            <Text style={styles.emptyListText}>No advisee records match the current filter.</Text>
-          </View>
-        }
       />
     </SafeAreaView>
   );
 };
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc' },
-  centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 8, fontSize: 13, color: '#64748b' },
-  header: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  headerTitle: { fontSize: 17, fontWeight: '800', color: '#0f172a' },
-  headerSubtitle: { fontSize: 11.5, color: '#64748b', marginTop: 1 },
-  filterRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  filterChip: {
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    backgroundColor: '#f1f5f9',
-  },
-  filterChipActive: { backgroundColor: COLORS.primary },
-  filterChipDangerActive: { backgroundColor: '#dc2626' },
-  filterText: { fontSize: 11.5, fontWeight: '700', color: '#64748b' },
-  filterTextActive: { color: '#ffffff' },
-  filterTextDangerActive: { color: '#ffffff' },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 12,
-    marginTop: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  searchInput: { flex: 1, fontSize: 12, color: '#0f172a' },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  cardCutting: {
-    borderColor: '#fca5a5',
-    backgroundColor: '#fffcfc',
-  },
-  cardHeader: { flexDirection: 'row', alignItems: 'center' },
-  numberBadge: {
-    width: 22,
-    height: 22,
-    borderRadius: 4,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 6,
-  },
-  numberText: { fontSize: 10.5, fontWeight: '800', color: '#64748b' },
-  avatarWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(0, 75, 135, 0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  avatarImg: { width: 38, height: 38 },
-  initialsText: { fontSize: 13, fontWeight: '800', color: COLORS.primary },
-  nameText: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
-  lrnText: { fontSize: 10.5, color: '#64748b', fontFamily: 'monospace' },
-  gateText: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
-  complianceBadge: { alignItems: 'flex-end', minWidth: 44 },
-  complianceText: { fontSize: 13, fontWeight: '800' },
-  complianceSub: { fontSize: 9.5, color: '#94a3b8' },
-  subjectsStrip: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-  },
-  subPill: {
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 5,
-    alignItems: 'center',
-  },
-  subCode: { fontSize: 9.5, fontWeight: '800' },
-  subStatus: { fontSize: 8.5, fontWeight: '600' },
-  warningStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 8,
-  },
-  warningText: { fontSize: 10.5, fontWeight: '700', color: '#dc2626' },
-  emptyStateBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  emptyTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a', marginTop: 8 },
-  emptySub: { fontSize: 12, color: '#64748b', textAlign: 'center', marginTop: 4, maxWidth: 260 },
-  emptyListBox: { padding: 32, alignItems: 'center' },
-  emptyListText: { fontSize: 12, color: '#94a3b8' },
-});
 
 export default AdvisoryMatrixScreen;

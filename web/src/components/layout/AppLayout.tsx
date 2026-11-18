@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Floating Framed Layout
+ * AttendSure - Floating Framed Layout
  * File: web/src/components/layout/AppLayout.tsx
  */
 

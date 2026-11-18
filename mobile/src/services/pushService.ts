@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Safe Push & Wake-Up Service
+ * AttendSure - Safe Push & Wake-Up Service
  * File: mobile/src/services/pushService.ts
  *
  * Cybersecurity & Performance:

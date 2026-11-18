@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Gunicorn Production Configuration
+ATTENDSURE - Gunicorn Production Configuration
 Formula for workers: (2 x CPU cores) + 1
 Example: 4 CPU cores = 9 workers
 """

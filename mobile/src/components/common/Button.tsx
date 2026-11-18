@@ -1,12 +1,6 @@
 import React from 'react';
-import {
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  ActivityIndicator,
-  ViewStyle,
-} from 'react-native';
-import { theme } from '../../constants/theme';
+import { Text, TouchableOpacity, ActivityIndicator, ViewStyle } from 'react-native';
+import { useThemeMode } from '../../context/ThemeContext';
 
 interface ButtonProps {
   title: string;
@@ -17,41 +11,31 @@ interface ButtonProps {
   style?: ViewStyle;
 }
 
-export function Button({
-  title,
-  onPress,
-  variant = 'primary',
-  loading = false,
-  disabled = false,
-  style,
-}: ButtonProps) {
-  const getVariantStyles = () => {
-    switch (variant) {
-      case 'danger':
-        return { bg: theme.colors.danger, text: '#ffffff' };
-      case 'secondary':
-        return { bg: theme.colors.surfaceSubtle, text: theme.colors.textPrimary };
-      case 'outline':
-        return {
-          bg: 'transparent',
-          text: theme.colors.textSecondary,
-          border: theme.colors.borderStrong,
-        };
-      case 'primary':
-      default:
-        return { bg: theme.colors.primary, text: '#ffffff' };
-    }
-  };
+export function Button({ title, onPress, variant = 'primary', loading = false, disabled = false, style }: ButtonProps) {
+  const { palette, radius, spacing, fonts } = useThemeMode();
 
-  const config = getVariantStyles();
+  const stylesMap = {
+    primary: { bg: palette.primary, text: '#ffffff', border: 'transparent' },
+    danger: { bg: palette.danger, text: '#ffffff', border: 'transparent' },
+    secondary: { bg: palette.surfaceSubtle, text: palette.textPrimary, border: palette.border },
+    outline: { bg: 'transparent', text: palette.textSecondary, border: palette.borderStrong },
+  };
+  const cfg = stylesMap[variant];
 
   return (
     <TouchableOpacity
       style={[
-        styles.button,
-        { backgroundColor: config.bg, borderColor: config.border || 'transparent' },
-        config.border ? styles.border : null,
-        disabled && styles.disabled,
+        {
+          height: 44,
+          borderRadius: radius.md,
+          alignItems: 'center',
+          justifyContent: 'center',
+          paddingHorizontal: spacing.md,
+          backgroundColor: cfg.bg,
+          borderColor: cfg.border,
+          borderWidth: cfg.border !== 'transparent' ? 1 : 0,
+          opacity: disabled ? 0.5 : 1,
+        },
         style,
       ]}
       onPress={onPress}
@@ -59,30 +43,10 @@ export function Button({
       activeOpacity={0.8}
     >
       {loading ? (
-        <ActivityIndicator color={config.text} size="small" />
+        <ActivityIndicator color={cfg.text} size="small" />
       ) : (
-        <Text style={[styles.text, { color: config.text }]}>{title}</Text>
+        <Text style={{ fontSize: fonts.size.md, fontWeight: fonts.weight.bold, color: cfg.text }}>{title}</Text>
       )}
     </TouchableOpacity>
   );
 }
-
-const styles = StyleSheet.create({
-  button: {
-    height: 46,
-    borderRadius: theme.borderRadius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: theme.spacing.md,
-  },
-  border: {
-    borderWidth: 1,
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-  text: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-});

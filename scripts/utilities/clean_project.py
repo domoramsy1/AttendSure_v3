@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Project Cleaner
+AttendSure - Project Cleaner
 File: D:\\AttendSure_V3\\scripts\\clean_project.py
 """
 

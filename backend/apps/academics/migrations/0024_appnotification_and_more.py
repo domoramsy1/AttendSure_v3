@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Clean Retired Models & Create Direct Chat Table
+AttendSure - Clean Retired Models & Create Direct Chat Table
 File: backend/apps/academics/migrations/0024_appnotification_and_more.py
 """
 

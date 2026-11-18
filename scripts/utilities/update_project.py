@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Automated System Update & Synchronization Script
+AttendSure - Automated System Update & Synchronization Script
 File: D:\AttendSure_V3\update_project.py
 
 What it does:
@@ -57,7 +57,7 @@ def run_command(cmd, cwd=ROOT_DIR, check=True):
 
 def main():
     print("=" * 60)
-    print("AttendSure V3 - System Update & Verification")
+    print("AttendSure - System Update & Verification")
     print("=" * 60)
 
     # -----------------------------------------------------------------------
@@ -140,7 +140,7 @@ def main():
         current_tag = "No Git tag detected (main branch HEAD)"
 
     print("=" * 60)
-    print("SUCCESS: AttendSure V3 is updated and verified!")
+    print("SUCCESS: AttendSure is updated and verified!")
     print(f"Current Version Tag : {current_tag}")
     print("=" * 60)
 

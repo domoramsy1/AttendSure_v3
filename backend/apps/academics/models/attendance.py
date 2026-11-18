@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Classroom QR Attendance Models
+AttendSure - Classroom QR Attendance Models
 File: backend/apps/academics/models/attendance.py
 """
 

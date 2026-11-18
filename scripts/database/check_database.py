@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Database Health & Latency Test
+AttendSure - Database Health & Latency Test
 File: scripts/check_database.py
 Run: python scripts/check_database.py
 """

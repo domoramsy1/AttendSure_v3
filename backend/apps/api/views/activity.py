@@ -1,5 +1,5 @@
 """
-AttendSure V3 - System & User Activity Audit Log Engine
+AttendSure - System & User Activity Audit Log Engine
 File: backend/apps/api/views/activity.py
 """
 

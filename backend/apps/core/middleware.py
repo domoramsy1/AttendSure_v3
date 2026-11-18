@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Software License Verification Middleware
+AttendSure - Software License Verification Middleware
 File: backend/apps/core/middleware.py
 """
 

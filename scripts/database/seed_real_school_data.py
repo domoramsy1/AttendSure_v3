@@ -1,65 +1,69 @@
-import os
-import django
+"""
+AttendSure - Real School Data Seeder (Macasandig NHS)
+File: scripts/database/seed_real_school_data.py
+"""
 
+import os
+import sys
+from pathlib import Path
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent / 'backend'
+sys.path.insert(0, str(BACKEND_DIR))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'attendsure_core.settings')
+
+import django
 django.setup()
 
-from apps.academics.models import SchoolProfile, StaffProfile, Section, AcademicYear, Enrollment, Student
+from apps.academics.models import AcademicYear, Enrollment, FacultyProfile, SchoolProfile, Section, Student
+
 
 def sync_real_data():
-    # 1. Update or create real School Profile
-    school = SchoolProfile.objects.first()
-    if not school:
-        school = SchoolProfile()
-
+    school = SchoolProfile.objects.first() or SchoolProfile()
     school.school_id = '304033'
     school.school_name = 'Macasandig National High School'
     school.region = 'Region X'
     school.division = 'Cagayan de Oro City'
     school.district = 'District II'
+    school.address = 'Macasandig, Cagayan de Oro City, Misamis Oriental'
     school.save()
-    print(f"School Profile Synced: {school.school_name} (ID: {school.school_id})")
 
-    # 2. Ensure real Principal / School Head exists
-    principal, _ = StaffProfile.objects.update_or_create(
+    principal, _ = FacultyProfile.objects.update_or_create(
         employee_id='DEPED-SH-001',
         defaults={
             'first_name': 'Eleanor',
             'last_name': 'Roa',
             'position': 'Secondary School Principal IV',
-            'is_active': True
-        }
+            'is_active': True,
+        },
     )
+    school.principal_faculty = principal
+    school.principal_name = principal.full_name
+    school.save(update_fields=['principal_faculty', 'principal_name'])
 
-    # 3. Ensure real Adviser exists
-    adviser, _ = StaffProfile.objects.update_or_create(
-        employee_id='DEPED-TCH-001',
+    adviser, _ = FacultyProfile.objects.update_or_create(
+        employee_id='DEPED-FAC-001',
         defaults={
             'first_name': 'Jerel',
             'last_name': 'Eduave',
-            'position': 'Teacher III / Class Adviser',
-            'is_active': True
-        }
+            'position': 'Faculty III / Class Adviser',
+            'is_active': True,
+        },
     )
 
-    # 4. Bind Section Diamond to Adviser and active Academic Year
     sy = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.first()
     sec = Section.objects.first()
-    if sec:
+    if sec and sy:
         sec.adviser = adviser
         sec.academic_year = sy
         sec.save(update_fields=['adviser', 'academic_year'])
-        print(f"Section {sec.name} adviser set to {adviser.first_name} {adviser.last_name}")
-
-        # 5. Enroll all active learners directly into this section
-        all_students = Student.objects.filter(is_active=True)
-        for s in all_students:
+        for student in Student.objects.filter(is_active=True):
             Enrollment.objects.update_or_create(
-                student=s,
+                student=student,
                 academic_year=sy,
-                defaults={'section': sec, 'status': 'ENROLLED'}
+                defaults={'section': sec, 'status': 'ENROLLED'},
             )
-        print(f"Enrolled {all_students.count()} real learners into Section {sec.name}")
+    print('Synced Macasandig National High School profile and enrollments.')
+
 
 if __name__ == '__main__':
     sync_real_data()

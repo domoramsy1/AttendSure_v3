@@ -1,4 +1,4 @@
-# AttendSure V3 - GitHub Push, Auto-Tag Increment & Full Version Backup Script
+# AttendSure - GitHub Push, Auto-Tag Increment & Full Version Backup Script
 # File: D:\AttendSure_V3\scripts\push_and_sync.ps1
 
 param(

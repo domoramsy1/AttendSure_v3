@@ -5,10 +5,8 @@
  */
 
 export { AcademicSetupModal } from './AcademicSetupModal';
-export { PageSetupModal } from './PageSetupModal';
 export { ProfileModal } from './ProfileModal';
 export { CompleteProfileModal } from './CompleteProfileModal';
-export { AttendanceLogInspectionModal } from './AttendanceLogInspectionModal';
 export { StudentIdPassModal } from './StudentIdPassModal';
 export { UserFormModal } from './UserFormModal';
 export { UserDeleteModal } from './UserDeleteModal';

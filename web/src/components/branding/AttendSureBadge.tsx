@@ -1,4 +1,5 @@
 import React from 'react';
+import { AttendSureLogoAsset } from './BrandAssets';
 
 interface AttendSureBadgeProps {
   size?: number;
@@ -26,15 +27,10 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = ({
         flexShrink: 0,
       }}
     >
-      <img
-        src="/splash.svg"
+      <AttendSureLogoAsset
+        size={iconSize}
         alt="AttendSure"
-        style={{
-          width: `${iconSize}px`,
-          height: `${iconSize}px`,
-          objectFit: 'contain',
-          filter: 'brightness(0) invert(1)',
-        }}
+        style={{ filter: 'brightness(0) invert(1)' }}
       />
       <style>{`
         @keyframes attendsure-breathe {

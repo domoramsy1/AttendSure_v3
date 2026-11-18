@@ -1,6 +1,6 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { theme } from '../../constants/theme';
+import { Text, View } from 'react-native';
+import { useThemeMode } from '../../context/ThemeContext';
 
 interface BadgeProps {
   label: string;
@@ -8,33 +8,20 @@ interface BadgeProps {
 }
 
 export function Badge({ label, variant = 'neutral' }: BadgeProps) {
-  const stylesMap = {
-    success: { bg: theme.colors.successLight, text: theme.colors.successDark },
-    warning: { bg: theme.colors.warningLight, text: theme.colors.warningDark },
-    danger: { bg: theme.colors.dangerLight, text: theme.colors.dangerDark },
-    info: { bg: theme.colors.primaryLight, text: theme.colors.primaryHover },
-    neutral: { bg: theme.colors.surfaceSubtle, text: theme.colors.textSecondary },
-  };
+  const { palette, ui, fonts } = useThemeMode();
 
-  const current = stylesMap[variant];
+  const map = {
+    success: { bg: palette.successLight, text: palette.success },
+    warning: { bg: palette.warningLight, text: palette.warning },
+    danger: { bg: palette.dangerLight, text: palette.danger },
+    info: { bg: palette.infoLight, text: palette.info },
+    neutral: { bg: palette.surfaceSubtle, text: palette.textSecondary },
+  };
+  const cur = map[variant];
 
   return (
-    <View style={[styles.badge, { backgroundColor: current.bg }]}>
-      <Text style={[styles.text, { color: current.text }]}>{label}</Text>
+    <View style={[ui.badge, { backgroundColor: cur.bg }]}>
+      <Text style={{ fontSize: fonts.size.xs, fontWeight: fonts.weight.bold, color: cur.text }}>{label}</Text>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: theme.borderRadius.sm,
-    alignSelf: 'flex-start',
-  },
-  text: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-});

@@ -1,9 +1,9 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-title AttendSure V3 - Project Code Exporter
+title AttendSure - Project Code Exporter
 echo ========================================================
-echo       AttendSure V3 - Exporting All Project Codes
+echo       AttendSure - Exporting All Project Codes
 echo ========================================================
 echo.
 

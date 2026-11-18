@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo ============================================================
-echo AttendSure V3 - System Update and Verification
+echo AttendSure - System Update and Verification
 echo ============================================================
 
 :: 1. CHECK GIT REPOSITORY AND STASH LOCAL CHANGES
@@ -93,7 +93,7 @@ for /f "delims=" %%t in ('git describe --tags --abbrev^=0 2^>nul') do set "TAG=%
 if not defined TAG set "TAG=No Git tag detected (main branch HEAD)"
 
 echo ============================================================
-echo SUCCESS: AttendSure V3 is updated and verified!
+echo SUCCESS: AttendSure is updated and verified!
 echo Current Version Tag : !TAG!
 echo ============================================================
 

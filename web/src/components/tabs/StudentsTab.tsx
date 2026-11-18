@@ -56,7 +56,6 @@ interface Student {
   guardian_relationship?: string;
   parent_contact: string;
   qr_token?: string;
-  qr_token?: string;
   current_section?: string;
   section_id?: number;
   grade_level_id?: number;
@@ -548,7 +547,7 @@ export const StudentsTab: React.FC = () => {
         <div style={statCard}>
           <div style={statLabel}>CLASS SECTIONS</div>
           <div style={{ ...statVal, color: '#d97706' }}>{metrics.total_sections}</div>
-          <div style={statSub}>Active academic class rosters</div>
+          <div style={statSub}>Active academic class class_lists</div>
         </div>
       </div>
 
@@ -689,7 +688,7 @@ export const StudentsTab: React.FC = () => {
                           <span>{row.current_section || 'Unassigned'}</span>
                         </div>
                         <div style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 20, marginTop: 1 }}>
-                          Regular Roster
+                          Regular Class List
                         </div>
                       </td>
 

@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Application Entry Point
+ * AttendSure - Application Entry Point
  * File: web/src/main.tsx
  */
 
@@ -7,13 +7,13 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
-import appLogoSrc from './assets/attendsure-logo.svg';
+import { BRAND_ASSETS } from './components/branding/BrandAssets';
 
 // Dynamically generate a high-contrast PNG favicon from SVG emblem
 const applyAppFavicon = () => {
   try {
     const img = new Image();
-    img.src = appLogoSrc;
+    img.src = BRAND_ASSETS.attendsureLogo;
 
     img.onload = () => {
       try {

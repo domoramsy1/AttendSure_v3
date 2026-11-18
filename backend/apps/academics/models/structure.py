@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Academic Structure Models (Rooms, Sections, Uniform Subjects, Schedules)
+AttendSure - Academic Structure Models (Rooms, Sections, Uniform Subjects, Schedules)
 File: backend/apps/academics/models/structure.py
 """
 

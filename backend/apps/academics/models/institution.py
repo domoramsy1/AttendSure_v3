@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Profile, Academic Year & Campus GPS Boundary Models
+AttendSure - School Profile, Academic Year & Campus GPS Boundary Models
 File: backend/apps/academics/models/institution.py
 """
 

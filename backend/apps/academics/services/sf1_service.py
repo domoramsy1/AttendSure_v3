@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Form 1 (SF1) Service
+AttendSure - School Form 1 (SF1) Service
 File: backend/apps/academics/services/sf1_service.py
 """
 

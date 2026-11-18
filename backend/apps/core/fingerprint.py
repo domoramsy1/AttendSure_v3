@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Server Hardware Fingerprinting
+AttendSure - Server Hardware Fingerprinting
 File: backend/apps/core/fingerprint.py
 """
 

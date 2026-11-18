@@ -1,4 +1,7 @@
-// mobile/src/context/AuthContext.tsx
+/**
+ * AttendSure Mobile - Authentication Context & Session Manager
+ * File: mobile/src/context/AuthContext.tsx
+ */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { Platform } from 'react-native';
@@ -36,16 +39,11 @@ export interface AuthenticatedUser {
   is_staff: boolean;
 }
 
-interface DeviceIdentity {
-  deviceId?: string;
-}
-
 interface AuthContextType {
   user: AuthenticatedUser | null;
   token: string | null;
   loading: boolean;
   isLoading: boolean;
-  deviceIdentity: DeviceIdentity | null;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -59,9 +57,7 @@ const saveTokenSafely = async (token: string): Promise<void> => {
   if (Platform.OS !== 'web') {
     try {
       await SecureStore.setItemAsync(AUTH_TOKEN_KEY, token);
-    } catch {
-      // Ignore keychain write error
-    }
+    } catch {}
   }
 };
 
@@ -70,9 +66,7 @@ const clearTokenSafely = async (): Promise<void> => {
   if (Platform.OS !== 'web') {
     try {
       await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
-    } catch {
-      // Ignore keychain delete error
-    }
+    } catch {}
   }
 };
 
@@ -80,7 +74,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [deviceIdentity] = useState<DeviceIdentity | null>({ deviceId: 'WEB-CLIENT-UUID' });
   const isRefreshingRef = useRef<boolean>(false);
 
   const refreshUser = useCallback(async () => {
@@ -139,12 +132,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     restoreSession();
   }, [refreshUser]);
 
-const login = async (username: string, password: string): Promise<void> => {
-    const cleanUsername = username.trim();
-    const cleanPassword = password.trim();
+  const login = async (username: string, password: string): Promise<void> => {
+    const cleanUsername = username.replace(/[\r\n\t]/g, '').trim();
+    const cleanPassword = password.replace(/[\r\n\t]/g, '').trim();
 
     if (!cleanUsername || !cleanPassword) {
-      throw new Error('Username and password are required.');
+      throw new Error('Please enter both username and password.');
     }
 
     const res = await apiClient.post('/api/auth/login/', {
@@ -152,8 +145,9 @@ const login = async (username: string, password: string): Promise<void> => {
       password: cleanPassword,
     });
 
-    const receivedToken: string | undefined = res.data?.token;
-    const receivedUser: AuthenticatedUser | undefined = res.data?.user;
+    const d = res.data || {};
+    const receivedToken: string | undefined = d.token || d.access || d.key;
+    const receivedUser: AuthenticatedUser | undefined = d.user || (d.id ? d : undefined);
 
     if (!receivedToken || !receivedUser) {
       throw new Error('Invalid response received from authentication server.');
@@ -165,7 +159,6 @@ const login = async (username: string, password: string): Promise<void> => {
     setToken(receivedToken);
     setUser(receivedUser);
 
-    // Refresh profile in background without blocking successful login
     refreshUser().catch(() => {});
   };
 
@@ -189,7 +182,6 @@ const login = async (username: string, password: string): Promise<void> => {
         token,
         loading,
         isLoading: loading,
-        deviceIdentity,
         login,
         logout,
         refreshUser,
@@ -208,3 +200,5 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
+
+export default AuthContext;

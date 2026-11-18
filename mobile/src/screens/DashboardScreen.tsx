@@ -29,7 +29,7 @@ import { startPassivePresenceTracking } from '../services/backgroundLocation';
 import { COLORS } from '../constants/theme';
 import { TabType } from '../navigation/MainTabNavigator';
 
-const fallbackLogo = require('../../assets/attendsure-logo.svg');
+const fallbackLogo = require('../../assets/AttendSureLogo.svg');
 
 function calculateDistanceMeters(
   lat1: number,

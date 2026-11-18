@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Core Shared Utilities
+AttendSure - Core Shared Utilities
 File: backend/apps/common/utils.py
 """
 

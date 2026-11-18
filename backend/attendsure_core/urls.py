@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Root Application URL Configuration
+ATTENDSURE - Root Application URL Configuration
 File: backend/attendsure_core/urls.py
 """
 

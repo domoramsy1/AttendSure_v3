@@ -1,12 +1,8 @@
 ========================================================================================
-AttendSure V3 - Any-Placement & Any-Case Obsolete Feature Audit Report
-Run Time: 2026-11-17 07:34:51 AM
-Mode:     AUTO-CLEAN & VERIFY
+AttendSure - Any-Placement & Any-Case Obsolete Feature Audit Report
+Run Time: 2026-11-17 08:37:24 AM
+Mode:     READ-ONLY AUDIT
 ========================================================================================
-
-0. AUTO-CLEAN ACTIONS PERFORMED (1 item(s))
-----------------------------------------------------------------------------------------
-  - [CLEANED FILE] Rewrote backend/apps/scanners/views.py to USBQRStationStatusView
 
 1. POSTGRESQL DATABASE CHECK (Tables, Views, Columns & Roles)
 ----------------------------------------------------------------------------------------

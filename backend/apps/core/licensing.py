@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Hardware License & Integrity shield
+AttendSure - Hardware License & Integrity shield
 File: backend/apps/core/licensing.py
 """
 

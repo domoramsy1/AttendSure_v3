@@ -1,5 +1,5 @@
 """
-AttendSure V3 - DepEd SF & DTR Reports Tests
+AttendSure - DepEd SF & DTR Reports Tests
 File: D:\\AttendSure_V3\\scripts\\test_reports.py
 """
 

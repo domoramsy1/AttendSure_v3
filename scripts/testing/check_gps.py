@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Faculty GPS & Telemetry Monitor
+AttendSure - Faculty GPS & Telemetry Monitor
 File: D:\\AttendSure_V3\\scripts\\check_gps.py
 """
 

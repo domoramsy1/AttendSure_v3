@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Scripts Directory Tree and Codebase Viewer
+AttendSure - Scripts Directory Tree and Codebase Viewer
 Scans D:\\AttendSure_V3\\scripts, prints the file tree, and outputs all code.
 File: D:\\AttendSure_V3\\scripts\\show_scripts_codebase.py
 """
@@ -56,7 +56,7 @@ def run_codebase_scan():
 
     header = "=" * 80
     output_lines.append(header)
-    output_lines.append(f" ATTENDSURE V3 - SCRIPTS FOLDER STRUCTURE & CODEBASE")
+    output_lines.append(f" ATTENDSURE  - SCRIPTS FOLDER STRUCTURE & CODEBASE")
     output_lines.append(f" Root Path: {SCRIPTS_DIR}")
     output_lines.append(header)
     output_lines.append("")

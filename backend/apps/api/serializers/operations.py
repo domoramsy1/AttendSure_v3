@@ -1,5 +1,5 @@
 """
-AttendSure V3 - USB QR Classroom Scan, Mobile Facial Recognition & Notification Serializers
+AttendSure - USB QR Classroom Scan, Mobile Facial Recognition & Notification Serializers
 File: backend/apps/api/serializers/operations.py
 """
 

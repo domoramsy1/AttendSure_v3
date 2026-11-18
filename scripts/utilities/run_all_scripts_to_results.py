@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Master Script Runner
+AttendSure - Master Script Runner
 Executes diagnostic and test scripts, saving their logs and outputs into scripts/results/
 File: D:\\AttendSure_V3\\scripts\\run_all_scripts_to_results.py
 """
@@ -72,7 +72,7 @@ def run_single_script(script_name: str) -> dict:
         header = f"=" * 80 + "\n"
         log_content = (
             f"{header}"
-            f"ATTENDSURE V3 SCRIPT EXECUTION RESULT\n"
+            f"ATTENDSURE  SCRIPT EXECUTION RESULT\n"
             f"Script: {script_name}\n"
             f"Executed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Status: {status_text}\n"
@@ -105,7 +105,7 @@ def run_single_script(script_name: str) -> dict:
 
 def main():
     print("=" * 80)
-    print(" ATTENDSURE V3 - RUNNING ALL SCRIPTS & COLLECTING RESULTS")
+    print(" ATTENDSURE  - RUNNING ALL SCRIPTS & COLLECTING RESULTS")
     print(f" Target folder: {RESULTS_DIR}")
     print("=" * 80)
 
@@ -119,7 +119,7 @@ def main():
     summary_file = RESULTS_DIR / "_all_scripts_summary.txt"
     summary_lines = [
         "=" * 80,
-        "ATTENDSURE V3 - ALL SCRIPTS SUMMARY REPORT",
+        "ATTENDSURE  - ALL SCRIPTS SUMMARY REPORT",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "=" * 80,
         f"{'Script Name':<30} | {'Status':<20} | {'Log File'}",

@@ -1,6 +1,6 @@
 import React from 'react';
-import { StyleSheet, Text, View, ViewStyle } from 'react-native';
-import { theme } from '../../constants/theme';
+import { Text, View, ViewStyle } from 'react-native';
+import { useThemeMode } from '../../context/ThemeContext';
 
 interface CardProps {
   title?: string;
@@ -11,56 +11,20 @@ interface CardProps {
 }
 
 export function Card({ title, subtitle, rightAction, children, style }: CardProps) {
+  const { palette, ui, fonts, spacing } = useThemeMode();
+
   return (
-    <View style={[styles.card, style]}>
+    <View style={[ui.card, style]}>
       {(title || rightAction) && (
-        <View style={styles.header}>
-          <View style={styles.titleContainer}>
-            {title && <Text style={styles.title}>{title}</Text>}
-            {subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
+        <View style={[ui.rowBetween, { marginBottom: spacing.sm, paddingBottom: spacing.xs, borderBottomWidth: 1, borderBottomColor: palette.border }]}>
+          <View style={{ flex: 1 }}>
+            {title && <Text style={{ fontSize: fonts.size.xs, fontWeight: fonts.weight.bold, color: palette.textSecondary, textTransform: 'uppercase' }}>{title}</Text>}
+            {subtitle && <Text style={{ fontSize: fonts.size.xs, color: palette.textMuted, marginTop: 2 }}>{subtitle}</Text>}
           </View>
           {rightAction && <View>{rightAction}</View>}
         </View>
       )}
-      <View style={styles.body}>{children}</View>
+      <View>{children}</View>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: theme.spacing.md,
-    marginBottom: theme.spacing.md,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: theme.spacing.sm,
-    paddingBottom: theme.spacing.xs,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.surfaceSubtle,
-  },
-  titleContainer: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: theme.colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  subtitle: {
-    fontSize: 12,
-    color: theme.colors.textMuted,
-    marginTop: 2,
-  },
-  body: {
-    marginTop: theme.spacing.xs,
-  },
-});

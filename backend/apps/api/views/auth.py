@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Authentication & Identity APIs (Full Profile CRUD)
+AttendSure - Authentication & Identity APIs (Full Profile CRUD)
 File: backend/apps/api/views/auth.py
 """
 

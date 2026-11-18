@@ -17,7 +17,7 @@ export default function App() {
             <AppNavigator />
             {!splashDone && (
               <SplashScreen
-                minDurationMs={700}
+                minDurationMs={7000}
                 onFinish={() => setSplashDone(true)}
               />
             )}

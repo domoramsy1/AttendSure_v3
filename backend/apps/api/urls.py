@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Unified API URL Router (Pure Software Architecture)
+AttendSure - Unified API URL Router (Pure Software Architecture)
 File: backend/apps/api/urls.py
 """
 

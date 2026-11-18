@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Parent & Faculty Direct Chat API (Full CRUD)
+AttendSure - Parent & Faculty Direct Chat API (Full CRUD)
 File: backend/apps/api/views/chat.py
 """
 

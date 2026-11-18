@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Mobile Push Notifications, GPS Heartbeats, Exit Passes & Audit Logs
+AttendSure - Mobile Push Notifications, GPS Heartbeats, Exit Passes & Audit Logs
 File: backend/apps/academics/models/telemetry.py
 """
 

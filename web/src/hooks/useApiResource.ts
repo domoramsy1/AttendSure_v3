@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Reusable Fast Data Fetching Hook (with AbortController Cancellation)
+ * AttendSure - Reusable Fast Data Fetching Hook (with AbortController Cancellation)
  * File: web/src/hooks/useApiResource.ts
  */
 

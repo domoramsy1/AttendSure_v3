@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Academic Application Configuration (Mobile Phone & Laptop/PC Only)
+AttendSure - Academic Application Configuration (Mobile Phone & Laptop/PC Only)
 File: backend/apps/academics/apps.py
 """
 

@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - School Footer
+ * AttendSure - School Footer
  * File: web/src/components/layout/Footer.tsx
  */
 

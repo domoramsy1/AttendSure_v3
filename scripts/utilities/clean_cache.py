@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Cache Clean Utility
+AttendSure - Cache Clean Utility
 File: scripts/clean_cache.py
 Run: python scripts/clean_cache.py
 """

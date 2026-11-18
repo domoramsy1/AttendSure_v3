@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Master Script Runner
+AttendSure - Master Script Runner
 File: D:\\AttendSure_V3\\scripts\\run_all.py
 """
 
@@ -57,7 +57,7 @@ def run_script(script_name: str) -> dict:
         status_text = "PASSED" if proc.returncode == 0 else f"FAILED (Exit Code {proc.returncode})"
         content = (
             f"================================================================================\n"
-            f"ATTENDSURE V3 SCRIPT RESULT: {script_name}\n"
+            f"ATTENDSURE  SCRIPT RESULT: {script_name}\n"
             f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Status: {status_text}\n"
             f"================================================================================\n\n"
@@ -77,7 +77,7 @@ def run_script(script_name: str) -> dict:
 
 def main():
     print("=" * 80)
-    print(" ATTENDSURE V3 - RUNNING DIAGNOSTICS & TESTS")
+    print(" ATTENDSURE  - RUNNING DIAGNOSTICS & TESTS")
     print(f" Target Folder: {RESULTS_DIR}")
     print("=" * 80)
 
@@ -89,7 +89,7 @@ def main():
 
     summary_file = RESULTS_DIR / "_summary.txt"
     with open(summary_file, "w", encoding="utf-8") as f:
-        f.write(f"ATTENDSURE V3 TEST SUMMARY - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write(f"ATTENDSURE  TEST SUMMARY - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         for item in summary:
             f.write(f"{item['name']:<25} | {item['status']}\n")
 

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Classroom Attendance & Enrollment Full CRUD Views
+AttendSure - Classroom Attendance & Enrollment Full CRUD Views
 File: backend/apps/api/views/attendance_crud.py
 """
 

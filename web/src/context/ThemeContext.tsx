@@ -1,112 +1,105 @@
 /**
- * AttendSure V3 - Institutional Theme Provider (Pure White Theme)
+ * ============================================================================
+ * ATTENDSURE  - THEME CONTEXT & CSS VARIABLE ENGINE
  * File: web/src/context/ThemeContext.tsx
+ *
+ * PURPOSE:
+ * Controls Light, Dark, and High-Contrast Daylight modes across the entire app.
+ * Automatically updates CSS variables (--bg-surface, --text-primary, etc.)
+ * and provides ready-made `ui` styles to every component.
+ * ============================================================================
  */
 
-import React, { createContext, useContext, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import {
+  THEME_PALETTES,
+  BRAND_COLORS,
+  FONTS,
+  RADIUS,
+  createStyles,
+  type ThemeMode,
+  type ThemeTokens,
+} from '../theme/tokens';
 
-export type Theme = 'light';
-
-export interface ThemeTokens {
-  bgApp: string;
-  bgSurface: string;
-  bgSurfaceSubtle: string;
-  bgSurfaceHover: string;
-  borderSubtle: string;
-  borderStrong: string;
-  textPrimary: string;
-  textSecondary: string;
-  textMuted: string;
-  cardShadow: string;
-  primaryLight: string;
-}
-
-export interface BrandColors {
-  primary: string;
-  primaryHover: string;
-  secondary: string;
-  success: string;
-  warning: string;
-  danger: string;
-}
-
-interface ThemeContextType {
-  resolvedTheme: 'light';
+interface ThemeContextValue {
+  mode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
   toggleTheme: () => void;
   tokens: ThemeTokens;
-  brand: BrandColors;
+  brand: typeof BRAND_COLORS.light;
+  fonts: typeof FONTS;
+  radius: typeof RADIUS;
+  ui: ReturnType<typeof createStyles>;
 }
 
-const BRAND_COLORS: BrandColors = {
-  primary: '#004B87',      // Official AttendSure Logo Navy
-  primaryHover: '#003865',
-  secondary: '#0284C7',
-  success: '#10B981',
-  warning: '#F59E0B',
-  danger: '#EF4444',
-};
-
-const PURE_WHITE_TOKENS: ThemeTokens = {
-  bgApp: '#F1F5F9',               // Soft outer frame canvas
-  bgSurface: '#FFFFFF',           // Crisp white floating cards
-  bgSurfaceSubtle: '#F8FAFC',     // Subdued containers and inputs
-  bgSurfaceHover: '#F1F5F9',      // Active hover tone
-  borderSubtle: '#E2E8F0',        // Clean institutional borders
-  borderStrong: '#CBD5E1',
-  textPrimary: '#0F172A',         // High contrast slate
-  textSecondary: '#475569',
-  textMuted: '#94A3B8',
-  cardShadow: '0 4px 16px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -2px rgba(15, 23, 42, 0.03)',
-  primaryLight: '#EBF3FB',        // Subtle brand blue tint
-};
-
-const ThemeContext = createContext<ThemeContextType>({
-  resolvedTheme: 'light',
-  toggleTheme: () => {},
-  tokens: PURE_WHITE_TOKENS,
-  brand: BRAND_COLORS,
-});
+const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
+const STORAGE_KEY = 'attendsure_theme_mode';
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [mode, setMode] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY) as ThemeMode;
+    return saved && THEME_PALETTES[saved] ? saved : 'light';
+  });
+
+  const setThemeMode = (nextMode: ThemeMode) => {
+    setMode(nextMode);
+    localStorage.setItem(STORAGE_KEY, nextMode);
+  };
+
+  const toggleTheme = () => {
+    const order: ThemeMode[] = ['light', 'dark', 'high-contrast'];
+    const next = order[(order.indexOf(mode) + 1) % order.length];
+    setThemeMode(next);
+  };
+
+  const tokens = THEME_PALETTES[mode];
+  const brand = BRAND_COLORS[mode];
+  const ui = useMemo(() => createStyles(tokens, brand), [tokens, brand]);
+
+  // Sync CSS variables onto <html> so CSS files and common components automatically change color
   useEffect(() => {
     const root = document.documentElement;
+    root.setAttribute('data-theme', mode);
+    root.style.setProperty('--bg-app', tokens.bgApp);
+    root.style.setProperty('--bg-canvas', tokens.bgCanvas);
+    root.style.setProperty('--bg-surface', tokens.bgSurface);
+    root.style.setProperty('--bg-surface-subtle', tokens.bgSurfaceSubtle);
+    root.style.setProperty('--text-primary', tokens.textPrimary);
+    root.style.setProperty('--text-secondary', tokens.textSecondary);
+    root.style.setProperty('--text-muted', tokens.textMuted);
+    root.style.setProperty('--border-subtle', tokens.borderSubtle);
+    root.style.setProperty('--border-strong', tokens.borderStrong);
+    root.style.setProperty('--brand-primary', brand.primary);
+    root.style.setProperty('--brand-success', brand.success);
+    root.style.setProperty('--brand-warning', brand.warning);
+    root.style.setProperty('--brand-danger', brand.danger);
+    root.style.setProperty('--card-shadow', tokens.cardShadow);
+    root.style.setProperty('--font-sans', FONTS.sans);
+  }, [mode, tokens, brand]);
 
-    // Remove any previously saved dark classes or attributes
-    root.classList.remove('dark');
-    root.setAttribute('data-theme', 'light');
-    localStorage.removeItem('attendsure_theme');
-
-    // Lock global CSS variables to pure white institutional colors
-    root.style.setProperty('--bg-app', PURE_WHITE_TOKENS.bgApp);
-    root.style.setProperty('--bg-surface', PURE_WHITE_TOKENS.bgSurface);
-    root.style.setProperty('--bg-surface-subtle', PURE_WHITE_TOKENS.bgSurfaceSubtle);
-    root.style.setProperty('--bg-surface-hover', PURE_WHITE_TOKENS.bgSurfaceHover);
-    root.style.setProperty('--border-subtle', PURE_WHITE_TOKENS.borderSubtle);
-    root.style.setProperty('--border-strong', PURE_WHITE_TOKENS.borderStrong);
-    root.style.setProperty('--text-primary', PURE_WHITE_TOKENS.textPrimary);
-    root.style.setProperty('--text-secondary', PURE_WHITE_TOKENS.textSecondary);
-    root.style.setProperty('--text-muted', PURE_WHITE_TOKENS.textMuted);
-    root.style.setProperty('--card-shadow', PURE_WHITE_TOKENS.cardShadow);
-    root.style.setProperty('--primary-light', PURE_WHITE_TOKENS.primaryLight);
-    root.style.setProperty('--brand-primary', BRAND_COLORS.primary);
-    root.style.setProperty('--brand-secondary', BRAND_COLORS.secondary);
-    root.style.setProperty('--brand-success', BRAND_COLORS.success);
-    root.style.setProperty('--brand-warning', BRAND_COLORS.warning);
-    root.style.setProperty('--brand-danger', BRAND_COLORS.danger);
-  }, []);
+  // Keyboard shortcut: Alt + T cycles color themes
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && e.key.toLowerCase() === 't') {
+        e.preventDefault();
+        toggleTheme();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mode]);
 
   return (
     <ThemeContext.Provider
-      value={{
-        resolvedTheme: 'light',
-        toggleTheme: () => {},
-        tokens: PURE_WHITE_TOKENS,
-        brand: BRAND_COLORS,
-      }}
+      value={{ mode, setThemeMode, toggleTheme, tokens, brand, fonts: FONTS, radius: RADIUS, ui }}
     >
       {children}
     </ThemeContext.Provider>
   );
 };
 
-export const useTheme = () => useContext(ThemeContext);
+export const useTheme = (): ThemeContextValue => {
+  const ctx = useContext(ThemeContext);
+  if (!ctx) throw new Error('useTheme must be used inside ThemeProvider');
+  return ctx;
+};

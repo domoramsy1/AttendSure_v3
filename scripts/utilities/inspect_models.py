@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Database Models Inspector
+AttendSure - Database Models Inspector
 File: D:\\AttendSure_V3\\scripts\\inspect_models.py
 """
 
@@ -20,7 +20,7 @@ def main():
 
     out_lines = [
         "=" * 80,
-        "ATTENDSURE V3 - ACADEMICS MODEL SCHEMA & DEFINITIONS",
+        "ATTENDSURE  - ACADEMICS MODEL SCHEMA & DEFINITIONS",
         f"Path: {MODELS_DIR}",
         "=" * 80,
         ""

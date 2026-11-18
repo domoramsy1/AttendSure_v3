@@ -37,7 +37,7 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({ data }) => {
 
   if (!data) return null;
 
-  // 1. Dynamic Teacher Signatory Resolution
+  // 1. Dynamic Faculty Signatory Resolution
   const currentUser = user as Record<string, any> | null;
   const activeUserFullName =
     currentUser?.full_name ||
@@ -50,9 +50,9 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({ data }) => {
     currentUser?.role || currentUser?.system_role || 'EMPLOYEE'
   ).trim().toUpperCase();
 
-  const isTeachingRole = ['TEACHER', 'FACULTY', 'EMPLOYEE'].includes(userRole);
+  const isTeachingRole = ['FACULTY', 'FACULTY', 'EMPLOYEE'].includes(userRole);
 
-  const resolvedTeacherName =
+  const resolvedFacultyName =
     (isTeachingRole && activeUserFullName.length > 0
       ? activeUserFullName
       : null) ||
@@ -544,7 +544,7 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({ data }) => {
               <Text style={styles.reasonItem}>b.7. Hunger/Malnutrition</Text>
 
               <Text style={styles.reasonSection}>c. School-Related Factors</Text>
-              <Text style={styles.reasonItem}>c.1. Teacher Factor</Text>
+              <Text style={styles.reasonItem}>c.1. Faculty Factor</Text>
               <Text style={styles.reasonItem}>c.2. Physical condition of classroom</Text>
               <Text style={styles.reasonItem}>c.3. Peer influence</Text>
 
@@ -674,10 +674,10 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({ data }) => {
                 </Text>
 
                 <View style={styles.signFieldBox}>
-                  <Text style={styles.signPersonName}>{resolvedTeacherName.toUpperCase()}</Text>
+                  <Text style={styles.signPersonName}>{resolvedFacultyName.toUpperCase()}</Text>
                   <View style={styles.signUnderline} />
                   <Text style={styles.signPositionLabel}>
-                    (Signature of Teacher over Printed Name)
+                    (Signature of Faculty over Printed Name)
                   </Text>
                 </View>
 

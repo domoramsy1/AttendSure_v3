@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Academic Timetables, Sections & Schedules
+ * AttendSure - Academic Timetables, Sections & Schedules
  * File: web/src/components/tabs/SchedulesTab.tsx
  */
 

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Academic Structure Serializers (Zero N+1 Queries)
+AttendSure - Academic Structure Serializers (Zero N+1 Queries)
 File: backend/apps/api/serializers/academics.py
 """
 

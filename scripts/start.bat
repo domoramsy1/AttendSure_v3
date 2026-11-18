@@ -1,8 +1,8 @@
 @echo off
-title AttendSure V3 Launcher
+title AttendSure Launcher
 color 0B
 echo ========================================================
-echo         STARTING ATTENDSURE V3 SYSTEM
+echo         STARTING ATTENDSURE  SYSTEM
 echo ========================================================
 echo.
 

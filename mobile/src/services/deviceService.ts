@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Hardware Device Identity Service
+ * AttendSure - Hardware Device Identity Service
  * File: mobile/src/services/deviceService.ts
  *
  * Cybersecurity & Anti-Cheating:

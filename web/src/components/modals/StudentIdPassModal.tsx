@@ -1,10 +1,11 @@
 /**
- * AttendSure - Unified Digital ID & Gate entry_point Pass Modal
- * Supports both Student and Faculty identification credentials.
+ * AttendSure - Digital ID & QR Pass Modal
  * File: web/src/components/modals/StudentIdPassModal.tsx
  */
 
 import React, { useState } from 'react';
+import { useTheme } from '../../context/ThemeContext';
+import { isSafeImageUrl } from '../../theme/tokens';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { ShieldCheck, Copy, Check, Printer, User as UserIcon } from 'lucide-react';
@@ -17,174 +18,60 @@ interface StudentIdPassModalProps {
   onCopyLrn: (lrn: string) => void;
 }
 
-const isSafeImageUrl = (url?: string | null): boolean => {
-  if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
-  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
-  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) return false;
-  return (
-    clean.startsWith('http://') ||
-    clean.startsWith('https://') ||
-    clean.startsWith('/') ||
-    clean.startsWith('data:image/') ||
-    clean.startsWith('blob:')
-  );
-};
-
-export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({
-  student,
-  selectedClass,
-  onClose,
-  onCopyLrn,
-}) => {
-  const [copied, setCopied] = useState<boolean>(false);
+export const StudentIdPassModal: React.FC<StudentIdPassModalProps> = ({ student, selectedClass, onClose, onCopyLrn }) => {
+  const { tokens, brand, fonts, ui } = useTheme();
+  const [copied, setCopied] = useState(false);
 
   if (!student) return null;
-
   const safePhoto = isSafeImageUrl(student.photo_url) ? student.photo_url : null;
   const identifier = student.lrn || 'ID-00000';
 
-  const handleCopy = () => {
-    onCopyLrn(identifier);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   return (
-    <Modal isOpen={Boolean(student)} onClose={onClose} title="Digital Pass & Gate entry_point QR">
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '6px 0' }}>
-        <div
-          id="printable-id-card"
-          style={{
-            width: 300,
-            backgroundColor: '#FFFFFF',
-            border: '2px solid #004B87',
-            borderRadius: 14,
-            overflow: 'hidden',
-            boxShadow: '0 8px 24px rgba(0, 75, 135, 0.12)',
-            boxSizing: 'border-box',
-          }}
-        >
-          {/* Card Header */}
-          <div style={{ backgroundColor: '#004B87', color: '#FFFFFF', padding: '12px 14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: '0.70rem', fontWeight: 800 }}>
-              <ShieldCheck size={14} color="#38bdf8" />
-              <span>ATTENDSURE OFFICIAL PASS</span>
+    <Modal isOpen={Boolean(student)} onClose={onClose} title="Digital QR ID Pass">
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+        <div style={{ width: 290, backgroundColor: tokens.bgSurface, border: `2px solid ${brand.primary}`, borderRadius: 14, overflow: 'hidden', boxShadow: tokens.cardShadow }}>
+          <div style={{ backgroundColor: brand.primary, color: '#fff', padding: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: fonts.size.xs, fontWeight: 800 }}>
+              <ShieldCheck size={14} /> ATTENDSURE OFFICIAL PASS
             </div>
-            <div style={{ fontSize: '0.60rem', color: '#E0F2FE', marginTop: 2 }}>
-              Macasandig National High School &bull; Gate Clearance
-            </div>
+            <div style={{ fontSize: '0.62rem', opacity: 0.9, marginTop: 2 }}>Macasandig National High School</div>
           </div>
 
-          {/* Card Body */}
-          <div style={{ padding: '16px 14px' }}>
-            <div style={{ margin: '0 auto 10px auto', display: 'flex', justifyContent: 'center' }}>
-              <div
-                style={{
-                  width: 54,
-                  height: 54,
-                  borderRadius: '50%',
-                  backgroundColor: '#F1F5F9',
-                  border: '2px solid #E2E8F0',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  overflow: 'hidden',
-                }}
-              >
-                {safePhoto ? (
-                  <img
-                    src={safePhoto}
-                    alt={student.name}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
-                ) : (
-                  <UserIcon size={28} color="#94A3B8" />
-                )}
-              </div>
+          <div style={{ padding: 16 }}>
+            <div style={{ width: 54, height: 54, borderRadius: '50%', margin: '0 auto 10px', backgroundColor: tokens.bgSurfaceSubtle, border: `2px solid ${tokens.borderSubtle}`, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {safePhoto ? <img src={safePhoto} alt={student.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <UserIcon size={26} color={tokens.textMuted} />}
             </div>
 
-            <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0F172A', lineHeight: 1.2 }}>
-              {student.name}
-            </div>
+            <div style={{ fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>{student.name}</div>
+            <div style={{ fontSize: fonts.size.sm, color: tokens.textSecondary, marginTop: 2 }}>{selectedClass?.section_name || 'Authorized Member'}</div>
 
-            <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#475569', marginTop: 4 }}>
-              {selectedClass?.section_name || 'Authorized Member'}
-            </div>
-
-            {/* Identifier Badge with Copy Button */}
-            <div
-              onClick={handleCopy}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                margin: '10px 0',
-                padding: '4px 10px',
-                backgroundColor: '#F8FAFC',
-                border: '1px solid #E2E8F0',
-                borderRadius: 6,
-                fontFamily: 'monospace',
-                fontSize: '0.76rem',
-                fontWeight: 700,
-                color: '#0F172A',
-                cursor: 'pointer',
-              }}
-              title="Click to copy identifier"
+            <button
+              type="button"
+              onClick={() => { onCopyLrn(identifier); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+              style={{ ...ui.btnSecondary, margin: '10px auto', fontFamily: fonts.mono }}
             >
               <span>ID: {identifier}</span>
-              {copied ? <Check size={11} color="#10B981" /> : <Copy size={11} color="#94A3B8" />}
-            </div>
+              {copied ? <Check size={12} color={brand.success} /> : <Copy size={12} />}
+            </button>
 
-            {/* High-Contrast QR Code for Classroom USB QR Scanner */}
-            <div
-              style={{
-                margin: '8px auto',
-                padding: 6,
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #E2E8F0',
-                borderRadius: 10,
-                width: 124,
-                height: 124,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
+            <div style={{ margin: '6px auto', padding: 6, backgroundColor: '#ffffff', border: `1px solid ${tokens.borderSubtle}`, borderRadius: 10, width: 124, height: 124 }}>
               <img
                 src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(identifier)}`}
-                alt="Gate Pass QR"
+                alt="QR Code"
                 style={{ width: '100%', height: '100%', objectFit: 'contain' }}
               />
             </div>
           </div>
 
-          {/* Footer NFC / qr_id State */}
-          <div
-            style={{
-              backgroundColor: '#F8FAFC',
-              borderTop: '1px solid #E2E8F0',
-              padding: '8px 12px',
-              fontSize: '0.68rem',
-              color: '#475569',
-            }}
-          >
-            Card UID:{' '}
-            <strong style={{ color: student.qr_token ? '#10B981' : '#F59E0B' }}>
-              {student.qr_token || 'No Card Linked'}
-            </strong>
+          <div style={{ backgroundColor: tokens.bgSurfaceSubtle, borderTop: `1px solid ${tokens.borderSubtle}`, padding: 8, fontSize: fonts.size.xs, color: tokens.textSecondary }}>
+            QR Token: <strong style={{ color: student.qr_token ? brand.success : brand.warning }}>{student.qr_token || 'Active'}</strong>
           </div>
         </div>
 
-        {/* Modal Actions */}
-        <div style={{ display: 'flex', gap: 10, marginTop: 16, width: '100%', justifyContent: 'center' }}>
-          <Button variant="secondary" size="md" type="button" onClick={onClose}>
-            Close
-          </Button>
+        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+          <Button variant="secondary" size="md" type="button" onClick={onClose}>Close</Button>
           <Button variant="primary" size="md" type="button" onClick={() => window.print()}>
-            <Printer size={15} style={{ marginRight: 6 }} />
-            Print Pass
+            <Printer size={14} style={{ marginRight: 6 }} /> Print Pass
           </Button>
         </div>
       </div>

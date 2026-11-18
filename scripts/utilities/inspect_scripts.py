@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Scripts Folder Codebase Viewer
+AttendSure - Scripts Folder Codebase Viewer
 File: D:\\AttendSure_V3\\scripts\\inspect_scripts.py
 """
 
@@ -17,7 +17,7 @@ IGNORE_DIRS = {'__pycache__', '.git', 'results'}
 def main():
     out_lines = [
         "=" * 80,
-        "ATTENDSURE V3 - SCRIPTS CODEBASE SNAPSHOT",
+        "ATTENDSURE  - SCRIPTS CODEBASE SNAPSHOT",
         "=" * 80,
         ""
     ]

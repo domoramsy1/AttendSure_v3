@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Institutional Classroom Attendance Scanner
+ * AttendSure - Institutional Classroom Attendance Scanner (Themed)
  * File: web/src/components/scanner/ClassroomScanner.tsx
  * Supports: All Device Cameras, USB/OTG Barcode Guns, and Manual Entry.
  */
@@ -122,7 +122,6 @@ const StudentPhoto: React.FC<StudentPhotoProps> = ({
     const clean = photoUrl.trim();
     if (!clean || clean === 'null' || clean === 'undefined') return null;
 
-    // Replace 0.0.0.0 bind host with browser host
     if (clean.includes('0.0.0.0:8000')) {
       return clean.replace('0.0.0.0:8000', window.location.host);
     }
@@ -403,11 +402,9 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
 
   const sessionStats = useMemo(() => {
     const total = sessionList.length;
-    const present = sessionList.filter((s) => s.status === 'PRESENT').length;
-    return { total, present };
+    return { total };
   }, [sessionList]);
 
-  // Number position for the currently active student card
   const activeStudentNumber = useMemo(() => {
     if (!activeStudent) return null;
     const foundIndex = sessionList.findIndex((s) => s.lrn === activeStudent.lrn);
@@ -435,21 +432,21 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
         gap: 16,
       };
 
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: tokens.bgSurface,
-    borderRadius: 16,
-    border: `1px solid ${tokens.borderSubtle}`,
-    boxShadow: tokens.cardShadow,
-    width: isModal ? '100%' : 'auto',
-    maxWidth: isModal ? 880 : '100%',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-  };
-
   return (
     <div style={containerStyle}>
-      <div style={cardStyle}>
+      <div
+        style={{
+          backgroundColor: tokens.bgSurface,
+          borderRadius: 16,
+          border: `1px solid ${tokens.borderSubtle}`,
+          boxShadow: tokens.cardShadow,
+          width: isModal ? '100%' : 'auto',
+          maxWidth: isModal ? 880 : '100%',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
         {/* 1. Terminal Controls Bar */}
         <div
           style={{
@@ -517,8 +514,8 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
                 gap: 6,
                 padding: '5px 10px',
                 borderRadius: 20,
-                backgroundColor: 'rgba(16, 185, 129, 0.12)',
-                border: '1px solid rgba(16, 185, 129, 0.25)',
+                backgroundColor: tokens.successLight,
+                border: `1px solid ${brand.success}`,
                 fontSize: '0.72rem',
                 fontWeight: 700,
                 color: brand.success,
@@ -585,6 +582,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
             gap: 16,
             alignItems: 'start',
             padding: 18,
+            backgroundColor: tokens.bgCanvas,
           }}
         >
           {/* Left Column: Scanner Station & Active Student Card */}
@@ -698,12 +696,12 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
                 {cameraMessage ? (
                   <div
                     style={{
-                      backgroundColor: '#eff6ff',
+                      backgroundColor: tokens.infoLight,
                       borderRadius: 10,
-                      border: '1px solid #bfdbfe',
+                      border: `1px solid ${brand.secondary}`,
                       padding: '16px 18px',
                       fontSize: '0.78rem',
-                      color: '#1e40af',
+                      color: brand.secondary,
                       lineHeight: 1.5,
                     }}
                   >
@@ -760,20 +758,19 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
               </div>
             )}
 
-            {/* Active Verified Student Card (Shows Numbering & Profile Photo) */}
+            {/* Active Verified Student Card */}
             {activeStudent ? (
               <div
                 style={{
                   backgroundColor: tokens.bgSurface,
                   borderRadius: 14,
                   border: `1px solid ${tokens.borderSubtle}`,
-                  borderLeft: `5px solid ${activeStudent.is_duplicate ? '#f59e0b' : brand.success}`,
+                  borderLeft: `5px solid ${activeStudent.is_duplicate ? brand.warning : brand.success}`,
                   boxShadow: tokens.cardShadow,
                   padding: '16px 20px',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                  {/* Real Student Profile Photo */}
                   <StudentPhoto
                     photoUrl={activeStudent.photo_url}
                     name={activeStudent.student_name}
@@ -813,8 +810,8 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
                           borderRadius: 12,
                           fontSize: '0.70rem',
                           fontWeight: 800,
-                          backgroundColor: activeStudent.is_duplicate ? '#fffbeb' : 'rgba(16, 185, 129, 0.12)',
-                          color: activeStudent.is_duplicate ? '#d97706' : brand.success,
+                          backgroundColor: activeStudent.is_duplicate ? tokens.warningLight : tokens.successLight,
+                          color: activeStudent.is_duplicate ? brand.warning : brand.success,
                         }}
                       >
                         {activeStudent.is_duplicate ? 'ALREADY TAPPED' : 'PRESENT'}
@@ -878,7 +875,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
             )}
           </div>
 
-          {/* Right Column: Session Class List with Numbering and Profile Photos */}
+          {/* Right Column: Session Class List */}
           <div
             style={{
               backgroundColor: tokens.bgSurface,
@@ -953,7 +950,6 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
-                      {/* Numbering Badge */}
                       <div
                         style={{
                           width: 26,
@@ -974,7 +970,6 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
                         {idx + 1}
                       </div>
 
-                      {/* Student Profile Photo */}
                       <StudentPhoto
                         photoUrl={item.photo_url}
                         name={item.student_name}
@@ -1010,7 +1005,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({
                           borderRadius: 8,
                           fontSize: '0.66rem',
                           fontWeight: 800,
-                          backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                          backgroundColor: tokens.successLight,
                           color: brand.success,
                         }}
                       >

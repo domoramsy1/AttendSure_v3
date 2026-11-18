@@ -1,5 +1,5 @@
 r"""
-AttendSure V3 - Complete Backend CRUD & Functional API Verification Suite
+AttendSure - Complete Backend CRUD & Functional API Verification Suite
 File: D:\AttendSure_V3\scripts\test_all_cruds.py
 
 Automatically saves all test output, HTTP error responses, and exception
@@ -135,17 +135,18 @@ class BackendVerifier:
             return False
 
         token, _ = Token.objects.get_or_create(user=self.admin_user)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}", HTTP_HOST="testserver")
         return True
 
     def run_crud_cycle(self, label: str, endpoint: str, create_payload: dict, update_payload: dict, verify_field: str, list_query: str = ""):
         created_id = None
         try:
             # 1. CREATE (POST)
-            res, ms = self.timed_call(self.client.post, endpoint, create_payload, format="json")
+            res, ms = self.timed_call(self.client.post, endpoint, create_payload, format="json", HTTP_HOST="testserver")
             ok_create = res.status_code in (200, 201)
-            if ok_create and isinstance(res.data, dict):
-                created_id = res.data.get("id")
+            res_data = getattr(res, "data", {})
+            if ok_create and isinstance(res_data, dict):
+                created_id = res_data.get("id")
             err_body = "" if (ok_create and created_id) else self._format_response_error(res)
             self.record("CRUD-CREATE", f"{label} (POST)", ok_create and bool(created_id), f"HTTP {res.status_code} | ID={created_id}", ms, err_body)
             if not created_id:
@@ -154,29 +155,31 @@ class BackendVerifier:
             detail_url = f"{endpoint}{created_id}/"
 
             # 2. READ LIST (GET)
-            res_list, ms_list = self.timed_call(self.client.get, f"{endpoint}{list_query}")
-            items = res_list.data.get("results", res_list.data) if isinstance(res_list.data, dict) else res_list.data
+            res_list, ms_list = self.timed_call(self.client.get, f"{endpoint}{list_query}", HTTP_HOST="testserver")
+            list_data = getattr(res_list, "data", {})
+            items = list_data.get("results", list_data) if isinstance(list_data, dict) else list_data
             found_in_list = isinstance(items, list) and any(item.get("id") == created_id for item in items if isinstance(item, dict))
             ok_list = res_list.status_code == 200 and found_in_list
             err_list = "" if ok_list else self._format_response_error(res_list)
             self.record("CRUD-READ", f"{label} List (GET)", ok_list, f"HTTP {res_list.status_code} | Count={len(items) if isinstance(items, list) else 0}", ms_list, err_list)
 
             # 3. READ DETAIL (GET /:id/)
-            res_detail, ms_detail = self.timed_call(self.client.get, detail_url)
+            res_detail, ms_detail = self.timed_call(self.client.get, detail_url, HTTP_HOST="testserver")
             ok_detail = res_detail.status_code == 200
             err_detail = "" if ok_detail else self._format_response_error(res_detail)
             self.record("CRUD-READ", f"{label} Detail (GET)", ok_detail, f"HTTP {res_detail.status_code}", ms_detail, err_detail)
 
             # 4. UPDATE (PATCH)
-            res_upd, ms_upd = self.timed_call(self.client.patch, detail_url, update_payload, format="json")
-            updated_val = res_upd.data.get(verify_field) if isinstance(res_upd.data, dict) else None
+            res_upd, ms_upd = self.timed_call(self.client.patch, detail_url, update_payload, format="json", HTTP_HOST="testserver")
+            upd_data = getattr(res_upd, "data", {})
+            updated_val = upd_data.get(verify_field) if isinstance(upd_data, dict) else None
             expected_val = update_payload.get(verify_field)
             ok_upd = res_upd.status_code == 200 and str(updated_val) == str(expected_val)
             err_upd = "" if ok_upd else self._format_response_error(res_upd)
             self.record("CRUD-UPDATE", f"{label} (PATCH)", ok_upd, f"HTTP {res_upd.status_code} | {verify_field}={updated_val}", ms_upd, err_upd)
 
             # 5. DELETE (DELETE)
-            res_del, ms_del = self.timed_call(self.client.delete, detail_url)
+            res_del, ms_del = self.timed_call(self.client.delete, detail_url, HTTP_HOST="testserver")
             ok_del = res_del.status_code in (200, 204)
             err_del = "" if ok_del else self._format_response_error(res_del)
             self.record("CRUD-DELETE", f"{label} (DELETE)", ok_del, f"HTTP {res_del.status_code}", ms_del, err_del)
@@ -184,28 +187,37 @@ class BackendVerifier:
                 created_id = None
         finally:
             if created_id:
-                self.client.delete(f"{endpoint}{created_id}/")
+                self.client.delete(f"{endpoint}{created_id}/", HTTP_HOST="testserver")
 
     def test_system_and_auth(self):
-        res_db, ms_db = self.timed_call(self.client.get, "/api/health/db/")
-        ok_db = res_db.status_code == 200 and isinstance(res_db.data, dict) and res_db.data.get("db") is True
+        res_db, ms_db = self.timed_call(self.client.get, "/api/health/db/", HTTP_HOST="testserver")
+        db_data = getattr(res_db, "data", {})
+        ok_db = res_db.status_code == 200 and isinstance(db_data, dict) and (db_data.get("database") == "CONNECTED" or db_data.get("status") == "CONNECTED")
         self.record("HEALTH", "Database Connection", ok_db, f"HTTP {res_db.status_code}", ms_db, "" if ok_db else self._format_response_error(res_db))
 
-        res_me, ms_me = self.timed_call(self.client.get, "/api/auth/me/")
-        ok_me = res_me.status_code == 200
-        self.record("AUTH", "Current User Profile (GET)", ok_me, f"User={res_me.data.get('username') if isinstance(res_me.data, dict) else ''}", ms_me, "" if ok_me else self._format_response_error(res_me))
+        res_me, ms_me = self.timed_call(self.client.get, "/api/auth/me/", HTTP_HOST="testserver")
+        me_data = getattr(res_me, "data", {})
+        ok_me = res_me.status_code == 200 and isinstance(me_data, dict)
+        username_val = me_data.get("username", "") if ok_me else ""
+        self.record("AUTH", "Current User Profile (GET)", ok_me, f"User={username_val}", ms_me, "" if ok_me else self._format_response_error(res_me))
 
-        res_dash, ms_dash = self.timed_call(self.client.get, "/api/dashboard/overview/")
-        ok_dash = res_dash.status_code == 200
-        self.record("DASHBOARD", "Dashboard Overview (GET)", ok_dash, f"Students={res_dash.data.get('total_students') if isinstance(res_dash.data, dict) else 0}", ms_dash, "" if ok_dash else self._format_response_error(res_dash))
+        res_dash, ms_dash = self.timed_call(self.client.get, "/api/dashboard/overview/", HTTP_HOST="testserver")
+        dash_data = getattr(res_dash, "data", {})
+        ok_dash = res_dash.status_code == 200 and isinstance(dash_data, dict)
+        total_students = dash_data.get("total_students", 0) if ok_dash else 0
+        self.record("DASHBOARD", "Dashboard Overview (GET)", ok_dash, f"Students={total_students}", ms_dash, "" if ok_dash else self._format_response_error(res_dash))
 
-        res_school, ms_school = self.timed_call(self.client.get, "/api/settings/school/")
-        ok_school = res_school.status_code == 200
-        self.record("SETTINGS", "School Metadata (GET)", ok_school, f"School={res_school.data.get('school_name') if isinstance(res_school.data, dict) else ''}", ms_school, "" if ok_school else self._format_response_error(res_school))
+        res_school, ms_school = self.timed_call(self.client.get, "/api/settings/school/", HTTP_HOST="testserver")
+        school_data = getattr(res_school, "data", {})
+        ok_school = res_school.status_code == 200 and isinstance(school_data, dict)
+        school_name = school_data.get("school_name", "") if ok_school else ""
+        self.record("SETTINGS", "School Metadata (GET)", ok_school, f"School={school_name}", ms_school, "" if ok_school else self._format_response_error(res_school))
 
-        res_logs, ms_logs = self.timed_call(self.client.get, "/api/settings/activity-logs/")
-        ok_logs = res_logs.status_code == 200
-        self.record("SECURITY", "Audit Activity Logs (GET)", ok_logs, f"Logs={res_logs.data.get('total') if isinstance(res_logs.data, dict) else 0}", ms_logs, "" if ok_logs else self._format_response_error(res_logs))
+        res_logs, ms_logs = self.timed_call(self.client.get, "/api/user-activity-logs/", HTTP_HOST="testserver")
+        logs_data = getattr(res_logs, "data", {})
+        ok_logs = res_logs.status_code == 200 and isinstance(logs_data, dict)
+        total_logs = logs_data.get("total", 0) if ok_logs else 0
+        self.record("SECURITY", "Audit Activity Logs (GET)", ok_logs, f"Logs={total_logs}", ms_logs, "" if ok_logs else self._format_response_error(res_logs))
 
     def test_all_crud_endpoints(self):
         ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.first()
@@ -447,12 +459,13 @@ class BackendVerifier:
         Enrollment.objects.create(student=student, section=section, academic_year=ay, status="ENROLLED")
 
         try:
-            res_cards, ms_cards = self.timed_call(self.client.get, f"/api/classroom/qr-cards/?section_id={section.id}")
-            cards = res_cards.data.get("cards", []) if isinstance(res_cards.data, dict) else []
+            res_cards, ms_cards = self.timed_call(self.client.get, f"/api/classroom/qr-cards/?section_id={section.id}", HTTP_HOST="testserver")
+            cards_data = getattr(res_cards, "data", {})
+            cards = cards_data.get("cards", []) if isinstance(cards_data, dict) else []
             ok_cards = res_cards.status_code == 200 and len(cards) == 1
             self.record("QR-ID", "Printable QR ID Cards (GET)", ok_cards, f"HTTP {res_cards.status_code} | Cards={len(cards)}", ms_cards, "" if ok_cards else self._format_response_error(res_cards))
 
-            res_cls, ms_cls = self.timed_call(self.client.get, "/api/classroom/classes/?mode=all")
+            res_cls, ms_cls = self.timed_call(self.client.get, "/api/classroom/classes/?mode=all", HTTP_HOST="testserver")
             ok_cls = res_cls.status_code == 200
             self.record("CLASSROOM", "Classes & Class List (GET)", ok_cls, f"HTTP {res_cls.status_code}", ms_cls, "" if ok_cls else self._format_response_error(res_cls))
 
@@ -461,34 +474,40 @@ class BackendVerifier:
                 "/api/classroom/scan/",
                 {"qr_token": student.qr_token, "schedule_id": sched2.id},
                 format="json",
+                HTTP_HOST="testserver",
             )
-            scan_ok = res_scan.status_code == 201 and isinstance(res_scan.data, dict) and res_scan.data.get("lrn") == lrn_flow
-            self.record("QR-SCAN", "Classroom QR Scan (POST)", scan_ok, f"HTTP {res_scan.status_code} | Status={res_scan.data.get('status') if isinstance(res_scan.data, dict) else ''}", ms_scan, "" if scan_ok else self._format_response_error(res_scan))
+            scan_data = getattr(res_scan, "data", {})
+            scan_ok = res_scan.status_code == 201 and isinstance(scan_data, dict) and scan_data.get("lrn") == lrn_flow
+            self.record("QR-SCAN", "Classroom QR Scan (POST)", scan_ok, f"HTTP {res_scan.status_code} | Status={scan_data.get('status') if isinstance(scan_data, dict) else ''}", ms_scan, "" if scan_ok else self._format_response_error(res_scan))
 
             res_dup, ms_dup = self.timed_call(
                 self.client.post,
                 "/api/classroom/scan/",
                 {"qr_token": student.qr_token, "schedule_id": sched2.id},
                 format="json",
+                HTTP_HOST="testserver",
             )
-            ok_dup = res_dup.status_code == 200 and isinstance(res_dup.data, dict) and res_dup.data.get("is_duplicate") is True
+            dup_data = getattr(res_dup, "data", {})
+            ok_dup = res_dup.status_code == 200 and isinstance(dup_data, dict) and dup_data.get("is_duplicate") is True
             self.record("QR-SCAN", "Duplicate Scan shield (POST)", ok_dup, f"HTTP {res_dup.status_code}", ms_dup, "" if ok_dup else self._format_response_error(res_dup))
 
-            res_mat, ms_mat = self.timed_call(self.client.get, f"/api/classroom/adviser-matrix/?section_id={section.id}")
-            ok_mat = res_mat.status_code == 200 and isinstance(res_mat.data, dict) and res_mat.data.get("total_students") == 1
+            res_mat, ms_mat = self.timed_call(self.client.get, f"/api/classroom/adviser-matrix/?section_id={section.id}", HTTP_HOST="testserver")
+            mat_data = getattr(res_mat, "data", {})
+            ok_mat = res_mat.status_code == 200 and isinstance(mat_data, dict) and mat_data.get("total_students") == 1
             self.record("LOAFING", "Adviser Cutting Matrix (GET)", ok_mat, f"HTTP {res_mat.status_code}", ms_mat, "" if ok_mat else self._format_response_error(res_mat))
 
             parent_client = APIClient()
             parent_token, _ = Token.objects.get_or_create(user=parent_user)
-            parent_client.credentials(HTTP_AUTHORIZATION=f"Token {parent_token.key}")
+            parent_client.credentials(HTTP_AUTHORIZATION=f"Token {parent_token.key}", HTTP_HOST="testserver")
 
-            res_par, ms_par = self.timed_call(parent_client.get, "/api/parent/overview/")
-            par_children = res_par.data.get("children", []) if isinstance(res_par.data, dict) else []
-            par_notifs = res_par.data.get("notifications", []) if isinstance(res_par.data, dict) else []
+            res_par, ms_par = self.timed_call(parent_client.get, "/api/parent/portal/", HTTP_HOST="testserver")
+            par_data = getattr(res_par, "data", {})
+            par_children = par_data.get("children", []) if isinstance(par_data, dict) else []
+            par_notifs = par_data.get("notifications", []) if isinstance(par_data, dict) else []
             ok_par = res_par.status_code == 200 and len(par_children) == 1
             self.record("PARENT-APP", "Parent Portal Overview (GET)", ok_par, f"Children={len(par_children)} | Alerts={len(par_notifs)}", ms_par, "" if ok_par else self._format_response_error(res_par))
 
-            res_read, ms_read = self.timed_call(parent_client.post, "/api/parent/notifications/read/", {}, format="json")
+            res_read, ms_read = self.timed_call(parent_client.post, "/api/parent/notifications/read/", {}, format="json", HTTP_HOST="testserver")
             ok_read = res_read.status_code == 200
             self.record("PARENT-APP", "Mark Alerts Read (POST)", ok_read, f"HTTP {res_read.status_code}", ms_read, "" if ok_read else self._format_response_error(res_read))
 
@@ -496,26 +515,27 @@ class BackendVerifier:
             test_lat = float(school.latitude) if (school and school.latitude is not None) else 8.4858
             test_lon = float(school.longitude) if (school and school.longitude is not None) else 124.6567
 
-            res_geo, ms_geo = self.timed_call(self.client.get, "/api/geofence/status/")
+            res_geo, ms_geo = self.timed_call(self.client.get, "/api/geofence/status/", HTTP_HOST="testserver")
             ok_geo = res_geo.status_code == 200
             self.record("GPS-CHECK", "Geofence Status (GET)", ok_geo, f"HTTP {res_geo.status_code} | Center=({test_lat}, {test_lon})", ms_geo, "" if ok_geo else self._format_response_error(res_geo))
 
             today = timezone.localdate()
             month_name = today.strftime("%B")
 
-            res_sf1, ms_sf1 = self.timed_call(self.client.get, f"/api/reports/sf1/?section_id={section.id}")
-            ok_sf1 = res_sf1.status_code == 200 and isinstance(res_sf1.data, dict) and res_sf1.data.get("total_combined") == 1
+            res_sf1, ms_sf1 = self.timed_call(self.client.get, f"/api/reports/sf1/?section_id={section.id}", HTTP_HOST="testserver")
+            sf1_data = getattr(res_sf1, "data", {})
+            ok_sf1 = res_sf1.status_code == 200 and isinstance(sf1_data, dict) and sf1_data.get("total_combined") == 1
             self.record("REPORTS", "DepEd SF1 Register (GET)", ok_sf1, f"HTTP {res_sf1.status_code}", ms_sf1, "" if ok_sf1 else self._format_response_error(res_sf1))
 
-            res_sf2, ms_sf2 = self.timed_call(self.client.get, f"/api/reports/sf2/?section_id={section.id}&month={month_name}&year={today.year}")
+            res_sf2, ms_sf2 = self.timed_call(self.client.get, f"/api/reports/sf2/?section_id={section.id}&month={month_name}&year={today.year}", HTTP_HOST="testserver")
             ok_sf2 = res_sf2.status_code == 200
             self.record("REPORTS", "DepEd SF2 Attendance (GET)", ok_sf2, f"HTTP {res_sf2.status_code}", ms_sf2, "" if ok_sf2 else self._format_response_error(res_sf2))
 
-            res_sf4, ms_sf4 = self.timed_call(self.client.get, f"/api/reports/sf4/?month={month_name}&year={today.year}")
+            res_sf4, ms_sf4 = self.timed_call(self.client.get, f"/api/reports/sf4/?month={month_name}&year={today.year}", HTTP_HOST="testserver")
             ok_sf4 = res_sf4.status_code == 200
             self.record("REPORTS", "DepEd SF4 Summary (GET)", ok_sf4, f"HTTP {res_sf4.status_code}", ms_sf4, "" if ok_sf4 else self._format_response_error(res_sf4))
 
-            res_dtr, ms_dtr = self.timed_call(self.client.get, f"/api/reports/dtr/?month={today.month}&year={today.year}")
+            res_dtr, ms_dtr = self.timed_call(self.client.get, f"/api/reports/dtr/?month={today.month}&year={today.year}", HTTP_HOST="testserver")
             ok_dtr = res_dtr.status_code == 200
             self.record("REPORTS", "Faculty Monthly DTR (GET)", ok_dtr, f"HTTP {res_dtr.status_code}", ms_dtr, "" if ok_dtr else self._format_response_error(res_dtr))
 
@@ -537,7 +557,7 @@ class BackendVerifier:
 
     def write_error_summary(self):
         with open(ERROR_FILE, "w", encoding="utf-8") as f:
-            f.write(f"AttendSure V3 - Error & Failure Log ({datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')})\n")
+            f.write(f"AttendSure - Error & Failure Log ({datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')})\n")
             f.write("=" * 88 + "\n")
             if not self.errors:
                 f.write("ZERO ERRORS: All backend CRUD and functional checks passed.\n")
@@ -551,7 +571,7 @@ def main() -> int:
     sys.stdout = tee
     sys.stderr = tee
 
-    print("AttendSure V3 - Backend CRUD & Functional Verification")
+    print("AttendSure - Backend CRUD & Functional Verification")
     print(f"Run Time: {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')}")
     print("=" * 88)
 

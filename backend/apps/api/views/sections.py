@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Section & Class List Views
+AttendSure - Section & Class List Views
 File: backend/apps/api/views/sections.py
 """
 

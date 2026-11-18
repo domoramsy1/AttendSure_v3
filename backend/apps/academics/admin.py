@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Campus Administration (Printed QR ID & Mobile App Only)
+AttendSure - Campus Administration (Printed QR ID & Mobile App Only)
 File: backend/apps/academics/admin.py
 """
 

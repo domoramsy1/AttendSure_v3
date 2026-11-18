@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Mobile Gate Pass & Clearance Center
+ * AttendSure - Mobile Gate Pass & Clearance Center
  * File: mobile/src/screens/GatePassScreen.tsx
  */
 

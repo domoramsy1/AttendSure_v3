@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Parent Mobile App Portal & Push Notification Views
+AttendSure - Parent Mobile App Portal & Push Notification Views
 File: backend/apps/api/views/parent.py
 """
 

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Academics Models Package Exports
+AttendSure - Academics Models Package Exports
 File: backend/apps/academics/models/__init__.py
 """
 

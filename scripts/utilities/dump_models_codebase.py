@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Academic Models Inspector
+AttendSure - Academic Models Inspector
 File: backend/scripts/dump_models_codebase.py
 """
 
@@ -32,7 +32,7 @@ def export_models_report():
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     with open(OUTPUT_FILE, "w", encoding="utf-8", errors="replace") as out:
-        write_banner(out, f"ATTENDSURE V3 - ACADEMICS MODELS DUMP ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
+        write_banner(out, f"ATTENDSURE  - ACADEMICS MODELS DUMP ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
 
         # Check if models is a folder
         if MODELS_DIR.is_dir():

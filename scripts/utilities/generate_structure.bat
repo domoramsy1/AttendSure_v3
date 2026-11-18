@@ -73,7 +73,7 @@ function Build-StructureTree([string]$currentPath, [string]$prefix, [string]$bas
     }
 }
 
-Write-Host "Scanning AttendSure V3 project structure..." -ForegroundColor Cyan
+Write-Host "Scanning AttendSure project structure..." -ForegroundColor Cyan
 Build-StructureTree $rootDir "" $rootDir $excludeDirs $excludeRegex $stats
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -81,7 +81,7 @@ $writer = [System.IO.StreamWriter]::new($outputFile, $false, $utf8NoBom)
 
 try {
     $header = "================================================================================`n" +
-              "ATTENDSURE V3 - PROJECT FILE & DIRECTORY STRUCTURE`n" +
+              "ATTENDSURE  - PROJECT FILE & DIRECTORY STRUCTURE`n" +
               "Generated : " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "`n" +
               "Root Path : $rootDir`n" +
               "Summary   : $($stats.DirCount) Directories, $($stats.FileCount) Source Files`n" +

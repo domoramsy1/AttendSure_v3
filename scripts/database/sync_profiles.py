@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Profile Photo & Avatar Synchronizer
+AttendSure - Profile Photo & Avatar Synchronizer
 Ensures physical profile avatar image files exist on disk without generating fake data.
 File: D:\\AttendSure_V3\\scripts\\sync_profiles.py
 """

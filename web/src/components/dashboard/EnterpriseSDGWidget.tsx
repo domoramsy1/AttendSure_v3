@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - UN SDG Impact, SARDO Early-Warning & Emergency Campus Roll-Call Widget
+ * AttendSure - UN SDG Impact, SARDO Early-Warning & Emergency Campus Roll-Call Widget (Themed)
  * File: web/src/components/dashboard/EnterpriseSDGWidget.tsx
  */
 
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import apiClient from '../../api/client';
 import { useApiResource } from '../../hooks/useApiResource';
+import { useTheme } from '../../context/ThemeContext';
 
 interface EmergencyStudent {
   student_id: number;
@@ -46,6 +47,7 @@ interface EmergencyRollCallData {
 }
 
 export const EnterpriseSDGWidget: React.FC = () => {
+  const { tokens, brand } = useTheme();
   const { data: sdgData, loading: loadingSdg, reload: reloadSdg } = useApiResource<any>('/enterprise/sdg-impact/', null);
   const { data: sardoData, loading: loadingSardo, reload: reloadSardo } = useApiResource<any>('/enterprise/sardo-early-warning/', null);
 
@@ -125,22 +127,22 @@ export const EnterpriseSDGWidget: React.FC = () => {
   const atRiskStudents = Array.isArray(sardoData?.at_risk_students) ? sardoData.at_risk_students : [];
 
   return (
-    <div style={containerStyle}>
+    <div style={{ ...containerStyle, backgroundColor: tokens.bgSurface, borderColor: tokens.borderSubtle }}>
       {/* Top Action Header */}
       <div style={headerBarStyle}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={badgePillStyle}>
+            <span style={{ ...badgePillStyle, backgroundColor: tokens.primaryLight, color: brand.primary }}>
               <Globe size={13} /> UN SDG &amp; ENTERPRISE IMPACT
             </span>
-            <span style={privacyPillStyle}>
+            <span style={{ ...privacyPillStyle, backgroundColor: tokens.successLight, color: brand.success }}>
               <ShieldCheck size={13} /> RA 10173 &amp; GDPR Compliant • Pure Software & Mobile Push
             </span>
           </div>
-          <h3 style={{ margin: '4px 0 0', fontSize: '1.05rem', fontWeight: 800, color: '#0f172a' }}>
+          <h3 style={{ margin: '4px 0 0', fontSize: '1.05rem', fontWeight: 800, color: tokens.textPrimary }}>
             Sustainable Development Goals, SARDO Early-Warning &amp; Campus Safety
           </h3>
-          <p style={{ margin: 0, fontSize: '0.78rem', color: '#64748b' }}>
+          <p style={{ margin: 0, fontSize: '0.78rem', color: tokens.textSecondary }}>
             Student attendance via USB QR Scanner on Faculty PC/Laptop • Faculty attendance via Mobile Facial Recognition &amp; Campus GPS
           </p>
         </div>
@@ -156,7 +158,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
               padding: '7px 13px',
               borderRadius: 8,
               border: 'none',
-              backgroundColor: '#dc2626',
+              backgroundColor: brand.danger,
               color: '#ffffff',
               fontSize: '0.76rem',
               fontWeight: 800,
@@ -170,7 +172,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
             type="button"
             onClick={handleExportEdFi}
             disabled={exportingEdFi}
-            style={secondaryBtnStyle}
+            style={{ ...secondaryBtnStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderStrong, color: tokens.textPrimary }}
           >
             <Download size={14} /> {exportingEdFi ? 'Exporting...' : 'Export Ed-Fi JSON'}
           </button>
@@ -179,7 +181,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
             type="button"
             onClick={handleRefresh}
             disabled={loading}
-            style={secondaryBtnStyle}
+            style={{ ...secondaryBtnStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderStrong, color: tokens.textPrimary }}
           >
             <RefreshCw size={14} /> {loading ? 'Updating...' : 'Refresh'}
           </button>
@@ -190,8 +192,8 @@ export const EnterpriseSDGWidget: React.FC = () => {
       {rollCallOpen && (
         <div
           style={{
-            backgroundColor: '#fef2f2',
-            border: '2px solid #dc2626',
+            backgroundColor: tokens.bgSurfaceSubtle,
+            border: `2px solid ${brand.danger}`,
             borderRadius: 10,
             padding: 16,
             display: 'flex',
@@ -201,10 +203,10 @@ export const EnterpriseSDGWidget: React.FC = () => {
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <div>
-              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#991b1b', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: brand.danger, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <ShieldAlert size={18} /> SDG 11 • EMERGENCY EVACUATION CAMPUS ROLL-CALL
               </div>
-              <div style={{ fontSize: '0.76rem', color: '#7f1d1d' }}>
+              <div style={{ fontSize: '0.76rem', color: tokens.textSecondary }}>
                 {rollCallData
                   ? `Snapshot as of ${rollCallData.timestamp} • ${rollCallData.total_people_on_campus} People Verified on Campus`
                   : 'Loading live campus headcount...'}
@@ -220,9 +222,9 @@ export const EnterpriseSDGWidget: React.FC = () => {
                 gap: 4,
                 padding: '5px 10px',
                 borderRadius: 6,
-                border: '1px solid #fecaca',
-                backgroundColor: '#ffffff',
-                color: '#991b1b',
+                border: `1px solid ${tokens.borderSubtle}`,
+                backgroundColor: tokens.bgSurface,
+                color: brand.danger,
                 fontWeight: 700,
                 fontSize: '0.75rem',
                 cursor: 'pointer',
@@ -233,29 +235,29 @@ export const EnterpriseSDGWidget: React.FC = () => {
           </div>
 
           {rollCallLoading ? (
-            <div style={{ fontSize: '0.82rem', color: '#7f1d1d', fontWeight: 700 }}>
+            <div style={{ fontSize: '0.82rem', color: tokens.textSecondary, fontWeight: 700 }}>
               Fetching active student and faculty headcount...
             </div>
           ) : rollCallData ? (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-                <div style={{ backgroundColor: '#ffffff', padding: 10, borderRadius: 8, border: '1px solid #fecaca' }}>
-                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b' }}>STUDENTS ON CAMPUS</div>
-                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#0f172a' }}>{rollCallData.students_count}</div>
+                <div style={{ backgroundColor: tokens.bgSurface, padding: 10, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: tokens.textMuted }}>STUDENTS ON CAMPUS</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: tokens.textPrimary }}>{rollCallData.students_count}</div>
                 </div>
-                <div style={{ backgroundColor: '#ffffff', padding: 10, borderRadius: 8, border: '1px solid #fecaca' }}>
-                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#059669' }}>CHECKED SAFE AT ASSEMBLY</div>
-                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#059669' }}>{safeCount}</div>
+                <div style={{ backgroundColor: tokens.bgSurface, padding: 10, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: brand.success }}>CHECKED SAFE AT ASSEMBLY</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: brand.success }}>{safeCount}</div>
                 </div>
-                <div style={{ backgroundColor: '#ffffff', padding: 10, borderRadius: 8, border: '1px solid #fecaca' }}>
-                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#dc2626' }}>UNACCOUNTED FOR</div>
-                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#dc2626' }}>
+                <div style={{ backgroundColor: tokens.bgSurface, padding: 10, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: brand.danger }}>UNACCOUNTED FOR</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: brand.danger }}>
                     {Math.max(0, rollCallData.students_count - safeCount)}
                   </div>
                 </div>
-                <div style={{ backgroundColor: '#ffffff', padding: 10, borderRadius: 8, border: '1px solid #fecaca' }}>
-                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#004b87' }}>FACULTY ON CAMPUS</div>
-                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#004b87' }}>{rollCallData.faculty_count}</div>
+                <div style={{ backgroundColor: tokens.bgSurface, padding: 10, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: brand.primary }}>FACULTY ON CAMPUS</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: brand.primary }}>{rollCallData.faculty_count}</div>
                 </div>
               </div>
 
@@ -267,15 +269,16 @@ export const EnterpriseSDGWidget: React.FC = () => {
                 style={{
                   padding: '8px 12px',
                   borderRadius: 8,
-                  border: '1px solid #fca5a5',
-                  backgroundColor: '#ffffff',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.bgSurface,
+                  color: tokens.textPrimary,
                   fontSize: '0.82rem',
                 }}
               />
 
-              <div style={{ maxHeight: 240, overflowY: 'auto', backgroundColor: '#ffffff', borderRadius: 8, border: '1px solid #fecaca' }}>
+              <div style={{ maxHeight: 240, overflowY: 'auto', backgroundColor: tokens.bgSurface, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
                 {filteredRollCallStudents.length === 0 ? (
-                  <div style={{ padding: 12, fontSize: '0.8rem', color: '#64748b' }}>
+                  <div style={{ padding: 12, fontSize: '0.8rem', color: tokens.textMuted }}>
                     No students currently checked in on campus today.
                   </div>
                 ) : (
@@ -289,8 +292,8 @@ export const EnterpriseSDGWidget: React.FC = () => {
                           alignItems: 'center',
                           justifyContent: 'space-between',
                           padding: '8px 12px',
-                          borderBottom: '1px solid #f1f5f9',
-                          backgroundColor: isSafe ? '#ecfdf5' : '#ffffff',
+                          borderBottom: `1px solid ${tokens.borderSubtle}`,
+                          backgroundColor: isSafe ? tokens.successLight : tokens.bgSurface,
                           cursor: 'pointer',
                           fontSize: '0.8rem',
                         }}
@@ -300,11 +303,11 @@ export const EnterpriseSDGWidget: React.FC = () => {
                             type="checkbox"
                             checked={isSafe}
                             onChange={() => toggleStudentSafe(st.student_id)}
-                            style={{ width: 16, height: 16, accentColor: '#059669' }}
+                            style={{ width: 16, height: 16, accentColor: brand.success }}
                           />
                           <div>
-                            <strong style={{ color: '#0f172a' }}>{st.full_name}</strong>
-                            <span style={{ color: '#64748b', marginLeft: 8 }}>
+                            <strong style={{ color: tokens.textPrimary }}>{st.full_name}</strong>
+                            <span style={{ color: tokens.textSecondary, marginLeft: 8 }}>
                               LRN: {st.lrn} • {st.section}
                             </span>
                           </div>
@@ -313,7 +316,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
                           style={{
                             fontSize: '0.7rem',
                             fontWeight: 800,
-                            color: isSafe ? '#059669' : '#dc2626',
+                            color: isSafe ? brand.success : brand.danger,
                           }}
                         >
                           {isSafe ? 'SAFE' : 'UNACCOUNTED'}
@@ -330,109 +333,109 @@ export const EnterpriseSDGWidget: React.FC = () => {
 
       {/* 4 UN SDG Impact Cards */}
       <div style={cardsGridStyle}>
-        <div style={cardStyle}>
+        <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: '#fee2e2', color: '#b91c1c' }}>
+            <span style={{ ...sdgTagStyle, backgroundColor: tokens.dangerLight, color: brand.danger }}>
               SDG 4 • QUALITY EDUCATION
             </span>
-            <Award size={18} color="#b91c1c" />
+            <Award size={18} color={brand.danger} />
           </div>
-          <div style={metricValueStyle}>
+          <div style={{ ...metricValueStyle, color: tokens.textPrimary }}>
             {loading ? '...' : (sdg4?.verified_classroom_qr_scans ?? 0).toLocaleString()}
           </div>
-          <div style={metricSubStyle}>Verified Classroom USB QR Scans</div>
-          <div style={dividerStyle} />
-          <div style={metaRowStyle}>
+          <div style={{ ...metricSubStyle, color: tokens.textMuted }}>Verified Classroom USB QR Scans</div>
+          <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
+          <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Critical SARDO Risk:</span>
-            <strong style={{ color: '#dc2626' }}>{sardoData?.critical_sardo_count ?? 0} Learners</strong>
+            <strong style={{ color: brand.danger }}>{sardoData?.critical_sardo_count ?? 0} Learners</strong>
           </div>
-          <div style={metaRowStyle}>
+          <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Early-Warning Watch:</span>
-            <strong style={{ color: '#d97706' }}>{sardoData?.early_warning_count ?? 0} Learners</strong>
+            <strong style={{ color: brand.warning }}>{sardoData?.early_warning_count ?? 0} Learners</strong>
           </div>
         </div>
 
-        <div style={cardStyle}>
+        <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: '#e0f2fe', color: '#0369a1' }}>
+            <span style={{ ...sdgTagStyle, backgroundColor: tokens.infoLight, color: brand.secondary }}>
               SDG 5 &amp; 10 • EQUALITY &amp; INCLUSION
             </span>
-            <Users size={18} color="#0369a1" />
+            <Users size={18} color={brand.secondary} />
           </div>
-          <div style={metricValueStyle}>
+          <div style={{ ...metricValueStyle, color: tokens.textPrimary }}>
             {loading
               ? '...'
               : `${sdg5?.male_attendance_rate_today ?? 0}% M / ${sdg5?.female_attendance_rate_today ?? 0}% F`}
           </div>
-          <div style={metricSubStyle}>Live Gender Attendance Parity Today</div>
-          <div style={dividerStyle} />
-          <div style={metaRowStyle}>
+          <div style={{ ...metricSubStyle, color: tokens.textMuted }}>Live Gender Attendance Parity Today</div>
+          <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
+          <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Enrolled Male / Female:</span>
-            <strong>
+            <strong style={{ color: tokens.textPrimary }}>
               {sdg5?.male_learners ?? 0} M • {sdg5?.female_learners ?? 0} F
             </strong>
           </div>
-          <div style={metaRowStyle}>
+          <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>4Ps / CCT Beneficiaries:</span>
-            <strong style={{ color: '#0284c7' }}>{sdg5?.cct_4ps_beneficiaries_monitored ?? 0} Monitored</strong>
+            <strong style={{ color: brand.secondary }}>{sdg5?.cct_4ps_beneficiaries_monitored ?? 0} Monitored</strong>
           </div>
         </div>
 
-        <div style={cardStyle}>
+        <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: '#dcfce7', color: '#15803d' }}>
+            <span style={{ ...sdgTagStyle, backgroundColor: tokens.successLight, color: brand.success }}>
               SDG 12 &amp; 13 • CLIMATE &amp; ROI
             </span>
-            <Leaf size={18} color="#15803d" />
+            <Leaf size={18} color={brand.success} />
           </div>
-          <div style={{ ...metricValueStyle, color: '#059669' }}>
+          <div style={{ ...metricValueStyle, color: brand.success }}>
             {loading ? '...' : `${sdg12?.estimated_co2_reduced_kg ?? 180} kg CO2e`}
           </div>
-          <div style={metricSubStyle}>Carbon Reduced &amp; Zero Gate Hardware E-Waste</div>
-          <div style={dividerStyle} />
-          <div style={metaRowStyle}>
+          <div style={{ ...metricSubStyle, color: tokens.textMuted }}>Carbon Reduced &amp; Zero Gate Hardware E-Waste</div>
+          <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
+          <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Paper Sheets Saved:</span>
-            <strong>{(sdg12?.paper_sheets_saved ?? 0).toLocaleString()} Sheets</strong>
+            <strong style={{ color: tokens.textPrimary }}>{(sdg12?.paper_sheets_saved ?? 0).toLocaleString()} Sheets</strong>
           </div>
-          <div style={metaRowStyle}>
+          <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Est. Annual Savings:</span>
-            <strong style={{ color: '#059669' }}>
+            <strong style={{ color: brand.success }}>
               PHP {(sdg12?.estimated_annual_savings_php ?? 145000).toLocaleString()}
             </strong>
           </div>
         </div>
 
-        <div style={cardStyle}>
+        <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: '#ede9fe', color: '#6d28d9' }}>
+            <span style={{ ...sdgTagStyle, backgroundColor: 'rgba(124, 58, 237, 0.12)', color: '#7c3aed' }}>
               SDG 16 • ACCOUNTABLE SCHOOLS
             </span>
-            <Smartphone size={18} color="#6d28d9" />
+            <Smartphone size={18} color="#7c3aed" />
           </div>
-          <div style={metricValueStyle}>
+          <div style={{ ...metricValueStyle, color: tokens.textPrimary }}>
             {loading
               ? '...'
               : `${sdg16?.faculty_face_gps_verified_today ?? 0} / ${sdg16?.total_active_faculty ?? 0}`}
           </div>
-          <div style={metricSubStyle}>Faculty Verified via Mobile Face &amp; GPS Today</div>
-          <div style={dividerStyle} />
-          <div style={metaRowStyle}>
+          <div style={{ ...metricSubStyle, color: tokens.textMuted }}>Faculty Verified via Mobile Face &amp; GPS Today</div>
+          <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
+          <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Parent Push Alerts:</span>
-            <strong>{(sdg12?.mobile_push_alerts_delivered ?? 0).toLocaleString()} Delivered</strong>
+            <strong style={{ color: tokens.textPrimary }}>{(sdg12?.mobile_push_alerts_delivered ?? 0).toLocaleString()} Delivered</strong>
           </div>
-          <div style={metaRowStyle}>
+          <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Audit Logs (Month):</span>
-            <strong>{(sdg16?.tamper_evident_audit_logs_this_month ?? 0).toLocaleString()} Records</strong>
+            <strong style={{ color: tokens.textPrimary }}>{(sdg16?.tamper_evident_audit_logs_this_month ?? 0).toLocaleString()} Records</strong>
           </div>
         </div>
       </div>
 
       {/* SARDO Early-Warning Section */}
-      <div style={sardoBoxStyle}>
+      <div style={{ ...sardoBoxStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <AlertTriangle size={17} color={atRiskStudents.length > 0 ? '#dc2626' : '#059669'} />
-            <span style={{ fontSize: '0.88rem', fontWeight: 800, color: '#0f172a' }}>
+            <AlertTriangle size={17} color={atRiskStudents.length > 0 ? brand.danger : brand.success} />
+            <span style={{ fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
               SARDO Dropout Early-Warning Class List (Last 30 Days: {atRiskStudents.length} Flagged)
             </span>
           </div>
@@ -440,7 +443,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
             <button
               type="button"
               onClick={() => setShowAtRiskList(!showAtRiskList)}
-              style={toggleBtnStyle}
+              style={{ ...toggleBtnStyle, backgroundColor: tokens.bgSurface, borderColor: tokens.borderStrong, color: tokens.textPrimary }}
             >
               {showAtRiskList ? 'Hide Class List' : 'Show Class List'}
             </button>
@@ -448,8 +451,8 @@ export const EnterpriseSDGWidget: React.FC = () => {
         </div>
 
         {atRiskStudents.length === 0 ? (
-          <div style={healthyBannerStyle}>
-            <CheckCircle2 size={16} color="#059669" />
+          <div style={{ ...healthyBannerStyle, backgroundColor: tokens.successLight, color: brand.success }}>
+            <CheckCircle2 size={16} color={brand.success} />
             <span>
               Zero students are currently at risk of dropping out over the last 30 days. All class lists have healthy attendance.
             </span>
@@ -457,34 +460,34 @@ export const EnterpriseSDGWidget: React.FC = () => {
         ) : (
           showAtRiskList && (
             <div style={{ overflowX: 'auto', marginTop: 10 }}>
-              <table style={tableStyle}>
+              <table style={{ ...tableStyle, backgroundColor: tokens.bgSurface }}>
                 <thead>
-                  <tr style={{ backgroundColor: '#f1f5f9', textAlign: 'left' }}>
-                    <th style={thStyle}>Learner Name &amp; LRN</th>
-                    <th style={thStyle}>Grade &amp; Section</th>
-                    <th style={thStyle}>30-Day Attendance</th>
-                    <th style={thStyle}>Risk Level</th>
-                    <th style={thStyle}>Recommended Action</th>
+                  <tr style={{ backgroundColor: tokens.bgSurfaceSubtle, textAlign: 'left' }}>
+                    <th style={{ ...thStyle, color: tokens.textMuted }}>Learner Name &amp; LRN</th>
+                    <th style={{ ...thStyle, color: tokens.textMuted }}>Grade &amp; Section</th>
+                    <th style={{ ...thStyle, color: tokens.textMuted }}>30-Day Attendance</th>
+                    <th style={{ ...thStyle, color: tokens.textMuted }}>Risk Level</th>
+                    <th style={{ ...thStyle, color: tokens.textMuted }}>Recommended Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {atRiskStudents.slice(0, 10).map((st: any) => {
                     const isCritical = st.risk_level === 'CRITICAL_SARDO';
                     return (
-                      <tr key={st.student_id} style={{ borderTop: '1px solid #e2e8f0' }}>
+                      <tr key={st.student_id} style={{ borderTop: `1px solid ${tokens.borderSubtle}` }}>
                         <td style={tdStyle}>
-                          <div style={{ fontWeight: 800, color: '#0f172a' }}>{st.full_name}</div>
-                          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                          <div style={{ fontWeight: 800, color: tokens.textPrimary }}>{st.full_name}</div>
+                          <div style={{ fontSize: '0.7rem', color: tokens.textMuted }}>
                             LRN: {st.lrn} {st.is_4ps_beneficiary ? '• 4Ps Beneficiary' : ''}
                           </div>
                         </td>
-                        <td style={tdStyle}>{st.section}</td>
+                        <td style={{ ...tdStyle, color: tokens.textPrimary }}>{st.section}</td>
                         <td style={tdStyle}>
-                          <span style={{ color: '#dc2626', fontWeight: 700 }}>{st.absent_days_30d} Absent</span>
+                          <span style={{ color: brand.danger, fontWeight: 700 }}>{st.absent_days_30d} Absent</span>
                           {' • '}
-                          <span style={{ color: '#d97706', fontWeight: 700 }}>{st.cutting_days_30d} Cutting</span>
+                          <span style={{ color: brand.warning, fontWeight: 700 }}>{st.cutting_days_30d} Cutting</span>
                           {' • '}
-                          <span style={{ color: '#64748b' }}>{st.late_days_30d} Late</span>
+                          <span style={{ color: tokens.textMuted }}>{st.late_days_30d} Late</span>
                         </td>
                         <td style={tdStyle}>
                           <span
@@ -493,15 +496,15 @@ export const EnterpriseSDGWidget: React.FC = () => {
                               borderRadius: 10,
                               fontSize: '0.68rem',
                               fontWeight: 800,
-                              backgroundColor: isCritical ? '#fef2f2' : '#fffbeb',
-                              color: isCritical ? '#dc2626' : '#d97706',
-                              border: `1px solid ${isCritical ? '#fecaca' : '#fde68a'}`,
+                              backgroundColor: isCritical ? tokens.dangerLight : tokens.warningLight,
+                              color: isCritical ? brand.danger : brand.warning,
+                              border: `1px solid ${isCritical ? brand.danger : brand.warning}`,
                             }}
                           >
                             {isCritical ? 'CRITICAL SARDO' : 'EARLY WARNING'} ({st.risk_score}%)
                           </span>
                         </td>
-                        <td style={{ ...tdStyle, fontSize: '0.74rem', color: '#334155' }}>
+                        <td style={{ ...tdStyle, fontSize: '0.74rem', color: tokens.textSecondary }}>
                           {st.recommended_intervention}
                         </td>
                       </tr>
@@ -518,9 +521,9 @@ export const EnterpriseSDGWidget: React.FC = () => {
 };
 
 const containerStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
   borderRadius: 12,
-  border: '1px solid #e2e8f0',
+  borderWidth: 1,
+  borderStyle: 'solid',
   padding: 18,
   display: 'flex',
   flexDirection: 'column',
@@ -542,8 +545,6 @@ const badgePillStyle: React.CSSProperties = {
   gap: 5,
   padding: '3px 10px',
   borderRadius: 12,
-  backgroundColor: '#eff6ff',
-  color: '#004b87',
   fontSize: '0.68rem',
   fontWeight: 800,
 };
@@ -554,8 +555,6 @@ const privacyPillStyle: React.CSSProperties = {
   gap: 5,
   padding: '3px 10px',
   borderRadius: 12,
-  backgroundColor: '#ecfdf5',
-  color: '#047857',
   fontSize: '0.68rem',
   fontWeight: 700,
 };
@@ -566,9 +565,8 @@ const secondaryBtnStyle: React.CSSProperties = {
   gap: 6,
   padding: '7px 12px',
   borderRadius: 8,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#f8fafc',
-  color: '#0f172a',
+  borderWidth: 1,
+  borderStyle: 'solid',
   fontSize: '0.76rem',
   fontWeight: 700,
   cursor: 'pointer',
@@ -581,9 +579,9 @@ const cardsGridStyle: React.CSSProperties = {
 };
 
 const cardStyle: React.CSSProperties = {
-  backgroundColor: '#f8fafc',
   borderRadius: 10,
-  border: '1px solid #e2e8f0',
+  borderWidth: 1,
+  borderStyle: 'solid',
   padding: 14,
   display: 'flex',
   flexDirection: 'column',
@@ -601,19 +599,16 @@ const sdgTagStyle: React.CSSProperties = {
 const metricValueStyle: React.CSSProperties = {
   fontSize: '1.35rem',
   fontWeight: 800,
-  color: '#0f172a',
   marginTop: 4,
 };
 
 const metricSubStyle: React.CSSProperties = {
   fontSize: '0.72rem',
-  color: '#64748b',
   fontWeight: 600,
 };
 
 const dividerStyle: React.CSSProperties = {
   height: 1,
-  backgroundColor: '#e2e8f0',
   margin: '4px 0',
 };
 
@@ -621,13 +616,12 @@ const metaRowStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
   fontSize: '0.73rem',
-  color: '#475569',
 };
 
 const sardoBoxStyle: React.CSSProperties = {
-  backgroundColor: '#f8fafc',
   borderRadius: 10,
-  border: '1px solid #e2e8f0',
+  borderWidth: 1,
+  borderStyle: 'solid',
   padding: 14,
 };
 
@@ -638,8 +632,6 @@ const healthyBannerStyle: React.CSSProperties = {
   marginTop: 8,
   padding: '8px 12px',
   borderRadius: 8,
-  backgroundColor: '#ecfdf5',
-  color: '#065f46',
   fontSize: '0.78rem',
   fontWeight: 700,
 };
@@ -647,8 +639,8 @@ const healthyBannerStyle: React.CSSProperties = {
 const toggleBtnStyle: React.CSSProperties = {
   padding: '4px 10px',
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
+  borderWidth: 1,
+  borderStyle: 'solid',
   fontSize: '0.72rem',
   fontWeight: 700,
   cursor: 'pointer',
@@ -658,7 +650,6 @@ const tableStyle: React.CSSProperties = {
   width: '100%',
   borderCollapse: 'collapse',
   fontSize: '0.78rem',
-  backgroundColor: '#ffffff',
   borderRadius: 8,
   overflow: 'hidden',
 };
@@ -667,7 +658,6 @@ const thStyle: React.CSSProperties = {
   padding: '8px 10px',
   fontSize: '0.7rem',
   fontWeight: 800,
-  color: '#475569',
   textTransform: 'uppercase',
 };
 

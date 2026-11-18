@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Anti-Clone HMAC-SHA256 QR ID Security Service
+AttendSure - Anti-Clone HMAC-SHA256 QR ID Security Service
 File: backend/apps/api/services/qr_security.py
 """
 

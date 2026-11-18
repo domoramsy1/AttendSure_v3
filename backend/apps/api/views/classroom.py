@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Classroom Printed QR ID Scanner & Loafing Detection Engine
+AttendSure - Classroom Printed QR ID Scanner & Loafing Detection Engine
 File: backend/apps/api/views/classroom.py
 """
 

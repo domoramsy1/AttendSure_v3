@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Backend Directory Tree Viewer
+AttendSure - Backend Directory Tree Viewer
 File: backend/show_tree.py
 
 Displays a clean visual tree of your backend files while skipping

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Color Terminal Request Logger
+AttendSure - Color Terminal Request Logger
 File: backend/apps/api/color_logger.py
 """
 

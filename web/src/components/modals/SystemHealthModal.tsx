@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Plain English System Health & Auto-Repair Center
+ * AttendSure - Plain English System Health & Auto-Repair Center (Themed)
  * Designed for School Principals, Registrars, and Administrative Staff.
  * File: web/src/components/modals/SystemHealthModal.tsx
  */
@@ -80,7 +80,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
         });
       }
 
-      // 2. Check push queue and push_engine
+      // 2. Check push queue and push engine
       if (pushRes?.data) {
         const pending = Number(pushRes.data.pending_total || pushRes.data.pending_queue || 0);
         const failed = Number(pushRes.data.failed_today || pushRes.data.failed_count || 0);
@@ -90,14 +90,14 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
             id: 'push-stuck',
             category: 'push',
             title: `${pending} text message(s) waiting to be sent to parents`,
-            whatHappened: 'The GSM text push_engine connected to the server computer has paused delivery.',
+            whatHappened: 'The GSM text push engine connected to the server computer has paused delivery.',
             whatItMeans: 'Parents have not yet received attendance notifications on their phones.',
             solutionType: 'AUTO_BUTTON',
-            actionButtonLabel: 'Restart push Sending Queue',
+            actionButtonLabel: 'Restart Push Sending Queue',
             actionEndpoint: '/system/status/',
             physicalSteps: [
-              'Check if the USB Text push_engine dongle is firmly plugged into the computer USB port.',
-              'Ensure the school SIM card inside the push_engine has regular airtime load or an active push promo.',
+              'Check if the USB Text push engine dongle is firmly plugged into the computer USB port.',
+              'Ensure the school SIM card inside the push engine has regular airtime load or an active push promo.',
             ],
             severity: pending > 100 ? 'CRITICAL' : 'WARNING',
           });
@@ -118,8 +118,8 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
             id: 'station-offline',
             category: 'GATE',
             title: `${offlineStations.length} Software Station(s) offline`,
-            whatHappened: 'The main gate scanner entry_point has lost connection to the server.',
-            whatItMeans: 'Student and teacher ID card taps at this gate will not register on screen.',
+            whatHappened: 'The main gate scanner entry has lost connection to the server.',
+            whatItMeans: 'Student and faculty ID card taps at this gate will not register on screen.',
             solutionType: 'AUTO_BUTTON',
             actionButtonLabel: 'Wake Up USB QR & Campus GPS',
             actionEndpoint: '/system/status/',
@@ -146,8 +146,8 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
             id: 'users-locked',
             category: 'ACCOUNTS',
             title: `${lockedUsers.length} staff account(s) temporarily locked`,
-            whatHappened: 'Teachers entered the wrong password multiple times.',
-            whatItMeans: 'These teachers cannot sign in to check classroom student attendance.',
+            whatHappened: 'Faculty entered the wrong password multiple times.',
+            whatItMeans: 'These faculty cannot sign in to check classroom student attendance.',
             solutionType: 'AUTO_BUTTON',
             actionButtonLabel: 'Unlock All Staff Accounts',
             actionEndpoint: '/core/maintenance/flush-cache/',
@@ -187,7 +187,6 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
     try {
       await apiClient.post(issue.actionEndpoint);
       setFixSuccessMessage(`Repaired successfully! "${issue.title}" has been resolved.`);
-      // Re-scan after 1.5 seconds
       setTimeout(() => {
         runDiagnostics();
       }, 1500);
@@ -220,10 +219,10 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
         style={{
           width: '100%',
           maxWidth: 680,
-          backgroundColor: '#FFFFFF',
+          backgroundColor: tokens.bgSurface,
           borderRadius: 20,
           border: `1px solid ${tokens.borderSubtle}`,
-          boxShadow: '0 20px 45px -10px rgba(15, 23, 42, 0.15)',
+          boxShadow: tokens.cardShadow,
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
@@ -239,7 +238,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            backgroundColor: '#FFFFFF',
+            backgroundColor: tokens.bgSurface,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -337,14 +336,14 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                 gap: 8,
                 padding: '12px 16px',
                 borderRadius: 10,
-                backgroundColor: '#ECFDF5',
-                border: '1px solid #A7F3D0',
-                color: '#065F46',
+                backgroundColor: tokens.successLight,
+                border: `1px solid ${brand.success}`,
+                color: brand.success,
                 fontSize: '0.80rem',
                 fontWeight: 700,
               }}
             >
-              <CheckCircle2 size={16} color="#059669" />
+              <CheckCircle2 size={16} color={brand.success} />
               <span>{fixSuccessMessage}</span>
             </div>
           )}
@@ -354,7 +353,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
               style={{
                 padding: '48px 24px',
                 textAlign: 'center',
-                backgroundColor: '#FFFFFF',
+                backgroundColor: tokens.bgSurface,
                 borderRadius: 14,
                 border: `1px solid ${tokens.borderSubtle}`,
               }}
@@ -369,7 +368,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                 Checking School Systems...
               </div>
               <p style={{ margin: '4px 0 0 0', fontSize: '0.76rem', color: tokens.textMuted }}>
-                Verifying gate scanner hardware, parent push push_engine, and student records.
+                Verifying gate scanner hardware, parent push engine, and student records.
               </p>
             </div>
           ) : issues.length === 0 ? (
@@ -378,7 +377,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
               style={{
                 padding: '36px 24px',
                 textAlign: 'center',
-                backgroundColor: '#FFFFFF',
+                backgroundColor: tokens.bgSurface,
                 borderRadius: 16,
                 border: `1px solid ${tokens.borderSubtle}`,
                 boxShadow: tokens.cardShadow,
@@ -389,15 +388,15 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   width: 56,
                   height: 56,
                   borderRadius: '50%',
-                  backgroundColor: '#ECFDF5',
-                  border: '1px solid #A7F3D0',
+                  backgroundColor: tokens.successLight,
+                  border: `1px solid ${brand.success}`,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   margin: '0 auto 14px auto',
                 }}
               >
-                <ShieldCheck size={30} color="#059669" />
+                <ShieldCheck size={30} color={brand.success} />
               </div>
 
               <h3
@@ -405,7 +404,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   margin: '0 0 4px 0',
                   fontSize: '1.15rem',
                   fontWeight: 800,
-                  color: '#065F46',
+                  color: brand.success,
                 }}
               >
                 All Systems Are Running Smoothly
@@ -421,7 +420,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   lineHeight: 1.5,
                 }}
               >
-                Gate scanners are recording arrival taps, the parent push push_engine is ready, and the school database is safely saving records.
+                Gate scanners are recording arrival taps, the parent push engine is ready, and the school database is safely saving records.
               </p>
 
               <div
@@ -433,37 +432,37 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   textAlign: 'left',
                 }}
               >
-                <div style={healthyItemBox}>
-                  <Radio size={14} color="#059669" />
+                <div style={{ ...healthyItemBox, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
+                  <Radio size={14} color={brand.success} />
                   <div>
                     <div style={{ fontWeight: 800, fontSize: '0.74rem', color: tokens.textPrimary }}>
                       Gate Terminals
                     </div>
-                    <div style={{ fontSize: '0.66rem', color: '#059669', fontWeight: 700 }}>
+                    <div style={{ fontSize: '0.66rem', color: brand.success, fontWeight: 700 }}>
                       Connected &bull; Online
                     </div>
                   </div>
                 </div>
 
-                <div style={healthyItemBox}>
-                  <MessageSquare size={14} color="#059669" />
+                <div style={{ ...healthyItemBox, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
+                  <MessageSquare size={14} color={brand.success} />
                   <div>
                     <div style={{ fontWeight: 800, fontSize: '0.74rem', color: tokens.textPrimary }}>
-                      Parent push
+                      Parent Push
                     </div>
-                    <div style={{ fontSize: '0.66rem', color: '#059669', fontWeight: 700 }}>
+                    <div style={{ fontSize: '0.66rem', color: brand.success, fontWeight: 700 }}>
                       Ready to Send
                     </div>
                   </div>
                 </div>
 
-                <div style={healthyItemBox}>
-                  <Database size={14} color="#059669" />
+                <div style={{ ...healthyItemBox, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
+                  <Database size={14} color={brand.success} />
                   <div>
                     <div style={{ fontWeight: 800, fontSize: '0.74rem', color: tokens.textPrimary }}>
                       Database
                     </div>
-                    <div style={{ fontSize: '0.66rem', color: '#059669', fontWeight: 700 }}>
+                    <div style={{ fontSize: '0.66rem', color: brand.success, fontWeight: 700 }}>
                       Healthy &bull; Active
                     </div>
                   </div>
@@ -479,15 +478,15 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   alignItems: 'center',
                   gap: 8,
                   padding: '10px 14px',
-                  backgroundColor: '#FFFBEB',
+                  backgroundColor: tokens.warningLight,
                   borderRadius: 10,
-                  border: '1px solid #FDE68A',
-                  color: '#92400E',
+                  border: `1px solid ${brand.warning}`,
+                  color: brand.warning,
                   fontSize: '0.78rem',
                   fontWeight: 700,
                 }}
               >
-                <AlertTriangle size={16} color="#D97706" />
+                <AlertTriangle size={16} color={brand.warning} />
                 <span>
                   {issues.length} item(s) need your attention. Click the blue button on any item to fix it automatically.
                 </span>
@@ -497,9 +496,9 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                 <div
                   key={issue.id}
                   style={{
-                    backgroundColor: '#FFFFFF',
+                    backgroundColor: tokens.bgSurface,
                     borderRadius: 14,
-                    border: `1px solid ${issue.severity === 'CRITICAL' ? '#FECACA' : tokens.borderSubtle}`,
+                    border: `1px solid ${issue.severity === 'CRITICAL' ? brand.danger : tokens.borderSubtle}`,
                     boxShadow: tokens.cardShadow,
                     padding: '18px 20px',
                     display: 'flex',
@@ -514,7 +513,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                           width: 36,
                           height: 36,
                           borderRadius: 10,
-                          backgroundColor: issue.severity === 'CRITICAL' ? '#FEF2F2' : '#FFFBEB',
+                          backgroundColor: issue.severity === 'CRITICAL' ? tokens.dangerLight : tokens.warningLight,
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -522,10 +521,10 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                           marginTop: 2,
                         }}
                       >
-                        {issue.category === 'push' && <MessageSquare size={18} color="#D97706" />}
-                        {issue.category === 'GATE' && <Radio size={18} color="#DC2626" />}
-                        {issue.category === 'DATABASE' && <Database size={18} color="#DC2626" />}
-                        {issue.category === 'ACCOUNTS' && <Unlock size={18} color="#D97706" />}
+                        {issue.category === 'push' && <MessageSquare size={18} color={brand.warning} />}
+                        {issue.category === 'GATE' && <Radio size={18} color={brand.danger} />}
+                        {issue.category === 'DATABASE' && <Database size={18} color={brand.danger} />}
+                        {issue.category === 'ACCOUNTS' && <Unlock size={18} color={brand.warning} />}
                       </div>
 
                       <div>
@@ -536,8 +535,8 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                               fontWeight: 800,
                               padding: '2px 6px',
                               borderRadius: 4,
-                              backgroundColor: issue.severity === 'CRITICAL' ? '#FEE2E2' : '#FEF3C7',
-                              color: issue.severity === 'CRITICAL' ? '#991B1B' : '#92400E',
+                              backgroundColor: issue.severity === 'CRITICAL' ? tokens.dangerLight : tokens.warningLight,
+                              color: issue.severity === 'CRITICAL' ? brand.danger : brand.warning,
                             }}
                           >
                             {issue.severity === 'CRITICAL' ? 'NEEDS ATTENTION' : 'NOTICE'}
@@ -628,7 +627,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                     </div>
                   </div>
 
-                  {/* Physical Checklist (if cables are unplugged) */}
+                  {/* Physical Checklist */}
                   {issue.physicalSteps && (
                     <div style={{ marginTop: 2 }}>
                       <span style={{ fontSize: '0.70rem', fontWeight: 700, color: tokens.textMuted }}>
@@ -657,7 +656,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            backgroundColor: '#FFFFFF',
+            backgroundColor: tokens.bgSurface,
           }}
         >
           <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>
@@ -671,7 +670,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
               padding: '7px 20px',
               borderRadius: 8,
               border: `1px solid ${tokens.borderStrong}`,
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.bgSurface,
               color: tokens.textPrimary,
               fontSize: '0.80rem',
               fontWeight: 700,
@@ -692,8 +691,8 @@ const healthyItemBox: React.CSSProperties = {
   gap: 8,
   padding: '8px 12px',
   borderRadius: 8,
-  backgroundColor: '#F8FAFC',
-  border: '1px solid #E2E8F0',
+  borderWidth: 1,
+  borderStyle: 'solid',
 };
 
 export default SystemHealthModal;

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Shared Choice Constants
+AttendSure - Shared Choice Constants
 File: backend/apps/academics/models/base.py
 """
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { TechBlazerLogoAsset } from './BrandAssets';
 
 interface TechBlazerSignatureProps {
   size?: number;
@@ -35,15 +36,7 @@ export const TechBlazerSignature: React.FC<TechBlazerSignatureProps> = ({
         from
       </span>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <img
-          src="/techblazer.svg"
-          alt="TECHBLAZER"
-          style={{
-            width: `${size}px`,
-            height: `${size}px`,
-            objectFit: 'contain',
-          }}
-        />
+        <TechBlazerLogoAsset size={size} alt="TECHBLAZER" />
         <span
           style={{
             fontFamily: 'Plus Jakarta Sans, sans-serif',

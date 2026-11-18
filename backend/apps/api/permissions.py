@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Reusable Cybersecurity & Permission Classes
+AttendSure - Reusable Cybersecurity & Permission Classes
 File: backend/apps/api/permissions.py
 """
 

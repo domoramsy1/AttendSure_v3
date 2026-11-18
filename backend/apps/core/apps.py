@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Core Security & Licensing App Configuration
+AttendSure - Core Security & Licensing App Configuration
 File: backend/apps/core/apps.py
 """
 

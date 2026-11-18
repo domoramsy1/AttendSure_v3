@@ -1,123 +1,210 @@
 @echo off
-setlocal
-cd /d "%~dp0"
-set "BAT_FILE=%~f0"
+setlocal DisableDelayedExpansion
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$f=$false; $s=(Get-Content -LiteralPath $env:BAT_FILE | Where-Object { if ($_ -eq '#PS_PAYLOAD') { $f=$true; $false } else { $f } }) -join [Environment]::NewLine; Invoke-Expression $s"
+title AttendSure - Full Codebase and Secret Exporter
+echo ================================================================================
+echo         AttendSure - Exporting File Structure, Secret Files and Codebase
+echo ================================================================================
+echo.
 
+set "BATCH_DIR=%~dp0"
+set "BATCH_FILE=%~f0"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$lines = [System.IO.File]::ReadAllLines($env:BATCH_FILE, [System.Text.Encoding]::UTF8); $idx = [Array]::IndexOf($lines, '# === POWERSHELL_LOGIC_START ==='); $code = ($lines[($idx + 1)..($lines.Length - 1)] -join \"`n\"); Invoke-Expression $code"
+
+echo.
 pause
-exit /b %errorlevel%
+exit /b 0
 
-#PS_PAYLOAD
-$rootDir = Split-Path -Parent $env:BAT_FILE
-$outputFile = Join-Path $rootDir "all_source_codes.txt"
+# === POWERSHELL_LOGIC_START ===
+$ErrorActionPreference = "Stop"
 
-# 1. Allowed file extensions
-$validExtensions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-@(".py", ".ts", ".tsx", ".js", ".jsx", ".html", ".css", ".json", ".ps1", ".sql", ".bat") | ForEach-Object { [void]$validExtensions.Add($_) }
+$scriptPath = $env:BATCH_DIR.TrimEnd('\', '/')
+$folderName = Split-Path $scriptPath -Leaf
 
-# 2. Excluded folders: only modules, scripts, and libraries (plus build/cache folders)
-$excludeDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+if ($folderName -ieq 'utilities') {
+    $root = (Resolve-Path (Join-Path $scriptPath '..\..')).Path
+} elseif ($folderName -ieq 'scripts') {
+    $root = (Resolve-Path (Join-Path $scriptPath '..')).Path
+} else {
+    $root = $scriptPath
+}
+
+$outFile = Join-Path $scriptPath 'all_codes_export.txt'
+if (Test-Path -LiteralPath $outFile) {
+    Write-Host "Removing previous export file..." -ForegroundColor Yellow
+    Remove-Item -LiteralPath $outFile -Force
+}
+
+$skipDirs = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 @(
-    "scripts",
-    "node_modules",
-    "venv",
-    "env",
-    ".venv",
-    "Lib",
-    "site-packages",
-    "vendor",
-    "libs",
-    "__pycache__",
-    ".git",
-    ".expo",
-    ".vscode",
-    "dist",
-    "build",
-    "media",
-    "assets",
-    "coverage",
-    ".cache"
-) | ForEach-Object { [void]$excludeDirs.Add($_) }
+    '.git', '.github', '.idea',
+    'node_modules', '.expo', '.next', 'dist', 'build', 'coverage',
+    'venv', '.venv', 'env', '__pycache__', '.pytest_cache', '.mypy_cache', 'site-packages',
+    'media', 'staticfiles', 'results', '_backup_monoliths'
+) | ForEach-Object { [void]$skipDirs.Add($_) }
 
-# 3. Excluded files: package-lock.json, lockfiles, this exporter, and sensitive secrets/DBs
-$excludeFileRegex = '^(all_source_codes\.txt|project_files\.txt|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|export_all_codes\.(bat|py)|\.env.*|.*\.sqlite3|.*\.db|.*\.log|.*\.keystore|.*\.jks|.*\.pem|.*\.key|.*\.pfx|google-services\.json|GoogleService-Info\.plist)$'
-$maxSizeBytes = 2 * 1024 * 1024
+$skipFiles = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+@(
+    'all_codes_export.txt', 'backend_code_export.txt', 'project_files.txt',
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock'
+) | ForEach-Object { [void]$skipFiles.Add($_) }
 
-function Collect-SourceFiles([string]$currentDir, [System.Collections.Generic.List[string]]$results) {
-    try {
-        foreach ($subDir in [System.IO.Directory]::EnumerateDirectories($currentDir)) {
-            $dirName = [System.IO.Path]::GetFileName($subDir)
-            if (-not $excludeDirs.Contains($dirName)) {
-                Collect-SourceFiles $subDir $results
-            }
+$allowedExts = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+@(
+    '.py', '.ts', '.tsx', '.js', '.jsx', '.json', '.html', '.css', '.sql',
+    '.env', '.bat', '.cmd', '.ps1', '.sh', '.md', '.yml', '.yaml',
+    '.toml', '.ini', '.conf', '.cfg', '.pem', '.key', '.crt', '.txt'
+) | ForEach-Object { [void]$allowedExts.Add($_) }
+
+$collectedFiles = New-Object 'System.Collections.Generic.List[System.IO.FileInfo]'
+$visitedDirs = New-Object 'System.Collections.Generic.List[string]'
+
+function Scan-Directory([string]$currentDir) {
+    $dirInfo = New-Object System.IO.DirectoryInfo($currentDir)
+
+    foreach ($file in ($dirInfo.GetFiles() | Sort-Object Name)) {
+        if ($skipFiles.Contains($file.Name)) { continue }
+
+        $isSecretOrEnv = (
+            $file.Name.StartsWith('.env', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $file.Name -match '(?i)(secret|credential|firebase|google-services|\.env)'
+        )
+
+        if ($isSecretOrEnv -or $allowedExts.Contains($file.Extension)) {
+            $collectedFiles.Add($file)
         }
-        foreach ($filePath in [System.IO.Directory]::EnumerateFiles($currentDir)) {
-            $fileName = [System.IO.Path]::GetFileName($filePath)
-            $ext = [System.IO.Path]::GetExtension($filePath)
-            if ($validExtensions.Contains($ext) -and ($fileName -notmatch $excludeFileRegex)) {
-                try {
-                    $fi = [System.IO.FileInfo]::new($filePath)
-                    if ($fi.Length -le $maxSizeBytes) {
-                        $results.Add($filePath)
-                    }
-                } catch {}
-            }
-        }
-    } catch {}
+    }
+
+    foreach ($subDir in ($dirInfo.GetDirectories() | Sort-Object Name)) {
+        if ($skipDirs.Contains($subDir.Name)) { continue }
+        $visitedDirs.Add($subDir.FullName)
+        Scan-Directory $subDir.FullName
+    }
 }
 
-Write-Host "Scanning repository for source code files (excluding modules, scripts, libraries & package-lock.json)..." -ForegroundColor Cyan
-$collectedFiles = [System.Collections.Generic.List[string]]::new()
-Collect-SourceFiles $rootDir $collectedFiles
-$collectedFiles.Sort([System.StringComparer]::OrdinalIgnoreCase)
+Write-Host "Scanning project folder (including secret and .env files): $root" -ForegroundColor Cyan
+Scan-Directory $root
 
-if ($collectedFiles.Count -eq 0) {
-    Write-Host "No matching source code files found." -ForegroundColor Yellow
-    exit
+$totalFiles = $collectedFiles.Count
+$totalDirs = $visitedDirs.Count
+Write-Host "Found $totalFiles files across $totalDirs folders." -ForegroundColor Green
+
+function Build-TreeLines([string]$baseDir, [System.Collections.Generic.List[System.IO.FileInfo]]$files) {
+    $treeLines = New-Object 'System.Collections.Generic.List[string]'
+    $rootName = Split-Path $baseDir -Leaf
+    $treeLines.Add("$rootName/")
+
+    $relPaths = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($f in $files) {
+        $rel = $f.FullName.Substring($baseDir.Length).TrimStart('\', '/') -replace '\\', '/'
+        $relPaths.Add($rel)
+    }
+
+    $nodeMap = @{}
+    foreach ($path in $relPaths) {
+        $parts = $path -split '/'
+        $curr = $nodeMap
+        for ($i = 0; $i -lt $parts.Length; $i++) {
+            $part = $parts[$i]
+            if (-not $curr.ContainsKey($part)) {
+                $curr[$part] = @{}
+            }
+            $curr = $curr[$part]
+        }
+    }
+
+    function Render-Nodes([hashtable]$map, [string]$prefix) {
+        $keys = $map.Keys | Sort-Object {
+            if ($map[$_].Count -gt 0) { "0_$_" } else { "1_$_" }
+        }
+        $keyList = @($keys)
+        for ($i = 0; $i -lt $keyList.Count; $i++) {
+            $k = $keyList[$i]
+            $isLast = ($i -eq ($keyList.Count - 1))
+            $branch = if ($isLast) { "+-- " } else { "|-- " }
+            $childMap = $map[$k]
+            if ($childMap.Count -gt 0) {
+                $treeLines.Add("$prefix$branch$k/")
+                $nextPrefix = if ($isLast) { "$prefix    " } else { "$prefix|   " }
+                Render-Nodes $childMap $nextPrefix
+            } else {
+                $treeLines.Add("$prefix$branch$k")
+            }
+        }
+    }
+
+    Render-Nodes $nodeMap ""
+    return $treeLines
 }
 
-Write-Host "Found $($collectedFiles.Count) source files. Writing archive..." -ForegroundColor Green
-
-$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$writer = [System.IO.StreamWriter]::new($outputFile, $false, $utf8NoBom)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$writer = New-Object System.IO.StreamWriter($outFile, $false, $utf8NoBom)
 
 try {
-    $header = "================================================================================`n" +
-              "ATTENDSURE V3 - COMPLETE SOURCE CODE REPOSITORY EXPORT`n" +
-              "Generated : " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "`n" +
-              "Root Path : $rootDir`n" +
-              "Total     : $($collectedFiles.Count) files`n" +
-              "================================================================================`n`n"
-    $writer.Write($header)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $padWidth = [Math]::Max(3, $totalFiles.ToString().Length)
 
-    $index = 1
-    $total = $collectedFiles.Count
+    # 1. TOP SUMMARY HEADER
+    $writer.WriteLine("================================================================================")
+    $writer.WriteLine("ATTENDSURE  - COMPLETE PROJECT STRUCTURE & SOURCE CODE EXPORT")
+    $writer.WriteLine("Generated   : $timestamp")
+    $writer.WriteLine("Project Root: $root")
+    $writer.WriteLine("Summary     : $totalDirs Folders, $totalFiles Files (Includes Secret & Config Files)")
+    $writer.WriteLine("================================================================================")
+    $writer.WriteLine("")
 
-    foreach ($file in $collectedFiles) {
-        $relPath = $file.Substring($rootDir.Length).TrimStart('\', '/')
-        $banner = "================================================================================`n" +
-                  "FILE [$index/$total]: $relPath`n" +
-                  "FULL PATH: $file`n" +
-                  "================================================================================`n`n"
-        $writer.Write($banner)
+    # 2. VISUAL DIRECTORY TREE
+    $writer.WriteLine("================================================================================")
+    $writer.WriteLine("SECTION 1: VISUAL DIRECTORY STRUCTURE")
+    $writer.WriteLine("================================================================================")
+    $treeOutput = Build-TreeLines $root $collectedFiles
+    foreach ($tLine in $treeOutput) {
+        $writer.WriteLine($tLine)
+    }
+    $writer.WriteLine("")
+
+    # 3. NUMBERED COMPLETE FILE PATH LIST
+    $writer.WriteLine("================================================================================")
+    $writer.WriteLine("SECTION 2: NUMBERED COMPLETE FILE PATH INDEX (1 to $totalFiles)")
+    $writer.WriteLine("================================================================================")
+    for ($i = 0; $i -lt $totalFiles; $i++) {
+        $num = ($i + 1).ToString().PadLeft($padWidth, '0')
+        $fullPath = $collectedFiles[$i].FullName
+        $writer.WriteLine("[$num] $fullPath")
+    }
+    $writer.WriteLine("")
+
+    # 4. INDIVIDUAL NUMBERED FILE CODES WITH COMPLETE PATH
+    $writer.WriteLine("================================================================================")
+    $writer.WriteLine("SECTION 3: COMPLETE FILE CODES (1 to $totalFiles)")
+    $writer.WriteLine("================================================================================")
+
+    for ($i = 0; $i -lt $totalFiles; $i++) {
+        $f = $collectedFiles[$i]
+        $num = ($i + 1).ToString().PadLeft($padWidth, '0')
+        $totalStr = $totalFiles.ToString().PadLeft($padWidth, '0')
+        $relPath = $f.FullName.Substring($root.Length).TrimStart('\', '/')
+
+        $writer.WriteLine("")
+        $writer.WriteLine("================================================================================")
+        $writer.WriteLine("FILE [$num of $totalStr]")
+        $writer.WriteLine("Complete Path : $($f.FullName)")
+        $writer.WriteLine("Relative Path : $relPath")
+        $writer.WriteLine("================================================================================")
 
         try {
-            $content = [System.IO.File]::ReadAllText($file, $utf8NoBom)
+            $content = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
             $writer.WriteLine($content)
         } catch {
-            $writer.WriteLine("// [WARNING] Could not read file contents: $($_.Exception.Message)")
+            $writer.WriteLine("[Could not read file as text: $($_.Exception.Message)]")
         }
-
-        $writer.WriteLine("`n")
-        $index++
     }
 } finally {
-    $writer.Dispose()
+    $writer.Close()
 }
 
-$sizeMb = [math]::Round((Get-Item -LiteralPath $outputFile).Length / 1MB, 2)
-Write-Host "`nExport complete! Clean source archive generated:" -ForegroundColor Green
-Write-Host "Location: $outputFile" -ForegroundColor Cyan
-Write-Host "Files Included: $($collectedFiles.Count) ($sizeMb MB)" -ForegroundColor White
-```
+Write-Host "================================================================================" -ForegroundColor Green
+Write-Host "Export finished! Saved $totalFiles numbered files with full structure to:" -ForegroundColor Green
+Write-Host $outFile -ForegroundColor Yellow
+Write-Host "================================================================================" -ForegroundColor Green

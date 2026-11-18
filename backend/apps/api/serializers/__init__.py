@@ -1,5 +1,5 @@
 """
-AttendSure V3 - API Serializers Package Initializer
+AttendSure - API Serializers Package Initializer
 File: backend/apps/api/serializers/__init__.py
 """
 

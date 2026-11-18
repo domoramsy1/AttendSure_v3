@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Core System & Hardware Configuration
+ATTENDSURE - Core System & Hardware Configuration
 File: backend/attendsure_core/settings.py
 """
 
@@ -133,7 +133,6 @@ INSTALLED_APPS = [
     'apps.core.apps.CoreConfig',
     'apps.academics.apps.AcademicsConfig',
     'apps.api.apps.ApiConfig',
-    'apps.scanners.apps.ScannersConfig',
     'apps.telemetry.apps.TelemetryConfig',
 ]
 

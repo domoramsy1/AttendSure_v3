@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Class Adviser Subject Attendance & Loafing Monitor
+ * AttendSure - Class Adviser Subject Attendance & C Monitor
  * File: web/src/components/advisory/AdvisorySubjectMonitor.tsx
  */
 

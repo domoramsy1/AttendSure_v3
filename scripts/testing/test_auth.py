@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Authentication Verification Tests
+AttendSure - Authentication Verification Tests
 File: D:\\AttendSure_V3\\scripts\\test_auth.py
 """
 

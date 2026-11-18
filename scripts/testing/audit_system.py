@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Project Auditor & Health Checker
+AttendSure - Project Auditor & Health Checker
 File: D:\\AttendSure_V3\\scripts\\audit_system.py
 """
 

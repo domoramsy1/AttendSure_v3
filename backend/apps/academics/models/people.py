@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Faculty, Parent & Student Profiles (Printed QR ID Only)
+AttendSure - Faculty, Parent & Student Profiles (Printed QR ID Only)
 File: backend/apps/academics/models/people.py
 """
 

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - API Views Package Initializer (Mobile Phone & Laptop/PC Only)
+AttendSure - API Views Package Initializer (Mobile Phone & Laptop/PC Only)
 File: backend/apps/api/views/__init__.py
 """
 

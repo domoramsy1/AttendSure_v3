@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Offline-First USB QR Batch Sync & Signed QR ID Card Generator
+AttendSure - Offline-First USB QR Batch Sync & Signed QR ID Card Generator
 File: backend/apps/api/views/classroom_sync.py
 """
 

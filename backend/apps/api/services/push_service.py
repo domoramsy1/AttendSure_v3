@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Non-Blocking Mobile Push & In-App Notification Service
+AttendSure - Non-Blocking Mobile Push & In-App Notification Service
 File: backend/apps/api/services/push_service.py
 """
 

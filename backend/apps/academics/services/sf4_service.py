@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Form 4 (SF4) Consolidated Monthly Attendance Service
+AttendSure - School Form 4 (SF4) Consolidated Monthly Attendance Service
 File: backend/apps/academics/services/sf4_service.py
 """
 

@@ -4,7 +4,6 @@ export * from './SF4ReportTab';
 export * from './StudentsTab';
 export * from './FacultyTab';
 export * from './DTRTab';
-export * from './ScannersTab';
 export * from './GatePassesTab';
 export * from './SchedulesTab';
 export * from './GeofenceTab';

@@ -1,11 +1,7 @@
 {
-  "active_tunnel_url": "http://127.0.0.1:8000",
+  "active_tunnel_url": "",
   "lan_servers": [
-    "http://192.168.100.4:8000",
-    "http://127.0.0.1:8000",
-    "http://localhost:8000",
-    "http://172.20.141.83:8000"
-
+    "http://192.168.100.8:8000"
   ],
   "production_domain": "https://macasandig.attendsure.com.ph"
 }

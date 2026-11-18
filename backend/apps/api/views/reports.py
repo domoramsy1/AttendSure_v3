@@ -1,5 +1,5 @@
 """
-AttendSure V3 - DepEd SF1, SF2, SF4, Faculty DTR & Audit Report Views (Batch Optimized)
+AttendSure - DepEd SF1, SF2, SF4, Faculty DTR & Audit Report Views (Batch Optimized)
 File: backend/apps/api/views/reports.py
 """
 

@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Academic, People & Notification CRUD ViewSets
+AttendSure - Academic, People & Notification CRUD ViewSets
 File: backend/apps/api/views/viewsets.py
 """
 

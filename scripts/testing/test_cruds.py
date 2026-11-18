@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Full CRUD Verification Suite
+AttendSure - Full CRUD Verification Suite
 File: D:\\AttendSure_V3\\scripts\\test_cruds.py
 """
 

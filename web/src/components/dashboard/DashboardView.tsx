@@ -1,98 +1,22 @@
 /**
- * AttendSure V3 - School Executive Dashboard & Telemetry Hub
+ * AttendSure - School Dashboard & Telemetry Hub (Pure Software & USB QR)
  * File: web/src/components/dashboard/DashboardView.tsx
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient from '../../api/client';
 import { useTheme } from '../../context/ThemeContext';
+import { StatsCard } from '../common/StatsCard';
 import {
-  UserCheck,
-  UserX,
-  Clock,
-  Radio,
-  RefreshCw,
-  Scan,
-  TrendingUp,
-  Inbox,
-  Database,
-  Ticket,
-  CalendarCheck,
-  Send,
-  Users,
-  ChevronLeft,
-  ChevronRight,
-  Bell,
-  Sparkles,
-  QrCode,
-  BookOpen,
+  UserCheck, UserX, Clock, Radio, RefreshCw, Scan, TrendingUp, Inbox,
+  Database, Ticket, CalendarCheck, Send, Users, ChevronLeft, ChevronRight,
+  Bell, Sparkles, QrCode, BookOpen,
 } from 'lucide-react';
-
-interface HourlyScanItem {
-  hour: string;
-  count: number;
-  height: number;
-  is_peak: boolean;
-}
-
-interface GradeBreakdown {
-  grade: string;
-  present: number;
-  total: number;
-  percentage: number;
-}
-
-interface RecentScan {
-  id: string | number;
-  person_name: string;
-  role_label?: string;
-  grade_section: string;
-  direction: 'IN' | 'OUT';
-  scan_time: string;
-  scan_method: 'qr_id' | 'QR' | string;
-}
-
-interface CampusNotice {
-  id: string | number;
-  title: string;
-  date: string;
-  category: string;
-  details: string;
-}
-
-interface CalendarEvent {
-  date: string;
-  title: string;
-  is_holiday?: boolean;
-}
-
-interface DashboardMetrics {
-  total_students: number;
-  students_present: number;
-  students_absent: number;
-  attendance_rate: number;
-  faculty_on_duty: number;
-  total_faculty: number;
-  gate_scans_today: number;
-  active_gate_passes: number;
-  push_sent_today: number;
-  push_pending_count: number;
-  push_failed_count?: number;
-  push_alerts_today: number;
-  mobile_parents_connected: number;
-  hourly_scans: HourlyScanItem[];
-  grade_levels: GradeBreakdown[];
-  recent_scans: RecentScan[];
-  notices?: CampusNotice[];
-  events?: CalendarEvent[];
-  analytics?: Record<string, unknown>;
-  database?: Record<string, unknown>;
-}
 
 interface DashboardViewProps {
   isServerOnline?: boolean;
   userRole?: string;
-  onGateStatusChange?: (online: boolean) => void;
+  onStatusChange?: (online: boolean) => void;
   onManualRefresh?: () => void;
   onNavigateTab?: (tab: string, report?: string) => void;
 }
@@ -100,799 +24,304 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({
   isServerOnline = true,
   userRole,
-  onGateStatusChange,
+  onStatusChange,
   onManualRefresh,
   onNavigateTab,
 }) => {
-  const { tokens, brand } = useTheme();
+  const { tokens, brand, fonts, ui } = useTheme();
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState('');
+  const [fetchFailed, setFetchFailed] = useState(false);
+  const [calendarDate, setCalendarDate] = useState(new Date());
 
-  const [loading, setLoading] = useState<boolean>(true);
-  const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [lastSyncTime, setLastSyncTime] = useState<string>('');
-  const [fetchFailed, setFetchFailed] = useState<boolean>(false);
-
-  // Live Calendar State
-  const [calendarDate, setCalendarDate] = useState<Date>(new Date());
-
-  const isMounted = useRef<boolean>(true);
-  const abortControllerRef = useRef<AbortController | null>(null);
-
-  const effectiveRole = (userRole || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
-  const isAdmin = effectiveRole === 'ADMIN' || effectiveRole === 'SUPERADMIN' || effectiveRole === 'PRINCIPAL';
-  const isFaculty = effectiveRole === 'FACULTY';
-  const isRestrictedRole = effectiveRole === 'PARENT';
-
-  const [data, setData] = useState<DashboardMetrics>({
+  const [data, setData] = useState({
     total_students: 0,
     students_present: 0,
     students_absent: 0,
     attendance_rate: 0,
     faculty_on_duty: 0,
     total_faculty: 0,
-    gate_scans_today: 0,
-    active_gate_passes: 0,
-    push_sent_today: 0,
-    push_pending_count: 0,
-    push_failed_count: 0,
+    classroom_scans_today: 0,
+    active_exit_passes: 0,
     push_alerts_today: 0,
     mobile_parents_connected: 0,
-    hourly_scans: [],
-    grade_levels: [],
-    recent_scans: [],
-    notices: [],
-    events: [],
-    analytics: {},
-    database: {},
+    hourly_scans: [] as Array<{ hour: string; count: number; height: number; is_peak: boolean }>,
+    recent_scans: [] as Array<any>,
+    notices: [] as Array<any>,
   });
 
+  const abortRef = useRef<AbortController | null>(null);
+  const role = (userRole || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
+  const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(role);
+  const isFaculty = role === 'FACULTY';
   const isOnline = isServerOnline && !fetchFailed;
 
-  const navigateTo = (detail: string | { tab: string; report?: string }) => {
-    const targetTab = typeof detail === 'string' ? detail : detail.tab;
-    const targetReport = typeof detail === 'string' ? undefined : detail.report;
-
-    if (onNavigateTab) {
-      onNavigateTab(targetTab, targetReport);
-    }
-    window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail }));
+  const navigateTo = (tab: string, report?: string) => {
+    if (onNavigateTab) onNavigateTab(tab, report);
+    window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail: report ? { tab, report } : tab }));
   };
 
-  const fetchDashboardData = useCallback(
-    async (silent = false) => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
+  const fetchDashboardData = useCallback(async (silent = false) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-      try {
-        if (!silent) setRefreshing(true);
+    try {
+      if (!silent) setRefreshing(true);
+      const res = await apiClient.get('/dashboard/overview/', {
+        params: { silent: silent ? '1' : undefined },
+        signal: controller.signal,
+      });
 
-        const res = await apiClient.get<DashboardMetrics>('/dashboard/overview/', {
-          params: { silent: silent ? '1' : undefined },
-          timeout: 6000,
-          signal: controller.signal,
-        });
+      if (res.data) {
+        setFetchFailed(false);
+        const d = res.data;
+        const total = Number(d.total_students) || 0;
+        const present = Number(d.students_present) || 0;
+        const rawHourly = Array.isArray(d.hourly_scans) ? d.hourly_scans : [];
+        const maxCount = Math.max(...rawHourly.map((h: any) => Number(h.count) || 0), 1);
 
-        if (isMounted.current && res.data) {
-          setFetchFailed(false);
-          const totalStudents = Number(res.data.total_students) || 0;
-          const presentStudents = Number(res.data.students_present) || 0;
-          const calculatedRate =
-            totalStudents > 0
-              ? Math.min(100, Math.max(0, Math.round((presentStudents / totalStudents) * 100)))
-              : Number(res.data.attendance_rate) || 0;
-
-          const rawHourly = Array.isArray(res.data.hourly_scans) ? res.data.hourly_scans : [];
-          const maxHourlyVolume = Math.max(...rawHourly.map((h) => Number(h.count) || 0), 1);
-          const normalizedHourly = rawHourly.map((item) => {
-            const count = Number(item.count) || 0;
+        setData({
+          total_students: total,
+          students_present: present,
+          students_absent: Number(d.students_absent) || Math.max(0, total - present),
+          attendance_rate: total > 0 ? Math.round((present / total) * 100) : Number(d.attendance_rate) || 0,
+          faculty_on_duty: Number(d.faculty_on_duty) || 0,
+          total_faculty: Number(d.total_faculty) || 0,
+          classroom_scans_today: Number(d.classroom_scans_today ?? d.gate_scans_today) || 0,
+          active_exit_passes: Number(d.active_exit_passes ?? d.active_gate_passes) || 0,
+          push_alerts_today: Number(d.push_alerts_today ?? d.push_sent_today) || 0,
+          mobile_parents_connected: Number(d.mobile_parents_connected) || 0,
+          hourly_scans: rawHourly.map((h: any) => {
+            const c = Number(h.count) || 0;
             return {
-              hour: String(item.hour || ''),
-              count,
-              height: count > 0 ? Math.round((count / maxHourlyVolume) * 100) : 0,
-              is_peak: Boolean(item.is_peak),
+              hour: String(h.hour || ''),
+              count: c,
+              height: c > 0 ? Math.round((c / maxCount) * 100) : 0,
+              is_peak: Boolean(h.is_peak),
             };
-          });
-
-          setData({
-            total_students: totalStudents,
-            students_present: presentStudents,
-            students_absent: Number(res.data.students_absent) || Math.max(0, totalStudents - presentStudents),
-            attendance_rate: calculatedRate,
-            faculty_on_duty: Number(res.data.faculty_on_duty) || 0,
-            total_faculty: Number(res.data.total_faculty) || 0,
-            gate_scans_today: Number(res.data.gate_scans_today) || 0,
-            active_gate_passes: Number(res.data.active_gate_passes) || 0,
-            push_sent_today: Number(res.data.push_sent_today) || 0,
-            push_pending_count: Number(res.data.push_pending_count) || 0,
-            push_failed_count: Number(res.data.push_failed_count) || 0,
-            push_alerts_today: Number(res.data.push_alerts_today) || 0,
-            mobile_parents_connected: Number(res.data.mobile_parents_connected) || 0,
-            hourly_scans: normalizedHourly,
-            grade_levels: Array.isArray(res.data.grade_levels) ? res.data.grade_levels : [],
-            recent_scans: Array.isArray(res.data.recent_scans) ? res.data.recent_scans : [],
-            notices: Array.isArray(res.data.notices) ? res.data.notices : [],
-            events: Array.isArray(res.data.events) ? res.data.events : [],
-            analytics: res.data.analytics || {},
-            database: res.data.database || {},
-          });
-
-          setLastSyncTime(
-            new Date().toLocaleTimeString('en-US', {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            })
-          );
-
-          if (onGateStatusChange) {
-            onGateStatusChange(true);
-          }
-        }
-      } catch (err: unknown) {
-        if (err && typeof err === 'object' && 'name' in err && err.name === 'CanceledError') {
-          return;
-        }
-        if (isMounted.current) {
-          setFetchFailed(true);
-          if (onGateStatusChange) onGateStatusChange(false);
-        }
-      } finally {
-        if (isMounted.current) {
-          setLoading(false);
-          if (!silent) setRefreshing(false);
-        }
+          }),
+          recent_scans: Array.isArray(d.recent_scans) ? d.recent_scans : [],
+          notices: Array.isArray(d.notices) ? d.notices : [],
+        });
+        setLastSyncTime(new Date().toLocaleTimeString());
+        onStatusChange?.(true);
       }
-    },
-    [onGateStatusChange]
-  );
+    } catch (err: any) {
+      if (err?.name !== 'CanceledError') {
+        setFetchFailed(true);
+        onStatusChange?.(false);
+      }
+    } finally {
+      setLoading(false);
+      if (!silent) setRefreshing(false);
+    }
+  }, [onStatusChange]);
 
   useEffect(() => {
-    isMounted.current = true;
     fetchDashboardData(false);
-
-    const interval = setInterval(() => {
-      fetchDashboardData(true);
-    }, 20000);
-
+    const timer = setInterval(() => fetchDashboardData(true), 20000);
     return () => {
-      isMounted.current = false;
-      clearInterval(interval);
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
+      clearInterval(timer);
+      abortRef.current?.abort();
     };
   }, [fetchDashboardData]);
 
-  const handleManualSync = () => {
-    fetchDashboardData(false);
-    if (onManualRefresh) {
-      onManualRefresh();
-    }
-  };
-
-  const hasHourlyScans = isOnline && data.hourly_scans.some((h) => h.count > 0);
-
-  const currentMonthYear = useMemo(() => {
-    return calendarDate.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-  }, [calendarDate]);
-
   const calendarDays = useMemo(() => {
-    const year = calendarDate.getFullYear();
-    const month = calendarDate.getMonth();
-    const firstDayIndex = new Date(year, month, 1).getDay();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-    const days: Array<{ day: number | null; isToday: boolean }> = [];
+    const y = calendarDate.getFullYear();
+    const m = calendarDate.getMonth();
+    const firstDay = new Date(y, m, 1).getDay();
+    const totalDays = new Date(y, m + 1, 0).getDate();
     const now = new Date();
-
-    for (let i = 0; i < firstDayIndex; i++) {
-      days.push({ day: null, isToday: false });
-    }
-
-    for (let d = 1; d <= daysInMonth; d++) {
-      const isToday =
-        now.getFullYear() === year && now.getMonth() === month && now.getDate() === d;
-      days.push({ day: d, isToday });
-    }
-
-    return days;
+    return [
+      ...Array.from({ length: firstDay }, () => ({ day: null, isToday: false })),
+      ...Array.from({ length: totalDays }, (_, i) => ({
+        day: i + 1,
+        isToday: now.getFullYear() === y && now.getMonth() === m && now.getDate() === i + 1,
+      })),
+    ];
   }, [calendarDate]);
+
+  const quickActions = [
+    { label: 'USB QR Scanner', desc: 'Scan student QR ID card', icon: <QrCode size={20} />, onClick: () => navigateTo('classroom-scanner') },
+    { label: isFaculty ? 'Student Exit Permit' : 'Exit Passes', desc: 'Student exit & faculty travel', icon: <Ticket size={20} />, onClick: () => navigateTo('gate-passes') },
+    { label: 'Daily Attendance (SF2)', desc: 'Official DepEd register', icon: <CalendarCheck size={20} />, onClick: () => navigateTo('reports', 'sf2') },
+    { label: 'Civil Service DTR', desc: 'Form 48 faculty hours', icon: <Clock size={20} />, onClick: () => navigateTo('dtr') },
+    { label: isFaculty ? 'My Classes' : 'Class Lists', desc: 'Enrolled students by section', icon: isFaculty ? <BookOpen size={20} /> : <Users size={20} />, onClick: () => navigateTo(isFaculty ? 'my-classes' : 'students') },
+    ...(isAdmin ? [{ label: 'Push Notifications', desc: 'Send mobile alerts to parents', icon: <Send size={20} />, onClick: () => navigateTo('push') }] : []),
+  ];
 
   if (loading) {
     return (
       <div style={{ padding: 60, textAlign: 'center', color: tokens.textMuted }}>
-        <RefreshCw size={26} className="animate-spin" style={{ margin: '0 auto 10px auto', display: 'block', color: brand.primary }} />
-        <span style={{ fontWeight: 600, fontSize: '0.86rem' }}>Synchronizing school dashboard and hardware telemetry...</span>
+        <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 8px', display: 'block', color: brand.primary }} />
+        <span>Loading school dashboard...</span>
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        height: '100%',
-        overflowY: 'auto',
-        backgroundColor: tokens.bgSurfaceSubtle,
-        padding: 'clamp(14px, 2.5vw, 24px)',
-        boxSizing: 'border-box',
-      }}
-    >
+    <div style={{ height: '100%', overflowY: 'auto', backgroundColor: tokens.bgCanvas, padding: 'clamp(14px, 2vw, 24px)' }}>
       <div style={{ maxWidth: 1380, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* 1. Telemetry Status Header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: 10,
-            backgroundColor: '#FFFFFF',
-            padding: '10px 18px',
-            borderRadius: 14,
-            border: `1px solid ${tokens.borderSubtle}`,
-            boxShadow: tokens.cardShadow,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '4px 10px',
-                borderRadius: 9999,
-                backgroundColor: isOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                color: isOnline ? brand.success : brand.danger,
-                fontSize: '0.70rem',
-                fontWeight: 800,
-                border: `1px solid ${isOnline ? 'rgba(16, 185, 129, 0.28)' : 'rgba(239, 68, 68, 0.28)'}`,
-              }}
-            >
-              <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: isOnline ? brand.success : brand.danger }} />
-              {isOnline ? 'ONLINE' : 'OFFLINE'}
+        {/* 1. Status Bar */}
+        <div style={{ ...ui.card, padding: '10px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={ui.badge(isOnline ? tokens.successLight : tokens.dangerLight, isOnline ? brand.success : brand.danger)}>
+              ● {isOnline ? 'ONLINE' : 'OFFLINE'}
             </span>
-
             {isAdmin && (
               <>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
-                  <Database size={13} color={brand.primary} />
-                  <span>Server: {isOnline ? 'Active' : 'Offline'}</span>
+                <span style={{ fontSize: fonts.size.sm, fontWeight: 700, color: tokens.textSecondary, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <Database size={13} color={brand.primary} /> Server: {isOnline ? 'Active' : 'Offline'}
                 </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>
-                  <Radio size={13} color={brand.primary} />
-                  <span>Push Alerts Today: {data.push_alerts_today} • Parents Connected: {data.mobile_parents_connected}</span>
+                <span style={{ fontSize: fonts.size.sm, fontWeight: 700, color: tokens.textSecondary, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <Radio size={13} color={brand.primary} /> Push Alerts Today: {Number(data.push_alerts_today || 0).toLocaleString()} • Parents Connected: {Number(data.mobile_parents_connected || 0).toLocaleString()}
                 </span>
               </>
             )}
           </div>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {lastSyncTime && (
-              <span style={{ fontSize: '0.72rem', color: tokens.textMuted, fontFamily: 'monospace' }}>
-                Synced: {lastSyncTime}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={handleManualSync}
-              disabled={refreshing}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                border: `1px solid ${tokens.borderStrong}`,
-                borderRadius: 8,
-                padding: '5px 12px',
-                fontSize: '0.76rem',
-                fontWeight: 700,
-                color: tokens.textPrimary,
-                cursor: 'pointer',
-              }}
-            >
-              <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
-              <span>{refreshing ? 'Syncing...' : 'Sync Now'}</span>
+            {lastSyncTime && <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted, fontFamily: fonts.mono }}>Synced: {lastSyncTime}</span>}
+            <button type="button" onClick={() => { fetchDashboardData(false); onManualRefresh?.(); }} disabled={refreshing} style={ui.btnSecondary}>
+              <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} /> {refreshing ? 'Syncing...' : 'Sync Now'}
             </button>
           </div>
         </div>
 
-        {/* 2. Core KPI Statistics Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
-          <div style={kpiCardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={kpiLabelStyle}>LEARNERS IN SCHOOL</span>
-                <div style={kpiValueStyle}>{isOnline ? data.students_present.toLocaleString() : '—'}</div>
-              </div>
-              <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(16, 185, 129, 0.12)', color: brand.success }}>
-                <UserCheck size={20} />
-              </div>
-            </div>
-            <div style={kpiFooterStyle}>
-              <span style={{ color: brand.success, fontWeight: 800 }}>{data.attendance_rate}%</span>
-              <span style={{ color: tokens.textMuted }}>of {data.total_students} enrolled learners</span>
-            </div>
-          </div>
+        {/* 2. KPI Cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+          <StatsCard
+            label="LEARNERS IN CLASS"
+            value={isOnline ? Number(data.students_present || 0).toLocaleString() : '—'}
+            helpText={`${Number(data.attendance_rate || 0)}% of ${Number(data.total_students || 0).toLocaleString()} learners`}
+            badge={<UserCheck size={18} color={brand.success} />}
+          />
+          <StatsCard
+            label="ABSENT LEARNERS"
+            value={isOnline ? Number(data.students_absent || 0).toLocaleString() : '—'}
+            valueColor={Number(data.students_absent || 0) > 0 ? brand.danger : tokens.textPrimary}
+            helpText="Unverified today"
+            badge={<UserX size={18} color={brand.danger} />}
+          />
+          <StatsCard
+            label="FACULTY ON DUTY"
+            value={isOnline ? `${Number(data.faculty_on_duty || 0)}/${Number(data.total_faculty || 0)}` : '—'}
+            helpText="Verified via Mobile Face & GPS"
+            badge={<Clock size={18} color={brand.success} />}
+          />
+          <StatsCard
+            label="CLASSROOM QR SCANS"
+            value={isOnline ? Number(data.classroom_scans_today || 0).toLocaleString() : '—'}
+            helpText={`${Number(data.active_exit_passes || 0)} Active Exit Passes`}
+            badge={<Scan size={18} color={brand.primary} />}
+          />
+        </div>
 
-          <div style={kpiCardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={kpiLabelStyle}>ABSENT LEARNERS</span>
-                <div style={{ ...kpiValueStyle, color: data.students_absent > 0 ? brand.danger : tokens.textPrimary }}>
-                  {isOnline ? data.students_absent.toLocaleString() : '—'}
+        {/* 3. Quick Actions */}
+        <div style={ui.card}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <Sparkles size={16} color={brand.primary} />
+            <h3 style={{ margin: 0, fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>Quick Actions</h3>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+            {quickActions.map((act, i) => (
+              <button key={i} type="button" onClick={act.onClick} style={{ ...ui.subtleBox, display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', textAlign: 'left' }}>
+                <div style={{ width: 38, height: 38, borderRadius: 8, backgroundColor: tokens.primaryLight, color: brand.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  {act.icon}
                 </div>
-              </div>
-              <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(239, 68, 68, 0.12)', color: brand.danger }}>
-                <UserX size={20} />
-              </div>
-            </div>
-            <div style={kpiFooterStyle}>
-              <span style={{ color: tokens.textMuted }}>Unverified departures today</span>
-            </div>
-          </div>
-
-          <div style={kpiCardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={kpiLabelStyle}>FACULTY ON DUTY</span>
-                <div style={kpiValueStyle}>
-                  {isOnline ? `${data.faculty_on_duty}/${data.total_faculty}` : '—'}
+                <div>
+                  <div style={{ fontSize: fonts.size.base, fontWeight: 800, color: tokens.textPrimary }}>{act.label}</div>
+                  <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>{act.desc}</div>
                 </div>
-              </div>
-              <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(16, 185, 129, 0.12)', color: brand.success }}>
-                <Clock size={20} />
-              </div>
-            </div>
-            <div style={kpiFooterStyle}>
-              <span style={{ color: tokens.textMuted }}>Verified on campus DTR</span>
-            </div>
-          </div>
-
-          <div style={kpiCardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={kpiLabelStyle}>GATE TAPS TODAY</span>
-                <div style={kpiValueStyle}>{isOnline ? data.gate_scans_today.toLocaleString() : '—'}</div>
-              </div>
-              <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: tokens.primaryLight, color: brand.primary }}>
-                <Scan size={20} />
-              </div>
-            </div>
-            <div style={kpiFooterStyle}>
-              <span style={{ color: brand.primary, fontWeight: 700 }}>{data.active_gate_passes} Active Exit Passes</span>
-            </div>
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* 3. Quick Action Center */}
-        <div
-          style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: 16,
-            border: `1px solid ${tokens.borderSubtle}`,
-            boxShadow: tokens.cardShadow,
-            padding: '18px 20px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 14,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, backgroundColor: tokens.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Sparkles size={16} color={brand.primary} />
-            </div>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '0.94rem', fontWeight: 800, color: tokens.textPrimary }}>
-                Quick Action
-              </h3>
-              <span style={{ fontSize: '0.70rem', color: tokens.textMuted }}>
-                Immediate 1-click shortcuts for daily school operations
-              </span>
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
-              gap: 12,
-            }}
-          >
-            {/* 1. Attendance Scanner (Faculty & Admin) */}
-            {!isRestrictedRole && (
-              <button
-                type="button"
-                onClick={() => navigateTo('classroom-scanner')}
-                style={actionTileStyle}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = brand.primary;
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 75, 135, 0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = tokens.borderSubtle;
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <div style={{ ...actionIconFrame, backgroundColor: tokens.primaryLight, color: brand.primary }}>
-                  <QrCode size={20} />
-                </div>
-                <div>
-                  <div style={actionTileTitle}>Attendance Scanner</div>
-                  <div style={actionTileDesc}>Scan student QR or barcode card</div>
-                </div>
-              </button>
-            )}
-
-            {/* 2. Issue Gate Pass (All Users) */}
-            <button
-              type="button"
-              onClick={() => navigateTo('gate-passes')}
-              style={actionTileStyle}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = brand.primary;
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 75, 135, 0.1)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = tokens.borderSubtle;
-                e.currentTarget.style.boxShadow = 'none';
-              }}
-            >
-              <div style={{ ...actionIconFrame, backgroundColor: 'rgba(0, 75, 135, 0.1)', color: brand.primary }}>
-                <Ticket size={20} />
-              </div>
-              <div>
-                <div style={actionTileTitle}>{isFaculty ? 'Issue Student Permit' : 'Exit Passes'}</div>
-                <div style={actionTileDesc}>Student exit &amp; faculty travel</div>
-              </div>
-            </button>
-
-            {/* 3. Daily Attendance SF2 (Faculty & Admin) */}
-            {!isRestrictedRole && (
-              <button
-                type="button"
-                onClick={() => navigateTo({ tab: 'reports', report: 'sf2' })}
-                style={actionTileStyle}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = brand.primary;
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = tokens.borderSubtle;
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(16, 185, 129, 0.1)', color: brand.success }}>
-                  <CalendarCheck size={20} />
-                </div>
-                <div>
-                  <div style={actionTileTitle}>Daily Attendance (SF2)</div>
-                  <div style={actionTileDesc}>Official DepEd attendance register</div>
-                </div>
-              </button>
-            )}
-
-            {/* 4. Civil Service DTR (Faculty & Admin) */}
-            {!isRestrictedRole && (
-              <button
-                type="button"
-                onClick={() => navigateTo('dtr')}
-                style={actionTileStyle}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = brand.primary;
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(2, 132, 199, 0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = tokens.borderSubtle;
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(2, 132, 199, 0.1)', color: brand.secondary }}>
-                  <Clock size={20} />
-                </div>
-                <div>
-                  <div style={actionTileTitle}>Civil Service DTR</div>
-                  <div style={actionTileDesc}>Inspect and endorse Form 48 hours</div>
-                </div>
-              </button>
-            )}
-
-            {/* 5. Live Gate Monitor (shields & Admins) */}
-            {(isAdmin || isRestrictedRole) && (
-              <button
-                type="button"
-                onClick={() => navigateTo('attendance-logs')}
-                style={actionTileStyle}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = brand.primary;
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(124, 58, 237, 0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = tokens.borderSubtle;
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(124, 58, 237, 0.1)', color: '#7c3aed' }}>
-                  <Scan size={20} />
-                </div>
-                <div>
-                  <div style={actionTileTitle}>Live Gate Monitor</div>
-                  <div style={actionTileDesc}>Real-time arrival &amp; departure taps</div>
-                </div>
-              </button>
-            )}
-
-            {/* 6. Class Lists / My Classes (Faculty & Admin) */}
-            {!isRestrictedRole && (
-              <button
-                type="button"
-                onClick={() => navigateTo(isFaculty ? 'my-classes' : 'students')}
-                style={actionTileStyle}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = brand.primary;
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(100, 116, 139, 0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = tokens.borderSubtle;
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(100, 116, 139, 0.1)', color: tokens.textSecondary }}>
-                  {isFaculty ? <BookOpen size={20} /> : <Users size={20} />}
-                </div>
-                <div>
-                  <div style={actionTileTitle}>{isFaculty ? 'My Teaching Classes' : 'Class Lists'}</div>
-                  <div style={actionTileDesc}>Verify enrolled students by section</div>
-                </div>
-              </button>
-            )}
-
-            {/* 7. push Broadcast (Admin Only) */}
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => navigateTo('push')}
-                style={actionTileStyle}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = brand.primary;
-                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = tokens.borderSubtle;
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <div style={{ ...actionIconFrame, backgroundColor: 'rgba(245, 158, 11, 0.1)', color: brand.warning }}>
-                  <Send size={20} />
-                </div>
-                <div>
-                  <div style={actionTileTitle}>Push Notifications</div>
-                  <div style={actionTileDesc}>Send emergency broadcast to parents</div>
-                </div>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* 4. Split Main Content: Left Analytics & Right Utility Rail */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.8fr) minmax(320px, 1fr)', gap: 16 }}>
+        {/* 4. Bottom Analytics & Calendar Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.8fr) minmax(300px, 1fr)', gap: 16 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={sectionCardStyle}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                <div>
-                  <h3 style={sectionCardTitle}>Arrivals by Hour</h3>
-                  <span style={sectionCardSubtitle}>Gate scanner arrivals recorded today</span>
-                </div>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 6, backgroundColor: tokens.primaryLight, color: brand.primary, fontSize: '0.68rem', fontWeight: 700 }}>
-                  <TrendingUp size={12} color={brand.primary} />
-                  <span>Today</span>
-                </div>
+            <div style={ui.card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                <h3 style={{ margin: 0, fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>Classroom Scans by Hour</h3>
+                <span style={ui.badge(tokens.primaryLight, brand.primary)}><TrendingUp size={12} /> Today</span>
               </div>
-
-              {hasHourlyScans ? (
-                <div style={{ height: 180, display: 'flex', alignItems: 'flex-end', gap: 8, padding: '12px 0 4px 0' }}>
+              {data.hourly_scans.some((h) => h.count > 0) ? (
+                <div style={{ height: 160, display: 'flex', alignItems: 'flex-end', gap: 8 }}>
                   {data.hourly_scans.map((item, idx) => (
                     <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
-                      <span style={{ fontSize: '0.62rem', fontWeight: 700, color: item.is_peak ? brand.primary : tokens.textMuted, marginBottom: 2 }}>
-                        {item.count > 0 ? item.count : ''}
-                      </span>
-                      <div
-                        style={{
-                          width: '100%',
-                          maxWidth: 28,
-                          height: `${item.height}%`,
-                          backgroundColor: item.is_peak ? brand.primary : item.count > 0 ? brand.secondary : tokens.borderSubtle,
-                          borderRadius: '4px 4px 0 0',
-                          transition: 'height 0.3s ease',
-                        }}
-                      />
-                      <span style={{ fontSize: '0.62rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
-                        {item.hour}
-                      </span>
+                      <span style={{ fontSize: fonts.size.xs, fontWeight: 700, color: tokens.textMuted }}>{item.count || ''}</span>
+                      <div style={{ width: '100%', maxWidth: 26, height: `${item.height}%`, backgroundColor: item.is_peak ? brand.primary : brand.secondary, borderRadius: '4px 4px 0 0' }} />
+                      <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted, marginTop: 4 }}>{item.hour}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div style={emptyCardBox}>
-                  <Inbox size={26} color={tokens.textMuted} />
-                  <span style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
-                    No Gate Scans Recorded Today
-                  </span>
+                <div style={{ padding: 28, textAlign: 'center', color: tokens.textMuted }}>
+                  <Inbox size={24} style={{ margin: '0 auto 4px', display: 'block' }} /> No Classroom Scans Recorded Today
                 </div>
               )}
             </div>
 
-            <div style={sectionCardStyle}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                <div>
-                  <h3 style={sectionCardTitle}>Recent Gate Taps</h3>
-                  <span style={sectionCardSubtitle}>Real-time campus entrance &amp; exit feed</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => navigateTo('attendance-logs')}
-                  style={{ background: 'none', border: 'none', color: brand.primary, fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
-                >
-                  View All
-                </button>
-              </div>
-
+            <div style={ui.card}>
+              <h3 style={{ margin: '0 0 12px', fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>Recent Classroom QR Scans</h3>
               {data.recent_scans.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {data.recent_scans.slice(0, 5).map((scan, idx) => (
-                    <div
-                      key={`${scan.id}-${idx}`}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '10px 12px',
-                        backgroundColor: tokens.bgSurfaceSubtle,
-                        borderRadius: 10,
-                        border: `1px solid ${tokens.borderSubtle}`,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <span
-                          style={{
-                            padding: '2px 8px',
-                            borderRadius: 6,
-                            fontSize: '0.66rem',
-                            fontWeight: 800,
-                            backgroundColor: scan.direction === 'IN' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                            color: scan.direction === 'IN' ? brand.success : brand.danger,
-                          }}
-                        >
-                          {scan.direction}
-                        </span>
-                        <div>
-                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: tokens.textPrimary }}>{scan.person_name}</div>
-                          <div style={{ fontSize: '0.70rem', color: tokens.textMuted }}>
-                            {scan.grade_section} &bull; {scan.scan_method}
-                          </div>
-                        </div>
+                  {data.recent_scans.slice(0, 5).map((s: any, idx: number) => (
+                    <div key={idx} style={{ ...ui.subtleBox, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <strong style={{ fontSize: fonts.size.base, color: tokens.textPrimary }}>{s.person_name}</strong>
+                        <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>{s.grade_section} • USB QR Scanner</div>
                       </div>
-                      <span style={{ fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary }}>{scan.scan_time}</span>
+                      <span style={{ fontSize: fonts.size.sm, fontWeight: 700, color: tokens.textSecondary }}>{s.scan_time}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div style={emptyCardBox}>
-                  <Inbox size={26} color={tokens.textMuted} />
-                  <span style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
-                    No Gate Taps Recorded Yet
-                  </span>
-                </div>
+                <div style={{ padding: 24, textAlign: 'center', color: tokens.textMuted }}>No Classroom Scans Recorded Yet</div>
               )}
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={sectionCardStyle}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                <span style={{ fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
-                  {currentMonthYear}
-                </span>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}
-                    style={calNavBtn}
-                    title="Previous month"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCalendarDate(new Date())}
-                    style={{ ...calNavBtn, fontSize: '0.70rem', fontWeight: 700, padding: '0 8px', width: 'auto' }}
-                  >
-                    Today
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}
-                    style={calNavBtn}
-                    title="Next month"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
+            <div style={ui.card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <strong style={{ fontSize: fonts.size.base, color: tokens.textPrimary }}>
+                  {calendarDate.toLocaleString('en-US', { month: 'long', year: 'numeric' })}
+                </strong>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button type="button" onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))} style={ui.btnSecondary}><ChevronLeft size={13} /></button>
+                  <button type="button" onClick={() => setCalendarDate(new Date())} style={ui.btnSecondary}>Today</button>
+                  <button type="button" onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1))} style={ui.btnSecondary}><ChevronRight size={13} /></button>
                 </div>
               </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', marginBottom: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', gap: 4 }}>
                 {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-                  <span key={d} style={{ fontSize: '0.66rem', fontWeight: 800, color: tokens.textMuted }}>
-                    {d}
-                  </span>
+                  <span key={d} style={{ fontSize: fonts.size.xs, fontWeight: 800, color: tokens.textMuted }}>{d}</span>
                 ))}
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, textAlign: 'center' }}>
                 {calendarDays.map((item, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      height: 32,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      borderRadius: 8,
-                      fontSize: '0.76rem',
-                      fontWeight: item.isToday ? 800 : 600,
-                      backgroundColor: item.isToday ? brand.primary : 'transparent',
-                      color: item.isToday ? '#FFFFFF' : item.day ? tokens.textPrimary : 'transparent',
-                      border: item.isToday ? 'none' : `1px solid transparent`,
-                    }}
-                  >
+                  <div key={idx} style={{ height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, fontSize: fonts.size.sm, fontWeight: item.isToday ? 800 : 500, backgroundColor: item.isToday ? brand.primary : 'transparent', color: item.isToday ? '#fff' : tokens.textPrimary }}>
                     {item.day || ''}
                   </div>
                 ))}
               </div>
             </div>
 
-            <div style={sectionCardStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <div style={ui.card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <Bell size={16} color={brand.primary} />
-                <h3 style={sectionCardTitle}>Campus Bulletin</h3>
+                <h3 style={{ margin: 0, fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>Campus Bulletin</h3>
               </div>
-
-              {data.notices && data.notices.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {data.notices.map((notice) => (
-                    <div
-                      key={notice.id}
-                      style={{
-                        padding: '10px 12px',
-                        backgroundColor: tokens.bgSurfaceSubtle,
-                        borderRadius: 10,
-                        border: `1px solid ${tokens.borderSubtle}`,
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '0.66rem', fontWeight: 800, color: brand.primary }}>
-                          {notice.category}
-                        </span>
-                        <span style={{ fontSize: '0.64rem', color: tokens.textMuted }}>{notice.date}</span>
-                      </div>
-                      <div style={{ fontSize: '0.80rem', fontWeight: 800, color: tokens.textPrimary, marginTop: 2 }}>
-                        {notice.title}
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: tokens.textSecondary, marginTop: 2 }}>
-                        {notice.details}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              {data.notices.length === 0 ? (
+                <div style={{ padding: 20, textAlign: 'center', color: tokens.textMuted, fontSize: fonts.size.sm }}>No announcements posted</div>
               ) : (
-                <div style={{ ...emptyCardBox, padding: '24px 12px' }}>
-                  <Inbox size={22} color={tokens.textMuted} />
-                  <span style={{ fontSize: '0.76rem', fontWeight: 600, color: tokens.textMuted, marginTop: 4 }}>
-                    No announcements posted in database
-                  </span>
-                </div>
+                data.notices.map((n: any) => (
+                  <div key={n.id} style={{ ...ui.subtleBox, marginBottom: 8 }}>
+                    <div style={{ fontSize: fonts.size.base, fontWeight: 800, color: tokens.textPrimary }}>{n.title}</div>
+                    <div style={{ fontSize: fonts.size.xs, color: tokens.textSecondary }}>{n.details}</div>
+                  </div>
+                ))
               )}
             </div>
           </div>
@@ -903,118 +332,3 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 };
 
 export default DashboardView;
-
-const kpiCardStyle: React.CSSProperties = {
-  backgroundColor: '#FFFFFF',
-  borderRadius: 16,
-  border: '1px solid #E2E8F0',
-  boxShadow: '0 4px 16px -2px rgba(15, 23, 42, 0.05)',
-  padding: '16px 18px',
-};
-
-const kpiLabelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.66rem',
-  fontWeight: 800,
-  color: '#64748B',
-  marginBottom: 4,
-  letterSpacing: '0.4px',
-};
-
-const kpiValueStyle: React.CSSProperties = {
-  fontSize: '1.60rem',
-  fontWeight: 800,
-  color: '#0F172A',
-  lineHeight: 1.1,
-};
-
-const kpiFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  marginTop: 10,
-  paddingTop: 8,
-  borderTop: '1px solid #E2E8F0',
-  fontSize: '0.72rem',
-};
-
-const actionTileStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  padding: '12px 14px',
-  borderRadius: 12,
-  border: '1px solid #E2E8F0',
-  backgroundColor: '#FFFFFF',
-  cursor: 'pointer',
-  textAlign: 'left',
-  width: '100%',
-  boxSizing: 'border-box',
-  transition: 'border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease',
-};
-
-const actionIconFrame: React.CSSProperties = {
-  width: 42,
-  height: 42,
-  borderRadius: 10,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-};
-
-const actionTileTitle: React.CSSProperties = {
-  fontSize: '0.84rem',
-  fontWeight: 800,
-  color: '#0F172A',
-};
-
-const actionTileDesc: React.CSSProperties = {
-  fontSize: '0.70rem',
-  color: '#64748B',
-  marginTop: 1,
-};
-
-const sectionCardStyle: React.CSSProperties = {
-  backgroundColor: '#FFFFFF',
-  borderRadius: 16,
-  border: '1px solid #E2E8F0',
-  boxShadow: '0 4px 16px -2px rgba(15, 23, 42, 0.05)',
-  padding: '18px 20px',
-};
-
-const sectionCardTitle: React.CSSProperties = {
-  fontSize: '0.94rem',
-  fontWeight: 800,
-  color: '#0F172A',
-  margin: 0,
-};
-
-const sectionCardSubtitle: React.CSSProperties = {
-  fontSize: '0.70rem',
-  color: '#64748B',
-  marginTop: 2,
-  display: 'block',
-};
-
-const emptyCardBox: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '36px 16px',
-  textAlign: 'center',
-};
-
-const calNavBtn: React.CSSProperties = {
-  width: 26,
-  height: 26,
-  borderRadius: 6,
-  border: '1px solid #E2E8F0',
-  backgroundColor: '#F8FAFC',
-  color: '#475569',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-};

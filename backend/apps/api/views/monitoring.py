@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Classroom Cutting-Class & Faculty GPS Loafing Monitor
+AttendSure - Classroom Cutting-Class & Faculty GPS Loafing Monitor
 File: backend/apps/api/views/monitoring.py
 """
 

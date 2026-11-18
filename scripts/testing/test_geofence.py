@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Geofence & Anti-Spoofing Tests
+AttendSure - Geofence & Anti-Spoofing Tests
 File: D:\\AttendSure_V3\\scripts\\test_geofence.py
 """
 

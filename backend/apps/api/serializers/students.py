@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Student Serializer (Printed QR ID Only, Zero N+1 Queries)
+AttendSure - Student Serializer (Printed QR ID Only, Zero N+1 Queries)
 File: backend/apps/api/serializers/students.py
 """
 

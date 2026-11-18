@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Settings, Database Health & System Status Views
+AttendSure - School Settings, Database Health & System Status Views
 File: backend/apps/api/views/utils.py
 """
 

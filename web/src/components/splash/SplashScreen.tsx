@@ -1,9 +1,11 @@
 /**
- * AttendSure V3 - Minimalist Splash Screen (Light Mode Default)
+ * AttendSure - Circular Radar & Spiral Loader Splash Screen
  * File: web/src/components/splash/SplashScreen.tsx
  */
 
 import React, { useEffect, useState } from 'react';
+import { useTheme } from '../../context/ThemeContext';
+import { BRAND_ASSETS } from '../branding/BrandAssets';
 
 interface SplashScreenProps {
   loading: boolean;
@@ -11,25 +13,18 @@ interface SplashScreenProps {
   onFinish?: () => void;
 }
 
+const SPIRAL_DOTS = Array.from({ length: 8 }, (_, index) => index);
+
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   loading,
-  minDurationMs = 600,
+  minDurationMs = 7000,
   onFinish,
 }) => {
+  const { tokens, brand, fonts } = useTheme();
   const [canExit, setCanExit] = useState(false);
   const [fading, setFading] = useState(false);
   const [hidden, setHidden] = useState(false);
-
-  // Defaults to false (Light Mode) unless dark mode was explicitly saved
-  const [isDark] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    const docTheme = document.documentElement.getAttribute('data-theme');
-    if (docTheme === 'dark') return true;
-    if (docTheme === 'light') return false;
-
-    const saved = localStorage.getItem('attendsure_theme') || localStorage.getItem('attendsure_theme_preference');
-    return saved === 'dark';
-  });
+  const [useInlineFallback, setUseInlineFallback] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -44,16 +39,12 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
       const exitTimer = setTimeout(() => {
         setHidden(true);
         if (onFinish) onFinish();
-      }, 300);
+      }, 350);
       return () => clearTimeout(exitTimer);
     }
   }, [loading, canExit, onFinish]);
 
   if (hidden) return null;
-
-  const bgColor = isDark ? '#070b14' : '#f1f5f9';
-  const textColor = isDark ? '#f8fafc' : '#0f172a';
-  const mutedColor = isDark ? '#64748b' : '#94a3b8';
 
   return (
     <div
@@ -64,43 +55,160 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: bgColor,
+        justifyContent: 'space-between',
+        backgroundColor: tokens.bgCanvas,
         opacity: fading ? 0 : 1,
         transform: fading ? 'scale(1.02)' : 'scale(1)',
-        transition: 'opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+        transition: 'opacity 0.35s ease, transform 0.35s ease',
         pointerEvents: fading ? 'none' : 'auto',
-        fontFamily: "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
+        fontFamily: fonts.display,
+        padding: '32px 24px 24px',
+        boxSizing: 'border-box',
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+      <style>{`
+        @keyframes radarPing {
+          0% {
+            transform: scale(0.95);
+            opacity: 0.75;
+          }
+          100% {
+            transform: scale(1.85);
+            opacity: 0;
+          }
+        }
+        @keyframes radarSweep {
+          0% {
+            transform: rotate(0deg);
+          }
+          100% {
+            transform: rotate(360deg);
+          }
+        }
+        @keyframes spiralDotPulse {
+          0%, 100% {
+            transform: scale(0.32);
+            opacity: 0.2;
+          }
+          50% {
+            transform: scale(1);
+            opacity: 1;
+          }
+        }
+      `}</style>
+
+      {/* Top Spacer */}
+      <div style={{ height: 20 }} />
+
+      {/* Center Circular Radar Logo + Spiral Loader */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          textAlign: 'center',
+          width: '100%',
+          maxWidth: 340,
+        }}
+      >
+        {/* Circular Radar Emblem Container */}
         <div
           style={{
-            width: 72,
-            height: 72,
+            position: 'relative',
+            width: 112,
+            height: 112,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            marginBottom: 14,
+            marginBottom: 22,
           }}
         >
-          <img
-            src="/splash.svg"
-            alt="AttendSure Logo"
-            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-            onError={(e) => {
-              e.currentTarget.src = '/public/splash.svg';
+          {/* Expanding Radar Wave 1 */}
+          <span
+            style={{
+              position: 'absolute',
+              inset: 6,
+              borderRadius: '50%',
+              border: `2px solid ${brand.primary}`,
+              animation: 'radarPing 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite',
+              pointerEvents: 'none',
             }}
           />
+
+          {/* Expanding Radar Wave 2 (Staggered) */}
+          <span
+            style={{
+              position: 'absolute',
+              inset: 6,
+              borderRadius: '50%',
+              border: `2px solid ${brand.secondary}`,
+              animation: 'radarPing 2.4s cubic-bezier(0.16, 1, 0.3, 1) 1.2s infinite',
+              pointerEvents: 'none',
+            }}
+          />
+
+          {/* Rotating Radar Conic Sweep Ring */}
+          <span
+            style={{
+              position: 'absolute',
+              inset: 2,
+              borderRadius: '50%',
+              background: `conic-gradient(from 0deg, ${brand.primary}55 0deg, transparent 110deg, transparent 360deg)`,
+              animation: 'radarSweep 2.2s linear infinite',
+              pointerEvents: 'none',
+            }}
+          />
+
+          {/* Solid Circular Logo Badge */}
+          <div
+            style={{
+              position: 'relative',
+              width: 92,
+              height: 92,
+              borderRadius: '50%',
+              backgroundColor: '#ffffff',
+              border: `2px solid ${brand.primary}`,
+              boxShadow: tokens.cardShadow,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 15,
+              boxSizing: 'border-box',
+              zIndex: 2,
+            }}
+          >
+            {!useInlineFallback ? (
+              <img
+                src={BRAND_ASSETS.attendsureLogo}
+                alt="AttendSure Logo"
+                onError={() => setUseInlineFallback(true)}
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              />
+            ) : (
+              <svg viewBox="0 0 64 64" width="56" height="56" fill="none" aria-label="AttendSure Emblem">
+                <path d="M32 8L12 52H22.5L32 30.5L41.5 52H52L32 8Z" fill="#004b87" />
+                <rect x="14" y="42" width="36" height="10" rx="3" fill="#004b87" />
+                <path
+                  d="M26.5 36.5L30.5 40.5L38.5 31.5"
+                  stroke="#0284c7"
+                  strokeWidth="3.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </div>
         </div>
 
+        {/* Direct, Simple English Title */}
         <h1
           style={{
             margin: 0,
-            fontSize: '1.5rem',
-            fontWeight: 800,
-            color: textColor,
+            fontSize: '2rem',
+            fontWeight: 900,
+            color: tokens.textPrimary,
             letterSpacing: '-0.03em',
+            lineHeight: 1.1,
           }}
         >
           AttendSure
@@ -108,31 +216,82 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 
         <span
           style={{
-            fontSize: '0.74rem',
+            fontSize: '0.88rem',
             fontWeight: 600,
-            color: mutedColor,
-            marginTop: 4,
+            color: tokens.textSecondary,
+            marginTop: 6,
           }}
         >
-          Campus Attendance &amp; Security
+          School Attendance System
+        </span>
+
+        {/* 8-Dot Spiral Loading Spinner */}
+        <div
+          role="status"
+          aria-label="Loading"
+          style={{
+            position: 'relative',
+            width: 44,
+            height: 44,
+            marginTop: 24,
+          }}
+        >
+          {SPIRAL_DOTS.map((i) => {
+            const angleDeg = i * 45;
+            const delaySec = -(1.1 - i * 0.1375).toFixed(4);
+            return (
+              <div
+                key={i}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  transform: `rotate(${angleDeg}deg)`,
+                }}
+              >
+                <span
+                  style={{
+                    display: 'block',
+                    width: 8,
+                    height: 8,
+                    margin: '0 auto',
+                    borderRadius: '50%',
+                    backgroundColor: tokens.textPrimary,
+                    animation: `spiralDotPulse 1.1s ease-in-out ${delaySec}s infinite`,
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        <span
+          style={{
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            color: tokens.textMuted,
+            marginTop: 10,
+          }}
+        >
+          Please wait...
         </span>
       </div>
 
+      {/* Bottom Footer */}
       <div
         style={{
-          position: 'absolute',
-          bottom: 28,
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'center',
           gap: 6,
-          fontSize: '0.72rem',
-          color: mutedColor,
+          fontSize: '0.76rem',
+          color: tokens.textMuted,
           userSelect: 'none',
+          paddingTop: 16,
         }}
       >
         <span>&copy; 2026 AttendSure</span>
         <span>&bull;</span>
-        <span style={{ fontWeight: 700, color: isDark ? '#94a3b8' : '#475569' }}>
+        <span style={{ fontWeight: 800, color: tokens.textPrimary }}>
           TechBlazer
         </span>
       </div>

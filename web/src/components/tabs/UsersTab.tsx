@@ -1,9 +1,9 @@
 /**
- * AttendSure V3 - Users & Security Access Management
+ * AttendSure - Users & Security Access Management
  * File: web/src/components/tabs/UsersTab.tsx
  *
  * Architecture & Cybersecurity:
- * 1. Single Point Registration: All staff, teachers, leadership, and parents are enrolled here.
+ * 1. Single Point Registration: All staff, faculty, leadership, and parents are enrolled here.
  * 2. Automated Directory Filtering: Users with "Can Teach" enabled automatically appear
  *    in the Faculty tab; non-teaching users show only in the Users tab.
  * 3. Mobile App & Portal Integration: Links mobile phone numbers for parent push alerts and app linking.

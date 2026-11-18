@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Form 2 (SF2) Database-Driven Daily Attendance Service
+AttendSure - School Form 2 (SF2) Database-Driven Daily Attendance Service
 File: backend/apps/academics/services/sf2_service.py
 """
 

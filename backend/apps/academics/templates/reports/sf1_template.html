@@ -235,7 +235,7 @@
         <td style="width: 50%; text-align: center;">
             Certified Correct:
             <div class="sig-line"></div>
-            <strong>{{ school.principal.first_name }} {{ school.principal.last_name }}</strong><br>
+            <strong>{{ school.principal_name|default:school.principal_faculty.full_name }}</strong><br>
             School Principal
         </td>
     </tr>

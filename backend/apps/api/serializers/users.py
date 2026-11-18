@@ -1,5 +1,5 @@
 """
-AttendSure V3 - School Profile & User Management Serializer (QR ID & Mobile App Only)
+AttendSure - School Profile & User Management Serializer (QR ID & Mobile App Only)
 File: backend/apps/api/serializers/users.py
 """
 

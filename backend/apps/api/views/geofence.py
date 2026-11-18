@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Faculty Mobile Facial Recognition, Campus GPS Check-In & Device Binding
+AttendSure - Faculty Mobile Facial Recognition, Campus GPS Check-In & Device Binding
 File: backend/apps/api/views/geofence.py
 """
 

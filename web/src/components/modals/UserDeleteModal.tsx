@@ -1,9 +1,10 @@
 /**
- * AttendSure - Delete User Confirmation Modal
+ * AttendSure - Delete User Confirmation Modal (Themed)
  * File: web/src/components/modals/UserDeleteModal.tsx
  */
 
 import React from 'react';
+import { useTheme } from '../../context/ThemeContext';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 
@@ -22,10 +23,12 @@ export const UserDeleteModal: React.FC<UserDeleteModalProps> = ({
   onClose,
   onConfirm,
 }) => {
+  const { tokens, brand } = useTheme();
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Delete User Account">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-primary, #0f172a)' }}>
+        <p style={{ margin: 0, fontSize: '0.84rem', color: tokens.textPrimary }}>
           Permanently delete user account <strong>{username}</strong> ({fullName})?
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -37,7 +40,7 @@ export const UserDeleteModal: React.FC<UserDeleteModalProps> = ({
             size="md"
             type="button"
             onClick={onConfirm}
-            style={{ backgroundColor: 'var(--brand-danger, #EF4444)', borderColor: 'var(--brand-danger, #EF4444)' }}
+            style={{ backgroundColor: brand.danger, borderColor: brand.danger }}
           >
             Delete Account
           </Button>

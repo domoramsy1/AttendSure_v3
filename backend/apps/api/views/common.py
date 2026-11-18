@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Shared Database Resolvers, GPS Boundary Check & Security Helpers
+AttendSure - Shared Database Resolvers, GPS Boundary Check & Security Helpers
 File: backend/apps/api/views/common.py
 """
 

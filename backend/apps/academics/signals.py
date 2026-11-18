@@ -1,5 +1,5 @@
 """
-AttendSure V3 - User Role Sync & Uniform Grade-Level Subject Auto-Enrollment
+AttendSure - User Role Sync & Uniform Grade-Level Subject Auto-Enrollment
 File: backend/apps/academics/signals.py
 """
 

@@ -1,5 +1,5 @@
 ﻿r"""
-AttendSure V3 - Substring & Any-Placement Audit & Cleanup Script for Obsolete Features
+AttendSure - Substring & Any-Placement Audit & Cleanup Script for Obsolete Features
 File: D:\AttendSure_V3\scripts\check_unused_features.py
 """
 
@@ -282,7 +282,7 @@ def clean_files_and_codebase() -> list[str]:
     scanners_view = BACKEND_DIR / "apps" / "scanners" / "views.py"
     if scanners_view.exists():
         scanners_view.write_text(
-            '"""\nAttendSure V3 - Classroom USB QR Station Views\nFile: backend/apps/scanners/views.py\n"""\n\n'
+            '"""\nAttendSure  - Classroom USB QR Station Views\nFile: backend/apps/scanners/views.py\n"""\n\n'
             "from rest_framework import permissions, status\n"
             "from rest_framework.response import Response\n"
             "from rest_framework.views import APIView\n\n\n"
@@ -512,7 +512,7 @@ def main():
 
     report_lines = [
         "========================================================================================",
-        "AttendSure V3 - Any-Placement & Any-Case Obsolete Feature Audit Report",
+        "AttendSure - Any-Placement & Any-Case Obsolete Feature Audit Report",
         f"Run Time: {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')}",
         f"Mode:     {'AUTO-CLEAN & VERIFY' if args.clean else 'READ-ONLY AUDIT'}",
         "========================================================================================",

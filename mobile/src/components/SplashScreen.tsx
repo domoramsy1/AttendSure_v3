@@ -1,6 +1,5 @@
 /**
- * AttendSure - Mobile Splash Screen
- * Uses vector SVG logo for crisp, zero-latency rendering.
+ * AttendSure - Circular Radar & Spiral Loader Mobile Splash Screen
  * File: mobile/src/components/SplashScreen.tsx
  */
 
@@ -10,6 +9,7 @@ import {
   Text,
   StyleSheet,
   Animated,
+  Easing,
   Platform,
   TouchableOpacity,
   Modal,
@@ -22,6 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as NativeSplashScreen from 'expo-splash-screen';
 import { getServerBaseUrl, setServerBaseUrl } from '../services/configService';
 import { AttendSureLogo } from '../branding/AttendSureLogo';
+import { useThemeMode } from '../context/ThemeContext';
 
 interface SplashScreenProps {
   loading?: boolean;
@@ -29,7 +30,9 @@ interface SplashScreenProps {
   onFinish?: () => void;
 }
 
-// Cybersecurity: Prevent script or unsafe protocol injection into server address
+const SPIRAL_DOTS = Array.from({ length: 8 }, (_, index) => index);
+
+// Cybersecurity: Block unsafe URL protocols in server address input
 const isValidServerUrl = (url: string): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
@@ -46,19 +49,84 @@ const isValidServerUrl = (url: string): boolean => {
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   loading = false,
-  minDurationMs = 800,
+  minDurationMs = 7000,
   onFinish,
 }) => {
+  const { palette, isDark } = useThemeMode();
   const [canExit, setCanExit] = useState(false);
   const [hidden, setHidden] = useState(false);
 
+  // Fade out animation
   const opacityAnim = useRef(new Animated.Value(1)).current;
 
-  // Network Tools Modal State
+  // Radar wave & sweep animations
+  const radarWave1 = useRef(new Animated.Value(0)).current;
+  const radarWave2 = useRef(new Animated.Value(0)).current;
+  const radarSweep = useRef(new Animated.Value(0)).current;
+
+  // Spiral loader master clock (0 -> 1 loop)
+  const spiralClock = useRef(new Animated.Value(0)).current;
+
+  // Server Settings Modal State
   const [showToolsModal, setShowToolsModal] = useState<boolean>(false);
   const [customServerUrl, setCustomServerUrl] = useState<string>('');
   const isHoldingSplashRef = useRef<boolean>(false);
 
+  // Start continuous radar & spiral animations
+  useEffect(() => {
+    const wave1Loop = Animated.loop(
+      Animated.timing(radarWave1, {
+        toValue: 1,
+        duration: 2400,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      })
+    );
+
+    const wave2Loop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(1200),
+        Animated.timing(radarWave2, {
+          toValue: 1,
+          duration: 2400,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    const sweepLoop = Animated.loop(
+      Animated.timing(radarSweep, {
+        toValue: 1,
+        duration: 2200,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+
+    const spiralLoop = Animated.loop(
+      Animated.timing(spiralClock, {
+        toValue: 1,
+        duration: 1100,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+
+    wave1Loop.start();
+    wave2Loop.start();
+    sweepLoop.start();
+    spiralLoop.start();
+
+    return () => {
+      wave1Loop.stop();
+      wave2Loop.stop();
+      sweepLoop.stop();
+      spiralLoop.stop();
+    };
+  }, [radarWave1, radarWave2, radarSweep, spiralClock]);
+
+  // 7-second timer
   useEffect(() => {
     if (Platform.OS !== 'web') {
       NativeSplashScreen.hideAsync().catch(() => {});
@@ -71,6 +139,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     return () => clearTimeout(timer);
   }, [minDurationMs]);
 
+  // Exit transition once timer finishes
   useEffect(() => {
     if (!loading && canExit && !isHoldingSplashRef.current) {
       Animated.timing(opacityAnim, {
@@ -96,59 +165,161 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     if (!isValidServerUrl(cleanUrl)) {
       Alert.alert(
         'Invalid Address',
-        'Please enter a valid URL starting with http:// or https://'
+        'Please enter a valid web address starting with http:// or https://'
       );
       return;
     }
 
     try {
       await setServerBaseUrl(cleanUrl);
-      Alert.alert('Saved', 'School server address updated successfully.');
+      Alert.alert('Saved', 'School server address updated.');
       setShowToolsModal(false);
       isHoldingSplashRef.current = false;
       if (onFinish) onFinish();
     } catch (e: any) {
-      Alert.alert('Invalid URL', e.message || 'Please check the server address format.');
+      Alert.alert('Invalid Address', e.message || 'Please check the server address.');
     }
   };
 
   if (hidden) return null;
 
-  return (
-    <Animated.View style={[styles.container, { opacity: opacityAnim }]}>
-      <SafeAreaView style={styles.safeContainer} edges={['top', 'bottom']}>
-        <StatusBar style="dark" />
+  const wave1Scale = radarWave1.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.85] });
+  const wave1Opacity = radarWave1.interpolate({ inputRange: [0, 1], outputRange: [0.75, 0] });
 
-        {/* Top-Left Network Tools Button */}
+  const wave2Scale = radarWave2.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.85] });
+  const wave2Opacity = radarWave2.interpolate({ inputRange: [0, 1], outputRange: [0.75, 0] });
+
+  const sweepRotate = radarSweep.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  return (
+    <Animated.View style={[styles.container, { backgroundColor: palette.background, opacity: opacityAnim }]}>
+      <SafeAreaView style={styles.safeContainer} edges={['top', 'bottom']}>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+
+        {/* Top-Left Server Settings Button */}
         <View style={styles.topBar}>
           <TouchableOpacity
             style={styles.toolsButton}
             onPress={openTools}
             activeOpacity={0.8}
-            accessibilityLabel="Configure server endpoint"
+            accessibilityLabel="Server settings"
           >
-            <View style={styles.toolsIconHalo}>
-              <View style={styles.toolsIconCircle}>
+            <View style={[styles.toolsIconHalo, { backgroundColor: palette.primarySoft }]}>
+              <View style={[styles.toolsIconCircle, { backgroundColor: palette.primary }]}>
                 <Ionicons name="settings-sharp" size={16} color="#ffffff" />
               </View>
             </View>
           </TouchableOpacity>
         </View>
 
-        {/* Center Product Emblem: Uses AttendSure SVG Logo */}
+        {/* Center Circular Radar Logo + Spiral Loader */}
         <View style={styles.centerSection}>
-          <View style={styles.emblemContainer}>
-            <AttendSureLogo size={56} />
+          <View style={styles.radarContainer}>
+            {/* Expanding Radar Wave 1 */}
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.radarRing,
+                {
+                  borderColor: palette.primary,
+                  transform: [{ scale: wave1Scale }],
+                  opacity: wave1Opacity,
+                },
+              ]}
+            />
+
+            {/* Expanding Radar Wave 2 */}
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.radarRing,
+                {
+                  borderColor: palette.secondary,
+                  transform: [{ scale: wave2Scale }],
+                  opacity: wave2Opacity,
+                },
+              ]}
+            />
+
+            {/* Rotating Radar Sweep Ring */}
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.radarSweepRing,
+                {
+                  borderTopColor: palette.primary,
+                  borderRightColor: `${palette.primary}55`,
+                  transform: [{ rotate: sweepRotate }],
+                },
+              ]}
+            />
+
+            {/* Solid Circular Logo Emblem */}
+            <View style={[styles.emblemCircle, { borderColor: palette.primary }]}>
+              <AttendSureLogo size={56} />
+            </View>
           </View>
-          <Text style={styles.brandTitle}>AttendSure</Text>
+
+          <Text style={[styles.brandTitle, { color: palette.textPrimary }]}>AttendSure</Text>
+          <Text style={[styles.brandSubtitle, { color: palette.textSecondary }]}>
+            School Attendance System
+          </Text>
+
+          {/* 8-Dot Spiral Loading Spinner */}
+          <View style={styles.spiralContainer} accessibilityLabel="Loading">
+            {SPIRAL_DOTS.map((i) => {
+              const angleDeg = `${i * 45}deg`;
+              const phase = i / 8;
+
+              // Staggered phase shift around the 8 dots to create the spiral wave
+              const inputRange = [0, phase, (phase + 0.5) % 1, 1].sort((a, b) => a - b);
+              const uniqueInput = Array.from(new Set(inputRange));
+              const outputScale = uniqueInput.map((val) => {
+                const dist = Math.abs(((val - phase + 1.5) % 1) - 0.5) * 2; // 0 at peak, 1 at trough
+                return 1 - dist * 0.68;
+              });
+              const outputOpacity = uniqueInput.map((val) => {
+                const dist = Math.abs(((val - phase + 1.5) % 1) - 0.5) * 2;
+                return 1 - dist * 0.8;
+              });
+
+              const dotScale = spiralClock.interpolate({
+                inputRange: uniqueInput,
+                outputRange: outputScale,
+              });
+              const dotOpacity = spiralClock.interpolate({
+                inputRange: uniqueInput,
+                outputRange: outputOpacity,
+              });
+
+              return (
+                <View key={i} style={[styles.spiralArm, { transform: [{ rotate: angleDeg }] }]}>
+                  <Animated.View
+                    style={[
+                      styles.spiralDot,
+                      {
+                        backgroundColor: palette.textPrimary,
+                        transform: [{ scale: dotScale }],
+                        opacity: dotOpacity,
+                      },
+                    ]}
+                  />
+                </View>
+              );
+            })}
+          </View>
+
+          <Text style={[styles.waitText, { color: palette.textMuted }]}>Please wait...</Text>
         </View>
 
-        {/* Developer Corporate Signature at Bottom */}
+        {/* Bottom Footer */}
         <View style={styles.footerSection}>
-          <Text style={styles.signatureText}>System by TechBlazer</Text>
+          <Text style={[styles.signatureText, { color: palette.textMuted }]}>
+            &copy; 2026 AttendSure &bull; <Text style={{ fontWeight: '800', color: palette.textPrimary }}>TechBlazer</Text>
+          </Text>
         </View>
 
-        {/* Network & Server Tools Modal */}
+        {/* Server Settings Modal */}
         <Modal
           visible={showToolsModal}
           transparent
@@ -160,21 +331,28 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           }}
         >
           <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
+            <View style={[styles.modalCard, { backgroundColor: palette.surface, borderColor: palette.border }]}>
               <View style={styles.modalHeaderRow}>
-                <Ionicons name="server-outline" size={20} color="#004b87" />
-                <Text style={styles.modalTitle}>Network &amp; Server Tools</Text>
+                <Ionicons name="server-outline" size={20} color={palette.primary} />
+                <Text style={[styles.modalTitle, { color: palette.textPrimary }]}>Server Settings</Text>
               </View>
-              <Text style={styles.modalSubtitle}>
-                Configure local or cloud school server address
+              <Text style={[styles.modalSubtitle, { color: palette.textSecondary }]}>
+                Enter your school server web address
               </Text>
 
               <TextInput
-                style={styles.modalInput}
+                style={[
+                  styles.modalInput,
+                  {
+                    backgroundColor: palette.surfaceSubtle,
+                    borderColor: palette.borderStrong,
+                    color: palette.textPrimary,
+                  },
+                ]}
                 value={customServerUrl}
                 onChangeText={setCustomServerUrl}
                 placeholder="http://192.168.1.100:8000"
-                placeholderTextColor="#94a3b8"
+                placeholderTextColor={palette.textMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
               />
@@ -188,13 +366,13 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
                     if (onFinish) onFinish();
                   }}
                 >
-                  <Text style={styles.modalCancelText}>Cancel</Text>
+                  <Text style={[styles.modalCancelText, { color: palette.textMuted }]}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={styles.modalSaveBtn}
+                  style={[styles.modalSaveBtn, { backgroundColor: palette.primary }]}
                   onPress={saveServerAddress}
                 >
-                  <Text style={styles.modalSaveText}>Save &amp; Connect</Text>
+                  <Text style={styles.modalSaveText}>Save</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -208,16 +386,11 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    inset: 0,
     zIndex: 99999,
-    backgroundColor: '#ffffff',
   },
   safeContainer: {
     flex: 1,
-    backgroundColor: '#ffffff',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -234,7 +407,6 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: 'rgba(2, 132, 199, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -242,47 +414,89 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#0284c7',
     alignItems: 'center',
     justifyContent: 'center',
   },
   centerSection: {
     alignItems: 'center',
     justifyContent: 'center',
-    transform: [{ translateY: -16 }],
   },
-  emblemContainer: {
+  radarContainer: {
+    width: 116,
+    height: 116,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+  },
+  radarRing: {
+    position: 'absolute',
     width: 96,
     height: 96,
     borderRadius: 48,
+    borderWidth: 2,
+  },
+  radarSweepRing: {
+    position: 'absolute',
+    width: 106,
+    height: 106,
+    borderRadius: 53,
+    borderWidth: 2.5,
+    borderLeftColor: 'transparent',
+    borderBottomColor: 'transparent',
+  },
+  emblemCircle: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
+    borderWidth: 2,
     shadowColor: '#004b87',
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.14,
     shadowRadius: 10,
-    elevation: 4,
-    marginBottom: 14,
+    elevation: 5,
     overflow: 'hidden',
   },
   brandTitle: {
-    fontSize: 22,
+    fontSize: 28,
     fontWeight: '900',
-    color: '#003460',
-    letterSpacing: -0.3,
+    letterSpacing: -0.4,
+  },
+  brandSubtitle: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  spiralContainer: {
+    width: 44,
+    height: 44,
+    marginTop: 24,
+    position: 'relative',
+  },
+  spiralArm: {
+    position: 'absolute',
+    inset: 0,
+    alignItems: 'center',
+  },
+  spiralDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  waitText: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    marginTop: 10,
   },
   footerSection: {
     alignItems: 'center',
-    paddingBottom: 20,
+    paddingBottom: 12,
   },
   signatureText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: '#94a3b8',
-    letterSpacing: 0.4,
+    fontSize: 12,
+    fontWeight: '600',
   },
   modalBackdrop: {
     flex: 1,
@@ -294,11 +508,9 @@ const styles = StyleSheet.create({
   modalCard: {
     width: '100%',
     maxWidth: 340,
-    backgroundColor: '#ffffff',
     borderRadius: 16,
     padding: 20,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
   },
   modalHeaderRow: {
     flexDirection: 'row',
@@ -308,24 +520,18 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#0f172a',
   },
   modalSubtitle: {
-    fontSize: 11.5,
-    color: '#64748b',
+    fontSize: 12,
     marginTop: 4,
     marginBottom: 14,
-    lineHeight: 16,
   },
   modalInput: {
     height: 44,
     borderWidth: 1,
-    borderColor: '#cbd5e1',
     borderRadius: 8,
     paddingHorizontal: 12,
     fontSize: 13,
-    color: '#0f172a',
-    backgroundColor: '#f8fafc',
     marginBottom: 16,
   },
   modalActions: {
@@ -340,12 +546,10 @@ const styles = StyleSheet.create({
   modalCancelText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#64748b',
   },
   modalSaveBtn: {
-    backgroundColor: '#004b87',
     paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     borderRadius: 8,
   },
   modalSaveText: {

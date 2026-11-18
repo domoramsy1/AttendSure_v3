@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Enterprise UN SDG Impact, SARDO Early-Warning, Emergency Roll-Call & Ed-Fi Open Export
+AttendSure - Enterprise UN SDG Impact, SARDO Early-Warning, Emergency Roll-Call & Ed-Fi Open Export
 File: backend/apps/api/views/enterprise_sdg.py
 """
 

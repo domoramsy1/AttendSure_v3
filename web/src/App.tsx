@@ -1,11 +1,11 @@
 /**
- * AttendSure V3 - Main Application Layout & State Container
+ * AttendSure - Main Application Layout & State Container
  * File: web/src/App.tsx
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import apiClient from './api/client';
-import { LoginView } from './components/auth/LoginView';
+import { AuthPage as LoginView } from './components/auth/AuthPage';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { Sidebar, type NavItemKey } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
@@ -437,7 +437,7 @@ const AppContent: React.FC = () => {
 
   return (
     <>
-      <SplashScreen loading={isSchoolLoading} minDurationMs={300} />
+      <SplashScreen loading={isSchoolLoading} minDurationMs={7000} />
 
       {!session ? (
         <LoginView
@@ -511,7 +511,6 @@ const AppContent: React.FC = () => {
           >
             <Header
               title={getPageTitle()}
-              isGateNodeOnline={isServerOnline}
               session={session}
               userPhoto={userPhoto}
               schoolName={school.school_name}

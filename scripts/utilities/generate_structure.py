@@ -1,5 +1,5 @@
 """
-AttendSure V3 - High-Speed Project Structure & File Tree Exporter
+AttendSure - High-Speed Project Structure & File Tree Exporter
 File: D:\AttendSure_V3\generate_structure.py
 
 Key Capabilities:
@@ -99,12 +99,12 @@ def process_directory(current_path: str, prefix: str = ""):
 
 
 def main():
-    print("Scanning AttendSure V3 project structure...")
+    print("Scanning AttendSure project structure...")
     process_directory(ROOT_DIR)
 
     header = (
         "================================================================================\n"
-        "ATTENDSURE V3 - PROJECT FILE & DIRECTORY STRUCTURE\n"
+        "ATTENDSURE  - PROJECT FILE & DIRECTORY STRUCTURE\n"
         f"Generated : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"Root Path : {ROOT_DIR}\n"
         f"Summary   : {dir_count} Directories, {file_count} Source Files\n"

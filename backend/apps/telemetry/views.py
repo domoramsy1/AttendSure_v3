@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Asynchronous Telemetry & GPS Heartbeat View
+AttendSure - Asynchronous Telemetry & GPS Heartbeat View
 File: backend/apps/telemetry/views.py
 
 Cybersecurity & Performance:

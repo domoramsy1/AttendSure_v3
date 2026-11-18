@@ -1,5 +1,5 @@
 /**
- * AttendSure V3 - Collapsible Sidebar Navigation (Pure Software Architecture)
+ * AttendSure - Collapsible Sidebar Navigation (Pure Software Architecture)
  * File: web/src/components/layout/Sidebar.tsx
  */
 

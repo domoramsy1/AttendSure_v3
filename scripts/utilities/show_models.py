@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Models File Tree and Code Inspector
+AttendSure - Models File Tree and Code Inspector
 File: backend/show_models.py
 """
 

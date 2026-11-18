@@ -1,5 +1,5 @@
 """
-AttendSure V3 - App Notifications, Parent Linking & Pure-Software Schema
+AttendSure - App Notifications, Parent Linking & Pure-Software Schema
 File: backend/apps/academics/migrations/0023_appnotification_and_more.py
 """
 

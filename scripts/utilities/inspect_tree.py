@@ -1,5 +1,5 @@
 """
-AttendSure V3 - Backend Directory Tree Inspector
+AttendSure - Backend Directory Tree Inspector
 File: D:\\AttendSure_V3\\scripts\\inspect_tree.py
 """
 
