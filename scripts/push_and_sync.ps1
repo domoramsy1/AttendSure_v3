@@ -1,94 +1,49 @@
-# AttendSure - GitHub Push, Auto-Tag Increment & Full Version Backup Script
-# File: D:\AttendSure_V3\scripts\push_and_sync.ps1
-
 param(
-    [string]$CommitMessage = "Auto-sync update $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    [string]$CommitMessage = "Sync update $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 )
 
 $ErrorActionPreference = "Continue"
-$SourceDir = "D:\AttendSure_V3"
+$SourceDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $VersionBaseDir = "D:\ATTENDSURE SYSTEM\VERSION"
-
-if (-not (Test-Path $SourceDir)) {
-    Write-Host "Error: Source folder $SourceDir does not exist." -ForegroundColor Red
-    exit 1
-}
 
 Set-Location $SourceDir
 
-Write-Host "--- Step 1: Saving and pushing project changes to GitHub ---" -ForegroundColor Cyan
+Write-Host "--- Step 1: Committing and pushing changes to GitHub (main) ---" -ForegroundColor Cyan
 $CurrentBranch = (git rev-parse --abbrev-ref HEAD 2>$null).Trim()
-if ($CurrentBranch -ne "main") {
-    git checkout main
-}
+if ($CurrentBranch -ne "main") { git checkout main }
 
 git add -A
-
-$PendingChanges = git status --porcelain
-if ($PendingChanges) {
+if (git status --porcelain) {
     git commit -m "$CommitMessage"
 } else {
-    Write-Host "No new file changes to commit. Proceeding with push and version tagging..." -ForegroundColor Yellow
+    Write-Host "Working tree clean. Proceeding to version tag..." -ForegroundColor Yellow
 }
-
 git push origin main
 
-Write-Host "--- Step 2: Incrementing GitHub version tag ---" -ForegroundColor Cyan
+Write-Host "--- Step 2: Incrementing semantic version tag ---" -ForegroundColor Cyan
 git fetch --tags --force 2>$null
-
-# Get the highest semantic version tag (e.g., v3.0.28)
 $LatestTag = (git tag -l "v*" --sort=-v:refname | Select-Object -First 1)
-if (-not $LatestTag) {
-    $LatestTag = git describe --tags --abbrev=0 2>$null
-}
-
-if (-not $LatestTag) {
-    $NewTag = "v3.0.1"
-    Write-Host "No existing tags found. Starting at: $NewTag" -ForegroundColor Yellow
+if ($LatestTag -and $LatestTag.Trim() -match '^v(\d+)\.(\d+)\.(\d+)$') {
+    $NewTag = "v$($Matches[1]).$($Matches[2]).$([int]$Matches[3] + 1)"
 } else {
-    $LatestTag = $LatestTag.Trim()
-    Write-Host "Latest tag found: $LatestTag" -ForegroundColor Green
-
-    if ($LatestTag -match '^v(\d+)\.(\d+)\.(\d+)$') {
-        $Major = [int]$Matches[1]
-        $Minor = [int]$Matches[2]
-        $Patch = [int]$Matches[3] + 1
-        $NewTag = "v$Major.$Minor.$Patch"
-    } else {
-        $NewTag = "v3.0.29"
-    }
+    $NewTag = "v3.1.0"
 }
 
 while ((git tag -l "$NewTag") -eq $NewTag) {
     if ($NewTag -match '^v(\d+)\.(\d+)\.(\d+)$') {
-        $Major = [int]$Matches[1]
-        $Minor = [int]$Matches[2]
-        $Patch = [int]$Matches[3] + 1
-        $NewTag = "v$Major.$Minor.$Patch"
+        $NewTag = "v$($Matches[1]).$($Matches[2]).$([int]$Matches[3] + 1)"
     }
 }
 
-Write-Host "Creating and pushing new version tag: $NewTag" -ForegroundColor Green
 git tag -a $NewTag -m "Release $NewTag - $CommitMessage"
 git push origin main --tags
 
-Write-Host "--- Step 3: Backing up full project to $VersionBaseDir\$NewTag ---" -ForegroundColor Cyan
+Write-Host "--- Step 3: Saving clean source snapshot to $VersionBaseDir\$NewTag ---" -ForegroundColor Cyan
 $TargetVersionDir = Join-Path $VersionBaseDir $NewTag
+New-Item -ItemType Directory -Path $TargetVersionDir -Force | Out-Null
 
-if (-not (Test-Path $TargetVersionDir)) {
-    New-Item -ItemType Directory -Path $TargetVersionDir -Force | Out-Null
-}
+robocopy "$SourceDir" "$TargetVersionDir" /E /COPY:DAT /DCOPY:T /R:2 /W:1 /MT:16 `
+    /XD "node_modules" "venv" ".venv" "__pycache__" ".expo" "dist" "_legacy_backup" "_archived_legacy" `
+    /NP /NFL /NDL | Out-Null
 
-# Copy 100% of files and folders without ignoring anything
-robocopy "$SourceDir" "$TargetVersionDir" /E /COPY:DAT /DCOPY:T /R:2 /W:1 /MT:16 /NP /NFL /NDL
-
-if ($LASTEXITCODE -lt 8) {
-    Write-Host "==================================================================" -ForegroundColor Green
-    Write-Host "SUCCESS!" -ForegroundColor Green
-    Write-Host "1. GitHub Branch : main (Updated)" -ForegroundColor Green
-    Write-Host "2. GitHub Tag    : $NewTag" -ForegroundColor Green
-    Write-Host "3. Full Backup   : $TargetVersionDir" -ForegroundColor Green
-    Write-Host "==================================================================" -ForegroundColor Green
-} else {
-    Write-Host "Warning: Robocopy finished with exit code $LASTEXITCODE. Check open files." -ForegroundColor Yellow
-}
+Write-Host "SUCCESS: Pushed $NewTag and backed up source to $TargetVersionDir" -ForegroundColor Green

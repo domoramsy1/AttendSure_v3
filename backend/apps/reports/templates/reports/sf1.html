@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DepEd SF1 - {{ section_name }}</title>
+  <style>
+    @page { size: legal landscape; margin: 8mm; }
+    body { font-family: Arial, sans-serif; font-size: 8.5pt; color: #000; }
+    h1, h2 { margin: 2px 0; text-align: center; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 7.5pt; }
+    th, td { border: 1px solid #000; padding: 3px 4px; text-align: center; }
+    th { background: #eaeaea; }
+    .left { text-align: left; }
+    @media print { .no-print { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="no-print" style="text-align:right;margin-bottom:8px;">
+    <button onclick="window.print()">Print / Save PDF</button>
+  </div>
+  <h2>Republic of the Philippines &bull; Department of Education</h2>
+  <h1>School Form 1 (SF1) School Register</h1>
+  <p>
+    <strong>School:</strong> {{ school_name }} ({{ school_id }}) &nbsp;|&nbsp;
+    <strong>School Year:</strong> {{ academic_year }} &nbsp;|&nbsp;
+    <strong>Grade &amp; Section:</strong> {{ grade_level }} - {{ section_name }}
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>LRN</th><th>Learner's Name</th><th>Sex</th><th>Birth Date</th>
+        <th>Age</th><th>Address</th><th>Parent / Guardian</th><th>Contact</th><th>Remarks</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td colspan="10" class="left"><strong>MALE ({{ total_male }})</strong></td></tr>
+      {% for r in males %}
+      <tr>
+        <td>{{ forloop.counter }}</td><td>{{ r.lrn }}</td><td class="left">{{ r.name }}</td>
+        <td>M</td><td>{{ r.birthdate }}</td><td>{{ r.age }}</td><td class="left">{{ r.address }}</td>
+        <td class="left">{{ r.guardian_name|default:r.mother_maiden_name }}</td><td>{{ r.parent_contact }}</td><td>{{ r.remarks }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="10">No male learners enrolled.</td></tr>
+      {% endfor %}
+      <tr><td colspan="10" class="left"><strong>FEMALE ({{ total_female }})</strong></td></tr>
+      {% for r in females %}
+      <tr>
+        <td>{{ forloop.counter }}</td><td>{{ r.lrn }}</td><td class="left">{{ r.name }}</td>
+        <td>F</td><td>{{ r.birthdate }}</td><td>{{ r.age }}</td><td class="left">{{ r.address }}</td>
+        <td class="left">{{ r.guardian_name|default:r.mother_maiden_name }}</td><td>{{ r.parent_contact }}</td><td>{{ r.remarks }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="10">No female learners enrolled.</td></tr>
+      {% endfor %}
+      <tr><td colspan="10" class="left"><strong>COMBINED TOTAL: {{ total_combined }}</strong></td></tr>
+    </tbody>
+  </table>
+</body>
+</html>

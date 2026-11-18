@@ -1,32 +1,41 @@
-"""
-AttendSure - Project Cleaner
-File: D:\\AttendSure_V3\\scripts\\clean_project.py
+r"""
+AttendSure - Bytecode & Application Cache Cleaner
+Run: python utilities\clean_project.py
 """
 
 import shutil
+import sys
 from pathlib import Path
 
-SCRIPTS_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPTS_DIR.parent
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _bootstrap import BACKEND_DIR, EXPORTS_DIR, PROJECT_ROOT, RESULTS_DIR, SCRIPTS_DIR, setup_django
+
+setup_django()
+
+from django.core.cache import cache
+
+SKIP_ROOTS = {"venv", ".venv", "node_modules", ".git", "_legacy_backup", "_archived_legacy"}
 
 
 def main():
-    print("[*] Cleaning project repository...")
     removed = 0
-    for cache_dir in PROJECT_ROOT.rglob("__pycache__"):
-        try:
-            shutil.rmtree(cache_dir)
-            removed += 1
-        except Exception:
-            pass
+    for pycache in PROJECT_ROOT.rglob("__pycache__"):
+        if any(part in SKIP_ROOTS for part in pycache.parts):
+            continue
+        shutil.rmtree(pycache, ignore_errors=True)
+        removed += 1
 
-    # Ensure required runtime folders exist
-    (SCRIPTS_DIR / "results").mkdir(parents=True, exist_ok=True)
-    (SCRIPTS_DIR / "data").mkdir(parents=True, exist_ok=True)
-    (PROJECT_ROOT / "backend" / "logs").mkdir(parents=True, exist_ok=True)
+    # Remove stray folders if an older utility created them inside scripts/utilities/
+    for stray in (SCRIPTS_DIR / "utilities" / "data", SCRIPTS_DIR / "utilities" / "results"):
+        if stray.is_dir():
+            shutil.rmtree(stray, ignore_errors=True)
 
-    print(f"[✓] Removed {removed} stale __pycache__ folders.")
-    print("[✓] Project structure verified and ready.")
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    (BACKEND_DIR / "logs").mkdir(parents=True, exist_ok=True)
+
+    cache.clear()
+    print(f"[OK] Removed {removed} __pycache__ folder(s) and cleared Django cache.")
 
 
 if __name__ == "__main__":

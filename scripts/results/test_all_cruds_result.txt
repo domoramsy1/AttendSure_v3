@@ -1,141 +1,125 @@
-AttendSure - Backend CRUD & Functional Verification
-Run Time: 2026-11-17 09:15:10 AM
-========================================================================================
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/health/db/ [97m(User: faculty_admin)[0m [2m93ms[0m
-[PASS] HEALTH         | Database Connection                |  157.9 ms | HTTP 200
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/auth/me/ [97m(User: faculty_admin)[0m [2m72ms[0m
-[PASS] AUTH           | Current User Profile (GET)         |   73.2 ms | User=faculty_admin
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/dashboard/overview/ [97m(User: faculty_admin)[0m [2m53ms[0m
-[PASS] DASHBOARD      | Dashboard Overview (GET)           |   54.0 ms | Students=1001
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/settings/school/ [97m(User: faculty_admin)[0m [2m49ms[0m
-[PASS] SETTINGS       | School Metadata (GET)              |   50.7 ms | School=Macasandig National High School
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/user-activity-logs/ [97m(User: faculty_admin)[0m [2m120ms[0m
-[PASS] SECURITY       | Audit Activity Logs (GET)          |  121.4 ms | Logs=250
-[09:15:11] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/rooms/ [97m(User: faculty_admin)[0m [2m8ms[0m
-[PASS] CRUD-CREATE    | Rooms (POST)                       |    9.8 ms | HTTP 201 | ID=169
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/rooms/ [97m(User: faculty_admin)[0m [2m4ms[0m
-[PASS] CRUD-READ      | Rooms List (GET)                   |    5.1 ms | HTTP 200 | Count=17
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/rooms/169/ [97m(User: faculty_admin)[0m [2m5ms[0m
-[PASS] CRUD-READ      | Rooms Detail (GET)                 |    6.7 ms | HTTP 200
-[09:15:11] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/rooms/169/ [97m(User: faculty_admin)[0m [2m11ms[0m
-[PASS] CRUD-UPDATE    | Rooms (PATCH)                      |   13.1 ms | HTTP 200 | capacity=50
-[09:15:11] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/rooms/169/ [97m(User: faculty_admin)[0m [2m11ms[0m
-[PASS] CRUD-DELETE    | Rooms (DELETE)                     |   12.8 ms | HTTP 204
-[09:15:11] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/grade-levels/ [97m(User: faculty_admin)[0m [2m9ms[0m
-[PASS] CRUD-CREATE    | Grade Levels (POST)                |   10.8 ms | HTTP 201 | ID=83
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/grade-levels/ [97m(User: faculty_admin)[0m [2m4ms[0m
-[PASS] CRUD-READ      | Grade Levels List (GET)            |    6.4 ms | HTTP 200 | Count=15
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/grade-levels/83/ [97m(User: faculty_admin)[0m [2m9ms[0m
-[PASS] CRUD-READ      | Grade Levels Detail (GET)          |   12.4 ms | HTTP 200
-[09:15:11] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/grade-levels/83/ [97m(User: faculty_admin)[0m [2m13ms[0m
-[PASS] CRUD-UPDATE    | Grade Levels (PATCH)               |   15.3 ms | HTTP 200 | name=Level-3596ED-Updated
-[09:15:11] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/grade-levels/83/ [97m(User: faculty_admin)[0m [2m18ms[0m
-[PASS] CRUD-DELETE    | Grade Levels (DELETE)              |   22.9 ms | HTTP 204
-[09:15:11] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/subjects/ [97m(User: faculty_admin)[0m [2m11ms[0m
-[PASS] CRUD-CREATE    | Subjects (POST)                    |   17.0 ms | HTTP 201 | ID=122
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/subjects/ [97m(User: faculty_admin)[0m [2m14ms[0m
-[PASS] CRUD-READ      | Subjects List (GET)                |   15.9 ms | HTTP 200 | Count=11
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/subjects/122/ [97m(User: faculty_admin)[0m [2m11ms[0m
-[PASS] CRUD-READ      | Subjects Detail (GET)              |   12.4 ms | HTTP 200
-[09:15:11] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/subjects/122/ [97m(User: faculty_admin)[0m [2m15ms[0m
-[PASS] CRUD-UPDATE    | Subjects (PATCH)                   |   16.9 ms | HTTP 200 | units=5
-[09:15:11] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/subjects/122/ [97m(User: faculty_admin)[0m [2m15ms[0m
-[PASS] CRUD-DELETE    | Subjects (DELETE)                  |   16.6 ms | HTTP 204
-[09:15:11] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/sections/ [97m(User: faculty_admin)[0m [2m37ms[0m
-[PASS] CRUD-CREATE    | Sections (POST)                    |   39.0 ms | HTTP 201 | ID=146
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/sections/ [97m(User: faculty_admin)[0m [2m72ms[0m
-[PASS] CRUD-READ      | Sections List (GET)                |   74.4 ms | HTTP 200 | Count=25
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/sections/146/ [97m(User: faculty_admin)[0m [2m10ms[0m
-[PASS] CRUD-READ      | Sections Detail (GET)              |   11.9 ms | HTTP 200
-[09:15:11] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/sections/146/ [97m(User: faculty_admin)[0m [2m30ms[0m
-[PASS] CRUD-UPDATE    | Sections (PATCH)                   |   31.7 ms | HTTP 200 | capacity=48
-[09:15:11] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/sections/146/ [97m(User: faculty_admin)[0m [2m19ms[0m
-[PASS] CRUD-DELETE    | Sections (DELETE)                  |   20.0 ms | HTTP 204
-[09:15:11] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/schedules/ [97m(User: faculty_admin)[0m [2m19ms[0m
-[PASS] CRUD-CREATE    | Schedules (POST)                   |   20.3 ms | HTTP 201 | ID=289
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/schedules/ [97m(User: faculty_admin)[0m [2m14ms[0m
-[PASS] CRUD-READ      | Schedules List (GET)               |   15.1 ms | HTTP 200 | Count=20
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/schedules/289/ [97m(User: faculty_admin)[0m [2m12ms[0m
-[PASS] CRUD-READ      | Schedules Detail (GET)             |   13.6 ms | HTTP 200
-[09:15:11] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/schedules/289/ [97m(User: faculty_admin)[0m [2m13ms[0m
-[PASS] CRUD-UPDATE    | Schedules (PATCH)                  |   14.6 ms | HTTP 200 | start_time=08:30:00
-[09:15:11] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/schedules/289/ [97m(User: faculty_admin)[0m [2m14ms[0m
-[PASS] CRUD-DELETE    | Schedules (DELETE)                 |   15.5 ms | HTTP 204
-[09:15:11] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/students/ [97m(User: faculty_admin)[0m [2m38ms[0m
-[PASS] CRUD-CREATE    | Students (POST)                    |   39.1 ms | HTTP 201 | ID=3906
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/students/ [97m(User: faculty_admin)[0m [2m17ms[0m
-[PASS] CRUD-READ      | Students List (GET)                |   17.8 ms | HTTP 200 | Count=1
-[09:15:11] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/students/3906/ [97m(User: faculty_admin)[0m [2m11ms[0m
-[PASS] CRUD-READ      | Students Detail (GET)              |   12.7 ms | HTTP 200
-[09:15:11] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/students/3906/ [97m(User: faculty_admin)[0m [2m25ms[0m
-[PASS] CRUD-UPDATE    | Students (PATCH)                   |   27.2 ms | HTTP 200 | barangay=Lumbia
-[09:15:12] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/students/3906/ [97m(User: faculty_admin)[0m [2m24ms[0m
-[PASS] CRUD-DELETE    | Students (DELETE)                  |   26.3 ms | HTTP 204
-[09:15:12] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/faculty/ [97m(User: faculty_admin)[0m [2m12ms[0m
-[PASS] CRUD-CREATE    | Faculty Profiles (POST)            |   13.9 ms | HTTP 201 | ID=75
-[09:15:12] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/faculty/ [97m(User: faculty_admin)[0m [2m10ms[0m
-[PASS] CRUD-READ      | Faculty Profiles List (GET)        |   11.8 ms | HTTP 200 | Count=8
-[09:15:12] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/faculty/75/ [97m(User: faculty_admin)[0m [2m4ms[0m
-[PASS] CRUD-READ      | Faculty Profiles Detail (GET)      |    5.0 ms | HTTP 200
-[09:15:12] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/faculty/75/ [97m(User: faculty_admin)[0m [2m14ms[0m
-[PASS] CRUD-UPDATE    | Faculty Profiles (PATCH)           |   15.5 ms | HTTP 200 | department=English
-[09:15:12] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/faculty/75/ [97m(User: faculty_admin)[0m [2m31ms[0m
-[PASS] CRUD-DELETE    | Faculty Profiles (DELETE)          |   32.3 ms | HTTP 204
-[09:15:14] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/users/ [97m(User: faculty_admin)[0m [91m1926ms (SLOW)[0m
-[PASS] CRUD-CREATE    | User Accounts (POST)               | 1927.3 ms | HTTP 201 | ID=196
-[09:15:14] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/users/ [97m(User: faculty_admin)[0m [2m6ms[0m
-[PASS] CRUD-READ      | User Accounts List (GET)           |    7.6 ms | HTTP 200 | Count=7
-[09:15:14] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/users/196/ [97m(User: faculty_admin)[0m [2m6ms[0m
-[PASS] CRUD-READ      | User Accounts Detail (GET)         |    8.0 ms | HTTP 200
-[09:15:14] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/users/196/ [97m(User: faculty_admin)[0m [2m28ms[0m
-[PASS] CRUD-UPDATE    | User Accounts (PATCH)              |   31.4 ms | HTTP 200 | first_name=Guardian
-[09:15:14] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/users/196/ [97m(User: faculty_admin)[0m [2m36ms[0m
-[PASS] CRUD-DELETE    | User Accounts (DELETE)             |   37.4 ms | HTTP 204
-[09:15:14] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/gate-passes/ [97m(User: faculty_admin)[0m [2m13ms[0m
-[PASS] CRUD-CREATE    | Exit Passes (POST)                 |   14.3 ms | HTTP 201 | ID=17
-[09:15:14] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/gate-passes/ [97m(User: faculty_admin)[0m [2m9ms[0m
-[PASS] CRUD-READ      | Exit Passes List (GET)             |   11.0 ms | HTTP 200 | Count=3
-[09:15:14] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/gate-passes/17/ [97m(User: faculty_admin)[0m [2m6ms[0m
-[PASS] CRUD-READ      | Exit Passes Detail (GET)           |    9.2 ms | HTTP 200
-[09:15:14] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/gate-passes/17/ [97m(User: faculty_admin)[0m [2m9ms[0m
-[PASS] CRUD-UPDATE    | Exit Passes (PATCH)                |   10.9 ms | HTTP 200 | reason=Updated Seminar 3596ED
-[09:15:14] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/gate-passes/17/ [97m(User: faculty_admin)[0m [2m9ms[0m
-[PASS] CRUD-DELETE    | Exit Passes (DELETE)               |   10.1 ms | HTTP 204
-[09:15:14] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/notifications/ [97m(User: faculty_admin)[0m [2m9ms[0m
-[PASS] CRUD-CREATE    | App Notifications (POST)           |   10.8 ms | HTTP 201 | ID=7
-[2m[09:15:14] [ALERT-CHECK] GET /api/notifications/ -> 200 OK (20ms)[0m
-[PASS] CRUD-READ      | App Notifications List (GET)       |   21.3 ms | HTTP 200 | Count=1
-[09:15:14] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/notifications/7/ [97m(User: faculty_admin)[0m [2m8ms[0m
-[PASS] CRUD-READ      | App Notifications Detail (GET)     |    9.8 ms | HTTP 200
-[09:15:14] [93m[1m[UPDATE][0m [92m[1m[OK 200][0m [93mPATCH[0m /api/notifications/7/ [97m(User: faculty_admin)[0m [2m5ms[0m
-[PASS] CRUD-UPDATE    | App Notifications (PATCH)          |    6.8 ms | HTTP 200 | is_read=True
-[09:15:14] [95m[1m[DELETE][0m [92m[1m[OK 204][0m [95mDELETE[0m /api/notifications/7/ [97m(User: faculty_admin)[0m [2m7ms[0m
-[PASS] CRUD-DELETE    | App Notifications (DELETE)         |    8.5 ms | HTTP 204
-[09:15:15] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/classroom/qr-cards/ [97m(User: faculty_admin)[0m [2m11ms[0m
-[PASS] QR-ID          | Printable QR ID Cards (GET)        |   12.8 ms | HTTP 200 | Cards=1
-[09:15:16] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/classroom/classes/ [97m(User: faculty_admin)[0m [2m87ms[0m
-[PASS] CLASSROOM      | Classes & Class List (GET)         |   88.8 ms | HTTP 200
-[09:15:16] [92m[1m[CREATE][0m [92m[1m[OK 201][0m [92mPOST[0m /api/classroom/scan/ [97m(User: faculty_admin)[0m [2m59ms[0m
-[PASS] QR-SCAN        | Classroom QR Scan (POST)           |   61.6 ms | HTTP 201 | Status=LATE
-[09:15:16] [92m[1m[CREATE][0m [92m[1m[OK 200][0m [92mPOST[0m /api/classroom/scan/ [97m(User: faculty_admin)[0m [2m27ms[0m
-[PASS] QR-SCAN        | Duplicate Scan shield (POST)       |   28.7 ms | HTTP 200
-[09:15:16] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/classroom/adviser-matrix/ [97m(User: faculty_admin)[0m [2m40ms[0m
-[PASS] LOAFING        | Adviser Cutting Matrix (GET)       |   41.8 ms | HTTP 200
-[09:15:16] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/parent/portal/ [97m(User: par_flow_3596ed)[0m [2m24ms[0m
-[PASS] PARENT-APP     | Parent Portal Overview (GET)       |   27.4 ms | Children=1 | Alerts=1
-[09:15:16] [92m[1m[CREATE][0m [92m[1m[OK 200][0m [92mPOST[0m /api/parent/notifications/read/ [97m(User: par_flow_3596ed)[0m [2m4ms[0m
-[PASS] PARENT-APP     | Mark Alerts Read (POST)            |    6.3 ms | HTTP 200
-[09:15:16] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/geofence/status/ [97m(User: faculty_admin)[0m [2m38ms[0m
-[PASS] GPS-CHECK      | Geofence Status (GET)              |   40.5 ms | HTTP 200 | Center=(8.486319, 124.657196)
-[09:15:16] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/reports/sf1/ [97m(User: faculty_admin)[0m [2m36ms[0m
-[PASS] REPORTS        | DepEd SF1 Register (GET)           |   37.9 ms | HTTP 200
-[09:15:16] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/reports/sf2/ [97m(User: faculty_admin)[0m [2m49ms[0m
-[PASS] REPORTS        | DepEd SF2 Attendance (GET)         |   50.8 ms | HTTP 200
-[09:15:16] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/reports/sf4/ [97m(User: faculty_admin)[0m [2m214ms[0m
-[PASS] REPORTS        | DepEd SF4 Summary (GET)            |  218.4 ms | HTTP 200
-[09:15:16] [96m[1m[READ]  [0m [92m[1m[OK 200][0m [96mGET[0m /api/reports/dtr/ [97m(User: faculty_admin)[0m [2m25ms[0m
-[PASS] REPORTS        | Faculty Monthly DTR (GET)          |   27.6 ms | HTTP 200
-========================================================================================
-SUMMARY: 67/67 Passed | 0 Failed
-Full Results Saved To: D:\AttendSure_V3\scripts\results\test_all_cruds_result.txt
-Errors Log Saved To:   D:\AttendSure_V3\scripts\results\test_all_cruds_errors.txt
+AttendSure - Full API Verification (2026-11-19 06:42:36 AM)
+==========================================================================================
+[06:42:37] [POLL ]   [OK 200] GET /api/v1/health/db/ (111ms)
+[PASS] HEALTH         | Database Health (/api/v1/health/db/) |  157.1 ms | HTTP 200
+[06:42:37] [READ]   [OK 200]        GET    /api/v1/accounts/me/ (User: faculty_admin) 30ms [933B]
+[PASS] AUTH           | Current User (/api/v1/accounts/me/)  |   30.8 ms | HTTP 200
+[06:42:37] [READ]   [OK 200]        GET    /api/v1/reports/dashboard/ (User: faculty_admin) 76ms [994B]
+[PASS] DASHBOARD      | Dashboard (/api/v1/reports/dashboard/) |   76.7 ms | HTTP 200
+[06:42:37] [READ]   [OK 200]        GET    /api/v1/school/settings/ (User: faculty_admin) 6ms [1.3KB]
+[PASS] SETTINGS       | School Settings (/api/v1/school/settings/) |    7.1 ms | HTTP 200
+[06:42:37] [READ]   [OK 200]        GET    /api/activity-logs/ (User: faculty_admin) 34ms [122.9KB]
+[PASS] AUDIT          | Audit Logs (/api/activity-logs/)     |   35.2 ms | HTTP 200
+[06:42:37] [READ]   [OK 200]        GET    /api/faculty/dropdown/?include_all=true (User: faculty_admin) 5ms [2.1KB]
+[PASS] LEGACY         | Teacher Dropdown (/api/faculty/dropdown/) |    5.4 ms | HTTP 200
+[06:42:37] [READ]   [OK 200]        GET    /api/classroom/class_list/ (User: faculty_admin) 93ms [331.0KB]
+[PASS] LEGACY         | Class List (/api/classroom/class_list/) |   93.9 ms | HTTP 200
+[06:42:38] [CREATE] [OK 201]        POST   /api/v1/school/rooms/ (User: faculty_admin) 9ms [96B]
+[PASS] CRUD-CREATE    | Rooms (POST)                         |    9.7 ms | HTTP 201 ID=175
+[06:42:38] [READ]   [OK 200]        GET    /api/v1/school/rooms/ (User: faculty_admin) 4ms [1.8KB]
+[PASS] CRUD-READ      | Rooms List (GET)                     |    5.0 ms | HTTP 200 Count=17
+[06:42:38] [READ]   [OK 200]        GET    /api/v1/school/rooms/175/ (User: faculty_admin) 3ms [96B]
+[PASS] CRUD-READ      | Rooms Detail (GET)                   |    3.7 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/school/rooms/175/ (User: faculty_admin) 10ms [96B]
+[PASS] CRUD-UPDATE    | Rooms (PATCH)                        |   10.4 ms | HTTP 200 capacity=50
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/school/rooms/175/ (User: faculty_admin) 11ms [0B]
+[PASS] CRUD-DELETE    | Rooms (DELETE)                       |   11.8 ms | HTTP 204
+[06:42:39] [CREATE] [OK 201]        POST   /api/v1/school/grade-levels/ (User: faculty_admin) 10ms [81B]
+[PASS] CRUD-CREATE    | Grade Levels (POST)                  |   10.6 ms | HTTP 201 ID=90
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/school/grade-levels/ (User: faculty_admin) 9ms [1.2KB]
+[PASS] CRUD-READ      | Grade Levels List (GET)              |   10.1 ms | HTTP 200 Count=15
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/school/grade-levels/90/ (User: faculty_admin) 5ms [81B]
+[PASS] CRUD-READ      | Grade Levels Detail (GET)            |    6.1 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/school/grade-levels/90/ (User: faculty_admin) 10ms [78B]
+[PASS] CRUD-UPDATE    | Grade Levels (PATCH)                 |   10.7 ms | HTTP 200 name=Lv-29FA51
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/school/grade-levels/90/ (User: faculty_admin) 14ms [0B]
+[PASS] CRUD-DELETE    | Grade Levels (DELETE)                |   15.3 ms | HTTP 204
+[06:42:39] [CREATE] [OK 201]        POST   /api/v1/school/subjects/ (User: faculty_admin) 10ms [109B]
+[PASS] CRUD-CREATE    | Subjects (POST)                      |   10.9 ms | HTTP 201 ID=130
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/school/subjects/ (User: faculty_admin) 8ms [1.4KB]
+[PASS] CRUD-READ      | Subjects List (GET)                  |    9.7 ms | HTTP 200 Count=11
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/school/subjects/130/ (User: faculty_admin) 9ms [109B]
+[PASS] CRUD-READ      | Subjects Detail (GET)                |   10.2 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/school/subjects/130/ (User: faculty_admin) 11ms [109B]
+[PASS] CRUD-UPDATE    | Subjects (PATCH)                     |   12.5 ms | HTTP 200 units=5
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/school/subjects/130/ (User: faculty_admin) 14ms [0B]
+[PASS] CRUD-DELETE    | Subjects (DELETE)                    |   15.0 ms | HTTP 204
+[06:42:39] [CREATE] [OK 201]        POST   /api/v1/school/sections/ (User: faculty_admin) 23ms [324B]
+[PASS] CRUD-CREATE    | Sections (POST)                      |   24.1 ms | HTTP 201 ID=153
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/school/sections/ (User: faculty_admin) 50ms [7.1KB]
+[PASS] CRUD-READ      | Sections List (GET)                  |   50.7 ms | HTTP 200 Count=25
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/school/sections/153/ (User: faculty_admin) 16ms [324B]
+[PASS] CRUD-READ      | Sections Detail (GET)                |   16.6 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/school/sections/153/ (User: faculty_admin) 55ms [324B]
+[PASS] CRUD-UPDATE    | Sections (PATCH)                     |   55.9 ms | HTTP 200 capacity=45
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/school/sections/153/ (User: faculty_admin) 41ms [0B]
+[PASS] CRUD-DELETE    | Sections (DELETE)                    |   42.8 ms | HTTP 204
+[06:42:39] [CREATE] [OK 201]        POST   /api/v1/school/periods/ (User: faculty_admin) 32ms [312B]
+[PASS] CRUD-CREATE    | Class Periods (POST)                 |   32.9 ms | HTTP 201 ID=302
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/school/periods/ (User: faculty_admin) 19ms [6.1KB]
+[PASS] CRUD-READ      | Class Periods List (GET)             |   19.5 ms | HTTP 200 Count=20
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/school/periods/302/ (User: faculty_admin) 19ms [312B]
+[PASS] CRUD-READ      | Class Periods Detail (GET)           |   20.2 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/school/periods/302/ (User: faculty_admin) 18ms [312B]
+[PASS] CRUD-UPDATE    | Class Periods (PATCH)                |   19.4 ms | HTTP 200 start_time=09:15:00
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/school/periods/302/ (User: faculty_admin) 19ms [0B]
+[PASS] CRUD-DELETE    | Class Periods (DELETE)               |   19.7 ms | HTTP 204
+[06:42:39] [CREATE] [OK 201]        POST   /api/v1/accounts/teachers/ (User: faculty_admin) 16ms [366B]
+[PASS] CRUD-CREATE    | Teachers (POST)                      |   18.9 ms | HTTP 201 ID=82
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/accounts/teachers/ (User: faculty_admin) 14ms [4.2KB]
+[PASS] CRUD-READ      | Teachers List (GET)                  |   15.1 ms | HTTP 200 Count=8
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/accounts/teachers/82/ (User: faculty_admin) 7ms [366B]
+[PASS] CRUD-READ      | Teachers Detail (GET)                |    8.8 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/accounts/teachers/82/ (User: faculty_admin) 19ms [369B]
+[PASS] CRUD-UPDATE    | Teachers (PATCH)                     |   20.2 ms | HTTP 200 department=Science
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/accounts/teachers/82/ (User: faculty_admin) 49ms [0B]
+[PASS] CRUD-DELETE    | Teachers (DELETE)                    |   49.3 ms | HTTP 204
+[06:42:39] [CREATE] [OK 201]        POST   /api/v1/students/ (User: faculty_admin) 26ms [624B]
+[PASS] CRUD-CREATE    | Students (POST)                      |   26.7 ms | HTTP 201 ID=3913
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/students/?search=971795041759 (User: faculty_admin) 15ms [724B]
+[PASS] CRUD-READ      | Students List (GET)                  |   16.1 ms | HTTP 200 Count=1
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/students/3913/ (User: faculty_admin) 8ms [624B]
+[PASS] CRUD-READ      | Students Detail (GET)                |    8.4 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/students/3913/ (User: faculty_admin) 18ms [634B]
+[PASS] CRUD-UPDATE    | Students (PATCH)                     |   18.6 ms | HTTP 200 barangay=Macasandig
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/students/3913/ (User: faculty_admin) 21ms [0B]
+[PASS] CRUD-DELETE    | Students (DELETE)                    |   21.3 ms | HTTP 204
+[06:42:39] [CREATE] [OK 201]        POST   /api/v1/attendance/exit-passes/ (User: faculty_admin) 11ms [439B]
+[PASS] CRUD-CREATE    | Exit Passes (POST)                   |   11.8 ms | HTTP 201 ID=20
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/attendance/exit-passes/ (User: faculty_admin) 11ms [1.3KB]
+[PASS] CRUD-READ      | Exit Passes List (GET)               |   12.0 ms | HTTP 200 Count=3
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/attendance/exit-passes/20/ (User: faculty_admin) 7ms [439B]
+[PASS] CRUD-READ      | Exit Passes Detail (GET)             |    8.4 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/attendance/exit-passes/20/ (User: faculty_admin) 8ms [421B]
+[PASS] CRUD-UPDATE    | Exit Passes (PATCH)                  |    9.2 ms | HTTP 200 reason=Updated 29FA51
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/attendance/exit-passes/20/ (User: faculty_admin) 8ms [0B]
+[PASS] CRUD-DELETE    | Exit Passes (DELETE)                 |    8.2 ms | HTTP 204
+[06:42:39] [POLL ]   [OK 201] POST /api/v1/messaging/notifications/ (5ms)
+[PASS] CRUD-CREATE    | Notifications (POST)                 |    5.9 ms | HTTP 201 ID=13
+[06:42:39] [POLL ]   [OK 200] GET /api/v1/messaging/notifications/ (5ms)
+[PASS] CRUD-READ      | Notifications List (GET)             |    5.7 ms | HTTP 200 Count=1
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/messaging/notifications/13/ (User: faculty_admin) 7ms [194B]
+[PASS] CRUD-READ      | Notifications Detail (GET)           |    7.8 ms | HTTP 200
+[06:42:39] [UPDATE] [OK 200]        PATCH  /api/v1/messaging/notifications/13/ (User: faculty_admin) 12ms [175B]
+[PASS] CRUD-UPDATE    | Notifications (PATCH)                |   13.5 ms | HTTP 200 is_read=True
+[06:42:39] [DELETE] [OK 204]        DELETE /api/v1/messaging/notifications/13/ (User: faculty_admin) 9ms [0B]
+[PASS] CRUD-DELETE    | Notifications (DELETE)               |    9.8 ms | HTTP 204
+[06:42:39] [CREATE] [OK 201]        POST   /api/v1/attendance/scan/ (User: faculty_admin) 69ms [279B]
+[PASS] QR-SCAN        | Signed HMAC QR Scan (POST)           |   70.2 ms | HTTP 201
+[06:42:39] [CREATE] [OK 200]        POST   /api/v1/attendance/scan/ (User: faculty_admin) 40ms [278B]
+[PASS] QR-SCAN        | Duplicate Scan Shield (POST)         |   41.7 ms | HTTP 200
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/attendance/adviser-matrix/?section_id=152 (User: faculty_admin) 39ms [2.3KB]
+[PASS] REPORTS        | Adviser Cutting Matrix               |   40.0 ms | HTTP 200
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/campus/boundary/ (User: faculty_admin) 27ms [231B]
+[PASS] REPORTS        | Campus GPS Boundary                  |   28.5 ms | HTTP 200
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/reports/sf1/152/ (User: faculty_admin) 18ms [1.4KB]
+[PASS] REPORTS        | DepEd SF1 Report                     |   19.2 ms | HTTP 200
+[06:42:39] [READ]   [OK 200]        GET    /api/v1/reports/sf2/152/?month=November&year=2026 (User: faculty_admin) 27ms [2.7KB]
+[PASS] REPORTS        | DepEd SF2 Report                     |   28.7 ms | HTTP 200
+[06:42:40] [READ]   [OK 200]        GET    /api/v1/reports/sf4/?month=November&year=2026 (User: faculty_admin) 162ms [27.9KB]
+[PASS] REPORTS        | DepEd SF4 Report                     |  162.8 ms | HTTP 200
+[06:42:40] [READ]   [OK 200]        GET    /api/v1/reports/dtr/?month=11&year=2026 (User: faculty_admin) 12ms [1.7KB]
+[PASS] REPORTS        | Monthly DTR Report                   |   13.3 ms | HTTP 200
+==========================================================================================
+SUMMARY: 60/60 Passed | 0 Failed
+Saved: D:\AttendSure_V3\scripts\results\test_all_cruds_result.txt

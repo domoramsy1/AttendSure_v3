@@ -1,0 +1,719 @@
+================================================================================
+ATTENDSURE DOMAIN MODELS SNAPSHOT (2026-11-19 06:42:35)
+================================================================================
+
+--------------------------------------------------------------------------------
+APP: accounts  |  FILE: backend/apps/accounts/models.py
+--------------------------------------------------------------------------------
+import secrets
+from django.conf import settings
+from django.db import models
+from django.db.models import F
+from django.utils import timezone
+from common.fields import SafeJsonField
+from common.phone import normalize_ph_phone
+
+SUFFIX_CHOICES = [("", "None"), ("Jr.", "Jr."), ("Sr.", "Sr."), ("II", "II"), ("III", "III"), ("IV", "IV")]
+USER_ROLE_CHOICES = [
+    ("ADMIN", "System Administrator"),
+    ("PRINCIPAL", "School Principal"),
+    ("DEPT_HEAD", "Department Head"),
+    ("FACULTY", "Teacher / Adviser"),
+    ("PARENT", "Parent / Guardian"),
+]
+
+
+class TeacherProfile(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    employee_id = models.CharField(max_length=50, unique=True, db_index=True)
+    first_name = models.CharField(max_length=100)
+    middle_name = models.CharField(max_length=100, blank=True, default="")
+    last_name = models.CharField(max_length=100)
+    suffix = models.CharField(max_length=20, choices=SUFFIX_CHOICES, blank=True, default="")
+    position = models.CharField(max_length=100, blank=True, default="")
+    department = models.CharField(max_length=100, blank=True, default="")
+    contact_number = models.CharField(max_length=50, blank=True, default="")
+    email = models.EmailField(max_length=150, blank=True, default="")
+
+    photo = models.ImageField(upload_to="faculty/", null=True, blank=True)
+    photo_updated_at = models.DateTimeField(null=True, blank=True)
+    can_teach = models.BooleanField(default=True, db_index=True)
+    qr_token = models.CharField(max_length=128, unique=True, null=True, blank=True, db_index=True)
+    is_active = models.BooleanField(default=True)
+
+    bound_device_id = models.CharField(max_length=128, blank=True, null=True, unique=True)
+    device_model = models.CharField(max_length=100, blank=True, null=True)
+    device_bound_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="created_teachers"
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="updated_teachers"
+    )
+
+    class Meta:
+        db_table = "faculty_profiles"
+        ordering = ["last_name", "first_name"]
+
+    @property
+    def full_name(self) -> str:
+        mid = f" {self.middle_name[:1]}." if self.middle_name else ""
+        suf = f" {self.suffix}" if self.suffix else ""
+        return f"{self.first_name}{mid} {self.last_name}{suf}".strip()
+
+    def save(self, *args, **kwargs):
+        if self.contact_number:
+            self.contact_number = normalize_ph_phone(self.contact_number)
+        if not self.qr_token:
+            self.qr_token = secrets.token_urlsafe(24)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.full_name} ({self.employee_id})"
+
+
+class UserProfile(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
+    teacher = models.OneToOneField(
+        TeacherProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column="faculty_id",
+        related_name="account",
+    )
+    role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default="FACULTY")
+    phone_number = models.CharField(max_length=30, blank=True, default="", db_index=True)
+    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
+    push_token = models.CharField(max_length=255, blank=True, null=True)
+    is_teaching = models.BooleanField(default=True)
+    is_profile_completed = models.BooleanField(default=False)
+    failed_attempts = models.PositiveIntegerField(default=0)
+    locked_until = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "user_profiles"
+
+    def is_locked(self) -> bool:
+        return bool(self.locked_until and timezone.now() < self.locked_until)
+
+    def record_failed_attempt(self):
+        UserProfile.objects.filter(pk=self.pk).update(failed_attempts=F("failed_attempts") + 1)
+        self.refresh_from_db(fields=["failed_attempts"])
+        if self.failed_attempts >= 5:
+            self.locked_until = timezone.now() + timezone.timedelta(minutes=15)
+            self.save(update_fields=["locked_until"])
+
+    def reset_failed_attempts(self):
+        if self.failed_attempts > 0 or self.locked_until is not None:
+            UserProfile.objects.filter(pk=self.pk).update(failed_attempts=0, locked_until=None)
+
+    def save(self, *args, **kwargs):
+        if self.phone_number:
+            self.phone_number = normalize_ph_phone(self.phone_number)
+        if self.role == "PARENT":
+            self.is_teaching = False
+        super().save(*args, **kwargs)
+
+
+class AuditLog(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    table_name = models.CharField(max_length=64)
+    record_id = models.BigIntegerField()
+    action = models.CharField(max_length=10)
+    old_data = SafeJsonField(null=True, blank=True)
+    new_data = SafeJsonField(null=True, blank=True)
+    changed_fields = SafeJsonField(null=True, blank=True)
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_actions"
+    )
+    client_ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "audit_logs"
+        ordering = ["-created_at"]
+
+--------------------------------------------------------------------------------
+APP: school  |  FILE: backend/apps/school/models.py
+--------------------------------------------------------------------------------
+from django.db import models, transaction
+from django.db.models import UniqueConstraint
+from django.utils import timezone
+
+DAY_OF_WEEK_CHOICES = [
+    (1, "Monday"), (2, "Tuesday"), (3, "Wednesday"),
+    (4, "Thursday"), (5, "Friday"), (6, "Saturday"), (7, "Sunday"),
+]
+
+
+class SchoolYear(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=20, unique=True)
+    start_date = models.DateField()
+    baseline_cutoff_date = models.DateField(db_column="first_friday_june")
+    end_date = models.DateField()
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "academic_years"
+        ordering = ["-start_date"]
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            if self.is_active:
+                SchoolYear.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
+            super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.code
+
+
+class SchoolSettings(models.Model):
+    school_id = models.CharField(max_length=50, unique=True)
+    school_name = models.CharField(max_length=255)
+    region = models.CharField(max_length=100, blank=True, default="")
+    division = models.CharField(max_length=100, blank=True, default="")
+    district = models.CharField(max_length=100, blank=True, default="")
+    academic_year = models.CharField(max_length=20, blank=True, default="2026-2027")
+
+    address = models.TextField(blank=True, default="")
+    contact_number = models.CharField(max_length=50, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    website = models.URLField(max_length=200, blank=True, default="")
+
+    principal_teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column="principal_faculty_id",
+        related_name="headed_schools",
+    )
+    principal_name = models.CharField(max_length=255, blank=True, default="")
+    principal_title = models.CharField(max_length=150, blank=True, default="Secondary School Principal IV")
+    superintendent_name = models.CharField(max_length=255, blank=True, default="")
+
+    school_logo = models.TextField(blank=True, null=True)
+    left_logo = models.TextField(blank=True, null=True)
+    right_logo = models.TextField(blank=True, null=True)
+
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, default=8.4858000)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, default=124.6567000)
+    geofence_radius_meters = models.IntegerField(default=150)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "attendsure_school_profile"
+
+
+class SchoolHoliday(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    holiday_date = models.DateField(unique=True, db_index=True)
+    title = models.CharField(max_length=150)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "school_holidays"
+        ordering = ["holiday_date"]
+
+
+class StaffShift(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    label = models.CharField(max_length=100, blank=True, default="")
+    regular_days_label = models.CharField(max_length=100, blank=True, default="")
+    saturday_label = models.CharField(max_length=100, blank=True, default="")
+    am_arrival_start = models.TimeField(null=True, blank=True)
+    am_arrival_cutoff = models.TimeField(null=True, blank=True)
+    am_departure_time = models.TimeField(null=True, blank=True)
+    pm_arrival_time = models.TimeField(null=True, blank=True)
+    pm_departure_cutoff = models.TimeField(null=True, blank=True)
+    late_threshold_min = models.IntegerField(default=15)
+
+    class Meta:
+        db_table = "class_schedules"
+
+
+class Room(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=100, unique=True)
+    building = models.CharField(max_length=100, blank=True, default="")
+    capacity = models.PositiveIntegerField(default=45)
+    room_type = models.CharField(max_length=50, default="LECTURE")
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "rooms"
+        ordering = ["name"]
+
+
+class GradeLevel(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=20, unique=True)
+    name = models.CharField(max_length=100)
+    stage = models.CharField(max_length=20, blank=True, default="JHS")
+    level_order = models.IntegerField(default=1)
+
+    class Meta:
+        db_table = "grade_levels"
+        ordering = ["level_order"]
+
+
+class Section(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    school_year = models.ForeignKey(
+        SchoolYear, on_delete=models.CASCADE, db_column="academic_year_id", related_name="sections"
+    )
+    grade_level = models.ForeignKey(GradeLevel, on_delete=models.CASCADE, related_name="sections")
+    adviser = models.ForeignKey(
+        "accounts.TeacherProfile", on_delete=models.SET_NULL, null=True, blank=True, related_name="advising_sections"
+    )
+    room = models.ForeignKey(Room, on_delete=models.SET_NULL, null=True, blank=True, related_name="sections")
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=50, blank=True, default="")
+    track_strand = models.CharField(max_length=150, blank=True, default="")
+    room_number = models.CharField(max_length=50, blank=True, default="")
+    capacity = models.IntegerField(default=45)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        db_table = "sections"
+        ordering = ["name"]
+        constraints = [
+            UniqueConstraint(fields=["school_year", "grade_level", "name"], name="uq_section_year_grade_name")
+        ]
+
+
+class Subject(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    grade_level = models.ForeignKey(
+        GradeLevel, on_delete=models.CASCADE, null=True, blank=True, related_name="uniform_subjects"
+    )
+    code = models.CharField(max_length=30, unique=True)
+    title = models.CharField(max_length=200)
+    tier = models.CharField(max_length=20, blank=True, default="Core")
+    subject_type = models.CharField(max_length=50, blank=True, default="Core")
+    units = models.IntegerField(default=1)
+
+    class Meta:
+        db_table = "subjects"
+        ordering = ["code"]
+
+
+class ClassPeriod(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, blank=True, default="")
+    schedule_code = models.CharField(max_length=64, blank=True, default="")
+    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name="schedules")
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="schedules")
+    teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column="faculty_id",
+        related_name="assigned_periods",
+    )
+    room = models.ForeignKey(Room, on_delete=models.SET_NULL, null=True, blank=True, related_name="schedules")
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    days_of_week = models.CharField(max_length=50, default="MON-FRI")
+    room_number = models.CharField(max_length=50, blank=True, default="")
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        db_table = "schedules"
+        ordering = ["start_time"]
+
+
+class ClassPeriodDay(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    class_period = models.ForeignKey(
+        ClassPeriod, on_delete=models.CASCADE, db_column="schedule_id", related_name="days"
+    )
+    day_of_week = models.PositiveSmallIntegerField(choices=DAY_OF_WEEK_CHOICES, default=1)
+
+    class Meta:
+        db_table = "schedule_days"
+        constraints = [
+            UniqueConstraint(fields=["class_period", "day_of_week"], name="uq_period_day_of_week")
+        ]
+
+--------------------------------------------------------------------------------
+APP: students  |  FILE: backend/apps/students/models.py
+--------------------------------------------------------------------------------
+import secrets
+from django.conf import settings
+from django.db import models
+from django.db.models import UniqueConstraint
+from django.utils import timezone
+from common.phone import normalize_ph_phone
+
+SEX_CHOICES = [("Male", "Male"), ("Female", "Female")]
+ENROLLMENT_STATUS_CHOICES = [
+    ("ENROLLED", "Enrolled"),
+    ("DROPPED", "Dropped Out"),
+    ("TRANSFERRED_IN", "Transferred In"),
+    ("TRANSFERRED_OUT", "Transferred Out"),
+]
+ENROLLMENT_TYPE_CHOICES = [
+    ("REGULAR", "Regular"),
+    ("LATE_ENROLLEE", "Late Enrollee"),
+    ("TRANSFERRED_IN", "Transferred In"),
+    ("RETURNING", "Returning"),
+    ("REPEATER", "Repeater"),
+]
+
+
+class Student(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    lrn = models.CharField(max_length=20, unique=True, db_index=True)
+    first_name = models.CharField(max_length=100)
+    middle_name = models.CharField(max_length=100, blank=True, default="")
+    last_name = models.CharField(max_length=100)
+    suffix = models.CharField(max_length=20, blank=True, default="")
+    sex = models.CharField(max_length=10, choices=SEX_CHOICES)
+    birthdate = models.DateField()
+
+    mother_tongue = models.CharField(max_length=100, blank=True, default="")
+    ethnic_group = models.CharField(max_length=100, blank=True, default="")
+    religion = models.CharField(max_length=100, blank=True, default="")
+
+    house_street_sitio = models.CharField(max_length=255, blank=True, default="")
+    barangay = models.CharField(max_length=100, blank=True, default="")
+    municipality_city = models.CharField(max_length=100, blank=True, default="")
+    province = models.CharField(max_length=100, blank=True, default="")
+
+    father_name = models.CharField(max_length=200, blank=True, default="")
+    mother_maiden_name = models.CharField(max_length=200, blank=True, default="")
+    guardian_name = models.CharField(max_length=200, blank=True, default="")
+    guardian_relationship = models.CharField(max_length=50, blank=True, default="")
+    parent_contact = models.CharField(max_length=50, db_index=True)
+    parent_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="children"
+    )
+
+    photo = models.ImageField(upload_to="students/", null=True, blank=True)
+    photo_thumbnail = models.CharField(max_length=255, null=True, blank=True)
+    photo_updated_at = models.DateTimeField(null=True, blank=True)
+
+    qr_token = models.CharField(max_length=128, unique=True, db_index=True)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="created_students"
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="updated_students"
+    )
+
+    class Meta:
+        db_table = "students"
+        ordering = ["last_name", "first_name"]
+
+    @property
+    def full_name(self) -> str:
+        mid = f" {self.middle_name[:1]}." if self.middle_name else ""
+        suf = f" {self.suffix}" if self.suffix else ""
+        return f"{self.last_name}, {self.first_name}{mid}{suf}".strip()
+
+    def save(self, *args, **kwargs):
+        if self.parent_contact:
+            self.parent_contact = normalize_ph_phone(self.parent_contact)
+        if not self.qr_token:
+            self.qr_token = secrets.token_urlsafe(24)
+        if not self.parent_user_id and self.parent_contact:
+            from apps.accounts.models import UserProfile
+
+            matched = (
+                UserProfile.objects.filter(role="PARENT", phone_number=self.parent_contact)
+                .select_related("user")
+                .first()
+            )
+            if matched:
+                self.parent_user = matched.user
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.full_name} ({self.lrn})"
+
+
+class Enrollment(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="enrollments")
+    section = models.ForeignKey("school.Section", on_delete=models.CASCADE, related_name="enrollments")
+    school_year = models.ForeignKey(
+        "school.SchoolYear", on_delete=models.CASCADE, db_column="academic_year_id", related_name="enrollments"
+    )
+    enrollment_date = models.DateField(default=timezone.now)
+    enrollment_type = models.CharField(max_length=20, choices=ENROLLMENT_TYPE_CHOICES, default="REGULAR")
+    status = models.CharField(max_length=20, choices=ENROLLMENT_STATUS_CHOICES, default="ENROLLED")
+    status_date = models.DateField(null=True, blank=True)
+    status_reason_code = models.CharField(max_length=50, blank=True, default="")
+    transferred_school = models.CharField(max_length=255, blank=True, default="")
+    is_cct_recipient = models.BooleanField(default=False)
+    cct_id_number = models.CharField(max_length=50, blank=True, default="")
+    disability_detail = models.CharField(max_length=150, blank=True, default="")
+    accelerated_detail = models.CharField(max_length=150, blank=True, default="")
+    remarks = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "enrollments"
+        constraints = [
+            UniqueConstraint(fields=["student", "school_year"], name="uq_student_school_year")
+        ]
+
+--------------------------------------------------------------------------------
+APP: attendance  |  FILE: backend/apps/attendance/models.py
+--------------------------------------------------------------------------------
+from django.db import models
+from django.db.models import UniqueConstraint
+from django.utils import timezone
+
+ATTENDANCE_STATUS_CHOICES = [
+    ("PRESENT", "Present"),
+    ("LATE", "Late"),
+    ("CUTTING", "Cutting Classes"),
+    ("ABSENT", "Absent"),
+    ("EXCUSED", "Excused"),
+]
+
+SCAN_METHOD_CHOICES = [
+    ("QR", "Printed QR ID Scan"),
+    ("MANUAL", "Manual Class List Entry"),
+]
+
+EXIT_PASS_STATUS_CHOICES = [
+    ("PENDING", "Pending Approval"),
+    ("ACTIVE", "Active"),
+    ("USED", "Used"),
+    ("EXPIRED", "Expired"),
+    ("REVOKED", "Revoked"),
+]
+
+
+class ClassAttendance(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    student = models.ForeignKey("students.Student", on_delete=models.CASCADE, related_name="class_attendances")
+    class_period = models.ForeignKey(
+        "school.ClassPeriod", on_delete=models.CASCADE, db_column="schedule_id", related_name="attendance_records"
+    )
+    recorded_by = models.ForeignKey(
+        "accounts.TeacherProfile", on_delete=models.CASCADE, db_column="faculty_id", related_name="recorded_scans"
+    )
+    attendance_date = models.DateField(default=timezone.now, db_index=True)
+    scanned_at = models.DateTimeField(default=timezone.now)
+    scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default="QR")
+    status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default="PRESENT")
+
+    class Meta:
+        db_table = "subject_attendance_logs"
+        constraints = [
+            UniqueConstraint(
+                fields=["student", "class_period", "attendance_date"],
+                name="uq_class_attendance_daily",
+            )
+        ]
+
+
+class DailyAttendance(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    student = models.ForeignKey("students.Student", on_delete=models.CASCADE, related_name="daily_attendances")
+    section = models.ForeignKey("school.Section", on_delete=models.CASCADE, related_name="daily_attendances")
+    attendance_date = models.DateField(default=timezone.now, db_index=True)
+    status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default="PRESENT")
+    remarks = models.CharField(max_length=255, blank=True, default="")
+    recorded_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "daily_attendance_summaries"
+        constraints = [
+            UniqueConstraint(fields=["student", "attendance_date"], name="uq_daily_attendance_student_date")
+        ]
+
+
+class ExitPass(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    pass_number = models.CharField(max_length=50, unique=True, db_index=True)
+    teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column="faculty_id",
+        related_name="exit_passes",
+    )
+    student = models.ForeignKey(
+        "students.Student", on_delete=models.SET_NULL, null=True, blank=True, related_name="exit_passes"
+    )
+    issued_by = models.ForeignKey(
+        "accounts.TeacherProfile", on_delete=models.CASCADE, related_name="issued_exit_passes"
+    )
+    pass_type = models.CharField(max_length=50, default="Exit Permit")
+    reason = models.TextField()
+    valid_from = models.DateTimeField()
+    valid_until = models.DateTimeField(db_column="valid_to")
+    status = models.CharField(max_length=20, choices=EXIT_PASS_STATUS_CHOICES, default="ACTIVE", db_index=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "gate_passes"
+
+--------------------------------------------------------------------------------
+APP: campus  |  FILE: backend/apps/campus/models.py
+--------------------------------------------------------------------------------
+from django.conf import settings
+from django.db import models
+from django.db.models import UniqueConstraint
+from django.utils import timezone
+
+
+class CampusBoundary(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=100, default="Campus Boundary")
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    radius_meters = models.PositiveIntegerField(default=150)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "geofence_settings"
+
+
+class TeacherLocationLog(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
+        on_delete=models.CASCADE,
+        db_column="faculty_id",
+        related_name="location_logs",
+    )
+    latitude = models.DecimalField(max_digits=10, decimal_places=7)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    battery_level = models.IntegerField(default=100)
+    is_inside_geofence = models.BooleanField(default=True, db_index=True)
+    recorded_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        db_table = "faculty_heartbeats"
+        ordering = ["-recorded_at"]
+
+
+class BoundaryAlert(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
+        on_delete=models.CASCADE,
+        db_column="faculty_id",
+        related_name="boundary_alerts",
+    )
+    incident_date = models.DateField(default=timezone.now, db_index=True)
+    trigger_reason = models.CharField(max_length=255)
+    status = models.CharField(max_length=20, default="PENDING_REVIEW")
+    remarks = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "loafing_incidents"
+        ordering = ["-created_at"]
+
+
+class MonthlyTimeRecord(models.Model):
+    teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
+        on_delete=models.CASCADE,
+        db_column="faculty_id",
+        related_name="monthly_time_records",
+    )
+    month = models.PositiveSmallIntegerField()
+    year = models.PositiveSmallIntegerField()
+    is_submitted = models.BooleanField(default=False)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    is_dept_head_approved = models.BooleanField(default=False)
+    dept_head_approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="approved_time_records"
+    )
+    regular_hours = models.CharField(max_length=120, default="8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM")
+    saturday_hours = models.CharField(max_length=120, default="As Required")
+    remarks = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "faculty_monthly_dtr"
+        ordering = ["-year", "-month"]
+        constraints = [
+            UniqueConstraint(fields=["teacher", "month", "year"], name="uq_teacher_monthly_dtr")
+        ]
+
+--------------------------------------------------------------------------------
+APP: messaging  |  FILE: backend/apps/messaging/models.py
+--------------------------------------------------------------------------------
+from django.conf import settings
+from django.db import models
+from django.utils import timezone
+
+
+class Notification(models.Model):
+    CATEGORY_CHOICES = [
+        ("ATTENDANCE", "Classroom Attendance"),
+        ("CUTTING_ALERT", "Cutting Class Alert"),
+        ("GATE_PASS", "Exit Pass Update"),
+        ("GEOFENCE", "Campus Boundary Alert"),
+        ("ANNOUNCEMENT", "School Announcement"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications", db_index=True
+    )
+    student = models.ForeignKey(
+        "students.Student", on_delete=models.CASCADE, null=True, blank=True, related_name="parent_notifications"
+    )
+    title = models.CharField(max_length=150)
+    message = models.TextField()
+    category = models.CharField(max_length=25, choices=CATEGORY_CHOICES, default="ATTENDANCE", db_index=True)
+    is_read = models.BooleanField(default=False, db_index=True)
+    is_pushed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        db_table = "app_notifications"
+        ordering = ["-created_at"]
+
+
+class ChatMessage(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    student = models.ForeignKey("students.Student", on_delete=models.CASCADE, related_name="chat_messages")
+    teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
+        on_delete=models.CASCADE,
+        db_column="faculty_id",
+        related_name="chat_messages",
+    )
+    parent = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="parent_chat_messages"
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sent_chat_messages"
+    )
+    body = models.TextField()
+    is_read = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        db_table = "parent_faculty_messages"
+        ordering = ["created_at"]

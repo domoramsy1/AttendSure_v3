@@ -1,0 +1,16 @@
+================================================================================================
+  ATTENDSURE LIVE CAMPUS GPS MONITOR - MACASANDIG NATIONAL HIGH SCHOOL
+  Center: (8.486319, 124.657196) | Allowed Radius: 50m
+================================================================================================
+TEACHER NAME               | EMP ID       | DISTANCE   | STATUS           | LAST RECORDED
+------------------------------------------------------------------------------------------------
+Admin User                 | ADMIN        | --         | NO_CHECK_IN      | No GPS log yet
+Dept_Head User             | DEPT_HEAD    | --         | NO_CHECK_IN      | No GPS log yet
+Faculty User               | FACULTY      | 152.0m     | OUTSIDE_CAMPUS   | 2026-11-16 03:59 PM
+Faculty_Admin User         | FACULTY_ADMI | 12.10km    | OUTSIDE_CAMPUS   | 2026-11-18 12:03 AM
+Guard User                 | GUARD        | --         | NO_CHECK_IN      | No GPS log yet
+Principal User             | PRINCIPAL    | --         | NO_CHECK_IN      | No GPS log yet
+------------------------------------------------------------------------------------------------
+Total Active Teachers: 6 | Inside: 0 | Outside: 2 | No Log: 4
+================================================================================================
+

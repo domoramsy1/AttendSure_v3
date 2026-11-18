@@ -1,0 +1,25 @@
+================================================================
+  ATTENDSURE DATABASE HEALTH (POSTGRESQL)
+  Database : attendsure_v3_db | Latency: 92 ms
+================================================================
+  SchoolSettings         :      2 rows  (attendsure_school_profile)
+  SchoolYear             :      1 rows  (academic_years)
+  GradeLevel             :     13 rows  (grade_levels)
+  Room                   :     15 rows  (rooms)
+  Section                :     24 rows  (sections)
+  Subject                :      9 rows  (subjects)
+  ClassPeriod            :     18 rows  (schedules)
+  TeacherProfile         :      6 rows  (faculty_profiles)
+  UserProfile            :      6 rows  (user_profiles)
+  Student                :   1001 rows  (students)
+  Enrollment             :    953 rows  (enrollments)
+  ClassAttendance        :     87 rows  (subject_attendance_logs)
+  DailyAttendance        :   4879 rows  (daily_attendance_summaries)
+  ExitPass               :      2 rows  (gate_passes)
+  CampusBoundary         :      1 rows  (geofence_settings)
+  TeacherLocationLog     :   1803 rows  (faculty_heartbeats)
+  Notification           :      0 rows  (app_notifications)
+  ChatMessage            :      0 rows  (parent_faculty_messages)
+  AuditLog               :  10308 rows  (audit_logs)
+================================================================
+
