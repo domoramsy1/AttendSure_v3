@@ -187,7 +187,7 @@ export const UsersTab: React.FC = () => {
     const timer = setTimeout(async () => {
       try {
         setIsCheckingUsername(true);
-        const res = await apiClient.get('/auth/validate/', {
+        const res = await apiClient.get('/v1/accounts/validate-field/', {
           params: {
             field: 'username',
             value: cleanUser,
@@ -233,7 +233,7 @@ export const UsersTab: React.FC = () => {
       if (!silent) setLoading(true);
       setError(null);
 
-      const res = await apiClient.get('/users/', {
+      const res = await apiClient.get('/v1/accounts/users/', {
         params: { search: query.trim() || undefined, page_size: 'ALL' },
         signal: controller.signal,
       });
@@ -400,14 +400,14 @@ export const UsersTab: React.FC = () => {
       }
 
       if (editingUser) {
-        await apiClient.put(`/users/${editingUser.id}/`, payload);
+        await apiClient.put(`/v1/accounts/users/${editingUser.id}/`, payload);
         showAlert({
           title: 'Account Saved',
           message: `Saved updates for @${cleanUsername}. Role and permissions are now synced.`,
           type: 'success',
         });
       } else {
-        await apiClient.post('/users/', payload);
+        await apiClient.post('/v1/accounts/users/', payload);
         showAlert({
           title: 'Account Registered',
           message: `@${cleanUsername} is registered. ${
@@ -455,7 +455,7 @@ export const UsersTab: React.FC = () => {
       isDestructive: true,
       onConfirm: async () => {
         try {
-          await apiClient.delete(`/users/${user.id}/`);
+          await apiClient.delete(`/v1/accounts/users/${user.id}/`);
           setUsers((prev) => prev.filter((u) => u.id !== user.id));
           showAlert({
             title: 'Account Removed',

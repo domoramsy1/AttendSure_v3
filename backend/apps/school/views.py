@@ -3,6 +3,7 @@ from django.db import transaction
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
 from common.audit import AuditedModelViewSet, record_audit_log
 from common.permissions import IsLeadershipOrReadOnly
 from apps.campus.models import CampusBoundary
@@ -26,6 +27,27 @@ from .serializers import (
 )
 
 
+class PublicSchoolBrandingView(APIView):
+    """Returns non-sensitive public school letterhead info for the Sign-In screen."""
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        meta = get_school_metadata(request)
+        return Response(
+            {
+                "school_id": meta.get("school_id", ""),
+                "school_name": meta.get("school_name", ""),
+                "region": meta.get("region", ""),
+                "division": meta.get("division", ""),
+                "district": meta.get("district", ""),
+                "academic_year": meta.get("academic_year", ""),
+                "school_logo": meta.get("school_logo"),
+                "is_configured": meta.get("is_configured", False),
+            }
+        )
+
+
 class SchoolSettingsView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
 
@@ -35,7 +57,7 @@ class SchoolSettingsView(APIView):
             return Response(get_school_metadata(request))
         school = migrate_inline_logos_to_files(school)
         data = dict(SchoolSettingsSerializer(school, context={"request": request}).data)
-        data.update(get_school_metadata(request))
+        data.update(get_school_metadata(request, school=school))
         return Response(data)
 
     @transaction.atomic
@@ -46,7 +68,11 @@ class SchoolSettingsView(APIView):
                 school, data=request.data, partial=True, context={"request": request}
             )
         else:
-            payload = {k: request.data.get(k) for k in request.data.keys()} if hasattr(request.data, "keys") else dict(request.data)
+            payload = (
+                {k: request.data.get(k) for k in request.data.keys()}
+                if hasattr(request.data, "keys")
+                else dict(request.data)
+            )
             payload.setdefault("school_id", "000000")
             payload.setdefault("school_name", "AttendSure School")
             serializer = SchoolSettingsSerializer(data=payload, context={"request": request})
@@ -56,7 +82,10 @@ class SchoolSettingsView(APIView):
         cache.delete_many([SCHOOL_META_CACHE_KEY, "reports:system_status"])
 
         radius_val = max(20, int(saved.geofence_radius_meters or 150))
-        boundary = CampusBoundary.objects.filter(is_active=True).first() or CampusBoundary.objects.first()
+        boundary = (
+            CampusBoundary.objects.filter(is_active=True).first()
+            or CampusBoundary.objects.first()
+        )
         if boundary:
             boundary.name = saved.school_name or boundary.name or "Campus Boundary"
             boundary.latitude = saved.latitude
@@ -81,7 +110,7 @@ class SchoolSettingsView(APIView):
             changed_fields=list(serializer.validated_data.keys()),
         )
         data = dict(SchoolSettingsSerializer(saved, context={"request": request}).data)
-        data.update(get_school_metadata(request))
+        data.update(get_school_metadata(request, school=saved))
         return Response(data)
 
     def post(self, request):
@@ -105,7 +134,10 @@ class SchoolSettingsView(APIView):
                 changed_fields=[field],
             )
             return self.get(request)
-        return Response({"error": "Specify school_logo, left_logo, or right_logo."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Specify school_logo, left_logo, or right_logo."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 class SchoolHolidayViewSet(AuditedModelViewSet):

@@ -9,4 +9,6 @@ export * from './SchedulesTab';
 export * from './GeofenceTab';
 export * from './UsersTab';
 export * from './SettingsTab';
-export * from './GeofenceTab';
+export * from './MyAssignedClassesTab';
+export * from './PushNotificationsTab';
+export * from './ParentChatTab';

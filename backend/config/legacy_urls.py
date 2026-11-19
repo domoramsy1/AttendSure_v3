@@ -39,6 +39,7 @@ from apps.reports.views import (
     DashboardOverviewView,
     DropoutRiskView,
     MonthlyDtrView,
+    ReportAuditLogView,
     SdgImpactView,
     Sf1PrintView,
     Sf1ReportView,
@@ -142,6 +143,7 @@ urlpatterns = [
     path("settings/school/", SchoolSettingsView.as_view()),
     path("settings/calendar-exceptions/", holiday_list_create),
     path("user-activity-logs/", AuditLogListView.as_view()),
+    path("report-audit-logs/", ReportAuditLogView.as_view()),
     path("audit-logs/", AuditLogListView.as_view()),
 
     # Official DepEd Forms & Reports
@@ -159,6 +161,11 @@ urlpatterns = [
     path("enterprise/sardo-early-warning/", DropoutRiskView.as_view()),
     path("enterprise/emergency-roll-call/", EmergencyRollCallView.as_view()),
     path("enterprise/sdg-impact/", SdgImpactView.as_view()),
+
+    path("auth/validate-field/", ValidateFieldView.as_view()),
+    path("auth/validate/", ValidateFieldView.as_view()),
+    path("validate-field/", ValidateFieldView.as_view()),
+    path("validate/", ValidateFieldView.as_view()),
 
     path("", include(router.urls)),
 ]

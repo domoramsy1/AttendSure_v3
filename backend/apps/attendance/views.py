@@ -113,15 +113,21 @@ class ClassAttendanceView(APIView):
         ClassAttendance.objects.filter(id=int(rec_id)).delete()
         return Response({"ok": True, "success": True, "message": "Attendance record removed."})
 
-
 class AssignedClassRosterView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         view_all = str(request.query_params.get("mode", "")).lower() == "all"
-        return Response(get_assigned_classes_with_rosters(user=request.user, view_all=view_all, request=request))
-
-
+        summary_only = str(request.query_params.get("summary", "")).lower() in ("1", "true", "yes")
+        return Response(
+            get_assigned_classes_with_rosters(
+                user=request.user,
+                view_all=view_all,
+                include_students=not summary_only,
+                request=request,
+            )
+        )
+        
 class SectionStudentListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 

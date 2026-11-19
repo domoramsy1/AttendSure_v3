@@ -70,6 +70,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     root.style.setProperty('--border-subtle', tokens.borderSubtle);
     root.style.setProperty('--border-strong', tokens.borderStrong);
     root.style.setProperty('--brand-primary', brand.primary);
+    root.style.setProperty('--brand-button-bg', brand.buttonBg);
     root.style.setProperty('--brand-success', brand.success);
     root.style.setProperty('--brand-warning', brand.warning);
     root.style.setProperty('--brand-danger', brand.danger);

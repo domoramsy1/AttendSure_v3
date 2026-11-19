@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from common.audit import AuditedModelViewSet
 from common.permissions import IsLeadershipOrReadOnly
+from apps.school.selectors import get_sections_for_user
 from .models import Enrollment
 from .selectors import get_parent_portal_data, get_signed_qr_cards, get_students_for_user
 from .serializers import EnrollmentSerializer, StudentSerializer
@@ -24,22 +25,34 @@ class StudentViewSet(AuditedModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="metrics")
     def metrics(self, request):
-        qs = self.get_queryset().filter(is_active=True)
-        agg = qs.aggregate(
+        base_qs = self.get_queryset()
+        agg = base_qs.aggregate(
             total=Count("id", distinct=True),
-            male=Count("id", filter=Q(sex="Male"), distinct=True),
-            female=Count("id", filter=Q(sex="Female"), distinct=True),
-            enrolled=Count("id", filter=Q(enrollments__status="ENROLLED"), distinct=True),
+            active=Count("id", filter=Q(is_active=True), distinct=True),
+            male=Count("id", filter=Q(is_active=True, sex="Male"), distinct=True),
+            female=Count("id", filter=Q(is_active=True, sex="Female"), distinct=True),
+            enrolled=Count("id", filter=Q(is_active=True, enrollments__status="ENROLLED"), distinct=True),
+            paired=Count(
+                "id",
+                filter=Q(is_active=True, qr_token__isnull=False) & ~Q(qr_token=""),
+                distinct=True,
+            ),
         )
         total = agg["total"] or 0
+        active = agg["active"] or 0
         enrolled = agg["enrolled"] or 0
+        total_sections = get_sections_for_user(request.user).count()
+
         return Response({
-            "total_students": total,
+            "total_students": active,
             "total": total,
+            "active": active,
+            "paired": agg["paired"] or 0,
+            "total_sections": total_sections,
             "male": agg["male"] or 0,
             "female": agg["female"] or 0,
             "enrolled": enrolled,
-            "unassigned": max(0, total - enrolled),
+            "unassigned": max(0, active - enrolled),
         })
 
     @action(detail=False, methods=["get"], url_path="dropdown")

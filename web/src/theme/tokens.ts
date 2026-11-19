@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * ATTENDSURE  - CENTRAL DESIGN TOKENS, REUSABLE STYLES & SECURITY
+ * ATTENDSURE - CENTRAL DESIGN TOKENS, REUSABLE STYLES & SECURITY
  * File: web/src/theme/tokens.ts
  * ============================================================================
  */
@@ -9,16 +9,15 @@ import type React from 'react';
 
 export type ThemeMode = 'light' | 'dark' | 'high-contrast';
 
-// 1. CENTRAL FONT FAMILIES & SIZES
 export const FONTS = {
   sans: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
   display: "'Plus Jakarta Sans', 'Inter', sans-serif",
-  mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  mono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   size: {
-    xs: '0.66rem',
-    sm: '0.74rem',
-    base: '0.82rem',
-    md: '0.94rem',
+    xs: '0.68rem',
+    sm: '0.76rem',
+    base: '0.84rem',
+    md: '0.96rem',
     lg: '1.15rem',
     xl: '1.55rem',
   },
@@ -32,7 +31,6 @@ export const FONTS = {
   },
 };
 
-// 2. CENTRAL SPACING & CORNERS
 export const RADIUS = {
   sm: 6,
   md: 8,
@@ -41,10 +39,21 @@ export const RADIUS = {
   pill: 9999,
 };
 
-// 3. CENTRAL BRAND COLORS
-export const BRAND_COLORS = {
+export interface BrandColors {
+  primary: string;
+  buttonBg: string;
+  buttonHover: string;
+  secondary: string;
+  success: string;
+  warning: string;
+  danger: string;
+}
+
+export const BRAND_COLORS: Record<ThemeMode, BrandColors> = {
   light: {
     primary: '#004b87',
+    buttonBg: '#004b87',
+    buttonHover: '#003a6b',
     secondary: '#0284c7',
     success: '#059669',
     warning: '#d97706',
@@ -52,13 +61,17 @@ export const BRAND_COLORS = {
   },
   dark: {
     primary: '#38bdf8',
-    secondary: '#0284c7',
+    buttonBg: '#0284c7',
+    buttonHover: '#0369a1',
+    secondary: '#38bdf8',
     success: '#10b981',
     warning: '#f59e0b',
     danger: '#f87171',
   },
   'high-contrast': {
     primary: '#002b4d',
+    buttonBg: '#002b4d',
+    buttonHover: '#001d36',
     secondary: '#004b87',
     success: '#047857',
     warning: '#b45309',
@@ -66,7 +79,6 @@ export const BRAND_COLORS = {
   },
 };
 
-// 4. CENTRAL COLOR PALETTES FOR EACH MODE
 export interface ThemeTokens {
   bgApp: string;
   bgCanvas: string;
@@ -88,67 +100,68 @@ export interface ThemeTokens {
 
 export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
   light: {
-    bgApp: '#f1f5f9',
+    bgApp: '#eef2f6',
     bgCanvas: '#f8fafc',
     bgSurface: '#ffffff',
-    bgSurfaceSubtle: '#f8fafc',
-    bgSurfaceHover: '#f1f5f9',
+    bgSurfaceSubtle: '#f4f7fa',
+    bgSurfaceHover: '#edf2f7',
     textPrimary: '#0f172a',
     textSecondary: '#475569',
     textMuted: '#64748b',
     borderSubtle: '#e2e8f0',
     borderStrong: '#cbd5e1',
-    primaryLight: 'rgba(0, 75, 135, 0.10)',
-    successLight: 'rgba(16, 185, 129, 0.12)',
-    warningLight: 'rgba(245, 158, 11, 0.12)',
-    dangerLight: 'rgba(239, 68, 68, 0.12)',
-    infoLight: 'rgba(2, 132, 199, 0.12)',
-    cardShadow: '0 4px 16px -2px rgba(15, 23, 42, 0.05)',
+    primaryLight: 'rgba(0, 75, 135, 0.08)',
+    successLight: 'rgba(5, 150, 105, 0.11)',
+    warningLight: 'rgba(217, 119, 6, 0.12)',
+    dangerLight: 'rgba(220, 38, 38, 0.10)',
+    infoLight: 'rgba(2, 132, 199, 0.10)',
+    cardShadow: '0 4px 20px -2px rgba(15, 23, 42, 0.06)',
   },
   dark: {
-    bgApp: '#020617',
-    bgCanvas: '#0f172a',
-    bgSurface: '#1e293b',
-    bgSurfaceSubtle: '#0f172a',
-    bgSurfaceHover: '#334155',
+    bgApp: '#070d19',
+    bgCanvas: '#0b1324',
+    bgSurface: '#111c30',
+    bgSurfaceSubtle: '#17243d',
+    bgSurfaceHover: '#1e2f4d',
     textPrimary: '#f8fafc',
     textSecondary: '#cbd5e1',
     textMuted: '#94a3b8',
-    borderSubtle: '#334155',
-    borderStrong: '#475569',
-    primaryLight: 'rgba(56, 189, 248, 0.15)',
-    successLight: 'rgba(16, 185, 129, 0.18)',
-    warningLight: 'rgba(245, 158, 11, 0.18)',
-    dangerLight: 'rgba(248, 113, 113, 0.18)',
-    infoLight: 'rgba(56, 189, 248, 0.15)',
-    cardShadow: '0 6px 20px -2px rgba(0, 0, 0, 0.45)',
+    borderSubtle: '#1e2f48',
+    borderStrong: '#2e4466',
+    primaryLight: 'rgba(56, 189, 248, 0.14)',
+    successLight: 'rgba(16, 185, 129, 0.16)',
+    warningLight: 'rgba(245, 158, 11, 0.16)',
+    dangerLight: 'rgba(248, 113, 113, 0.16)',
+    infoLight: 'rgba(56, 189, 248, 0.14)',
+    cardShadow: '0 8px 28px -4px rgba(0, 0, 0, 0.55)',
   },
   'high-contrast': {
-    bgApp: '#e2e8f0',
+    bgApp: '#dfe6ee',
     bgCanvas: '#ffffff',
     bgSurface: '#ffffff',
     bgSurfaceSubtle: '#f1f5f9',
     bgSurfaceHover: '#e2e8f0',
     textPrimary: '#000000',
-    textSecondary: '#1e293b',
+    textSecondary: '#0f172a',
     textMuted: '#334155',
-    borderSubtle: '#64748b',
-    borderStrong: '#0f172a',
+    borderSubtle: '#94a3b8',
+    borderStrong: '#334155',
     primaryLight: '#dbeafe',
     successLight: '#d1fae5',
     warningLight: '#fef3c7',
     dangerLight: '#fee2e2',
     infoLight: '#e0f2fe',
-    cardShadow: '0 0 0 1px #0f172a',
+    cardShadow: '0 0 0 1.5px #0f172a, 0 10px 24px rgba(15, 23, 42, 0.12)',
   },
 };
 
-// 5. REUSABLE UI STYLE GENERATOR
-export const createStyles = (tokens: ThemeTokens, brand: typeof BRAND_COLORS.light) => ({
+export const createStyles = (tokens: ThemeTokens, brand: BrandColors) => ({
   card: {
     backgroundColor: tokens.bgSurface,
     borderRadius: RADIUS.xl,
-    border: `1px solid ${tokens.borderSubtle}`,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: tokens.borderSubtle,
     boxShadow: tokens.cardShadow,
     padding: '16px 18px',
   } as React.CSSProperties,
@@ -156,7 +169,9 @@ export const createStyles = (tokens: ThemeTokens, brand: typeof BRAND_COLORS.lig
   subtleBox: {
     backgroundColor: tokens.bgSurfaceSubtle,
     borderRadius: RADIUS.lg,
-    border: `1px solid ${tokens.borderSubtle}`,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: tokens.borderSubtle,
     padding: '12px 14px',
   } as React.CSSProperties,
 
@@ -172,7 +187,9 @@ export const createStyles = (tokens: ThemeTokens, brand: typeof BRAND_COLORS.lig
     width: '100%',
     padding: '8px 12px',
     borderRadius: RADIUS.sm,
-    border: `1px solid ${tokens.borderStrong}`,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: tokens.borderStrong,
     backgroundColor: tokens.bgSurface,
     color: tokens.textPrimary,
     fontSize: FONTS.size.base,
@@ -189,14 +206,18 @@ export const createStyles = (tokens: ThemeTokens, brand: typeof BRAND_COLORS.lig
     textTransform: 'uppercase',
     letterSpacing: '0.4px',
     backgroundColor: tokens.bgSurfaceSubtle,
-    borderBottom: `1px solid ${tokens.borderSubtle}`,
+    borderBottomWidth: 1,
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.borderSubtle,
   } as React.CSSProperties,
 
   td: {
     padding: '10px 12px',
     fontSize: FONTS.size.base,
     color: tokens.textPrimary,
-    borderBottom: `1px solid ${tokens.borderSubtle}`,
+    borderBottomWidth: 1,
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.borderSubtle,
     verticalAlign: 'middle',
   } as React.CSSProperties,
 
@@ -206,7 +227,9 @@ export const createStyles = (tokens: ThemeTokens, brand: typeof BRAND_COLORS.lig
     gap: 6,
     padding: '6px 12px',
     borderRadius: RADIUS.md,
-    border: `1px solid ${tokens.borderStrong}`,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: tokens.borderStrong,
     backgroundColor: tokens.bgSurfaceSubtle,
     color: tokens.textPrimary,
     fontSize: FONTS.size.sm,
@@ -220,8 +243,10 @@ export const createStyles = (tokens: ThemeTokens, brand: typeof BRAND_COLORS.lig
     gap: 6,
     padding: '7px 14px',
     borderRadius: RADIUS.md,
-    border: 'none',
-    backgroundColor: brand.primary,
+    borderWidth: 0,
+    borderStyle: 'none',
+    borderColor: 'transparent',
+    backgroundColor: brand.buttonBg,
     color: '#ffffff',
     fontSize: FONTS.size.sm,
     fontWeight: FONTS.weight.bold,
@@ -241,7 +266,6 @@ export const createStyles = (tokens: ThemeTokens, brand: typeof BRAND_COLORS.lig
   }),
 });
 
-// 6. CENTRAL CYBERSECURITY HELPERS
 export const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.trim().toLowerCase();
@@ -261,10 +285,9 @@ export const sanitizeText = (text: string, maxLength = 150): string => {
   return String(text || '').replace(/[<>]/g, '').trim().slice(0, maxLength);
 };
 
-// Backwards-compatible static export for UI primitives (Button.tsx, FormControls.tsx, AuthPage.tsx)
 export const theme = {
   colors: {
-    primary: 'var(--brand-primary, #004b87)',
+    primary: 'var(--brand-button-bg, #004b87)',
     primaryHover: '#003865',
     primaryLight: 'rgba(0, 75, 135, 0.10)',
     secondary: '#0284c7',
@@ -276,7 +299,7 @@ export const theme = {
     dangerLight: 'rgba(239, 68, 68, 0.12)',
     surface: 'var(--bg-surface, #ffffff)',
     surfaceSubtle: 'var(--bg-surface-subtle, #f8fafc)',
-    background: 'var(--bg-app, #f1f5f9)',
+    background: 'var(--bg-app, #eef2f6)',
     textPrimary: 'var(--text-primary, #0f172a)',
     textSecondary: 'var(--text-secondary, #475569)',
     textMuted: 'var(--text-muted, #64748b)',

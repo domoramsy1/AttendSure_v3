@@ -66,7 +66,7 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
       };
       if (formData.password.trim().length >= 8) payload.password = formData.password.trim();
 
-      const res = await apiClient.put('/me/', payload);
+      const res = await apiClient.put('/v1/accounts/me/', payload);
       showAlert({ title: 'Profile Completed', message: 'Your faculty record is now active.', type: 'success' });
       onCompleted(res.data);
     } catch (err: any) {

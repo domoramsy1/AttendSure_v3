@@ -48,8 +48,8 @@ interface EmergencyRollCallData {
 
 export const EnterpriseSDGWidget: React.FC = () => {
   const { tokens, brand } = useTheme();
-  const { data: sdgData, loading: loadingSdg, reload: reloadSdg } = useApiResource<any>('/enterprise/sdg-impact/', null);
-  const { data: sardoData, loading: loadingSardo, reload: reloadSardo } = useApiResource<any>('/enterprise/sardo-early-warning/', null);
+  const { data: sdgData, loading: loadingSdg, reload: reloadSdg } = useApiResource<any>('/v1/reports/sdg-impact/', null);
+  const { data: sardoData, loading: loadingSardo, reload: reloadSardo } = useApiResource<any>('/v1/reports/dropout-risk/', null);
 
   const [showAtRiskList, setShowAtRiskList] = useState<boolean>(true);
   const [rollCallOpen, setRollCallOpen] = useState<boolean>(false);
@@ -70,7 +70,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
     setRollCallOpen(true);
     setRollCallLoading(true);
     try {
-      const res = await apiClient.get('/enterprise/emergency-rollcall/');
+      const res = await apiClient.get('/v1/campus/roll-call/');
       setRollCallData(res.data);
     } catch {
       setRollCallData(null);

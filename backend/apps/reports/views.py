@@ -3,6 +3,8 @@ from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from common.audit import record_audit_log
 from common.permissions import is_school_leader
 from apps.accounts.selectors import get_teacher_section_ids, resolve_teacher_for_user
 from .selectors import (
@@ -99,9 +101,56 @@ class MonthlyDtrView(APIView):
         year = int(request.query_params.get("year", timezone.localdate().year))
         raw_tid = pk or request.query_params.get("faculty_id") or request.query_params.get("teacher_id")
         t_id = int(raw_tid) if (raw_tid and str(raw_tid).isdigit()) else None
+        list_only = str(request.query_params.get("list", "")).lower() in ("1", "true", "yes")
         return Response(
-            get_monthly_dtr_data(user=request.user, month=month, year=year, teacher_id=t_id, request=request)
+            get_monthly_dtr_data(
+                user=request.user,
+                month=month,
+                year=year,
+                teacher_id=t_id,
+                list_only=list_only,
+                request=request,
+            )
         )
+
+    def post(self, request, pk: int | None = None):
+        from .services import process_monthly_dtr_action
+
+        month = int(request.data.get("month") or timezone.localdate().month)
+        year = int(request.data.get("year") or timezone.localdate().year)
+        raw_tid = pk or request.data.get("faculty_id") or request.data.get("teacher_id")
+        t_id = int(raw_tid) if (raw_tid and str(raw_tid).isdigit()) else None
+
+        result = process_monthly_dtr_action(
+            request=request,
+            action=str(request.data.get("action") or ""),
+            month=month,
+            year=year,
+            teacher_id=t_id,
+            data=request.data,
+        )
+        return Response(result, status=status.HTTP_200_OK)
+
+
+class ReportAuditLogView(APIView):
+    """Records verifiable audit entries whenever SF1, SF2, SF4, or DTR forms are printed or exported."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        raw_section = request.data.get("section_id")
+        record_id = int(raw_section) if (raw_section and str(raw_section).isdigit()) else 0
+        action_code = str(request.data.get("action") or "EXPORT").strip().upper()[:10]
+        report_name = str(request.data.get("report_name") or "School Form").strip()[:80]
+        tracking_id = str(request.data.get("document_tracking_id") or "").strip()[:80]
+
+        record_audit_log(
+            request=request,
+            table_name="deped_reports",
+            record_id=record_id,
+            action=action_code,
+            new_data={"report_name": report_name, "tracking_id": tracking_id},
+        )
+        return Response({"ok": True, "logged": True}, status=status.HTTP_201_CREATED)
 
 
 class DropoutRiskView(APIView):

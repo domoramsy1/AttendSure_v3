@@ -1,50 +1,100 @@
-import React from 'react';
+/**
+ * AttendSure - Accessible Theme-Adaptive Form Controls
+ * File: web/src/components/ui/FormControls.tsx
+ */
+
+import React, { useId } from 'react';
 import { theme } from '../../theme/tokens';
 
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
 }
 
-export const TextInput: React.FC<InputProps> = ({ label, style, ...props }) => (
-  <div style={{ width: '100%' }}>
-    {label && <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: 4, color: theme.colors.textPrimary }}>{label}</label>}
-    <input
-      style={{
-        width: '100%',
-        padding: '8px 12px',
-        borderRadius: theme.radius.sm,
-        border: `1px solid ${theme.colors.border}`,
-        fontSize: '0.875rem',
-        outline: 'none',
-        boxSizing: 'border-box',
-        ...style,
-      }}
-      {...props}
-    />
-  </div>
-);
+export const TextInput: React.FC<InputProps> = ({ label, id, style, ...props }) => {
+  const generatedId = useId();
+  const inputId = id || generatedId;
+
+  return (
+    <div style={{ width: '100%' }}>
+      {label && (
+        <label
+          htmlFor={inputId}
+          style={{
+            display: 'block',
+            fontSize: '0.8rem',
+            fontWeight: 700,
+            marginBottom: 4,
+            color: theme.colors.textPrimary,
+          }}
+        >
+          {label}
+        </label>
+      )}
+      <input
+        id={inputId}
+        style={{
+          width: '100%',
+          padding: '9px 12px',
+          borderRadius: theme.radius.sm,
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: theme.colors.border,
+          backgroundColor: theme.colors.surfaceSubtle,
+          color: theme.colors.textPrimary,
+          fontSize: '0.875rem',
+          outline: 'none',
+          boxSizing: 'border-box',
+          transition: 'border-color 0.15s ease, background-color 0.15s ease',
+          ...style,
+        }}
+        {...props}
+      />
+    </div>
+  );
+};
 
 interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   label?: string;
 }
 
-export const Select: React.FC<SelectProps> = ({ label, children, style, ...props }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-    {label && <label style={{ fontSize: '0.875rem', fontWeight: 600, color: theme.colors.textPrimary, whiteSpace: 'nowrap' }}>{label}</label>}
-    <select
-      style={{
-        padding: '8px 12px',
-        borderRadius: theme.radius.sm,
-        border: `1px solid ${theme.colors.border}`,
-        fontSize: '0.875rem',
-        backgroundColor: theme.colors.surface,
-        outline: 'none',
-        cursor: 'pointer',
-        ...style,
-      }}
-      {...props}
-    >
-      {children}
-    </select>
-  </div>
-);
+export const Select: React.FC<SelectProps> = ({ label, id, children, style, ...props }) => {
+  const generatedId = useId();
+  const selectId = id || generatedId;
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {label && (
+        <label
+          htmlFor={selectId}
+          style={{
+            fontSize: '0.875rem',
+            fontWeight: 700,
+            color: theme.colors.textPrimary,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {label}
+        </label>
+      )}
+      <select
+        id={selectId}
+        style={{
+          padding: '8px 12px',
+          borderRadius: theme.radius.sm,
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: theme.colors.border,
+          fontSize: '0.875rem',
+          backgroundColor: theme.colors.surface,
+          color: theme.colors.textPrimary,
+          outline: 'none',
+          cursor: 'pointer',
+          ...style,
+        }}
+        {...props}
+      >
+        {children}
+      </select>
+    </div>
+  );
+};

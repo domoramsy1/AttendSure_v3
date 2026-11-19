@@ -10,17 +10,22 @@ from .models import ExitPass
 
 
 class ExitPassSerializer(serializers.ModelSerializer):
+    bearer_type = serializers.SerializerMethodField()
     student_name = serializers.CharField(source="student.full_name", read_only=True, default="")
+    student_lrn = serializers.CharField(source="student.lrn", read_only=True, default="")
     teacher_name = serializers.CharField(source="teacher.full_name", read_only=True, default="")
     faculty_name = serializers.CharField(source="teacher.full_name", read_only=True, default="")
+    faculty_emp_id = serializers.CharField(source="teacher.employee_id", read_only=True, default="")
+    adviser_name = serializers.CharField(source="issued_by.full_name", read_only=True, default="School Staff")
     valid_to = serializers.DateTimeField(source="valid_until", required=False)
 
     class Meta:
         model = ExitPass
         fields = [
-            "id", "pass_number", "student", "student_name",
-            "teacher", "teacher_name", "faculty_name",
-            "issued_by", "pass_type", "reason",
+            "id", "pass_number", "bearer_type",
+            "student", "student_name", "student_lrn",
+            "teacher", "teacher_name", "faculty_name", "faculty_emp_id",
+            "issued_by", "adviser_name", "pass_type", "reason",
             "valid_from", "valid_until", "valid_to", "status", "created_at",
         ]
         read_only_fields = ["id", "pass_number", "issued_by", "status", "created_at"]
@@ -29,12 +34,21 @@ class ExitPassSerializer(serializers.ModelSerializer):
             "valid_until": {"required": False},
         }
 
+    def get_bearer_type(self, obj) -> str:
+        return "STUDENT" if obj.student_id else "FACULTY"
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if data.get("status") == "REVOKED":
+            data["status"] = "DECLINED"
+        return data
+
     def validate(self, attrs):
         now = timezone.now()
         attrs.setdefault("valid_from", now)
         attrs.setdefault("valid_until", attrs["valid_from"] + timedelta(hours=4))
         if attrs["valid_until"] <= attrs["valid_from"]:
-            raise serializers.ValidationError({"valid_until": "Expiration must be after start time."})
+            raise serializers.ValidationError({"valid_until": "Return time must be after departure time."})
         return attrs
 
     def create(self, validated_data):

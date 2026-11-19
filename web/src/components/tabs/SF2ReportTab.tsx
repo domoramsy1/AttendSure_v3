@@ -208,7 +208,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
   useEffect(() => {
     const fetchSections = async () => {
       try {
-        const res = await apiClient.get('/sections/');
+        const res = await apiClient.get('/v1/school/sections/');
         const data = Array.isArray(res.data) ? res.data : res.data.results || [];
         setSections(data);
         if (!selectedSectionId && data.length > 0) {
@@ -227,7 +227,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     setError(null);
     try {
       const res = await apiClient.get<SF2ReportData>(
-        `/reports/sf2/${selectedSectionId}/?month=${selectedMonth}&year=${selectedYear}`
+        `/v1/reports/sf2/${selectedSectionId}/?month=${selectedMonth}&year=${selectedYear}`
       );
       setReportData(res.data);
       if (res.data?.academic_year && !selectedAcademicYear) {
@@ -303,7 +303,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
-      await apiClient.post('/reports/audit-logs/', {
+      await apiClient.post('/v1/reports/audit-logs/', {
         report_name: 'School Form 2 (SF2)',
         document_tracking_id: auditMeta.trackingId,
         section_id: selectedSectionId,

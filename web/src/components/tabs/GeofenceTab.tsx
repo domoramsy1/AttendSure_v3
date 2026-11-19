@@ -216,7 +216,7 @@ export const GeofenceTab: React.FC = () => {
     async (silent: boolean = false) => {
       if (!silent) setLoading(true);
       try {
-        const res = await apiClient.get<GeofenceData>('/geofence/', { timeout: 8000 });
+        const res = await apiClient.get<GeofenceData>('/v1/campus/boundary/', { timeout: 8000 });
         if (res.data) {
           setGeoData(res.data);
           if (!isDirtyRef.current) {
@@ -262,7 +262,7 @@ export const GeofenceTab: React.FC = () => {
           params.append('search', auditSearchQuery.trim());
         }
 
-        const res = await apiClient.get(`/geofence/audit/?${params.toString()}`, { timeout: 8000 });
+        const res = await apiClient.get(`/v1/campus/audit/?${params.toString()}`, { timeout: 8000 });
         if (res.data?.records) {
           setAuditRecords(res.data.records);
           setTotalDatabaseRecords(res.data.total_heartbeats ?? res.data.records.length);
@@ -676,7 +676,7 @@ export const GeofenceTab: React.FC = () => {
     setSaving(true);
     try {
       const res = await apiClient.put(
-        '/geofence/',
+        '/v1/campus/boundary/',
         {
           latitude: lat,
           longitude: lng,
@@ -715,7 +715,7 @@ export const GeofenceTab: React.FC = () => {
       onConfirm: async () => {
         setResettingId(facultyId);
         try {
-          const res = await apiClient.post(`/faculty/${facultyId}/reset-device/`);
+          const res = await apiClient.post(`/v1/accounts/teachers/${facultyId}/reset-device/`);
           showAlert({
             title: 'Device Lock Cleared',
             message: res.data?.message || `Phone binding for ${facultyName} has been cleared.`,

@@ -245,101 +245,194 @@ def get_dropout_risk_report(*, user, section_id: int | None = None, request=None
         "at_risk_students": at_risk[:100],
     }
 
+def get_monthly_dtr_data(
+    *,
+    user,
+    month: int,
+    year: int,
+    teacher_id: int | None = None,
+    list_only: bool = False,
+    request=None,
+) -> dict:
+    """Computes CSC Form 48 rows strictly from real database GPS logs and boundary alerts."""
+    from common.permissions import get_user_role
+    from apps.campus.models import BoundaryAlert
 
-def get_monthly_dtr_data(*, user, month: int, year: int, teacher_id: int | None = None, request=None) -> dict:
-    """Computes DTR rows strictly from real AM (<12:00) and PM (>=12:00) database timestamps."""
+    month = max(1, min(12, int(month)))
+    year = int(year)
+    role = get_user_role(user)
     leader = is_school_leader(user)
     own_teacher = resolve_teacher_for_user(user)
 
-    if teacher_id:
-        if not leader and (not own_teacher or own_teacher.id != teacher_id):
-            raise AppError("FORBIDDEN", "You can only view your own DTR record.", 403)
-        teacher = TeacherProfile.objects.filter(id=teacher_id).first()
-        if not teacher:
-            raise AppError("TEACHER_NOT_FOUND", "Teacher profile not found.", 404)
-
-        dtr, _ = MonthlyTimeRecord.objects.get_or_create(teacher=teacher, month=month, year=year)
-        _, num_days = calendar.monthrange(year, month)
-        pings_by_day: dict[int, list] = {}
-        for log in TeacherLocationLog.objects.filter(
-            teacher=teacher, recorded_at__year=year, recorded_at__month=month, is_inside_geofence=True
-        ).order_by("recorded_at"):
-            local_dt = timezone.localtime(log.recorded_at)
-            pings_by_day.setdefault(local_dt.day, []).append(local_dt)
-
-        daily_logs = []
-        for day_num in range(1, num_days + 1):
-            dt_obj = date(year, month, day_num)
-            day_pings = pings_by_day.get(day_num, [])
-            am_pings = [p for p in day_pings if p.hour < 12]
-            pm_pings = [p for p in day_pings if p.hour >= 12]
-
-            daily_logs.append({
-                "day": day_num,
-                "date": dt_obj.strftime("%Y-%m-%d"),
-                "weekday": dt_obj.strftime("%a"),
-                "am_arrival": am_pings[0].strftime("%I:%M %p") if am_pings else "",
-                "am_departure": am_pings[-1].strftime("%I:%M %p") if len(am_pings) > 1 else "",
-                "pm_arrival": pm_pings[0].strftime("%I:%M %p") if pm_pings else "",
-                "pm_departure": pm_pings[-1].strftime("%I:%M %p") if len(pm_pings) > 1 else "",
-                "status": "PRESENT" if day_pings else ("WEEKEND" if dt_obj.weekday() >= 5 else "NO_LOG"),
-            })
-
+    if list_only and not teacher_id:
+        teachers = (
+            list(TeacherProfile.objects.filter(is_active=True).order_by("last_name", "first_name"))
+            if leader
+            else ([own_teacher] if own_teacher else [])
+        )
+        t_ids = [t.id for t in teachers]
+        present_counts = dict(
+            TeacherLocationLog.objects.filter(
+                teacher_id__in=t_ids,
+                recorded_at__year=year,
+                recorded_at__month=month,
+                is_inside_geofence=True,
+            )
+            .values("teacher_id")
+            .annotate(days=Count("recorded_at__date", distinct=True))
+            .values_list("teacher_id", "days")
+        )
+        existing_dtrs = {
+            d.teacher_id: d
+            for d in MonthlyTimeRecord.objects.filter(teacher_id__in=t_ids, month=month, year=year)
+        }
         return {
-            "id": dtr.id,
-            "faculty_id": teacher.id,
-            "employee_id": teacher.employee_id,
-            "faculty_name": teacher.full_name,
-            "position": teacher.position,
-            "department": teacher.department,
-            "month": month,
+            "month": calendar.month_name[month],
+            "month_number": month,
             "year": year,
-            "days_present": sum(1 for d in daily_logs if d["status"] == "PRESENT"),
-            "is_submitted": dtr.is_submitted,
-            "is_dept_head_approved": dtr.is_dept_head_approved,
-            "regular_hours": dtr.regular_hours,
-            "saturday_hours": dtr.saturday_hours,
-            "daily_logs": daily_logs,
-            "school": get_school_metadata(request),
+            "records": [
+                {
+                    "id": existing_dtrs[t.id].id if t.id in existing_dtrs else t.id,
+                    "faculty_id": t.id,
+                    "employee_id": t.employee_id,
+                    "faculty_name": t.full_name,
+                    "position": t.position,
+                    "department": t.department,
+                    "month": month,
+                    "year": year,
+                    "days_present": present_counts.get(t.id, 0),
+                    "is_submitted": bool(t.id in existing_dtrs and existing_dtrs[t.id].is_submitted),
+                    "is_dept_head_approved": bool(
+                        t.id in existing_dtrs and existing_dtrs[t.id].is_dept_head_approved
+                    ),
+                }
+                for t in teachers
+            ],
         }
 
-    teachers = list(TeacherProfile.objects.filter(is_active=True)) if leader else ([own_teacher] if own_teacher else [])
-    t_ids = [t.id for t in teachers]
-    present_counts = dict(
-        TeacherLocationLog.objects.filter(
-            teacher_id__in=t_ids, recorded_at__year=year, recorded_at__month=month, is_inside_geofence=True
+    # Resolve target teacher directly so faculty and leaders get Form 48 on first request
+    if teacher_id:
+        if not leader and (not own_teacher or own_teacher.id != teacher_id):
+            raise AppError("FORBIDDEN", "You can only view your own Daily Time Record.", 403)
+        teacher = TeacherProfile.objects.filter(id=teacher_id).first()
+    else:
+        teacher = own_teacher or (
+            TeacherProfile.objects.filter(is_active=True).order_by("last_name", "first_name").first()
+            if leader
+            else None
         )
-        .values("teacher_id")
-        .annotate(days=Count("recorded_at__date", distinct=True))
-        .values_list("teacher_id", "days")
-    )
-    existing_dtrs = {
-        d.teacher_id: d
-        for d in MonthlyTimeRecord.objects.filter(teacher_id__in=t_ids, month=month, year=year)
-    }
+
+    if not teacher:
+        raise AppError("TEACHER_NOT_FOUND", "No teacher profile is linked to this account.", 404)
+
+    dtr, _ = MonthlyTimeRecord.objects.get_or_create(teacher=teacher, month=month, year=year)
+    _, num_days = calendar.monthrange(year, month)
+
+    pings_by_day: dict[int, list] = {}
+    for log in TeacherLocationLog.objects.filter(
+        teacher=teacher,
+        recorded_at__year=year,
+        recorded_at__month=month,
+        is_inside_geofence=True,
+    ).order_by("recorded_at"):
+        local_dt = timezone.localtime(log.recorded_at)
+        pings_by_day.setdefault(local_dt.day, []).append(local_dt)
+
+    alerts_by_day: dict[int, BoundaryAlert] = {}
+    for alert in BoundaryAlert.objects.filter(
+        teacher=teacher,
+        incident_date__year=year,
+        incident_date__month=month,
+    ).order_by("-created_at"):
+        alerts_by_day.setdefault(alert.incident_date.day, alert)
+
+    rows = []
+    days_present = 0
+
+    for day_num in range(1, 32):
+        if day_num > num_days:
+            rows.append({
+                "day": day_num,
+                "date_str": "",
+                "day_of_week": "",
+                "is_weekend": False,
+                "am_arrival": "",
+                "am_departure": "",
+                "pm_arrival": "",
+                "pm_departure": "",
+                "undertime_hours": "",
+                "undertime_minutes": "",
+                "status": "OUT_OF_MONTH",
+                "is_loafing": False,
+                "loafing_excused": False,
+                "loafing_remarks": "",
+            })
+            continue
+
+        dt_obj = date(year, month, day_num)
+        is_weekend = dt_obj.weekday() >= 5
+        day_pings = pings_by_day.get(day_num, [])
+        am_pings = [p for p in day_pings if p.hour < 12]
+        pm_pings = [p for p in day_pings if p.hour >= 12]
+
+        if day_pings:
+            days_present += 1
+
+        alert = alerts_by_day.get(day_num)
+        has_alert = alert is not None
+        is_excused = bool(alert and str(alert.status).upper() == "EXCUSED")
+
+        rows.append({
+            "day": day_num,
+            "date_str": dt_obj.strftime("%Y-%m-%d"),
+            "day_of_week": dt_obj.strftime("%a"),
+            "is_weekend": is_weekend,
+            "am_arrival": am_pings[0].strftime("%I:%M") if am_pings else "",
+            "am_departure": am_pings[-1].strftime("%I:%M") if len(am_pings) > 1 else "",
+            "pm_arrival": pm_pings[0].strftime("%I:%M") if pm_pings else "",
+            "pm_departure": pm_pings[-1].strftime("%I:%M") if len(pm_pings) > 1 else "",
+            "undertime_hours": "",
+            "undertime_minutes": "",
+            "status": "PRESENT" if day_pings else ("WEEKEND" if is_weekend else "NO_LOG"),
+            "is_loafing": has_alert,
+            "loafing_excused": is_excused,
+            "loafing_remarks": alert.trigger_reason if alert else "",
+        })
+
+    school_meta = get_school_metadata(request)
 
     return {
-        "month": month,
+        "id": dtr.id,
+        "faculty_id": teacher.id,
+        "teacher_id": teacher.id,
+        "employee_id": teacher.employee_id,
+        "faculty_name": teacher.full_name,
+        "position": teacher.position,
+        "department": teacher.department,
+        "month": calendar.month_name[month],
+        "month_number": month,
         "year": year,
-        "records": [
-            {
-                "id": existing_dtrs[t.id].id if t.id in existing_dtrs else t.id,
-                "faculty_id": t.id,
-                "employee_id": t.employee_id,
-                "faculty_name": t.full_name,
-                "position": t.position,
-                "department": t.department,
-                "month": month,
-                "year": year,
-                "days_present": present_counts.get(t.id, 0),
-                "is_submitted": bool(t.id in existing_dtrs and existing_dtrs[t.id].is_submitted),
-                "is_dept_head_approved": bool(t.id in existing_dtrs and existing_dtrs[t.id].is_dept_head_approved),
-            }
-            for t in teachers
-        ],
+        "regular_days_hours": dtr.regular_hours or "",
+        "saturdays_hours": dtr.saturday_hours or "",
+        "regular_hours": dtr.regular_hours or "",
+        "saturday_hours": dtr.saturday_hours or "",
+        "school_head": school_meta.get("school_head", ""),
+        "school_head_title": school_meta.get("principal_title", ""),
+        "dtr_submitted": bool(dtr.is_submitted),
+        "is_submitted": bool(dtr.is_submitted),
+        "dept_head_approved": bool(dtr.is_dept_head_approved),
+        "is_dept_head_approved": bool(dtr.is_dept_head_approved),
+        "user_role": role,
+        "can_approve_dept": leader,
+        "can_clear_loafing": bool(user.is_superuser or role in ("ADMIN", "PRINCIPAL")),
+        "days_present": days_present,
+        "total_undertime_hours": 0,
+        "total_undertime_minutes": 0,
+        "rows": rows,
+        "daily_logs": rows,
+        "school": school_meta,
     }
-
-
+    
 def get_sdg_impact_summary() -> dict:
     total_students = Student.objects.filter(is_active=True).count()
     linked_parents = Student.objects.filter(is_active=True, parent_user__isnull=False).count()

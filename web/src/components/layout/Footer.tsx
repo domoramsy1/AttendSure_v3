@@ -1,5 +1,5 @@
 /**
- * AttendSure - School Footer
+ * AttendSure - Dynamic Institutional Footer (Zero Mock IDs)
  * File: web/src/components/layout/Footer.tsx
  */
 
@@ -26,137 +26,54 @@ export const Footer: React.FC<FooterProps> = ({
   const { school } = useSchool();
   const { tokens, brand } = useTheme();
 
-  // Safe name resolution to prevent 0-width collapsing
-  const activeSchoolName =
-    (schoolName && schoolName.trim()) ||
-    (school?.school_name && school.school_name.trim()) ||
-    'Macasandig National High School';
-
-  const activeSchoolId =
-    (schoolId && schoolId.trim()) ||
-    (school?.school_id && school.school_id.trim()) ||
-    '55555';
-
-  const activeDivision =
-    (divisionOrCity && divisionOrCity.trim()) ||
-    (school?.division && school.division.trim()) ||
-    'Cagayan de Oro City';
+  const activeSchoolName = schoolName?.trim() || school.school_name?.trim() || 'AttendSure School Portal';
+  const activeSchoolId = schoolId?.trim() || school.school_id?.trim() || '—';
+  const activeDivision = divisionOrCity?.trim() || school.division?.trim() || '';
 
   return (
     <footer
       style={{
         width: '100%',
-        minHeight: 44,
-        height: 'auto',
+        minHeight: 42,
         flexShrink: 0,
-        marginTop: 'auto',
-        backgroundColor: tokens.bgSurface || '#ffffff',
-        borderTop: `1px solid ${tokens.borderSubtle || '#e2e8f0'}`,
-        padding: '10px clamp(12px, 2.5vw, 24px)',
+        backgroundColor: tokens.bgSurface,
+        borderTop: `1px solid ${tokens.borderSubtle}`,
+        padding: '8px clamp(12px, 2vw, 22px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: '8px 20px',
-        fontSize: '0.74rem',
-        lineHeight: 1.4,
-        color: tokens.textSecondary || '#64748b',
+        gap: '8px 18px',
+        fontSize: '0.73rem',
+        color: tokens.textSecondary,
         boxSizing: 'border-box',
-        userSelect: 'none',
-        zIndex: 10,
       }}
     >
-      {/* Left: School Identification */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '6px 10px',
-          minWidth: 0,
-          flex: '1 1 auto',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <Building2 size={14} color={brand.primary || '#004b87'} />
-          <strong
-            style={{
-              color: tokens.textPrimary || '#0f172a',
-              fontSize: '0.76rem',
-            }}
-          >
-            {activeSchoolName}
-          </strong>
-        </div>
-
-        <span style={{ color: tokens.borderStrong || '#cbd5e1' }}>|</span>
-
-        <span style={{ color: tokens.textMuted || '#94a3b8', flexShrink: 0 }}>
-          School ID: {activeSchoolId}
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <Building2 size={14} color={brand.primary} />
+          <strong style={{ color: tokens.textPrimary }}>{activeSchoolName}</strong>
         </span>
-
+        <span style={{ color: tokens.borderStrong }}>|</span>
+        <span style={{ color: tokens.textMuted }}>School ID: {activeSchoolId}</span>
         {activeDivision && (
           <>
-            <span style={{ color: tokens.borderStrong || '#cbd5e1' }}>|</span>
-            <span style={{ color: tokens.textMuted || '#94a3b8', flexShrink: 0 }}>
-              {activeDivision}
-            </span>
+            <span style={{ color: tokens.borderStrong }}>|</span>
+            <span style={{ color: tokens.textMuted }}>{activeDivision}</span>
           </>
         )}
       </div>
 
-      {/* Right: Simple System Status & Copyright */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '10px 18px',
-          flexShrink: 0,
-        }}
-      >
-        {/* Database Connection Status */}
-        <div
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-            color: isDatabaseConnected ? brand.success || '#059669' : brand.danger || '#dc2626',
-            fontWeight: 700,
-          }}
-        >
-          {isDatabaseConnected ? (
-            <CheckCircle2 size={13} color={brand.success || '#059669'} />
-          ) : (
-            <AlertCircle size={13} color={brand.danger || '#dc2626'} />
-          )}
-          <span>{isDatabaseConnected ? 'System Online' : 'System Offline'}</span>
-        </div>
-
-        {/* Gate Status */}
-        <div
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-            color: isGateSystemOnline ? brand.primary || '#004b87' : brand.danger || '#dc2626',
-            fontWeight: 700,
-          }}
-        >
-          <ShieldCheck size={13} color={isGateSystemOnline ? brand.primary || '#004b87' : brand.danger || '#dc2626'} />
-          <span>{isGateSystemOnline ? 'QR & Push Ready' : 'Gate Standby'}</span>
-        </div>
-
-        {/* Copyright */}
-        <span
-          style={{
-            color: tokens.textMuted || '#94a3b8',
-            fontSize: '0.70rem',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          &copy; 2026 AttendSure &bull; TechBlazer
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: isDatabaseConnected ? brand.success : brand.danger }}>
+          {isDatabaseConnected ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+          {isDatabaseConnected ? 'Database Connected' : 'Server Offline'}
         </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: isGateSystemOnline ? brand.primary : brand.danger }}>
+          <ShieldCheck size={13} />
+          {isGateSystemOnline ? 'QR & Mobile Push Ready' : 'Standby'}
+        </span>
+        <span style={{ color: tokens.textMuted, fontSize: '0.68rem' }}>&copy; 2026 AttendSure &bull; TechBlazer</span>
       </div>
     </footer>
   );

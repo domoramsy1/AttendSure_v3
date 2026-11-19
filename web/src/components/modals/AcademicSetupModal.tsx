@@ -177,13 +177,13 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
     setError(null);
     try {
       const results = await Promise.allSettled([
-        apiClient.get('/academic-years/'),
-        apiClient.get('/grade-levels/'),
-        apiClient.get('/rooms/'),
-        apiClient.get('/subjects/'),
-        apiClient.get('/sections/?page_size=300'),
-        apiClient.get('/faculty/dropdown/').catch(() => apiClient.get('/faculties/')),
-        apiClient.get('/schedules/?page_size=300'),
+        apiClient.get('/v1/school/school-years/'),
+        apiClient.get('/v1/school/grade-levels/'),
+        apiClient.get('/v1/school/rooms/'),
+        apiClient.get('/v1/school/subjects/'),
+        apiClient.get('/v1/school/sections/?page_size=300'),
+        apiClient.get('/v1/accounts/teachers/dropdown/').catch(() => apiClient.get('/faculties/')),
+        apiClient.get('/v1/school/periods/?page_size=300'),
       ]);
 
       const getData = (res: PromiseSettledResult<any>) =>
@@ -239,10 +239,10 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
 
     try {
       if (sectionForm.id) {
-        await apiClient.patch(`/sections/${sectionForm.id}/`, payload);
+        await apiClient.patch(`/v1/school/sections/${sectionForm.id}/`, payload);
         setSuccessMessage('Section and Class Adviser updated successfully.');
       } else {
-        await apiClient.post('/sections/', payload);
+        await apiClient.post('/v1/school/sections/', payload);
         setSuccessMessage('New Section and Class Adviser assigned.');
       }
 
@@ -287,10 +287,10 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
 
     try {
       if (scheduleForm.id) {
-        await apiClient.patch(`/schedules/${scheduleForm.id}/`, payload);
+        await apiClient.patch(`/v1/school/periods/${scheduleForm.id}/`, payload);
         setSuccessMessage('Class schedule and Subject Faculty updated.');
       } else {
-        await apiClient.post('/schedules/', payload);
+        await apiClient.post('/v1/school/periods/', payload);
         setSuccessMessage('New class period and Subject Faculty assigned.');
       }
 
@@ -322,19 +322,19 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
 
     try {
       if (activeSubTab === 'ROOMS') {
-        await apiClient.post('/rooms/', {
+        await apiClient.post('/v1/school/rooms/', {
           name: simpleForm.name.trim(),
           building: simpleForm.building.trim(),
           capacity: Number(simpleForm.capacity) || 45,
         });
       } else if (activeSubTab === 'SUBJECTS') {
-        await apiClient.post('/subjects/', {
+        await apiClient.post('/v1/school/subjects/', {
           code: simpleForm.code.trim().toUpperCase(),
           title: simpleForm.title.trim(),
           units: Number(simpleForm.units) || 1,
         });
       } else if (activeSubTab === 'GRADES') {
-        await apiClient.post('/grade-levels/', {
+        await apiClient.post('/v1/school/grade-levels/', {
           code: simpleForm.code.trim().toUpperCase(),
           name: simpleForm.name.trim(),
         });
@@ -572,7 +572,7 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleDeleteItem('sections', sec.id)}
+                            onClick={() => handleDeleteItem('v1/school/sections', sec.id)}
                             style={{ background: 'none', border: 'none', color: brand.danger, cursor: 'pointer' }}
                             title="Delete Section"
                           >
@@ -763,7 +763,7 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleDeleteItem('schedules', sc.id)}
+                            onClick={() => handleDeleteItem('v1/school/periods', sc.id)}
                             style={{ background: 'none', border: 'none', color: brand.danger, cursor: 'pointer' }}
                             title="Delete Schedule"
                           >
@@ -901,7 +901,7 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
                       <td style={{ padding: '8px 10px', fontWeight: 700, color: tokens.textPrimary }}>{g.code}</td>
                       <td style={{ padding: '8px 10px', color: tokens.textSecondary }}>{g.name}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                        <button type="button" onClick={() => handleDeleteItem('grade-levels', g.id)} style={{ background: 'none', border: 'none', color: brand.danger, cursor: 'pointer' }}>
+                        <button type="button" onClick={() => handleDeleteItem('v1/school/grade-levels', g.id)} style={{ background: 'none', border: 'none', color: brand.danger, cursor: 'pointer' }}>
                           <Trash2 size={13} />
                         </button>
                       </td>
@@ -916,7 +916,7 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
                         {r.building ? `${r.building} • ` : ''}Cap: {r.capacity}
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                        <button type="button" onClick={() => handleDeleteItem('rooms', r.id)} style={{ background: 'none', border: 'none', color: brand.danger, cursor: 'pointer' }}>
+                        <button type="button" onClick={() => handleDeleteItem('v1/school/rooms', r.id)} style={{ background: 'none', border: 'none', color: brand.danger, cursor: 'pointer' }}>
                           <Trash2 size={13} />
                         </button>
                       </td>
@@ -929,7 +929,7 @@ export const AcademicSetupModal: React.FC<AcademicSetupModalProps> = ({
                       <td style={{ padding: '8px 10px', fontWeight: 700, color: tokens.textPrimary }}>{s.code}</td>
                       <td style={{ padding: '8px 10px', color: tokens.textSecondary }}>{s.title}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                        <button type="button" onClick={() => handleDeleteItem('subjects', s.id)} style={{ background: 'none', border: 'none', color: brand.danger, cursor: 'pointer' }}>
+                        <button type="button" onClick={() => handleDeleteItem('v1/school/subjects', s.id)} style={{ background: 'none', border: 'none', color: brand.danger, cursor: 'pointer' }}>
                           <Trash2 size={13} />
                         </button>
                       </td>

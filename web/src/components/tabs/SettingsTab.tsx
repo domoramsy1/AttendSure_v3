@@ -191,9 +191,9 @@ export const SettingsTab: React.FC = () => {
   const fetchDiagnostics = async () => {
     try {
       const [dbRes, scanRes, pushRes] = await Promise.all([
-        apiClient.get('/core/maintenance/db-check/').catch(() => ({ data: { database: 'OFFLINE', latency_ms: 999 } })),
-        apiClient.get('/system/status/').catch(() => ({ data: { online_count: 0, total_scanners: 0 } })),
-        apiClient.get('/system/status/').catch(() => ({ data: { sent_today: 0, pending_queue: 0, failed_today: 0 } })),
+        apiClient.get('/v1/health/db/').catch(() => ({ data: { database: 'OFFLINE', latency_ms: 999 } })),
+        apiClient.get('/v1/reports/system-status/').catch(() => ({ data: { online_count: 0, total_scanners: 0 } })),
+        apiClient.get('/v1/reports/system-status/').catch(() => ({ data: { sent_today: 0, pending_queue: 0, failed_today: 0 } })),
       ]);
 
       setHealth({
@@ -219,7 +219,7 @@ export const SettingsTab: React.FC = () => {
       if (logDateFilter) params.append('date', logDateFilter);
 
       const qs = params.toString();
-      const endpoint = qs ? `/activity-logs/?${qs}` : '/activity-logs/';
+      const endpoint = qs ? `/v1/accounts/audit-logs/?${qs}` : '/v1/accounts/audit-logs/';
 
       const res = await apiClient.get(endpoint, { timeout: 8000 });
       if (res.data) {
@@ -241,8 +241,8 @@ export const SettingsTab: React.FC = () => {
       setLoading(true);
       try {
         const [schoolRes, facultyRes] = await Promise.all([
-          apiClient.get('/settings/school/', { timeout: 5000 }),
-          apiClient.get('/faculty/dropdown/?include_all=true', { timeout: 5000 }).catch(() => apiClient.get('/facultys/')),
+          apiClient.get('/v1/school/settings/', { timeout: 5000 }),
+          apiClient.get('/v1/accounts/teachers/dropdown/?include_all=true', { timeout: 5000 }).catch(() => apiClient.get('/v1/accounts/teachers/')),
         ]);
 
         if (!isMounted) return;
@@ -502,7 +502,7 @@ export const SettingsTab: React.FC = () => {
     setTimeout(() => setSaveSuccess(false), 3000);
 
     try {
-      const res = await apiClient.put('/settings/school/', payload, { timeout: 15000 });
+      const res = await apiClient.put('/v1/school/settings/', payload, { timeout: 15000 });
       if (res.data?.principal_photo_url) {
         setFormData((prev) => ({
           ...prev,
@@ -812,7 +812,7 @@ export const SettingsTab: React.FC = () => {
                       'SYNC_PUSH',
                       'Retry All Failed push Texts',
                       'This will re-queue all failed messages and instruct the GSM push_engine to send them immediately.',
-                      () => apiClient.post('/system/status/', { action: 'RETRY_FAILED' })
+                      () => apiClient.post('/v1/reports/system-status/', { action: 'RETRY_FAILED' })
                     )
                   }
                   style={actionBtnStyle(brand.secondary)}
@@ -845,7 +845,7 @@ export const SettingsTab: React.FC = () => {
                       'FLUSH_CACHE',
                       'Clean System Memory & Cache',
                       'This safely empties temporary cache files so fresh records load from the database.',
-                      () => apiClient.post('/core/maintenance/flush-cache/')
+                      () => apiClient.post('/v1/cache/flush/')
                     )
                   }
                   style={actionBtnStyle(brand.primary)}
@@ -878,7 +878,7 @@ export const SettingsTab: React.FC = () => {
                       'VERIFY_STATION',
                       'Test Gate Scanner Terminals',
                       'This sends a ping test to all enrolled campus gate scanners.',
-                      () => apiClient.get('/system/status/')
+                      () => apiClient.get('/v1/reports/system-status/')
                     )
                   }
                   style={actionBtnStyle(brand.success)}
@@ -911,7 +911,7 @@ export const SettingsTab: React.FC = () => {
                       'UNLOCK_ACCOUNTS',
                       'Unlock Faculty Accounts',
                       'This resets failed login attempts for locked accounts across the school.',
-                      () => apiClient.post('/core/maintenance/flush-cache/')
+                      () => apiClient.post('/v1/cache/flush/')
                     )
                   }
                   style={actionBtnStyle(brand.secondary)}

@@ -1,69 +1,156 @@
-from datetime import datetime
+from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.db.models import Q
-from common.permissions import is_school_leader
-from .models import AuditLog, TeacherProfile, UserProfile
+
+from common.media import build_media_url
+from common.permissions import get_user_role
+from apps.school.models import ClassPeriod, Section
+from apps.students.models import Enrollment
+from .models import TeacherProfile, UserProfile
 
 
-def resolve_teacher_for_user(user) -> TeacherProfile | None:
-    if not user or not user.is_authenticated:
+def resolve_teacher_for_user(user: User | None) -> TeacherProfile | None:
+    if not user or not getattr(user, "is_authenticated", False):
         return None
-    profile = getattr(user, "profile", None) or UserProfile.objects.filter(user=user).select_related("teacher").first()
-    if profile and profile.teacher_id:
-        return profile.teacher
-    if user.username:
-        teacher = TeacherProfile.objects.filter(employee_id__iexact=user.username, is_active=True).first()
-        if teacher:
+
+    cache_key = f"accounts:teacher_for_user:{user.id}"
+    cached_id = cache.get(cache_key)
+    if cached_id is not None:
+        if cached_id == 0:
+            return None
+        found = TeacherProfile.objects.select_related("account").filter(id=cached_id, is_active=True).first()
+        if found:
+            return found
+
+    profile = UserProfile.objects.select_related("teacher").filter(user=user).first()
+    if profile and getattr(profile, "teacher", None):
+        teacher = profile.teacher
+        if teacher and teacher.is_active:
+            cache.set(cache_key, teacher.id, timeout=60)
             return teacher
-    if user.email:
-        return TeacherProfile.objects.filter(email__iexact=user.email, is_active=True).first()
+
+    by_account = TeacherProfile.objects.select_related("account").filter(account__user=user, is_active=True).first()
+    if by_account:
+        cache.set(cache_key, by_account.id, timeout=60)
+        return by_account
+
+    by_username = (
+        TeacherProfile.objects.select_related("account")
+        .filter(Q(employee_id__iexact=user.username) | Q(email__iexact=user.email), is_active=True)
+        .first()
+    )
+    if by_username:
+        cache.set(cache_key, by_username.id, timeout=60)
+        return by_username
+
+    cache.set(cache_key, 0, timeout=30)
     return None
 
 
 def get_teacher_section_ids(teacher: TeacherProfile | None) -> set[int]:
     if not teacher:
         return set()
-    from apps.school.models import ClassPeriod, Section
 
-    advised = set(Section.objects.filter(adviser=teacher).values_list("id", flat=True))
-    taught = set(ClassPeriod.objects.filter(teacher=teacher).values_list("section_id", flat=True))
-    return advised | taught
+    cache_key = f"accounts:teacher_sections:{teacher.id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return set(cached)
+
+    advisory_ids = set(
+        Section.objects.filter(adviser=teacher, is_active=True).values_list("id", flat=True)
+    )
+    period_sec_ids = set(
+        ClassPeriod.objects.filter(teacher=teacher, is_active=True, section__is_active=True)
+        .exclude(section_id__isnull=True)
+        .values_list("section_id", flat=True)
+    )
+    combined = advisory_ids | period_sec_ids
+    cache.set(cache_key, list(combined), timeout=30)
+    return combined
 
 
 def get_teacher_student_ids(teacher: TeacherProfile | None) -> set[int]:
+    if not teacher:
+        return set()
+
     section_ids = get_teacher_section_ids(teacher)
     if not section_ids:
         return set()
-    from apps.students.models import Enrollment
 
     return set(
-        Enrollment.objects.filter(section_id__in=section_ids, student__is_active=True)
-        .exclude(status__in=["DROPPED", "TRANSFERRED_OUT"])
-        .values_list("student_id", flat=True)
+        Enrollment.objects.filter(
+            section_id__in=section_ids,
+            status="ENROLLED",
+            student__is_active=True,
+        ).values_list("student_id", flat=True)
     )
 
 
-def get_audit_logs_queryset(*, user, search: str = "", action: str = "ALL", date_str: str = ""):
-    qs = (
-        AuditLog.objects.select_related("performed_by")
-        .defer("old_data", "new_data")
-        .order_by("-created_at")
+def build_user_session_payload(user: User, request=None) -> dict:
+    """Builds the authenticated user session payload from real PostgreSQL profile & teacher data."""
+    profile = UserProfile.objects.select_related("teacher").filter(user=user).first()
+    teacher = resolve_teacher_for_user(user)
+    role = get_user_role(user)
+
+    section_ids = get_teacher_section_ids(teacher) if teacher else set()
+    period_count = (
+        ClassPeriod.objects.filter(teacher=teacher, is_active=True).count()
+        if teacher
+        else 0
     )
-    if not is_school_leader(user):
-        qs = qs.filter(performed_by=user)
-    if action and action.upper() != "ALL":
-        qs = qs.filter(action__iexact=action)
-    if date_str:
-        try:
-            qs = qs.filter(created_at__date=datetime.strptime(date_str, "%Y-%m-%d").date())
-        except ValueError:
-            pass
-    if search:
-        qs = qs.filter(
-            Q(action__icontains=search)
-            | Q(table_name__icontains=search)
-            | Q(client_ip__icontains=search)
-            | Q(performed_by__username__icontains=search)
-            | Q(performed_by__first_name__icontains=search)
-            | Q(performed_by__last_name__icontains=search)
-        )
-    return qs[:250]
+    assigned_class_count = len(section_ids) + period_count
+
+    can_teach = bool(
+        (teacher and getattr(teacher, "can_teach", False))
+        or assigned_class_count > 0
+        or role == "FACULTY"
+    )
+
+    if teacher:
+        full_name = teacher.full_name or user.get_full_name() or user.username
+        employee_id = teacher.employee_id or user.username
+        department = teacher.department or ""
+        position = teacher.position or ""
+        contact_number = teacher.contact_number or ""
+        email = teacher.email or user.email or ""
+        photo_raw = teacher.photo or (getattr(profile, "photo", None) if profile else None)
+    else:
+        full_name = user.get_full_name() or user.username
+        employee_id = user.username
+        department = "Parent / Guardian" if role == "PARENT" else ""
+        position = "Parent / Guardian" if role == "PARENT" else ""
+        contact_number = getattr(profile, "phone_number", "") if profile else ""
+        email = user.email or ""
+        photo_raw = getattr(profile, "photo", None) if profile else None
+
+    photo_url = build_media_url(photo_raw, request)
+
+    return {
+        "id": user.id,
+        "user_id": user.id,
+        "username": user.username,
+        "employee_id": employee_id,
+        "first_name": user.first_name,
+        "middle_name": teacher.middle_name if teacher else "",
+        "last_name": user.last_name,
+        "suffix": teacher.suffix if teacher else "",
+        "full_name": full_name,
+        "faculty_name": full_name,
+        "email": email,
+        "contact_number": contact_number,
+        "department": department,
+        "position": position,
+        "role": role,
+        "current_role": role,
+        "can_teach": can_teach,
+        "is_teaching": can_teach,
+        "assigned_class_count": assigned_class_count,
+        "is_profile_completed": bool(
+            getattr(profile, "is_profile_completed", True) if profile else True
+        ),
+        "faculty_id": teacher.id if teacher else None,
+        "photo": photo_url,
+        "photo_url": photo_url,
+        "is_active": user.is_active,
+        "is_superuser": user.is_superuser,
+    }

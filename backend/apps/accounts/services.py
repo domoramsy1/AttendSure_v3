@@ -76,36 +76,55 @@ def build_user_session_payload(user, request=None) -> dict:
 
 
 def login_with_credentials(*, request, username: str, password: str) -> dict:
-    if not username or not password:
-        raise AppError("MISSING_CREDENTIALS", "Username and password are required.", 400)
+    from django.db.models import Q
 
-    existing_user = User.objects.filter(username__iexact=username).first()
+    clean_identifier = str(username or "").strip()[:100]
+    raw_password = str(password or "")
+    if not clean_identifier or not raw_password:
+        raise AppError("MISSING_CREDENTIALS", "Enter both your username and password.", 400)
+
+    existing_user = (
+        User.objects.select_related("profile", "profile__teacher")
+        .filter(
+            Q(username__iexact=clean_identifier)
+            | Q(profile__teacher__employee_id__iexact=clean_identifier)
+        )
+        .first()
+    )
     profile = getattr(existing_user, "profile", None) if existing_user else None
 
     if profile and profile.is_locked():
-        raise AppError("ACCOUNT_LOCKED", "Account temporarily locked. Try again in 15 minutes.", 429)
+        raise AppError(
+            "ACCOUNT_LOCKED",
+            "Too many failed sign-in attempts. Please wait 15 minutes or ask your School Admin to unlock your account.",
+            429,
+        )
 
-    user = authenticate(request=request, username=username, password=password)
-    if user is None:
+    if existing_user is None:
+        # Constant-time dummy hash check prevents username/Employee ID enumeration
+        User().set_password(raw_password)
+        raise AppError("INVALID_CREDENTIALS", "Wrong username or password. Please try again.", 401)
+
+    auth_user = authenticate(request=request, username=existing_user.username, password=raw_password)
+    if auth_user is None:
         if profile:
             profile.record_failed_attempt()
-        raise AppError("INVALID_CREDENTIALS", "Invalid username or password.", 401)
+        raise AppError("INVALID_CREDENTIALS", "Wrong username or password. Please try again.", 401)
 
-    if not user.is_active:
-        raise AppError("ACCOUNT_INACTIVE", "Account is inactive. Contact your administrator.", 403)
+    if not auth_user.is_active:
+        raise AppError("ACCOUNT_INACTIVE", "This account is inactive. Contact your School Admin.", 403)
 
     if profile:
         profile.reset_failed_attempts()
 
-    legacy_token, _ = Token.objects.get_or_create(user=user)
-    refresh = RefreshToken.for_user(user)
+    legacy_token, _ = Token.objects.get_or_create(user=auth_user)
+    refresh = RefreshToken.for_user(auth_user)
     return {
         "token": legacy_token.key,
         "access": str(refresh.access_token),
         "refresh": str(refresh),
-        "user": build_user_session_payload(user, request),
+        "user": build_user_session_payload(auth_user, request),
     }
-
 
 @transaction.atomic
 def update_own_profile(*, user, data: dict, files: dict, request=None) -> dict:

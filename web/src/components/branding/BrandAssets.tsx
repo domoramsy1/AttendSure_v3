@@ -1,35 +1,13 @@
 /**
- * ATTENDSURE - Centralized Brand & Asset Components
+ * ATTENDSURE - Lightweight Brand & Theme-Safe Emblem Components
  * File: web/src/components/branding/BrandAssets.tsx
- *
- * Every image in `web/src/assets` has a dedicated, type-safe component here
- * so any screen or modal can import and render it with one line.
  */
 
-import React from 'react';
-
+import React, { useState } from 'react';
 import attendsureLogoSvg from '../../assets/AttendSureLogo.svg';
-import techblazerSvg from '../../assets/techblazer.svg';
-import splashSvg from '../../assets/splash.svg';
-import splashPng from '../../assets/splash.png';
-import iconSvg from '../../assets/icon.svg';
-import iconPng from '../../assets/icon.png';
-import adaptiveIconSvg from '../../assets/adaptive-icon.svg';
-import adaptiveIconPng from '../../assets/adaptive-icon.png';
-import attendSureFullSvg from '../../assets/AttendSureLogo.svg';
-import attendSureFullPng from '../../assets/AttendSureLogo.png';
 
 export const BRAND_ASSETS = {
   attendsureLogo: attendsureLogoSvg,
-  techblazer: techblazerSvg,
-  splashSvg,
-  splashPng,
-  iconSvg,
-  iconPng,
-  adaptiveIconSvg,
-  adaptiveIconPng,
-  attendSureFullSvg,
-  attendSureFullPng,
 } as const;
 
 export interface AssetImageProps {
@@ -41,40 +19,98 @@ export interface AssetImageProps {
   style?: React.CSSProperties;
 }
 
-const createAssetComponent = (src: string, defaultAlt: string): React.FC<AssetImageProps> => {
-  const AssetComponent: React.FC<AssetImageProps> = ({
-    size = 32,
-    width,
-    height,
-    alt = defaultAlt,
-    className,
-    style,
-  }) => (
-    <img
-      src={src}
-      alt={alt}
-      className={className}
+export const AttendSureLogoAsset: React.FC<AssetImageProps> = ({
+  size = 32,
+  width,
+  height,
+  alt = 'AttendSure Logo',
+  className,
+  style,
+}) => (
+  <img
+    src={attendsureLogoSvg}
+    alt={alt}
+    decoding="async"
+    className={className}
+    style={{
+      width: width ?? size,
+      height: height ?? size,
+      objectFit: 'contain',
+      display: 'block',
+      ...style,
+    }}
+  />
+);
+
+export interface AttendSureBrandBadgeProps {
+  size?: number;
+  shape?: 'squircle' | 'circle';
+  mode?: 'light' | 'dark' | 'high-contrast';
+  style?: React.CSSProperties;
+}
+
+export const AttendSureBrandBadge: React.FC<AttendSureBrandBadgeProps> = ({
+  size = 40,
+  shape = 'squircle',
+  mode = 'light',
+  style,
+}) => {
+  const [imgFailed, setImgFailed] = useState(false);
+  const innerSize = Math.round(size * 0.58);
+  const radius = shape === 'circle' ? '50%' : Math.max(8, Math.round(size * 0.27));
+
+  const borderColor =
+    mode === 'dark'
+      ? 'rgba(56, 189, 248, 0.55)'
+      : mode === 'high-contrast'
+      ? '#002b4d'
+      : '#cbd5e1';
+
+  const shadow =
+    mode === 'dark'
+      ? '0 4px 14px rgba(2, 132, 199, 0.28), inset 0 1px 0 #ffffff'
+      : mode === 'high-contrast'
+      ? 'none'
+      : '0 2px 8px rgba(0, 75, 135, 0.12), inset 0 1px 0 #ffffff';
+
+  return (
+    <div
       style={{
-        width: width ?? size,
-        height: height ?? size,
-        objectFit: 'contain',
-        display: 'block',
+        width: size,
+        height: size,
+        borderRadius: radius,
+        background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+        borderWidth: mode === 'high-contrast' ? 1.5 : 1,
+        borderStyle: 'solid',
+        borderColor,
+        boxShadow: shadow,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        boxSizing: 'border-box',
         ...style,
       }}
-    />
+    >
+      {!imgFailed ? (
+        <img
+          src={attendsureLogoSvg}
+          alt="AttendSure"
+          decoding="async"
+          onError={() => setImgFailed(true)}
+          style={{
+            width: innerSize,
+            height: innerSize,
+            objectFit: 'contain',
+            display: 'block',
+          }}
+        />
+      ) : (
+        <svg viewBox="0 0 64 64" width={innerSize} height={innerSize} fill="none" aria-label="AttendSure">
+          <path d="M32 8L12 52H22.5L32 30.5L41.5 52H52L32 8Z" fill="#004b87" />
+          <rect x="14" y="42" width="36" height="10" rx="3" fill="#0284c7" />
+        </svg>
+      )}
+    </div>
   );
-  AssetComponent.displayName = defaultAlt.replace(/\s+/g, '');
-  return AssetComponent;
 };
-
-// Individual Reusable Components for Every Image in src/assets
-export const AttendSureLogoAsset = createAssetComponent(attendsureLogoSvg, 'AttendSure Logo');
-export const TechBlazerLogoAsset = createAssetComponent(techblazerSvg, 'TECHBLAZER Logo');
-export const SplashSvgAsset = createAssetComponent(splashSvg, 'AttendSure Splash Vector');
-export const SplashPngAsset = createAssetComponent(splashPng, 'AttendSure Splash Image');
-export const AppIconSvgAsset = createAssetComponent(iconSvg, 'AttendSure App Icon Vector');
-export const AppIconPngAsset = createAssetComponent(iconPng, 'AttendSure App Icon');
-export const AdaptiveIconSvgAsset = createAssetComponent(adaptiveIconSvg, 'AttendSure Adaptive Icon Vector');
-export const AdaptiveIconPngAsset = createAssetComponent(adaptiveIconPng, 'AttendSure Adaptive Icon');
-export const AttendSureFullSvgAsset = createAssetComponent(attendSureFullSvg, 'AttendSure Full Logo Vector');
-export const AttendSureFullPngAsset = createAssetComponent(attendSureFullPng, 'AttendSure Full Logo');

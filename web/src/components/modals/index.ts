@@ -8,5 +8,3 @@ export { AcademicSetupModal } from './AcademicSetupModal';
 export { ProfileModal } from './ProfileModal';
 export { CompleteProfileModal } from './CompleteProfileModal';
 export { StudentIdPassModal } from './StudentIdPassModal';
-export { UserFormModal } from './UserFormModal';
-export { UserDeleteModal } from './UserDeleteModal';

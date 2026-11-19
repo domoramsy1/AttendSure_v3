@@ -1,2 +1,0 @@
-[OK] Exported 6 domain models.py files to: D:\AttendSure_V3\scripts\results\domain_models_report.txt
-

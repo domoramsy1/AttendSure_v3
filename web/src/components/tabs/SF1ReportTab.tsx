@@ -147,7 +147,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   useEffect(() => {
     const fetchSections = async () => {
       try {
-        const res = await apiClient.get('/sections/');
+        const res = await apiClient.get('/v1/school/sections/');
         const data = Array.isArray(res.data) ? res.data : res.data.results || [];
         setSections(data);
         if (!selectedSectionId && data.length > 0) {
@@ -165,7 +165,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const res = await apiClient.get<SF1Data>(`/reports/sf1/${selectedSectionId}/`, {
+      const res = await apiClient.get<SF1Data>(`/v1/reports/sf1/${selectedSectionId}/`, {
         params: {
           as_of_date: selectedDate || '',
           date: selectedDate || '',
@@ -335,7 +335,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
-      await apiClient.post('/reports/audit-logs/', {
+      await apiClient.post('/v1/reports/audit-logs/', {
         report_name: 'School Form 1 (SF1)',
         document_tracking_id: auditMeta.trackingId,
         section_id: selectedSectionId,

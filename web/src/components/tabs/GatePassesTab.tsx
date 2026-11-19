@@ -88,7 +88,7 @@ export const GatePassesTab: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiClient.get<any>('/gate-passes/', {
+      const res = await apiClient.get<any>('/v1/attendance/exit-passes/', {
         params: {
           search: search.trim() || undefined,
           status: statusFilter !== 'ALL' ? statusFilter : undefined,
@@ -110,7 +110,7 @@ export const GatePassesTab: React.FC = () => {
   const fetchStudents = async () => {
     setLoadingStudents(true);
     try {
-      const res = await apiClient.get<any>('/students/?page_size=200');
+      const res = await apiClient.get<any>('/v1/students/dropdown/');
       const list = res.data?.results ?? (Array.isArray(res.data) ? res.data : []);
       setStudents(list);
     } catch {
@@ -173,7 +173,7 @@ export const GatePassesTab: React.FC = () => {
         payload.append('student', formData.student_id);
       }
 
-      await apiClient.post('/gate-passes/', payload, {
+      await apiClient.post('/v1/attendance/exit-passes/', payload, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
@@ -201,7 +201,7 @@ export const GatePassesTab: React.FC = () => {
 
   const handleApprove = async (passId: number) => {
     try {
-      await apiClient.post(`/gate-passes/${passId}/approve/`);
+      await apiClient.post(`/v1/attendance/exit-passes/${passId}/approve/`);
       showAlert({ title: 'Pass Approved', message: 'Travel pass approved and active for gate departure.', type: 'success' });
       setReviewingPass(null);
       fetchPasses();
@@ -213,7 +213,7 @@ export const GatePassesTab: React.FC = () => {
   const handleDecline = async () => {
     if (!reviewingPass) return;
     try {
-      await apiClient.post(`/gate-passes/${reviewingPass.id}/decline/`, {
+      await apiClient.post(`/v1/attendance/exit-passes/${reviewingPass.id}/decline/`, {
         reason: declineReason.trim() || 'Declined upon document authenticity review.',
       });
       showAlert({ title: 'Pass Declined', message: 'Gate pass has been declined.', type: 'info' });
@@ -227,7 +227,7 @@ export const GatePassesTab: React.FC = () => {
 
   const handleMarkUsed = async (passId: number) => {
     try {
-      await apiClient.post(`/gate-passes/${passId}/mark-used/`);
+      await apiClient.post(`/v1/attendance/exit-passes/${passId}/mark-used/`);
       showAlert({ title: 'Exit Confirmed', message: 'Bearer departure confirmed.', type: 'success' });
       fetchPasses();
     } catch (err: any) {

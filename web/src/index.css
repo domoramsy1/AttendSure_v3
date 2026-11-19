@@ -1,5 +1,5 @@
 /* ============================================================================
- * ATTENDSURE  - GLOBAL STYLESHEET (Auto-syncs with ThemeContext.tsx)
+ * ATTENDSURE - GLOBAL STYLESHEET & ADAPTIVE LAPTOP SCALING
  * File: web/src/index.css
  * ============================================================================ */
 
@@ -9,25 +9,68 @@
   padding: 0;
 }
 
-html, body, #root {
+/* Adaptive root font sizing zooms out dense UI on 125%-scaled laptop screens */
+html {
+  font-size: 13.5px;
   width: 100%;
   height: 100%;
-  overflow: hidden;
+}
+
+@media (min-width: 1441px) {
+  html {
+    font-size: 14.5px;
+  }
+}
+
+@media (min-width: 1800px) {
+  html {
+    font-size: 15.5px;
+  }
+}
+
+@media (max-width: 768px) {
+  html {
+    font-size: 15px;
+  }
+}
+
+@media print {
+  html {
+    font-size: 16px !important;
+  }
+}
+
+body, #root {
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   background-color: var(--bg-app, #f1f5f9);
   color: var(--text-primary, #0f172a);
   font-family: var(--font-sans, Inter, system-ui, sans-serif);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-align: left;
   transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--brand-primary, #004b87);
+  outline-offset: 1px;
 }
 
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: var(--bg-surface-subtle, #f1f5f9);
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong, #cbd5e1);
   border-radius: 4px;

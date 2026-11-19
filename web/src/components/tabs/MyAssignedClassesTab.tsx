@@ -1,11 +1,18 @@
 /**
- * AttendSure - Assigned Classes & Student Attendance Directory
+ * AttendSure - My Classes & Student Attendance List
  * File: web/src/components/tabs/MyAssignedClassesTab.tsx
  */
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import apiClient from '../../api/client';
+import { API_ROUTES, extractApiError } from '../../api/routes';
+import { useTheme } from '../../context/ThemeContext';
+import { useSchool } from '../../context/SchoolContext';
+import { isSafeImageUrl, sanitizeText } from '../../theme/tokens';
+import { StatsCard } from '../common/StatsCard';
+import { ProfileAvatar } from '../common/ProfileAvatar';
 import { exportToCsv } from '../common/Pagination';
+import { ControlSwitch } from '../ui/ControlSwitch';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import {
@@ -16,7 +23,6 @@ import {
   Download,
   Copy,
   Check,
-  User as UserIcon,
   Phone,
   QrCode,
   MapPin,
@@ -24,6 +30,7 @@ import {
   Printer,
   ShieldCheck,
   BookOpen,
+  UserCheck,
 } from 'lucide-react';
 
 export interface StudentItem {
@@ -47,19 +54,15 @@ export interface AssignedClass {
   subject_title: string;
   start_time: string;
   end_time: string;
+  time_display?: string;
   room_number?: string;
   total_students: number;
   students: StudentItem[];
   is_adviser?: boolean;
 }
 
-const isSafeImageUrl = (url?: string | null): boolean => {
-  if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
-  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
-  return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('/') || clean.startsWith('data:image/');
-};
+type ViewScope = 'MY_CLASSES' | 'ALL_CLASSES';
+type StatusFilter = 'ALL' | 'PRESENT' | 'LATE' | 'CUTTING' | 'UNSCANNED';
 
 const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
   const cleanText = String(textToCopy || '').trim();
@@ -69,7 +72,9 @@ const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
     try {
       await navigator.clipboard.writeText(cleanText);
       return true;
-    } catch {}
+    } catch {
+      // Fall through to legacy copy helper on non-HTTPS LAN origins
+    }
   }
 
   if (typeof document !== 'undefined') {
@@ -92,135 +97,174 @@ const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
   return false;
 };
 
-const extractGradeLevelString = (val: any): string => {
-  if (val === null || val === undefined) return 'Grade 7';
-  if (typeof val === 'string') return val.trim() || 'Grade 7';
+const extractGradeLevelText = (val: unknown): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val.trim();
   if (typeof val === 'number') return `Grade ${val}`;
   if (typeof val === 'object') {
-    const name = val.name || val.level || val.grade_name || val.grade || val.id;
-    return name !== undefined && name !== null ? String(name).trim() : 'Grade 7';
+    const obj = val as Record<string, unknown>;
+    const label = obj.name ?? obj.level ?? obj.grade_name ?? obj.grade;
+    return label ? String(label).trim() : '';
   }
-  return String(val).trim() || 'Grade 7';
+  return String(val).trim();
+};
+
+const maskQrToken = (token?: string): string => {
+  const clean = String(token || '').trim();
+  if (!clean) return '';
+  return clean.length <= 4 ? 'Linked' : `••••${clean.slice(-4)}`;
+};
+
+const formatStatusLabel = (status: string): string => {
+  const code = status.toUpperCase();
+  if (code === 'UNSCANNED') return 'NOT SCANNED';
+  return code;
 };
 
 export const MyAssignedClassesTab: React.FC = () => {
+  const { tokens, brand, fonts, ui } = useTheme();
+  const { school } = useSchool();
+
   const [classes, setClasses] = useState<AssignedClass[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedClass, setSelectedClass] = useState<AssignedClass | null>(null);
+
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [userRole, setUserRole] = useState<string>('FACULTY');
-  const [viewScope, setViewScope] = useState<'MY_CLASSES' | 'ALL_CLASSES'>('MY_CLASSES');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+  const [viewScope, setViewScope] = useState<ViewScope>('MY_CLASSES');
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const [badgeStudent, setBadgeStudent] = useState<StudentItem | null>(null);
 
+  const userRole = useMemo(
+    () => String(localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(),
+    []
+  );
   const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
+
+  const abortRef = useRef<AbortController | null>(null);
   const isInteracting = useRef<boolean>(false);
   isInteracting.current = Boolean(badgeStudent);
 
-  const fetchClasses = useCallback(async (silent = false) => {
-    try {
-      if (!silent) setLoading(true);
-      setError(null);
+  const fetchClasses = useCallback(
+    async (silent = false, bypassCache = false) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-      const userRes = await apiClient.get('/me/');
-      if (userRes.data) {
-        setUserRole(String(userRes.data.role || 'FACULTY').toUpperCase());
-      }
-
-      const params: Record<string, string> = {};
-      if (viewScope === 'ALL_CLASSES') {
-        params.mode = 'all';
-      }
-
-      let rawData: any[] = [];
       try {
-        const classListRes = await apiClient.get('/classroom/student_list/', { params });
-        rawData = Array.isArray(classListRes.data) ? classListRes.data : classListRes.data?.results || [];
-      } catch {
-        try {
-          const fallbackRes = await apiClient.get('/classroom/class_list/', { params });
-          rawData = Array.isArray(fallbackRes.data) ? fallbackRes.data : fallbackRes.data?.results || [];
-        } catch {
-          rawData = [];
-        }
-      }
+        if (!silent) setLoading(true);
+        else setRefreshing(true);
+        setError(null);
 
-      const normalized: AssignedClass[] = rawData.map((item: any, idx: number) => {
-        const rawStudents = Array.isArray(item.students) ? item.students : [];
-        const students: StudentItem[] = rawStudents.map((st: any) => ({
-          id: st.id,
-          lrn: String(st.lrn || '—').trim(),
-          name:
-            st.name ||
-            st.full_name ||
-            `${st.first_name || ''} ${st.last_name || ''}`.trim() ||
-            'Learner',
-          gender: st.gender || st.sex || 'Male',
-          photo_url: isSafeImageUrl(st.photo_url || st.photo) ? (st.photo_url || st.photo) : null,
-          attendance_status: String(st.attendance_status || 'UNSCANNED').toUpperCase(),
-          parent_contact: st.parent_contact || '',
-          qr_token: st.qr_token || '',
-        }));
+        const params: Record<string, string | number> = {};
+        if (viewScope === 'ALL_CLASSES') params.mode = 'all';
+        if (bypassCache) params.nocache = 1;
 
-        const sectionName = item.section_name || item.name || 'Section';
-        const subjectTitle = item.subject_title || item.subject_name || 'Subject';
-
-        return {
-          schedule_id: item.schedule_id || item.id || idx + 1,
-          section_id: item.section_id || item.section?.id || item.id || idx + 1,
-          section_name: sectionName,
-          grade_level: extractGradeLevelString(item.grade_level || item.section?.grade_level),
-          display_name: item.display_name || `${sectionName} • ${subjectTitle}`,
-          subject_code: item.subject_code || item.subject?.code || 'SUB',
-          subject_title: subjectTitle,
-          start_time: item.start_time ? String(item.start_time).slice(0, 5) : '07:30',
-          end_time: item.end_time ? String(item.end_time).slice(0, 5) : '08:30',
-          room_number: item.room_number || item.room || 'Room —',
-          total_students: students.length || Number(item.total_students) || 0,
-          students,
-          is_adviser: Boolean(item.is_adviser),
-        };
-      });
-
-      setClasses(normalized);
-      if (normalized.length > 0) {
-        setSelectedClass((prev) => {
-          if (!prev) return normalized[0];
-          const exists = normalized.find(
-            (c) =>
-              (c.schedule_id && prev.schedule_id && c.schedule_id === prev.schedule_id) ||
-              c.section_id === prev.section_id
-          );
-          return exists || normalized[0];
+        const res = await apiClient.get(API_ROUTES.attendance.classes, {
+          params,
+          signal: controller.signal,
         });
-      } else {
-        setSelectedClass(null);
+
+        const rawData: Record<string, unknown>[] = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.results)
+          ? res.data.results
+          : [];
+
+        const normalized: AssignedClass[] = rawData.map((item, idx) => {
+          const rawStudents = Array.isArray(item.students) ? item.students : [];
+          const students: StudentItem[] = rawStudents.map((st: Record<string, unknown>) => {
+            const rawPhoto = (st.photo_url || st.photo) as string | null | undefined;
+            const fullName =
+              String(st.name || st.full_name || '').trim() ||
+              `${String(st.first_name || '')} ${String(st.last_name || '')}`.trim() ||
+              'Student';
+
+            return {
+              id: Number(st.id) || 0,
+              lrn: String(st.lrn || '—').trim(),
+              name: fullName,
+              gender: String(st.sex || st.gender || '—').trim(),
+              photo_url: isSafeImageUrl(rawPhoto) ? rawPhoto : null,
+              attendance_status: String(st.attendance_status || 'UNSCANNED').toUpperCase(),
+              parent_contact: String(st.parent_contact || '').trim(),
+              qr_token: String(st.qr_token || '').trim(),
+            };
+          });
+
+          const sectionName = String(item.section_name || item.name || 'Section').trim();
+          const subjectTitle = String(item.subject_title || item.subject_name || 'Homeroom').trim();
+          const startTime = item.start_time ? String(item.start_time).slice(0, 5) : '';
+          const endTime = item.end_time ? String(item.end_time).slice(0, 5) : '';
+          const timeDisplay =
+            String(item.time_display || '').trim() ||
+            (startTime && endTime ? `${startTime} - ${endTime}` : 'Homeroom');
+          const roomVal = String(item.room_number || item.room || '').trim();
+
+          return {
+            schedule_id: Number(item.schedule_id || item.id || idx + 1),
+            section_id: Number(item.section_id || idx + 1),
+            section_name: sectionName,
+            grade_level: extractGradeLevelText(item.grade_level),
+            display_name: String(item.display_name || `${sectionName} • ${subjectTitle}`),
+            subject_code: String(item.subject_code || 'CLASS'),
+            subject_title: subjectTitle,
+            start_time: startTime,
+            end_time: endTime,
+            time_display: timeDisplay,
+            room_number: roomVal || '—',
+            total_students: students.length || Number(item.total_students) || 0,
+            students,
+            is_adviser: Boolean(item.is_adviser),
+          };
+        });
+
+        setClasses(normalized);
+        setSelectedClass((prev) => {
+          if (normalized.length === 0) return null;
+          if (!prev) return normalized[0];
+          return (
+            normalized.find(
+              (c) => c.schedule_id === prev.schedule_id && c.section_id === prev.section_id
+            ) ||
+            normalized.find((c) => c.section_id === prev.section_id) ||
+            normalized[0]
+          );
+        });
+      } catch (err: unknown) {
+        const anyErr = err as { name?: string; code?: string };
+        if (anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
+        if (!silent) {
+          setError(extractApiError(err, 'Could not load your assigned classes.'));
+        }
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-    } catch (err: any) {
-      if (!silent) {
-        setError(err.response?.data?.detail || err.response?.data?.error || 'Failed to load assigned classes.');
-      }
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [viewScope]);
+    },
+    [viewScope]
+  );
 
   useEffect(() => {
-    fetchClasses(false);
+    fetchClasses(false, false);
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [fetchClasses]);
 
-  // Safe live background refresh
   useEffect(() => {
     const liveInterval = setInterval(() => {
       if (!isInteracting.current && document.visibilityState === 'visible') {
-        fetchClasses(true);
+        fetchClasses(true, true);
       }
-    }, 10000);
+    }, 15000);
     return () => clearInterval(liveInterval);
   }, [fetchClasses]);
 
   const handleCopy = async (val: string) => {
+    if (!val || val === '—') return;
     const ok = await copyTextSafely(val);
     if (ok) {
       setCopiedValue(val);
@@ -228,420 +272,526 @@ export const MyAssignedClassesTab: React.FC = () => {
     }
   };
 
+  const cleanSearch = useMemo(() => sanitizeText(searchQuery, 60).toLowerCase(), [searchQuery]);
+
   const filteredStudents = useMemo(() => {
     if (!selectedClass) return [];
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return selectedClass.students;
-    return selectedClass.students.filter(
-      (st) =>
-        st.name.toLowerCase().includes(query) ||
-        st.lrn.toLowerCase().includes(query) ||
-        (st.qr_token && st.qr_token.toLowerCase().includes(query))
-    );
-  }, [selectedClass, searchQuery]);
+    return selectedClass.students.filter((st) => {
+      if (statusFilter !== 'ALL') {
+        if (statusFilter === 'CUTTING') {
+          if (st.attendance_status !== 'CUTTING' && st.attendance_status !== 'ABSENT') return false;
+        } else if (st.attendance_status !== statusFilter) {
+          return false;
+        }
+      }
+      if (!cleanSearch) return true;
+      return st.name.toLowerCase().includes(cleanSearch) || st.lrn.toLowerCase().includes(cleanSearch);
+    });
+  }, [selectedClass, statusFilter, cleanSearch]);
 
-  // 4 Top Metrics matching the screenshot design
   const stats = useMemo(() => {
-    const totalClasses = classes.length;
-    const currentClassListCount = selectedClass?.students.length || 0;
-    const presentToday = (selectedClass?.students || []).filter((s) => s.attendance_status === 'PRESENT').length;
-    const cardsPaired = (selectedClass?.students || []).filter((s) => Boolean(s.qr_token)).length;
-
-    return { totalClasses, currentClassListCount, presentToday, cardsPaired };
-  }, [classes, selectedClass]);
+    const studentsList = selectedClass?.students || [];
+    const classTotal = studentsList.length;
+    const inClassToday = studentsList.filter(
+      (s) => s.attendance_status === 'PRESENT' || s.attendance_status === 'LATE'
+    ).length;
+    const cardsLinked = studentsList.filter((s) => Boolean(s.qr_token)).length;
+    return {
+      totalClasses: classes.length,
+      classTotal,
+      inClassToday,
+      cardsLinked,
+    };
+  }, [classes.length, selectedClass]);
 
   const handleExportCsv = () => {
-    if (!selectedClass) return;
+    if (!selectedClass || filteredStudents.length === 0) return;
     exportToCsv(
-      `AttendSure_ClassAttendance_${selectedClass.section_name}_${new Date().toISOString().slice(0, 10)}.csv`,
-      ['LRN', 'Student Name', 'Sex', 'Class Section', 'Subject', 'qr_id UID', 'Parent Contact', 'Attendance Status'],
+      `AttendSure_ClassList_${selectedClass.section_name}_${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        'LRN',
+        'Student Name',
+        'Sex',
+        'Section',
+        'Subject',
+        'QR Card Status',
+        'Parent Contact',
+        'Attendance Today',
+      ],
       filteredStudents.map((st) => [
         st.lrn,
         st.name,
         st.gender,
         selectedClass.section_name,
         selectedClass.subject_title,
-        st.qr_token || '',
+        st.qr_token ? 'Linked' : 'Not Linked',
         st.parent_contact || '',
-        st.attendance_status,
+        formatStatusLabel(st.attendance_status),
       ])
     );
   };
 
+  const renderStatusPill = (rawStatus: string) => {
+    const status = rawStatus.toUpperCase();
+    if (status === 'PRESENT') {
+      return (
+        <span style={statusBadgeStyle(tokens.successLight, brand.success)}>
+          PRESENT
+        </span>
+      );
+    }
+    if (status === 'LATE') {
+      return (
+        <span style={statusBadgeStyle(tokens.warningLight, brand.warning)}>
+          LATE
+        </span>
+      );
+    }
+    if (status === 'CUTTING' || status === 'ABSENT') {
+      return (
+        <span style={statusBadgeStyle(tokens.dangerLight, brand.danger)}>
+          {status}
+        </span>
+      );
+    }
+    return (
+      <span style={statusBadgeStyle(tokens.bgSurfaceSubtle, tokens.textMuted)}>
+        NOT SCANNED
+      </span>
+    );
+  };
+
+  const activeSchoolName = school.school_name || 'Official School Pass';
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* 1. Four Metric Cards */}
-      <div style={statsGrid}>
-        <div style={statCard}>
-          <div style={statLabel}>ASSIGNED CLASSES</div>
-          <div style={{ ...statVal, color: '#0f172a' }}>{stats.totalClasses}</div>
-          <div style={statSub}>Active teaching timetable sessions</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>CLASS ROSTER</div>
-          <div style={{ ...statVal, color: '#16a34a' }}>{stats.currentClassListCount}</div>
-          <div style={statSub}>Enrolled learners in selected class</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>PRESENT TODAY</div>
-          <div style={{ ...statVal, color: '#004b87' }}>
-            {stats.presentToday} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentClassListCount}</span>
-          </div>
-          <div style={statSub}>Verified classroom attendance scans</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>qr_id CARDS PAIRED</div>
-          <div style={{ ...statVal, color: '#d97706' }}>
-            {stats.cardsPaired} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {stats.currentClassListCount}</span>
-          </div>
-          <div style={statSub}>Learners with linked gate cards</div>
-        </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(12px, 2vw, 20px)' }}>
+      {/* 1. Summary KPI Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
+        <StatsCard
+          label="ASSIGNED CLASSES"
+          value={stats.totalClasses}
+          helpText="Active class periods in your schedule"
+          badge={<BookOpen size={18} color={brand.primary} />}
+        />
+        <StatsCard
+          label="CLASS LIST"
+          value={stats.classTotal}
+          valueColor={brand.success}
+          helpText="Enrolled students in selected class"
+          badge={<UserCheck size={18} color={brand.success} />}
+        />
+        <StatsCard
+          label="IN CLASS TODAY"
+          value={`${stats.inClassToday} / ${stats.classTotal}`}
+          valueColor={brand.primary}
+          helpText="Present and late QR scans today"
+          badge={<Clock size={18} color={brand.primary} />}
+        />
+        <StatsCard
+          label="QR CARDS LINKED"
+          value={`${stats.cardsLinked} / ${stats.classTotal}`}
+          valueColor={brand.secondary}
+          helpText="Students with active QR ID cards"
+          badge={<CreditCard size={18} color={brand.secondary} />}
+        />
       </div>
 
-      {/* 2. Top Filter and Actions Bar */}
-      <div style={controlBar}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      {/* 2. Class Selector & View Controls */}
+      <div
+        style={{
+          ...ui.card,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 12,
+          padding: '12px 16px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <select
-            value={
-              selectedClass
-                ? String(selectedClass.schedule_id || selectedClass.section_id)
-                : ''
-            }
+            aria-label="Select assigned class"
+            value={selectedClass ? `${selectedClass.schedule_id}:${selectedClass.section_id}` : ''}
             onChange={(e) => {
               const found = classes.find(
-                (c) => String(c.schedule_id || c.section_id) === e.target.value
+                (c) => `${c.schedule_id}:${c.section_id}` === e.target.value
               );
               if (found) {
                 setSelectedClass(found);
                 setSearchQuery('');
+                setStatusFilter('ALL');
               }
             }}
-            style={selectStyle}
+            style={{ ...ui.input, width: 'auto', minWidth: 260, fontWeight: 700, cursor: 'pointer' }}
           >
+            {classes.length === 0 && <option value="">No classes available</option>}
             {classes.map((c, idx) => (
               <option
-                key={`dropdown-class-${c.schedule_id || c.section_id}-${idx}`}
-                value={String(c.schedule_id || c.section_id)}
+                key={`cls-${c.schedule_id}-${c.section_id}-${idx}`}
+                value={`${c.schedule_id}:${c.section_id}`}
               >
-                {c.section_name} ({c.grade_level}) &bull; {c.subject_title} — {c.total_students} Students {c.is_adviser ? '(Adviser)' : ''}
+                {c.grade_level ? `${c.grade_level} - ` : ''}
+                {c.section_name} &bull; {c.subject_title} ({c.total_students}){' '}
+                {c.is_adviser ? '★ Adviser' : ''}
               </option>
             ))}
           </select>
 
           {isAdmin && (
-            <div style={toggleContainerStyle}>
-              <button
-                type="button"
-                onClick={() => setViewScope('MY_CLASSES')}
-                style={{
-                  ...toggleButtonStyle,
-                  backgroundColor: viewScope === 'MY_CLASSES' ? '#004b87' : 'transparent',
-                  color: viewScope === 'MY_CLASSES' ? '#ffffff' : '#64748b',
-                }}
-              >
-                My Classes
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewScope('ALL_CLASSES')}
-                style={{
-                  ...toggleButtonStyle,
-                  backgroundColor: viewScope === 'ALL_CLASSES' ? '#004b87' : 'transparent',
-                  color: viewScope === 'ALL_CLASSES' ? '#ffffff' : '#64748b',
-                }}
-              >
-                All School Classes
-              </button>
-            </div>
+            <ControlSwitch<ViewScope>
+              options={[
+                { value: 'MY_CLASSES', label: 'My Classes' },
+                { value: 'ALL_CLASSES', label: 'All School Classes' },
+              ]}
+              value={viewScope}
+              onChange={setViewScope}
+              size="sm"
+              ariaLabel="Class Scope"
+            />
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" onClick={handleExportCsv} style={secondaryBtnStyle}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={!selectedClass || filteredStudents.length === 0}
+            style={ui.btnSecondary}
+          >
             <Download size={14} />
             <span>Export CSV ({filteredStudents.length})</span>
           </button>
 
-          <button type="button" onClick={() => fetchClasses(false)} style={primaryBtnStyle}>
-            <RefreshCw size={14} />
-            <span>Refresh Class List</span>
+          <button
+            type="button"
+            onClick={() => fetchClasses(true, true)}
+            disabled={loading || refreshing}
+            style={ui.btnPrimary}
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            <span>{refreshing ? 'Refreshing...' : 'Refresh Class List'}</span>
           </button>
         </div>
       </div>
 
-      {/* 3. Main Directory White Card */}
-      <div style={mainCard}>
-        <div style={mainCardHeader}>
+      {/* 3. Main Class List Table Card */}
+      <div style={{ ...ui.card, padding: '18px 20px' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            flexWrap: 'wrap',
+            gap: 12,
+            marginBottom: 14,
+          }}
+        >
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h3 style={titleHeading}>
-                {selectedClass ? `${selectedClass.section_name} • ${selectedClass.subject_title}` : 'Assigned Classes Directory'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h3 style={{ margin: 0, fontSize: fonts.size.lg, fontWeight: 800, color: tokens.textPrimary }}>
+                {selectedClass
+                  ? `${selectedClass.section_name} • ${selectedClass.subject_title}`
+                  : 'Assigned Classes'}
               </h3>
               {selectedClass?.is_adviser && (
-                <span style={adviserTagStyle}>Official Class Adviser</span>
+                <span style={ui.badge(tokens.primaryLight, brand.primary)}>Class Adviser</span>
               )}
             </div>
-            <p style={subtitleText}>
+            <p style={{ margin: '4px 0 0', fontSize: fonts.size.sm, color: tokens.textSecondary }}>
               {selectedClass
-                ? `${selectedClass.grade_level || 'Grade 7'} • Room: ${selectedClass.room_number || 'Room —'} • Time: ${selectedClass.start_time} - ${selectedClass.end_time}`
-                : 'Manage verified student attendance, check gate scan entries, and inspect class class_lists.'}
+                ? `${selectedClass.grade_level ? `${selectedClass.grade_level} • ` : ''}Room: ${selectedClass.room_number} • Time: ${selectedClass.time_display}`
+                : 'View enrolled students, check today’s classroom attendance, and print student QR ID cards.'}
             </p>
           </div>
 
-          <div style={searchWrapper}>
-            <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-            <input
-              type="text"
-              placeholder="Search by Student Name, LRN..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={searchInput}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <ControlSwitch<StatusFilter>
+              options={[
+                { value: 'ALL', label: 'All' },
+                { value: 'PRESENT', label: 'Present' },
+                { value: 'LATE', label: 'Late' },
+                { value: 'CUTTING', label: 'Absent / Cutting' },
+                { value: 'UNSCANNED', label: 'Not Scanned' },
+              ]}
+              value={statusFilter}
+              onChange={setStatusFilter}
+              size="sm"
+              ariaLabel="Attendance Status Filter"
             />
+
+            <div style={{ position: 'relative', width: 240 }}>
+              <Search
+                size={14}
+                color={tokens.textMuted}
+                style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }}
+              />
+              <input
+                type="text"
+                maxLength={60}
+                placeholder="Search student or LRN..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{ ...ui.input, paddingLeft: 32 }}
+              />
+            </div>
           </div>
         </div>
 
         {error && (
-          <div style={errorBanner}>
+          <div
+            style={{
+              ...ui.subtleBox,
+              backgroundColor: tokens.dangerLight,
+              borderColor: brand.danger,
+              color: brand.danger,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 14,
+              fontWeight: 600,
+            }}
+          >
             <AlertCircle size={16} />
             <span>{error}</span>
           </div>
         )}
 
         {loading ? (
-          <div style={loadingContainer}>
-            <RefreshCw size={28} className="animate-spin" color="#004b87" />
-            <span style={{ fontSize: '0.84rem', color: '#64748b' }}>Loading class class_list...</span>
+          <div style={{ padding: '44px 0', textAlign: 'center', color: tokens.textMuted }}>
+            <RefreshCw
+              size={26}
+              className="animate-spin"
+              color={brand.primary}
+              style={{ margin: '0 auto 8px', display: 'block' }}
+            />
+            <span style={{ fontSize: fonts.size.base, fontWeight: 600 }}>Loading class list...</span>
           </div>
         ) : classes.length === 0 ? (
-          <div style={emptyContainer}>
-            <BookOpen size={40} color="#cbd5e1" />
-            <p style={{ margin: '8px 0 2px 0', fontWeight: 700, color: '#334155', fontSize: '0.90rem' }}>
+          <div style={{ padding: '44px 0', textAlign: 'center' }}>
+            <BookOpen size={38} color={tokens.textMuted} style={{ margin: '0 auto 8px', display: 'block' }} />
+            <div style={{ fontWeight: 800, color: tokens.textPrimary, fontSize: fonts.size.md }}>
               No Assigned Classes Found
+            </div>
+            <p style={{ margin: '4px 0 0', fontSize: fonts.size.sm, color: tokens.textMuted }}>
+              No class schedules or advisory sections are linked to your profile yet.
             </p>
-            <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8' }}>
-              No teaching timetable slots or advisory sections are currently linked to your faculty profile.
-            </p>
+          </div>
+        ) : filteredStudents.length === 0 ? (
+          <div style={{ padding: '36px 0', textAlign: 'center', color: tokens.textMuted, fontSize: fonts.size.base }}>
+            No students match the selected filter.
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
+            <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
-                <tr style={tableHeaderRow}>
-                  <th style={thStyle}>Learner Member</th>
-                  <th style={thStyle}>Learner LRN</th>
-                  <th style={thStyle}>Classroom &amp; Time</th>
-                  <th style={thStyle}>School Gate Card</th>
-                  <th style={thStyle}>Parent Contact</th>
-                  <th style={thStyle}>Attendance Status</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Actions</th>
+                <tr>
+                  <th style={ui.th}>Student</th>
+                  <th style={ui.th}>LRN</th>
+                  <th style={ui.th}>Room &amp; Time</th>
+                  <th style={ui.th}>QR ID Card</th>
+                  <th style={ui.th}>Parent Contact</th>
+                  <th style={ui.th}>Attendance Today</th>
+                  <th style={{ ...ui.th, textAlign: 'right' }}>ID Card</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredStudents.map((st) => {
-                  const isPresent = st.attendance_status === 'PRESENT';
-                  const isLate = st.attendance_status === 'LATE';
-                  const isCutting = st.attendance_status === 'CUTTING' || st.attendance_status === 'UNVERIFIED';
-
-                  return (
-                    <tr key={st.id || st.lrn} style={tableRowStyle}>
-                      {/* 1. Learner Member with Avatar */}
-                      <td style={tdStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          <div style={avatarStyle}>
-                            {st.photo_url ? (
-                              <img src={st.photo_url} alt={st.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            ) : (
-                              <UserIcon size={18} color="#94a3b8" />
-                            )}
+                {filteredStudents.map((st) => (
+                  <tr key={st.id || st.lrn}>
+                    <td style={ui.td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <ProfileAvatar photoUrl={st.photo_url} name={st.name} size={36} iconSize={17} />
+                        <div>
+                          <div style={{ fontWeight: 800, color: tokens.textPrimary, fontSize: fonts.size.base }}>
+                            {st.name}
                           </div>
-                          <div>
-                            <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.86rem' }}>
-                              {st.name}
-                            </div>
-                            <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: 1 }}>
-                              {st.gender} &bull; {selectedClass?.grade_level || 'Grade 7'}
-                            </div>
+                          <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted, marginTop: 1 }}>
+                            {st.gender}
+                            {selectedClass?.grade_level ? ` • ${selectedClass.grade_level}` : ''}
                           </div>
                         </div>
-                      </td>
+                      </div>
+                    </td>
 
-                      {/* 2. Learner LRN with Copy Button */}
-                      <td style={tdStyle}>
-                        <div style={codePill}>
-                          <span>{st.lrn}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(st.lrn)}
-                            style={copyBtn}
-                            title="Copy LRN"
-                          >
-                            {copiedValue === st.lrn ? <Check size={11} color="#16a34a" /> : <Copy size={11} color="#64748b" />}
-                          </button>
-                        </div>
-                      </td>
+                    <td style={ui.td}>
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          padding: '3px 8px',
+                          backgroundColor: tokens.bgSurfaceSubtle,
+                          borderWidth: 1,
+                          borderStyle: 'solid',
+                          borderColor: tokens.borderSubtle,
+                          borderRadius: 6,
+                          fontFamily: fonts.mono,
+                          fontSize: fonts.size.sm,
+                          fontWeight: 700,
+                          color: tokens.textPrimary,
+                        }}
+                      >
+                        <span>{st.lrn}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(st.lrn)}
+                          title="Copy LRN"
+                          aria-label={`Copy LRN ${st.lrn}`}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}
+                        >
+                          {copiedValue === st.lrn ? (
+                            <Check size={12} color={brand.success} />
+                          ) : (
+                            <Copy size={12} color={tokens.textMuted} />
+                          )}
+                        </button>
+                      </div>
+                    </td>
 
-                      {/* 3. Classroom & Time */}
-                      <td style={tdStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>
-                          <MapPin size={14} color="#004b87" />
-                          <span>{selectedClass?.room_number || 'Room —'}</span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>
-                          <Clock size={11} color="#94a3b8" />
-                          <span>{selectedClass?.start_time} - {selectedClass?.end_time}</span>
-                        </div>
-                      </td>
+                    <td style={ui.td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontWeight: 700, color: tokens.textPrimary, fontSize: fonts.size.sm }}>
+                        <MapPin size={13} color={brand.primary} />
+                        <span>{selectedClass?.room_number || '—'}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: fonts.size.xs, color: tokens.textMuted, marginTop: 2 }}>
+                        <Clock size={11} />
+                        <span>{selectedClass?.time_display || 'Homeroom'}</span>
+                      </div>
+                    </td>
 
-                      {/* 4. School Gate Card */}
-                      <td style={tdStyle}>
-                        {st.qr_token ? (
-                          <div style={cardPairedBadge}>
-                            <CreditCard size={13} color="#16a34a" />
-                            <span>{st.qr_token}</span>
-                          </div>
-                        ) : (
-                          <div style={cardUnpairedBadge}>
-                            <CreditCard size={13} color="#94a3b8" />
-                            <span>Not Paired</span>
-                          </div>
-                        )}
-                      </td>
-
-                      {/* 5. Parent Contact */}
-                      <td style={tdStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', color: '#334155' }}>
-                          <Phone size={13} color="#64748b" />
-                          <span>{st.parent_contact || 'None'}</span>
-                        </div>
-                      </td>
-
-                      {/* 6. Attendance Status */}
-                      <td style={tdStyle}>
+                    <td style={ui.td}>
+                      {st.qr_token ? (
                         <span
                           style={{
-                            ...activePill,
-                            backgroundColor: isPresent ? '#f0fdf4' : isLate ? '#fffbeb' : isCutting ? '#fef2f2' : '#f1f5f9',
-                            borderColor: isPresent ? '#bbf7d0' : isLate ? '#fef3c7' : isCutting ? '#fecaca' : '#e2e8f0',
-                            color: isPresent ? '#16a34a' : isLate ? '#d97706' : isCutting ? '#dc2626' : '#64748b',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            fontSize: fonts.size.sm,
+                            fontWeight: 700,
+                            color: brand.success,
+                            fontFamily: fonts.mono,
                           }}
                         >
-                          {st.attendance_status}
+                          <CreditCard size={13} />
+                          <span>{maskQrToken(st.qr_token)}</span>
                         </span>
-                      </td>
+                      ) : (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            fontSize: fonts.size.sm,
+                            color: tokens.textMuted,
+                          }}
+                        >
+                          <CreditCard size={13} />
+                          <span>Not Linked</span>
+                        </span>
+                      )}
+                    </td>
 
-                      {/* 7. Actions */}
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>
-                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                          <button
-                            type="button"
-                            onClick={() => setBadgeStudent(st)}
-                            style={actionBtn}
-                            title="Print / View ID Pass"
-                          >
-                            <QrCode size={14} color="#004b87" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                    <td style={ui.td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: fonts.size.sm, color: tokens.textSecondary }}>
+                        <Phone size={13} color={tokens.textMuted} />
+                        <span>{st.parent_contact || '—'}</span>
+                      </div>
+                    </td>
+
+                    <td style={ui.td}>{renderStatusPill(st.attendance_status)}</td>
+
+                    <td style={{ ...ui.td, textAlign: 'right' }}>
+                      <button
+                        type="button"
+                        onClick={() => setBadgeStudent(st)}
+                        title="View or Print Student QR ID Card"
+                        aria-label={`Open QR ID card for ${st.name}`}
+                        style={{ ...ui.btnSecondary, padding: '6px 8px' }}
+                      >
+                        <QrCode size={14} color={brand.primary} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         )}
       </div>
 
-      {/* Student ID Pass Modal */}
+      {/* 4. Student QR ID Card Modal */}
       {badgeStudent && (
         <Modal
           isOpen={Boolean(badgeStudent)}
           onClose={() => setBadgeStudent(null)}
-          title="Student Classroom & Gate ID Pass"
+          title="Student QR ID Card"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '6px 0' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
             <div
               style={{
-                width: 300,
-                backgroundColor: '#ffffff',
-                border: '2px solid #004b87',
+                width: 296,
+                backgroundColor: tokens.bgSurface,
+                borderWidth: 2,
+                borderStyle: 'solid',
+                borderColor: brand.primary,
                 borderRadius: 14,
                 overflow: 'hidden',
-                boxShadow: '0 8px 24px rgba(0, 75, 135, 0.12)',
+                boxShadow: tokens.cardShadow,
               }}
             >
-              <div style={{ background: '#004b87', color: '#ffffff', padding: '12px 14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: '0.68rem', fontWeight: 800 }}>
-                  <ShieldCheck size={14} color="#38bdf8" />
-                  <span>ATTENDSURE STUDENT PASS</span>
+              <div style={{ backgroundColor: brand.primary, color: '#ffffff', padding: '12px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: fonts.size.xs, fontWeight: 800 }}>
+                  <ShieldCheck size={14} />
+                  <span>OFFICIAL STUDENT QR ID</span>
                 </div>
-                <div style={{ fontSize: '0.58rem', color: '#e0f2fe', marginTop: 2 }}>
-                  Department of Education &bull; Classroom &amp; Gate Pass
-                </div>
+                <div style={{ fontSize: '0.64rem', opacity: 0.9, marginTop: 2 }}>{activeSchoolName}</div>
               </div>
 
               <div style={{ padding: '16px 14px' }}>
-                <div style={{ margin: '0 auto 10px auto', display: 'flex', justifyContent: 'center' }}>
-                  <div style={avatarStyle}>
-                    {badgeStudent.photo_url ? (
-                      <img src={badgeStudent.photo_url} alt={badgeStudent.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <UserIcon size={34} color="#94a3b8" />
-                    )}
-                  </div>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
+                  <ProfileAvatar photoUrl={badgeStudent.photo_url} name={badgeStudent.name} size={56} iconSize={26} />
                 </div>
 
-                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
+                <div style={{ fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>
                   {badgeStudent.name}
                 </div>
-
-                <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b', marginTop: 3 }}>
-                  Section: {selectedClass?.section_name || 'Class Class List'}
+                <div style={{ fontSize: fonts.size.sm, color: tokens.textSecondary, marginTop: 2 }}>
+                  {selectedClass?.grade_level ? `${selectedClass.grade_level} - ` : ''}
+                  {selectedClass?.section_name || 'Enrolled Student'}
                 </div>
 
-                <div
+                <button
+                  type="button"
                   onClick={() => handleCopy(badgeStudent.lrn)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    margin: '8px 0',
-                    padding: '4px 10px',
-                    backgroundColor: '#f1f5f9',
-                    borderRadius: 6,
-                    fontFamily: 'monospace',
-                    fontSize: '0.76rem',
-                    fontWeight: 700,
-                    color: '#0f172a',
-                    cursor: 'pointer',
-                  }}
-                  title="Click to copy LRN"
+                  style={{ ...ui.btnSecondary, margin: '10px auto', fontFamily: fonts.mono }}
+                  title="Copy LRN"
                 >
                   <span>LRN: {badgeStudent.lrn}</span>
-                  <Copy size={11} color="#64748b" />
-                </div>
+                  {copiedValue === badgeStudent.lrn ? (
+                    <Check size={12} color={brand.success} />
+                  ) : (
+                    <Copy size={12} color={tokens.textMuted} />
+                  )}
+                </button>
 
                 <div
                   style={{
-                    margin: '8px auto',
+                    margin: '6px auto',
                     padding: 6,
                     backgroundColor: '#ffffff',
-                    border: '1px solid #e2e8f0',
+                    borderWidth: 1,
+                    borderStyle: 'solid',
+                    borderColor: tokens.borderSubtle,
                     borderRadius: 10,
-                    width: 118,
-                    height: 118,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    width: 124,
+                    height: 124,
                   }}
                 >
                   <img
                     src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(
                       badgeStudent.lrn
                     )}`}
-                    alt="Student QR Code"
+                    alt={`QR code for ${badgeStudent.name}`}
+                    referrerPolicy="no-referrer"
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 </div>
@@ -649,34 +799,28 @@ export const MyAssignedClassesTab: React.FC = () => {
 
               <div
                 style={{
-                  backgroundColor: '#f8fafc',
-                  borderTop: '1px solid #e2e8f0',
+                  backgroundColor: tokens.bgSurfaceSubtle,
+                  borderTopWidth: 1,
+                  borderTopStyle: 'solid',
+                  borderTopColor: tokens.borderSubtle,
                   padding: '8px 12px',
-                  fontSize: '0.66rem',
-                  color: '#64748b',
+                  fontSize: fonts.size.xs,
+                  color: tokens.textSecondary,
                 }}
               >
-                Card UID:{' '}
-                <strong style={{ color: badgeStudent.qr_token ? '#059669' : '#d97706' }}>
-                  {badgeStudent.qr_token || 'No Card Linked'}
+                Card Status:{' '}
+                <strong style={{ color: badgeStudent.qr_token ? brand.success : brand.warning }}>
+                  {badgeStudent.qr_token ? `Active (${maskQrToken(badgeStudent.qr_token)})` : 'LRN Mode'}
                 </strong>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 16, width: '100%', justifyContent: 'center' }}>
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
               <Button variant="secondary" size="md" type="button" onClick={() => setBadgeStudent(null)}>
                 Close
               </Button>
-              <Button
-                variant="primary"
-                size="md"
-                type="button"
-                onClick={() => {
-                  window.print();
-                }}
-              >
-                <Printer size={15} style={{ marginRight: 6 }} />
-                Print ID Card
+              <Button variant="primary" size="md" type="button" onClick={() => window.print()}>
+                <Printer size={14} /> Print ID Card
               </Button>
             </div>
           </div>
@@ -686,292 +830,18 @@ export const MyAssignedClassesTab: React.FC = () => {
   );
 };
 
-export default MyAssignedClassesTab;
-
-// Visual Design Styles Matching the Faculty Screenshot Exactly
-const statsGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
-  gap: 12,
-};
-
-const statCard: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 10,
-  border: '1px solid #e2e8f0',
-  padding: '14px 18px',
-};
-
-const statLabel: React.CSSProperties = {
-  fontSize: '0.66rem',
-  fontWeight: 800,
-  color: '#64748b',
-  letterSpacing: '0.4px',
-  textTransform: 'uppercase',
-};
-
-const statVal: React.CSSProperties = {
-  fontSize: '1.60rem',
-  fontWeight: 800,
-  marginTop: 4,
-  lineHeight: 1.1,
-};
-
-const statSub: React.CSSProperties = {
-  fontSize: '0.72rem',
-  color: '#94a3b8',
-  marginTop: 3,
-};
-
-const controlBar: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  flexWrap: 'wrap',
-  gap: 12,
-};
-
-const selectStyle: React.CSSProperties = {
-  padding: '8px 14px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  fontSize: '0.82rem',
-  color: '#334155',
-  fontWeight: 600,
-  outline: 'none',
-  cursor: 'pointer',
-  minWidth: 260,
-};
-
-const toggleContainerStyle: React.CSSProperties = {
-  display: 'flex',
-  backgroundColor: '#f1f5f9',
-  borderRadius: 8,
-  padding: 2,
-  border: '1px solid #e2e8f0',
-};
-
-const toggleButtonStyle: React.CSSProperties = {
-  border: 'none',
-  padding: '6px 12px',
-  borderRadius: 6,
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const secondaryBtnStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  backgroundColor: '#ffffff',
-  color: '#0f172a',
-  border: '1px solid #cbd5e1',
-  padding: '8px 14px',
-  borderRadius: 6,
-  fontWeight: 700,
-  fontSize: '0.80rem',
-  cursor: 'pointer',
-};
-
-const primaryBtnStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  backgroundColor: '#004b87',
-  color: '#ffffff',
-  border: 'none',
-  padding: '8px 16px',
-  borderRadius: 6,
-  fontWeight: 700,
-  fontSize: '0.80rem',
-  cursor: 'pointer',
-};
-
-const mainCard: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  padding: '20px 24px',
-  border: '1px solid #e2e8f0',
-};
-
-const mainCardHeader: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-start',
-  flexWrap: 'wrap',
-  gap: 14,
-  marginBottom: 16,
-};
-
-const titleHeading: React.CSSProperties = {
-  margin: 0,
-  fontSize: '1.20rem',
-  fontWeight: 800,
-  color: '#0f172a',
-};
-
-const subtitleText: React.CSSProperties = {
-  margin: '4px 0 0 0',
-  fontSize: '0.80rem',
-  color: '#64748b',
-};
-
-const adviserTagStyle: React.CSSProperties = {
-  backgroundColor: '#e0f2fe',
-  color: '#0369a1',
-  border: '1px solid #bae6fd',
-  borderRadius: 12,
-  padding: '2px 8px',
-  fontSize: '0.68rem',
-  fontWeight: 800,
-};
-
-const searchWrapper: React.CSSProperties = {
-  position: 'relative',
-  width: '100%',
-  maxWidth: 290,
-};
-
-const searchInput: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 14px 8px 34px',
-  borderRadius: 8,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.80rem',
-  outline: 'none',
-  boxSizing: 'border-box',
-  color: '#0f172a',
-};
-
-const tableStyle: React.CSSProperties = {
-  width: '100%',
-  minWidth: 700,
-  borderCollapse: 'collapse',
-  textAlign: 'left',
-};
-
-const tableHeaderRow: React.CSSProperties = {
-  borderBottom: '2px solid #e2e8f0',
-};
-
-const thStyle: React.CSSProperties = {
-  padding: '12px 14px',
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  color: '#475569',
-};
-
-const tableRowStyle: React.CSSProperties = {
-  borderBottom: '1px solid #f1f5f9',
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '14px 14px',
-  verticalAlign: 'middle',
-};
-
-const avatarStyle: React.CSSProperties = {
-  width: 38,
-  height: 38,
-  borderRadius: '50%',
-  backgroundColor: '#f1f5f9',
-  border: '1px solid #e2e8f0',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  overflow: 'hidden',
-  flexShrink: 0,
-};
-
-const codePill: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '3px 8px',
-  backgroundColor: '#f8fafc',
-  border: '1px solid #e2e8f0',
-  borderRadius: 6,
-  fontFamily: 'monospace',
-  fontSize: '0.76rem',
-  fontWeight: 700,
-  color: '#0f172a',
-};
-
-const copyBtn: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  padding: 0,
-  display: 'flex',
-  alignItems: 'center',
-};
-
-const cardPairedBadge: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontSize: '0.76rem',
-  fontWeight: 700,
-  color: '#16a34a',
-  fontFamily: 'monospace',
-};
-
-const cardUnpairedBadge: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontSize: '0.76rem',
-  color: '#94a3b8',
-};
-
-const activePill: React.CSSProperties = {
+const statusBadgeStyle = (bg: string, color: string): React.CSSProperties => ({
   display: 'inline-flex',
   alignItems: 'center',
   padding: '3px 10px',
-  borderRadius: 14,
-  fontSize: '0.70rem',
+  borderRadius: 9999,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: color,
+  backgroundColor: bg,
+  color,
+  fontSize: '0.68rem',
   fontWeight: 800,
-};
+});
 
-const actionBtn: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  padding: '6px 8px',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const errorBanner: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  backgroundColor: '#fef2f2',
-  border: '1px solid #fecaca',
-  color: '#991b1b',
-  borderRadius: 6,
-  padding: '10px 14px',
-  marginBottom: 14,
-  fontSize: '0.80rem',
-};
-
-const loadingContainer: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 10,
-  padding: '40px 0',
-};
-
-const emptyContainer: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '40px 0',
-};
+export default MyAssignedClassesTab;

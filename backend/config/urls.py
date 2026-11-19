@@ -6,6 +6,14 @@ from django.views.static import serve
 
 from common.security import clear_system_cache_view, database_health_view
 
+
+def serve_cached_media(request, path):
+    response = serve(request, path, document_root=settings.MEDIA_ROOT)
+    response["Cache-Control"] = "public, max-age=86400"
+    response["Access-Control-Allow-Origin"] = "*"
+    return response
+
+
 v1_patterns = [
     path("health/db/", database_health_view, name="health-db"),
     path("cache/flush/", clear_system_cache_view, name="cache-flush"),
@@ -22,7 +30,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", include((v1_patterns, "v1"))),
     path("api/", include("config.legacy_urls")),
-    re_path(r"^media/(?P<path>.*)$", serve, {"document_root": settings.MEDIA_ROOT}),
+    re_path(r"^media/(?P<path>.*)$", serve_cached_media),
 ]
 
 if settings.DEBUG:

@@ -1,5 +1,6 @@
 from django.core.cache import cache
 from django.db.models import Count, Q
+
 from common.media import build_media_url, save_base64_logo_to_disk
 from common.permissions import is_school_leader
 from apps.accounts.selectors import get_teacher_section_ids, resolve_teacher_for_user
@@ -36,10 +37,10 @@ def migrate_inline_logos_to_files(school: SchoolSettings) -> SchoolSettings:
     return school
 
 
-def get_school_metadata(request=None) -> dict:
+def get_school_metadata(request=None, school: SchoolSettings | None = None) -> dict:
     raw = cache.get(SCHOOL_META_CACHE_KEY)
     if raw is None:
-        school = SchoolSettings.objects.select_related("principal_teacher").first()
+        school = school or SchoolSettings.objects.select_related("principal_teacher").first()
         if not school:
             return {"school_id": "", "school_name": "", "is_configured": False}
 
@@ -117,7 +118,9 @@ def get_class_periods_for_user(user, section_id: int | None = None):
     if not is_school_leader(user):
         teacher = resolve_teacher_for_user(user)
         if teacher:
-            qs = qs.filter(Q(teacher=teacher) | Q(section_id__in=get_teacher_section_ids(teacher))).distinct()
+            qs = qs.filter(
+                Q(teacher=teacher) | Q(section_id__in=get_teacher_section_ids(teacher))
+            ).distinct()
         else:
             qs = qs.none()
     return qs

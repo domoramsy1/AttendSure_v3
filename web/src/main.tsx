@@ -1,5 +1,5 @@
 /**
- * AttendSure - Application Entry Point
+ * AttendSure - Instant-Mount Application Entry Point
  * File: web/src/main.tsx
  */
 
@@ -9,12 +9,22 @@ import App from './App';
 import './index.css';
 import { BRAND_ASSETS } from './components/branding/BrandAssets';
 
-// Dynamically generate a high-contrast PNG favicon from SVG emblem
+// Mount React immediately on Frame 1 before running optional favicon work
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+}
+
+// Generate circular high-contrast favicon only when main thread is idle
 const applyAppFavicon = () => {
   try {
     const img = new Image();
+    img.decoding = 'async';
     img.src = BRAND_ASSETS.attendsureLogo;
-
     img.onload = () => {
       try {
         const canvas = document.createElement('canvas');
@@ -23,7 +33,6 @@ const applyAppFavicon = () => {
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // Circular background badge for clear contrast on dark browser tabs
         ctx.beginPath();
         ctx.arc(32, 32, 30, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
@@ -31,44 +40,27 @@ const applyAppFavicon = () => {
         ctx.lineWidth = 2;
         ctx.strokeStyle = '#e2e8f0';
         ctx.stroke();
-
-        // Render AttendSure emblem centered
         ctx.drawImage(img, 10, 10, 44, 44);
 
         const pngDataUrl = canvas.toDataURL('image/png');
+        document.querySelectorAll("link[rel*='icon']").forEach((el) => el.remove());
 
-        // Safely remove existing icon links to prevent duplicate DOM tags
-        const existingIcons = document.querySelectorAll("link[rel*='icon']");
-        existingIcons.forEach((el) => el.remove());
-
-        // Inject new favicon link
         const link = document.createElement('link');
         link.type = 'image/png';
         link.rel = 'icon';
         link.href = pngDataUrl;
         document.head.appendChild(link);
-      } catch (err) {
-        // Fallback silently if canvas operations fail
+      } catch {
+        // Keep inline SVG icon from index.html
       }
     };
-
-    img.onerror = () => {
-      // Keep existing default favicon if image load fails
-    };
   } catch {
-    // Top-level error catch prevents favicon logic from blocking UI render
+    // Non-blocking fallback
   }
 };
 
-// Apply high-contrast favicon
-applyAppFavicon();
-
-// Mount root React application
-const rootElement = document.getElementById('root');
-if (rootElement) {
-  ReactDOM.createRoot(rootElement).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>
-  );
+if (typeof window !== 'undefined') {
+  const idle = (window as unknown as { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
+  if (idle) idle(applyAppFavicon);
+  else setTimeout(applyAppFavicon, 600);
 }

@@ -37,7 +37,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
   useEffect(() => {
     if (!isOpen) return;
     setLoading(true);
-    apiClient.get('/me/')
+    apiClient.get('/v1/accounts/me/')
       .then((res) => {
         const u = res.data;
         setFormData({
@@ -78,7 +78,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
     if (formData.photo !== null) payload.photo = formData.photo === '' ? null : formData.photo;
 
     try {
-      const res = await apiClient.put('/me/', payload);
+      const res = await apiClient.put('/v1/accounts/me/', payload);
       showAlert({ title: 'Saved', message: 'Profile updated.', type: 'success' });
       onProfileUpdated?.(res.data);
       onClose();

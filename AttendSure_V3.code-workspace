@@ -1,0 +1,14 @@
+{
+  "folders": [
+    { "name": "web", "path": "web" },
+    { "name": "backend", "path": "backend" },
+    { "name": "mobile", "path": "mobile" },
+    { "name": "scripts", "path": "scripts" }
+  ],
+  "settings": {
+    "eslint.workingDirectories": [
+      { "directory": "./web", "changeProcessCWD": true },
+      { "directory": "./mobile", "changeProcessCWD": true }
+    ]
+  }
+}

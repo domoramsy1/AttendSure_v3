@@ -1,9 +1,0 @@
-============================================================================
-ATTENDSURE DIAGNOSTICS SUMMARY (2026-11-19 06:42:06 AM)
-============================================================================
-  database\check_database.py          | PASSED         | results/check_database_output.txt
-  testing\audit_codebase.py           | PASSED         | results/audit_codebase_output.txt
-  testing\check_campus_gps.py         | PASSED         | results/check_campus_gps_output.txt
-  utilities\inspect_models.py         | PASSED         | results/inspect_models_output.txt
-  testing\test_api_cruds.py           | PASSED         | results/test_api_cruds_output.txt
-============================================================================

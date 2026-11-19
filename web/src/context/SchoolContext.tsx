@@ -1,16 +1,11 @@
 /**
- * AttendSure - Institutional Context Provider (Real Database Data)
+ * AttendSure - School Profile Context (Zero Mock Data & Public Pre-Login Branding)
  * File: web/src/context/SchoolContext.tsx
- *
- * Cybersecurity & Performance:
- * 1. Zero Mock Data: All school information is loaded strictly from the PostgreSQL database.
- * 2. Real-Time Cache Sync: Caches genuine database records in localStorage to ensure fast frame-1 boot.
- * 3. Quota Safety shield: Strips excessive base64 payload strings before writing to browser storage.
- * 4. Simple English Terms: Clean data interfaces for school profile, head, and boundary settings.
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import apiClient from '../api/client';
+import { API_ROUTES } from '../api/routes';
 
 export interface SchoolData {
   school_id: string;
@@ -54,9 +49,21 @@ const EMPTY_SCHOOL: SchoolData = {
   right_logo: null,
   latitude: null,
   longitude: null,
-  geofence_radius_meters: 100,
+  geofence_radius_meters: 150,
   academic_year: '',
 };
+
+const sanitizeCachedSchool = (raw: Partial<SchoolData>): SchoolData => {
+  const merged = { ...EMPTY_SCHOOL, ...raw };
+  // Purge legacy mock placeholder ID if present in browser storage
+  if (merged.school_id === '55555' || merged.school_id === '000000') {
+    merged.school_id = '';
+  }
+  return merged;
+};
+
+const hasActiveToken = (): boolean =>
+  Boolean(localStorage.getItem('attendsure_access') || localStorage.getItem('attendsure_token'));
 
 interface SchoolContextValue {
   school: SchoolData;
@@ -78,22 +85,20 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [school, setSchool] = useState<SchoolData>(() => {
     try {
       const cached = localStorage.getItem('attendsure_school_profile');
-      if (cached) {
-        return { ...EMPTY_SCHOOL, ...JSON.parse(cached) };
-      }
+      if (cached) return sanitizeCachedSchool(JSON.parse(cached));
     } catch {
-      // Fallback to empty state
+      // Ignore malformed cache
     }
     return EMPTY_SCHOOL;
   });
 
-  const [loading, setLoading] = useState<boolean>(() => {
-    return !localStorage.getItem('attendsure_school_profile');
-  });
+  const [loading, setLoading] = useState<boolean>(
+    () => hasActiveToken() && !localStorage.getItem('attendsure_school_profile')
+  );
 
   const applySchoolUpdate = useCallback((patch: Partial<SchoolData>) => {
     setSchool((prev) => {
-      const updated = { ...prev, ...patch };
+      const updated = sanitizeCachedSchool({ ...prev, ...patch });
       try {
         const storageSafe = { ...updated };
         if (storageSafe.school_logo && storageSafe.school_logo.length > 300000) storageSafe.school_logo = null;
@@ -101,21 +106,21 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (storageSafe.right_logo && storageSafe.right_logo.length > 300000) storageSafe.right_logo = null;
         localStorage.setItem('attendsure_school_profile', JSON.stringify(storageSafe));
       } catch {
-        // Handle browser quota limit safely
+        // Ignore quota limits
       }
       return updated;
     });
   }, []);
 
   const fetchSchoolData = useCallback(async () => {
+    const endpoint = hasActiveToken()
+      ? API_ROUTES.school.settings
+      : '/v1/school/public-branding/';
     try {
-      const res = await apiClient.get<SchoolData>('/settings/school/', { timeout: 8000 });
-      if (res.data) {
-        applySchoolUpdate(res.data);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[SchoolContext] Database sync notice:', msg);
+      const res = await apiClient.get<SchoolData>(endpoint, { timeout: 6000 });
+      if (res.data) applySchoolUpdate(res.data);
+    } catch {
+      // Keep clean cached state if offline
     } finally {
       setLoading(false);
     }

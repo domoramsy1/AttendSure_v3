@@ -1,5 +1,5 @@
 import React from 'react';
-import { theme } from '../../theme/tokens';
+import { useTheme } from '../../context/ThemeContext';
 import { Loader2 } from 'lucide-react';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -19,24 +19,58 @@ export const Button: React.FC<ButtonProps> = ({
   style,
   ...props
 }) => {
+  const { tokens, brand, radius } = useTheme();
+
   const getVariantStyles = (): React.CSSProperties => {
     switch (variant) {
       case 'primary':
-        return { backgroundColor: theme.colors.primary, color: theme.colors.textWhite };
+        return {
+          backgroundColor: brand.buttonBg,
+          color: '#ffffff',
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: brand.buttonBg,
+          boxShadow: '0 2px 8px rgba(0, 75, 135, 0.22)',
+        };
       case 'secondary':
-        return { backgroundColor: theme.colors.surfaceSubtle, color: theme.colors.textPrimary, border: `1px solid ${theme.colors.border}` };
+        return {
+          backgroundColor: tokens.bgSurfaceSubtle,
+          color: tokens.textPrimary,
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: tokens.borderStrong,
+        };
       case 'danger':
-        return { backgroundColor: theme.colors.danger, color: theme.colors.textWhite };
+        return {
+          backgroundColor: brand.danger,
+          color: '#ffffff',
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: brand.danger,
+        };
       case 'dark':
-        return { backgroundColor: '#334155', color: theme.colors.textWhite };
+        return {
+          backgroundColor: '#1e293b',
+          color: '#ffffff',
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: '#334155',
+        };
       case 'ghost':
-        return { backgroundColor: 'transparent', color: theme.colors.textPrimary };
+        return {
+          backgroundColor: 'transparent',
+          color: tokens.textPrimary,
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: 'transparent',
+        };
     }
   };
 
-  const sizeStyles: React.CSSProperties = size === 'sm'
-    ? { padding: '5px 10px', fontSize: '0.8rem' }
-    : { padding: '8px 14px', fontSize: '0.875rem' };
+  const sizeStyles: React.CSSProperties =
+    size === 'sm'
+      ? { padding: '5px 10px', fontSize: '0.78rem' }
+      : { padding: '8px 14px', fontSize: '0.86rem' };
 
   return (
     <button
@@ -45,13 +79,12 @@ export const Button: React.FC<ButtonProps> = ({
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: '6px',
-        fontWeight: 600,
-        borderRadius: theme.radius.sm,
-        border: 'none',
+        gap: 7,
+        fontWeight: 700,
+        borderRadius: radius.md,
         cursor: disabled || loading ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.6 : 1,
-        transition: 'all 0.15s ease-in-out',
+        transition: 'background-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
         ...sizeStyles,
         ...getVariantStyles(),
         ...style,

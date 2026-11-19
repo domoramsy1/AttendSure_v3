@@ -1,16 +1,17 @@
 /**
- * AttendSure - Responsive School Sign-In Page (Admin-Issued Accounts Only)
+ * AttendSure - Executive School Staff Sign-In Portal
  * File: web/src/components/auth/AuthPage.tsx
  */
 
-import React, { useState, useEffect } from 'react';
-import apiClient from '../../api/client';
+import React, { useState, useEffect, useRef } from 'react';
+import apiClient, { clearApiClientCache } from '../../api/client';
+import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
 import { isSafeImageUrl, type ThemeMode } from '../../theme/tokens';
-import { AttendSureLogoAsset } from '../branding/BrandAssets';
+import { AttendSureBrandBadge } from '../branding/BrandAssets';
 import { Button } from '../ui/Button';
-import { TextInput } from '../ui/FormControls';
+import { ControlSwitch } from '../ui/ControlSwitch';
 import type { UserSession } from '../../types/section';
 import type { LoginPayload } from '../../types/auth';
 import {
@@ -24,14 +25,11 @@ import {
   Eye,
   EyeOff,
   AlertCircle,
-  CheckCircle2,
-  KeyRound,
-  RotateCw,
-  ArrowLeft,
+  AlertTriangle,
   Sun,
   Moon,
-  Sparkles,
   Lock,
+  User,
 } from 'lucide-react';
 
 interface AuthPageProps {
@@ -39,362 +37,355 @@ interface AuthPageProps {
   onLoginSuccess?: (session: UserSession) => void;
 }
 
-interface TwoFactorPayload {
-  username: string;
-  masked_phone: string;
-  temp_token?: string;
-}
+const ALLOWED_WEB_ROLES = new Set(['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY']);
+
+const clearPreviousSessionStorage = (): void => {
+  const keys = [
+    'attendsure_access',
+    'attendsure_refresh',
+    'attendsure_token',
+    'auth_token',
+    'token',
+    'attendsure_username',
+    'attendsure_faculty_name',
+    'attendsure_role',
+    'attendsure_user_id',
+    'attendsure_user_photo',
+    'attendsure_can_teach',
+  ];
+  keys.forEach((k) => localStorage.removeItem(k));
+};
 
 export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSuccess }) => {
-  const { school } = useSchool();
+  const { school, updateSchoolInstantly, refreshSchool } = useSchool();
   const { mode, setThemeMode, tokens, brand, fonts } = useTheme();
 
-  const [step, setStep] = useState<'LOGIN' | '2FA'>('LOGIN');
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [capsLockOn, setCapsLockOn] = useState<boolean>(false);
+  const [focusedField, setFocusedField] = useState<'username' | 'password' | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [loginForm, setLoginForm] = useState<LoginPayload>({ username: '', password: '' });
 
-  const [twoFactorData, setTwoFactorData] = useState<TwoFactorPayload>({
-    username: '',
-    masked_phone: '',
-    temp_token: '',
-  });
-  const [otpCode, setOtpCode] = useState<string>('');
-  const [otpCooldown, setOtpCooldown] = useState<number>(0);
-  const [resendingOtp, setResendingOtp] = useState<boolean>(false);
-
-  const [loginForm, setLoginForm] = useState<LoginPayload>({
-    username: '',
-    password: '',
-  });
+  const usernameInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    if (otpCooldown <= 0) return;
-    const timer = setTimeout(() => setOtpCooldown((prev) => prev - 1), 1000);
+    usernameInputRef.current?.focus();
+    return () => {
+      setLoginForm({ username: '', password: '' });
+    };
+  }, []);
+
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return;
+    const timer = setTimeout(() => setCooldownSeconds((prev) => Math.max(0, prev - 1)), 1000);
     return () => clearTimeout(timer);
-  }, [otpCooldown]);
+  }, [cooldownSeconds]);
 
-  const triggerSuccess = (session: UserSession) => {
-    localStorage.setItem('attendsure_token', session.token);
-    localStorage.setItem('attendsure_username', session.username);
-    localStorage.setItem('attendsure_faculty_name', session.faculty_name);
-    localStorage.setItem('attendsure_role', session.role);
-
-    if (onAuthSuccess) onAuthSuccess(session);
-    if (onLoginSuccess) onLoginSuccess(session);
+  const handleKeyEvent = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (typeof e.getModifierState === 'function') {
+      setCapsLockOn(e.getModifierState('CapsLock'));
+    }
   };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setLoading(true);
+    if (loading || cooldownSeconds > 0) return;
 
-    try {
-      const cleanPayload = {
-        username: loginForm.username.replace(/[\r\n\t]/g, '').trim(),
-        password: loginForm.password,
-      };
-      const res = await apiClient.post('/auth/login/', cleanPayload);
+    const cleanUsername = loginForm.username.replace(/[\r\n\t<>]/g, '').trim().slice(0, 100);
+    const rawPassword = loginForm.password.slice(0, 128);
 
-      if (res.data.requires_2fa || res.data.two_factor_required || res.data.status === '2FA_REQUIRED') {
-        setTwoFactorData({
-          username: res.data.username || cleanPayload.username,
-          masked_phone: res.data.masked_phone || res.data.phone || 'your phone number',
-          temp_token: res.data.temp_token || '',
-        });
-        setOtpCode('');
-        setOtpCooldown(60);
-        setStep('2FA');
-        setSuccessMsg(res.data.message || 'We sent a 6-digit code to your phone.');
-        return;
-      }
-
-      triggerSuccess({
-        token: res.data.token,
-        username: res.data.username,
-        faculty_name: res.data.faculty_name,
-        role: res.data.role,
-      });
-    } catch (err: any) {
-      setErrorMsg(
-        err.response?.data?.error ||
-          err.response?.data?.detail ||
-          err.message ||
-          'Wrong username or password. Please try again.'
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleOtpSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    const cleanOtp = otpCode.trim();
-    if (cleanOtp.length < 6) {
-      setErrorMsg('Please enter all 6 numbers.');
+    if (!cleanUsername || !rawPassword) {
+      setErrorMsg('Please enter both your username and password.');
       return;
     }
 
+    setErrorMsg(null);
     setLoading(true);
+
     try {
-      const res = await apiClient.post('/auth/verify-2fa/', {
-        username: twoFactorData.username,
-        otp: cleanOtp,
-        temp_token: twoFactorData.temp_token,
+      const res = await apiClient.post(API_ROUTES.accounts.login, {
+        username: cleanUsername,
+        password: rawPassword,
       });
 
-      triggerSuccess({
-        token: res.data.token,
-        username: res.data.username,
-        faculty_name: res.data.faculty_name,
-        role: res.data.role,
-      });
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.error || err.response?.data?.detail || 'Wrong or expired code.');
+      const data = res.data || {};
+      const userObj = data.user || data;
+      const role = String(userObj.role || userObj.system_role || 'FACULTY').toUpperCase();
+
+      if (!ALLOWED_WEB_ROLES.has(role)) {
+        clearPreviousSessionStorage();
+        clearApiClientCache();
+        setLoginForm((prev) => ({ ...prev, password: '' }));
+        setErrorMsg(
+          'Parent accounts sign in on the AttendSure Mobile App. Please use a teacher or admin account here.'
+        );
+        return;
+      }
+
+      const token = String(data.token || data.access || '').trim();
+      const access = String(data.access || '').trim();
+      const refresh = String(data.refresh || '').trim();
+      const username = String(userObj.username || cleanUsername).trim();
+      const facultyName = String(userObj.faculty_name || userObj.full_name || username).trim();
+      const userId = Number(userObj.id || userObj.user_id || 0);
+      const canTeach = Boolean(
+        userObj.can_teach || userObj.is_teaching || Number(userObj.assigned_class_count) > 0 || role === 'FACULTY'
+      );
+      const rawPhoto = (userObj.photo_url || userObj.photo) as string | null | undefined;
+      const safeUserPhoto = isSafeImageUrl(rawPhoto) ? rawPhoto! : null;
+
+      clearPreviousSessionStorage();
+      clearApiClientCache();
+
+      if (token) localStorage.setItem('attendsure_token', token);
+      if (access) localStorage.setItem('attendsure_access', access);
+      if (refresh) localStorage.setItem('attendsure_refresh', refresh);
+      localStorage.setItem('attendsure_username', username);
+      localStorage.setItem('attendsure_faculty_name', facultyName);
+      localStorage.setItem('attendsure_role', role);
+      localStorage.setItem('attendsure_can_teach', String(canTeach));
+      if (userId) localStorage.setItem('attendsure_user_id', String(userId));
+      if (safeUserPhoto) localStorage.setItem('attendsure_user_photo', safeUserPhoto);
+
+      if (userObj.school_name || userObj.school_id) {
+        updateSchoolInstantly({
+          school_name: String(userObj.school_name || ''),
+          school_id: String(userObj.school_id || ''),
+          school_logo: isSafeImageUrl(userObj.school_logo) ? userObj.school_logo : school.school_logo,
+          left_logo: isSafeImageUrl(userObj.left_logo) ? userObj.left_logo : school.left_logo,
+          right_logo: isSafeImageUrl(userObj.right_logo) ? userObj.right_logo : school.right_logo,
+        });
+      }
+      refreshSchool().catch(() => {});
+
+      setLoginForm({ username: '', password: '' });
+
+      const session: UserSession = {
+        user_id: userId,
+        token,
+        username,
+        faculty_name: facultyName,
+        role,
+      };
+
+      onAuthSuccess?.(session);
+      onLoginSuccess?.(session);
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 429) {
+        setCooldownSeconds(30);
+      }
+      setLoginForm((prev) => ({ ...prev, password: '' }));
+      setErrorMsg(extractApiError(err, 'Wrong username or password. Please try again.'));
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleResendOtp = async () => {
-    if (otpCooldown > 0 || resendingOtp) return;
-    setErrorMsg(null);
-    setResendingOtp(true);
-
-    try {
-      await apiClient.post('/auth/resend-2fa-otp/', { username: twoFactorData.username });
-      setSuccessMsg('A new code was sent to your phone.');
-      setOtpCooldown(60);
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.error || 'Could not send a new code.');
-    } finally {
-      setResendingOtp(false);
     }
   };
 
   const safeSchoolLogo = isSafeImageUrl(school.school_logo) ? school.school_logo : null;
-  const schoolTitle = school.school_name || 'Macasandig National High School';
+  const schoolTitle = school.school_name?.trim() || 'Official School Portal';
+  const validSchoolId =
+    school.school_id?.trim() && school.school_id !== '55555' && school.school_id !== '000000'
+      ? school.school_id.trim()
+      : '';
 
   const features = [
     {
-      icon: <QrCode size={18} color="#38bdf8" />,
-      title: 'Fast Classroom QR Scanning',
-      desc: 'Scan student ID cards using a USB scanner on any faculty laptop, even without internet.',
+      icon: <QrCode size={16} color="#7dd3fc" />,
+      title: 'Classroom QR Scan',
+      desc: 'Fast USB scanner or camera check-in, even offline.',
     },
     {
-      icon: <Smartphone size={18} color="#34d399" />,
-      title: 'Mobile Faculty Check-In',
-      desc: 'Faculty members check in easily using their own phone camera and school location.',
+      icon: <Smartphone size={16} color="#6ee7b7" />,
+      title: 'Campus GPS Check-In',
+      desc: 'Teachers verify arrival via mobile camera and GPS.',
     },
     {
-      icon: <FileSpreadsheet size={18} color="#fbbf24" />,
-      title: 'Ready-to-Print School Forms',
-      desc: 'Creates official SF1, SF2, SF4 attendance sheets and faculty DTR forms automatically.',
+      icon: <FileSpreadsheet size={16} color="#fcd34d" />,
+      title: 'Official DepEd Forms',
+      desc: 'Ready-to-print SF1, SF2, SF4, and CSC Form 48.',
     },
     {
-      icon: <BellRing size={18} color="#f472b6" />,
-      title: 'Instant Parent Updates',
-      desc: 'Sends automatic phone alerts to parents when students arrive or receive an exit pass.',
+      icon: <BellRing size={16} color="#f9a8d4" />,
+      title: 'Parent Mobile Alerts',
+      desc: 'Instant arrival, cutting, and exit pass notices.',
     },
   ];
 
-  const themeChoices: { key: ThemeMode; label: string; icon: React.ReactNode }[] = [
-    { key: 'light', label: 'Light', icon: <Sun size={13} /> },
-    { key: 'dark', label: 'Dark', icon: <Moon size={13} /> },
-    { key: 'high-contrast', label: 'Daylight', icon: <Eye size={13} /> },
+  const themeChoices: { value: ThemeMode; title: string; icon: React.ReactNode }[] = [
+    { value: 'light', title: 'Light Mode', icon: <Sun size={13} /> },
+    { value: 'dark', title: 'Dark Mode', icon: <Moon size={13} /> },
+    { value: 'high-contrast', title: 'Daylight High-Contrast Mode', icon: <Eye size={13} /> },
   ];
+
+  // Theme-harmonized outer viewport & hero gradients so Light, Dark, and Daylight all feel cohesive
+  const viewportBackground =
+    mode === 'dark'
+      ? 'radial-gradient(circle at 18% 18%, rgba(2, 132, 199, 0.20) 0%, transparent 45%), radial-gradient(circle at 84% 82%, rgba(16, 185, 129, 0.12) 0%, transparent 45%), linear-gradient(155deg, #060b16 0%, #0a1324 55%, #050912 100%)'
+      : mode === 'high-contrast'
+      ? 'linear-gradient(155deg, #dce4ee 0%, #cbd5e1 100%)'
+      : 'radial-gradient(circle at 15% 15%, rgba(2, 132, 199, 0.12) 0%, transparent 45%), radial-gradient(circle at 85% 85%, rgba(0, 75, 135, 0.10) 0%, transparent 45%), linear-gradient(155deg, #edf2f7 0%, #e2e8f0 100%)';
+
+  const heroBackground =
+    mode === 'dark'
+      ? 'linear-gradient(155deg, #0c2d52 0%, #071d36 56%, #051324 100%)'
+      : mode === 'high-contrast'
+      ? 'linear-gradient(155deg, #003865 0%, #002342 100%)'
+      : 'linear-gradient(155deg, #0369a1 0%, #004b87 54%, #06284b 100%)';
+
+  const shellShadow =
+    mode === 'dark'
+      ? '0 28px 65px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(148, 163, 184, 0.16)'
+      : mode === 'high-contrast'
+      ? '0 18px 40px rgba(15, 23, 42, 0.18), 0 0 0 2px #0f172a'
+      : '0 24px 56px -8px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.08)';
+
+  const inputWrapStyle = (isFocused: boolean): React.CSSProperties => ({
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+    width: '100%',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderStyle: 'solid',
+    borderColor: isFocused ? brand.primary : tokens.borderStrong,
+    backgroundColor: isFocused ? tokens.bgSurface : tokens.bgSurfaceSubtle,
+    boxShadow: isFocused ? `0 0 0 3px ${tokens.primaryLight}` : 'none',
+    transition: 'border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease',
+  });
 
   return (
     <div
+      className="auth-viewport"
       style={{
-        minHeight: '100dvh',
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'radial-gradient(circle at 15% 20%, #0f294a 0%, #071120 55%, #030712 100%)',
-        padding: 'clamp(12px, 3vw, 28px)',
-        boxSizing: 'border-box',
-        position: 'relative',
-        overflowX: 'hidden',
-        overflowY: 'auto',
         fontFamily: fonts.sans,
+        background: viewportBackground,
       }}
     >
       <style>{`
-        @keyframes auroraFloatOne {
-          0%, 100% { transform: translate(0, 0) scale(1); }
-          50% { transform: translate(28px, -22px) scale(1.08); }
-        }
-        @keyframes auroraFloatTwo {
-          0%, 100% { transform: translate(0, 0) scale(1); }
-          50% { transform: translate(-24px, 26px) scale(1.06); }
-        }
-        @keyframes cardEntrance {
-          from { opacity: 0; transform: translateY(16px) scale(0.985); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes formFadeSlide {
-          from { opacity: 0; transform: translateX(8px); }
-          to { opacity: 1; transform: translateX(0); }
-        }
-        @keyframes badgePulse {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.35); }
-          50% { box-shadow: 0 0 0 8px rgba(56, 189, 248, 0); }
+        .auth-viewport {
+          height: 100dvh;
+          width: 100%;
+          overflow-y: auto;
+          overflow-x: hidden;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: clamp(14px, 2.5vh, 28px) clamp(14px, 3vw, 28px);
+          box-sizing: border-box;
+          transition: background 0.25s ease;
         }
         .auth-shell {
-          display: flex;
-          flex-direction: row;
+          display: grid;
+          grid-template-columns: 1.06fr 0.94fr;
           width: 100%;
-          max-width: 1080px;
-          min-height: 610px;
-          border-radius: 22px;
+          max-width: 870px;
+          margin: auto;
+          border-radius: 20px;
           overflow: hidden;
-          box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.09);
-          animation: cardEntrance 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-          position: relative;
-          z-index: 2;
         }
         .auth-hero-pane {
-          flex: 1.12;
-          background: linear-gradient(150deg, #0284c7 0%, #004b87 48%, #022444 100%);
-          padding: clamp(24px, 4vw, 42px);
+          padding: clamp(24px, 2.8vw, 34px);
           display: flex;
           flex-direction: column;
           justify-content: space-between;
+          gap: 20px;
           color: #ffffff;
           position: relative;
-          overflow: hidden;
         }
-        .aurora-orb-1 {
+        .auth-hero-pattern {
           position: absolute;
-          top: -70px;
-          right: -60px;
-          width: 280px;
-          height: 280px;
-          border-radius: 50%;
-          background: radial-gradient(circle, rgba(56, 189, 248, 0.38) 0%, rgba(56, 189, 248, 0) 70%);
-          animation: auroraFloatOne 9s ease-in-out infinite;
+          inset: 0;
+          background-image: radial-gradient(rgba(255, 255, 255, 0.09) 1px, transparent 1px);
+          background-size: 20px 20px;
           pointer-events: none;
         }
-        .aurora-orb-2 {
-          position: absolute;
-          bottom: -80px;
-          left: -50px;
-          width: 310px;
-          height: 310px;
-          border-radius: 50%;
-          background: radial-gradient(circle, rgba(16, 185, 129, 0.25) 0%, rgba(16, 185, 129, 0) 70%);
-          animation: auroraFloatTwo 11s ease-in-out infinite;
-          pointer-events: none;
-        }
-        .glass-feature-grid {
-          margin-top: 24px;
+        .auth-feature-grid {
           display: grid;
-          grid-template-columns: 1fr;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 10px;
+          margin-top: 18px;
         }
-        .glass-feature-card {
-          display: flex;
-          align-items: flex-start;
-          gap: 12px;
-          padding: 11px 14px;
+        .auth-feature-card {
+          padding: 12px;
           border-radius: 12px;
-          background: rgba(255, 255, 255, 0.09);
+          background: rgba(255, 255, 255, 0.08);
           border: 1px solid rgba(255, 255, 255, 0.14);
-          backdrop-filter: blur(8px);
-          transition: transform 0.22s ease, background 0.22s ease, border-color 0.22s ease;
-        }
-        .glass-feature-card:hover {
-          transform: translateX(5px);
-          background: rgba(255, 255, 255, 0.15);
-          border-color: rgba(125, 211, 252, 0.45);
-        }
-        .auth-form-pane {
-          flex: 1.08;
-          padding: clamp(24px, 4vw, 46px);
           display: flex;
           flex-direction: column;
-          justify-content: center;
-          transition: background-color 0.25s ease;
+          gap: 6px;
+          transition: background-color 0.18s ease, border-color 0.18s ease;
         }
-        .form-animate-body {
-          animation: formFadeSlide 0.28s ease-out forwards;
+        .auth-feature-card:hover {
+          background: rgba(255, 255, 255, 0.13);
+          border-color: rgba(125, 211, 252, 0.35);
         }
-        @media (max-width: 920px) {
+        .auth-form-pane {
+          padding: clamp(24px, 3vw, 36px);
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          gap: 18px;
+        }
+        @media (max-width: 820px) {
+          .auth-viewport {
+            align-items: flex-start;
+          }
           .auth-shell {
-            flex-direction: column-reverse;
-            max-width: 540px;
-            min-height: auto;
+            grid-template-columns: 1fr;
+            max-width: 450px;
           }
-          .glass-feature-grid {
-            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+          .auth-hero-pane {
+            order: 2;
+          }
+          .auth-form-pane {
+            order: 1;
           }
         }
-        @media (max-width: 520px) {
-          .auth-shell {
-            border-radius: 16px;
-          }
-          .glass-feature-grid {
+        @media (max-width: 480px) {
+          .auth-feature-grid {
             grid-template-columns: 1fr;
           }
         }
       `}</style>
 
-      {/* Ambient Glow */}
-      <div
-        style={{
-          position: 'fixed',
-          top: '8%',
-          left: '6%',
-          width: 320,
-          height: 320,
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(2, 132, 199, 0.18) 0%, transparent 70%)',
-          pointerEvents: 'none',
-        }}
-      />
-
-      <div className="auth-shell">
-        {/* LEFT SHOWCASE PANEL */}
-        <div className="auth-hero-pane">
-          <div className="aurora-orb-1" />
-          <div className="aurora-orb-2" />
+      <div className="auth-shell" style={{ boxShadow: shellShadow }}>
+        {/* Left Institutional Showcase Pane */}
+        <div className="auth-hero-pane" style={{ background: heroBackground }}>
+          <div className="auth-hero-pattern" />
 
           <div style={{ position: 'relative', zIndex: 1 }}>
+            {/* Verified School Header Pill */}
             <div
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 9,
-                padding: '6px 14px',
-                backgroundColor: 'rgba(255, 255, 255, 0.14)',
-                border: '1px solid rgba(255, 255, 255, 0.22)',
+                gap: 8,
+                padding: '5px 12px',
+                backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                borderWidth: 1,
+                borderStyle: 'solid',
+                borderColor: 'rgba(255, 255, 255, 0.22)',
                 borderRadius: 9999,
-                marginBottom: 20,
-                backdropFilter: 'blur(6px)',
+                marginBottom: 18,
                 maxWidth: '100%',
               }}
             >
               {safeSchoolLogo ? (
                 <img
                   src={safeSchoolLogo}
-                  alt="School Logo"
-                  style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'contain', flexShrink: 0 }}
+                  alt="School Seal"
+                  style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'contain', backgroundColor: '#ffffff', padding: 1, flexShrink: 0 }}
                 />
               ) : (
-                <School size={17} color="#7dd3fc" style={{ flexShrink: 0 }} />
+                <School size={15} color="#7dd3fc" style={{ flexShrink: 0 }} />
               )}
               <span
                 style={{
-                  fontSize: '0.80rem',
+                  fontSize: '0.78rem',
                   fontWeight: 700,
-                  letterSpacing: '0.2px',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -402,67 +393,82 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
               >
                 {schoolTitle}
               </span>
+              {validSchoolId && (
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    color: '#bae6fd',
+                    borderLeftWidth: 1,
+                    borderLeftStyle: 'solid',
+                    borderLeftColor: 'rgba(255, 255, 255, 0.28)',
+                    paddingLeft: 8,
+                    fontFamily: fonts.mono,
+                    flexShrink: 0,
+                  }}
+                >
+                  ID: {validSchoolId}
+                </span>
+              )}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            {/* Brand Title Lockup */}
+            <div style={{ marginBottom: 8 }}>
+              <div
+                style={{
+                  fontSize: '0.66rem',
+                  fontWeight: 800,
+                  letterSpacing: '0.12em',
+                  color: '#7dd3fc',
+                  textTransform: 'uppercase',
+                  marginBottom: 4,
+                }}
+              >
+                ATTENDANCE &amp; CAMPUS MANAGEMENT
+              </div>
               <h1
                 style={{
                   margin: 0,
-                  fontSize: 'clamp(1.75rem, 3.2vw, 2.35rem)',
+                  fontSize: 'clamp(1.65rem, 2.5vw, 2.05rem)',
                   fontWeight: 900,
+                  letterSpacing: '-0.025em',
                   lineHeight: 1.1,
-                  letterSpacing: '-0.6px',
                   fontFamily: fonts.display,
                 }}
               >
-                AttendSure <span style={{ color: '#7dd3fc' }}></span>
+                AttendSure
               </h1>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: '3px 9px',
-                  borderRadius: 9999,
-                  backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                  border: '1px solid rgba(125, 211, 252, 0.4)',
-                  fontSize: '0.66rem',
-                  fontWeight: 800,
-                  color: '#e0f2fe',
-                  animation: 'badgePulse 3s infinite',
-                }}
-              >
-                <Sparkles size={11} /> SCHOOL SYSTEM
-              </span>
             </div>
 
-            <p style={{ margin: 0, fontSize: '0.90rem', color: '#e0f2fe', lineHeight: 1.55, maxWidth: 420 }}>
-              Simple classroom attendance tracking, faculty mobile check-in, and ready-to-print school reports.
+            <p style={{ margin: 0, fontSize: '0.84rem', color: '#e0f2fe', lineHeight: 1.5, maxWidth: 400 }}>
+              Real-time classroom QR attendance, teacher campus check-in, parent mobile alerts, and official DepEd reports.
             </p>
 
-            <div className="glass-feature-grid">
-              {features.map((feat, idx) => (
-                <div key={idx} className="glass-feature-card">
-                  <div
-                    style={{
-                      width: 34,
-                      height: 34,
-                      borderRadius: 10,
-                      backgroundColor: 'rgba(15, 23, 42, 0.35)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {feat.icon}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 800, fontSize: '0.84rem', color: '#ffffff' }}>{feat.title}</div>
-                    <div style={{ fontSize: '0.73rem', color: '#bae6fd', lineHeight: 1.35, marginTop: 2 }}>
-                      {feat.desc}
+            {/* 2x2 Capability Grid */}
+            <div className="auth-feature-grid">
+              {features.map((feat) => (
+                <div key={feat.title} className="auth-feature-card">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 8,
+                        backgroundColor: 'rgba(15, 23, 42, 0.42)',
+                        borderWidth: 1,
+                        borderStyle: 'solid',
+                        borderColor: 'rgba(255, 255, 255, 0.10)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {feat.icon}
                     </div>
+                    <div style={{ fontWeight: 800, fontSize: '0.80rem', lineHeight: 1.2 }}>{feat.title}</div>
                   </div>
+                  <div style={{ fontSize: '0.72rem', color: '#cbd5e1', lineHeight: 1.38 }}>{feat.desc}</div>
                 </div>
               ))}
             </div>
@@ -470,379 +476,274 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
 
           <div
             style={{
-              marginTop: 24,
-              borderTop: '1px solid rgba(255, 255, 255, 0.18)',
-              paddingTop: 14,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: 8,
-              fontSize: '0.73rem',
-              color: '#bae6fd',
               position: 'relative',
               zIndex: 1,
+              borderTopWidth: 1,
+              borderTopStyle: 'solid',
+              borderTopColor: 'rgba(255, 255, 255, 0.15)',
+              paddingTop: 12,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 8,
+              fontSize: '0.72rem',
+              color: '#bae6fd',
             }}
           >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <ShieldCheck size={15} color="#34d399" /> For School Faculty &amp; Staff Only
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+              <ShieldCheck size={14} color="#34d399" /> Authorized School Personnel
             </span>
-            <span style={{ opacity: 0.85, fontWeight: 700 }}>by TECHBLAZER</span>
+            <span style={{ fontWeight: 800, letterSpacing: '0.05em', fontSize: '0.68rem', opacity: 0.9 }}>
+              TECHBLAZER
+            </span>
           </div>
         </div>
 
-        {/* RIGHT SIGN-IN PANEL */}
+        {/* Right Sign-In Workspace Pane */}
         <div className="auth-form-pane" style={{ backgroundColor: tokens.bgSurface }}>
-          {/* Brand Header & Color Mode Switcher */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 22,
-              gap: 10,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-              <div
-                style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 12,
-                  backgroundColor: tokens.primaryLight,
-                  border: `1px solid ${brand.primary}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                <AttendSureLogoAsset size={22} alt="AttendSure" />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: '1.05rem', fontWeight: 900, color: tokens.textPrimary, lineHeight: 1.15 }}>
-                  {step === 'LOGIN' ? 'Welcome Back' : 'Confirm Code'}
-                </div>
-                <div style={{ fontSize: '0.74rem', color: tokens.textMuted, marginTop: 2 }}>
-                  {step === 'LOGIN'
-                    ? 'Sign in with your school account'
-                    : 'Enter the 6-digit code sent to your phone'}
-                </div>
-              </div>
-            </div>
-
-            {/* Color Switcher */}
+          <div>
+            {/* Top Brand Emblem + Theme Switcher Header */}
             <div
               style={{
                 display: 'flex',
-                backgroundColor: tokens.bgSurfaceSubtle,
-                padding: 3,
-                borderRadius: 9999,
-                border: `1px solid ${tokens.borderSubtle}`,
-                flexShrink: 0,
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 22,
+                gap: 12,
               }}
             >
-              {themeChoices.map((tc) => {
-                const active = mode === tc.key;
-                return (
-                  <button
-                    key={tc.key}
-                    type="button"
-                    title={`${tc.label} Mode`}
-                    onClick={() => setThemeMode(tc.key)}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <AttendSureBrandBadge size={42} mode={mode} />
+                <div>
+                  <h2
                     style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: '50%',
-                      border: 'none',
-                      backgroundColor: active ? brand.primary : 'transparent',
-                      color: active ? '#ffffff' : tokens.textMuted,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
+                      margin: 0,
+                      fontSize: '1.14rem',
+                      fontWeight: 900,
+                      color: tokens.textPrimary,
+                      letterSpacing: '-0.015em',
+                      lineHeight: 1.15,
+                      fontFamily: fonts.display,
                     }}
                   >
-                    {tc.icon}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Admin-Issued Account Notice */}
-          {step === 'LOGIN' ? (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '10px 14px',
-                borderRadius: 12,
-                marginBottom: 20,
-                backgroundColor: tokens.primaryLight,
-                border: `1px solid ${tokens.borderSubtle}`,
-              }}
-            >
-              <Lock size={16} color={brand.primary} style={{ flexShrink: 0 }} />
-              <span style={{ fontSize: '0.76rem', color: tokens.textSecondary, lineHeight: 1.35 }}>
-                Accounts are provided by the <strong style={{ color: tokens.textPrimary }}>School Admin</strong>. Contact your office if you need a username or password reset.
-              </span>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 8,
-                    backgroundColor: tokens.primaryLight,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <KeyRound size={18} color={brand.primary} />
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 800, color: tokens.textPrimary }}>
-                    Enter Code
-                  </h3>
-                  <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>
-                    Check your phone messages
-                  </span>
+                    Welcome Back
+                  </h2>
+                  <div style={{ fontSize: '0.76rem', color: tokens.textMuted, marginTop: 2 }}>
+                    Sign in to your school workspace
+                  </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setStep('LOGIN');
-                  setErrorMsg(null);
-                }}
+
+              <ControlSwitch
+                options={themeChoices}
+                value={mode}
+                onChange={setThemeMode}
+                compactIconsOnly
+                ariaLabel="Color Theme"
+              />
+            </div>
+
+            {errorMsg && (
+              <div
+                role="alert"
                 style={{
-                  display: 'inline-flex',
+                  display: 'flex',
                   alignItems: 'center',
-                  gap: 4,
-                  background: 'none',
-                  border: 'none',
-                  color: brand.primary,
+                  gap: 8,
+                  padding: '10px 12px',
+                  backgroundColor: tokens.dangerLight,
+                  color: brand.danger,
+                  borderRadius: 10,
+                  borderWidth: 1,
+                  borderStyle: 'solid',
+                  borderColor: brand.danger,
+                  marginBottom: 16,
                   fontSize: '0.78rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
+                  fontWeight: 600,
+                  lineHeight: 1.35,
                 }}
               >
-                <ArrowLeft size={14} /> Back
-              </button>
-            </div>
-          )}
+                <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                <span>{errorMsg}</span>
+              </div>
+            )}
 
-          {/* Feedback Alerts */}
-          {errorMsg && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '10px 14px',
-                backgroundColor: tokens.dangerLight,
-                color: brand.danger,
-                borderRadius: 10,
-                marginBottom: 16,
-                fontSize: '0.80rem',
-                fontWeight: 600,
-                lineHeight: 1.4,
-              }}
-            >
-              <AlertCircle size={17} style={{ flexShrink: 0 }} />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          {successMsg && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '10px 14px',
-                backgroundColor: tokens.successLight,
-                color: brand.success,
-                borderRadius: 10,
-                marginBottom: 16,
-                fontSize: '0.80rem',
-                fontWeight: 600,
-                lineHeight: 1.4,
-              }}
-            >
-              <CheckCircle2 size={17} style={{ flexShrink: 0 }} />
-              <span>{successMsg}</span>
-            </div>
-          )}
-
-          {/* STEP 1: SIGN IN FORM */}
-          {step === 'LOGIN' && (
-            <form
-              key="login-form"
-              className="form-animate-body"
-              onSubmit={handleLoginSubmit}
-              style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
-            >
+            {/* Primary Sign-In Form */}
+            <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
               <div>
-                <TextInput
-                  label="Username or Employee ID"
-                  type="text"
-                  required
-                  placeholder="Enter your username"
-                  value={loginForm.username}
-                  onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
-                />
+                <label
+                  htmlFor="login-identifier"
+                  style={{
+                    display: 'block',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    marginBottom: 6,
+                    color: tokens.textPrimary,
+                  }}
+                >
+                  Username or Employee ID
+                </label>
+                <div style={inputWrapStyle(focusedField === 'username')}>
+                  <User
+                    size={15}
+                    color={focusedField === 'username' ? brand.primary : tokens.textMuted}
+                    style={{ marginLeft: 12, flexShrink: 0 }}
+                  />
+                  <input
+                    ref={usernameInputRef}
+                    id="login-identifier"
+                    type="text"
+                    required
+                    maxLength={100}
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder="Enter username or Employee ID"
+                    value={loginForm.username}
+                    onFocus={() => setFocusedField('username')}
+                    onBlur={() => setFocusedField(null)}
+                    onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px 10px 9px',
+                      borderWidth: 0,
+                      borderStyle: 'none',
+                      background: 'transparent',
+                      color: tokens.textPrimary,
+                      fontSize: '0.86rem',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
               </div>
 
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <label style={{ fontSize: '0.80rem', fontWeight: 700, color: tokens.textPrimary }}>
-                    Password
-                  </label>
+                <label
+                  htmlFor="login-password"
+                  style={{
+                    display: 'block',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    marginBottom: 6,
+                    color: tokens.textPrimary,
+                  }}
+                >
+                  Password
+                </label>
+                <div style={inputWrapStyle(focusedField === 'password')}>
+                  <Lock
+                    size={15}
+                    color={focusedField === 'password' ? brand.primary : tokens.textMuted}
+                    style={{ marginLeft: 12, flexShrink: 0 }}
+                  />
+                  <input
+                    id="login-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    maxLength={128}
+                    autoComplete="current-password"
+                    placeholder="Enter your password"
+                    value={loginForm.password}
+                    onFocus={() => setFocusedField('password')}
+                    onBlur={() => setFocusedField(null)}
+                    onKeyUp={handleKeyEvent}
+                    onKeyDown={handleKeyEvent}
+                    onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                    style={{
+                      width: '100%',
+                      padding: '10px 8px 10px 9px',
+                      borderWidth: 0,
+                      borderStyle: 'none',
+                      background: 'transparent',
+                      color: tokens.textPrimary,
+                      fontSize: '0.86rem',
+                      outline: 'none',
+                    }}
+                  />
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
                     style={{
                       background: 'none',
-                      border: 'none',
+                      borderWidth: 0,
+                      borderStyle: 'none',
                       color: brand.primary,
-                      fontSize: '0.75rem',
+                      fontSize: '0.74rem',
                       fontWeight: 700,
-                      display: 'flex',
+                      display: 'inline-flex',
                       alignItems: 'center',
                       gap: 4,
                       cursor: 'pointer',
-                      padding: 0,
+                      padding: '4px 11px',
+                      flexShrink: 0,
                     }}
                   >
                     {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
-                    {showPassword ? 'Hide' : 'Show'}
+                    <span>{showPassword ? 'Hide' : 'Show'}</span>
                   </button>
                 </div>
-                <TextInput
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  placeholder="Enter your password"
-                  value={loginForm.password}
-                  onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
-                />
+
+                {capsLockOn && (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      marginTop: 5,
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      color: brand.warning,
+                    }}
+                  >
+                    <AlertTriangle size={13} />
+                    <span>Caps Lock is on</span>
+                  </div>
+                )}
               </div>
 
               <Button
                 type="submit"
                 variant="primary"
                 loading={loading}
+                disabled={loading || cooldownSeconds > 0}
                 icon={<LogIn size={16} />}
                 style={{
                   width: '100%',
                   marginTop: 6,
-                  padding: '12px 0',
+                  padding: '11px 0',
                   borderRadius: 10,
                   fontWeight: 800,
-                  fontSize: '0.90rem',
+                  fontSize: '0.88rem',
                 }}
               >
-                Sign In
+                {cooldownSeconds > 0 ? `Please wait (${cooldownSeconds}s)` : 'Sign In'}
               </Button>
             </form>
-          )}
+          </div>
 
-          {/* STEP 2: 2FA CODE FORM */}
-          {step === '2FA' && (
-            <form
-              key="2fa-form"
-              className="form-animate-body"
-              onSubmit={handleOtpSubmit}
-              style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
-            >
-              <div
-                style={{
-                  padding: '12px 14px',
-                  backgroundColor: tokens.infoLight,
-                  borderRadius: 10,
-                  border: `1px solid ${brand.secondary}`,
-                }}
-              >
-                <span style={{ fontSize: '0.80rem', color: tokens.textPrimary, lineHeight: 1.45, display: 'block' }}>
-                  Enter the 6-digit code sent to <strong>{twoFactorData.masked_phone}</strong>.
-                </span>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.80rem', fontWeight: 700, color: tokens.textPrimary, marginBottom: 6 }}>
-                  6-Digit Code *
-                </label>
-                <input
-                  type="text"
-                  required
-                  maxLength={6}
-                  placeholder="123456"
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                  style={{
-                    width: '100%',
-                    padding: '12px 14px',
-                    borderRadius: 10,
-                    border: `1.5px solid ${tokens.borderStrong}`,
-                    backgroundColor: tokens.bgSurfaceSubtle,
-                    fontSize: '1.4rem',
-                    fontWeight: 800,
-                    letterSpacing: '8px',
-                    textAlign: 'center',
-                    fontFamily: fonts.mono,
-                    color: tokens.textPrimary,
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem' }}>
-                <span style={{ color: tokens.textSecondary }}>No code received?</span>
-                <button
-                  type="button"
-                  disabled={otpCooldown > 0 || resendingOtp}
-                  onClick={handleResendOtp}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    background: 'none',
-                    border: 'none',
-                    color: otpCooldown > 0 ? tokens.textMuted : brand.primary,
-                    fontWeight: 700,
-                    cursor: otpCooldown > 0 ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  <RotateCw size={12} className={resendingOtp ? 'animate-spin' : ''} />
-                  {otpCooldown > 0 ? `Wait ${otpCooldown}s` : 'Send Again'}
-                </button>
-              </div>
-
-              <Button
-                type="submit"
-                variant="primary"
-                loading={loading}
-                icon={<ShieldCheck size={16} />}
-                style={{
-                  width: '100%',
-                  marginTop: 6,
-                  padding: '12px 0',
-                  borderRadius: 10,
-                  fontWeight: 800,
-                  fontSize: '0.90rem',
-                }}
-              >
-                Confirm
-              </Button>
-            </form>
-          )}
+          {/* Calm Account Governance Footnote */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
+              paddingTop: 14,
+              borderTopWidth: 1,
+              borderTopStyle: 'solid',
+              borderTopColor: tokens.borderSubtle,
+              fontSize: '0.73rem',
+              color: tokens.textMuted,
+              lineHeight: 1.4,
+            }}
+          >
+            <Lock size={14} color={tokens.textMuted} style={{ marginTop: 1, flexShrink: 0 }} />
+            <span>
+              Accounts are issued by your <strong style={{ color: tokens.textSecondary }}>School Admin</strong>. Need a password reset? Contact the school office.
+            </span>
+          </div>
         </div>
       </div>
     </div>

@@ -1,10 +1,11 @@
 /**
- * AttendSure - Collapsible Sidebar Navigation (Pure Software Architecture)
+ * AttendSure - Compact Collapsible Sidebar Navigation with Hover Prefetch
  * File: web/src/components/layout/Sidebar.tsx
  */
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { useTheme } from '../../context/ThemeContext';
+import { isSafeImageUrl } from '../../theme/tokens';
 import type { UserSession } from '../../types/section';
 import type { TabBadgeCounts } from './Header';
 import {
@@ -24,6 +25,7 @@ import {
   ChevronRight,
   QrCode,
   LayoutGrid,
+  MessageSquare,
 } from 'lucide-react';
 
 export type NavItemKey =
@@ -41,6 +43,7 @@ export type NavItemKey =
   | 'geofence'
   | 'scanners'
   | 'push'
+  | 'messages'
   | 'notifications'
   | 'reports'
   | 'settings';
@@ -48,6 +51,7 @@ export type NavItemKey =
 interface SidebarProps {
   activeTab: NavItemKey;
   onSelectTab: (tab: NavItemKey) => void;
+  onPrefetchTab?: (tab: NavItemKey) => void;
   session?: UserSession | null;
   userPhoto?: string | null;
   isCollapsed?: boolean;
@@ -71,39 +75,13 @@ interface NavGroup {
   items: NavItem[];
 }
 
-interface HoverTooltipState {
-  label: string;
-  badge?: string;
-  top: number;
-  left: number;
-}
-
-// Cybersecurity: Block unsafe URI schemes (XSS prevention)
-const isSafeImageUrl = (url?: string | null): boolean => {
-  if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
-  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
-  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) return false;
-  return (
-    clean.startsWith('http://') ||
-    clean.startsWith('https://') ||
-    clean.startsWith('/') ||
-    clean.startsWith('data:image/') ||
-    clean.startsWith('blob:')
-  );
-};
-
-// Generates school initials abbreviation (e.g., "Macasandig National High School" -> "MNHS")
 const getSchoolAbbreviation = (name?: string): string => {
-  if (!name || !name.trim()) return 'MNHS';
-  const clean = name.trim();
-  const ignoreWords = new Set(['of', 'the', 'and', 'in', 'at', 'for', 'to', 'ng', 'mga', 'sa']);
-  const words = clean.split(/\s+/).filter((w) => !ignoreWords.has(w.toLowerCase()));
-  if (words.length === 1) {
-    return words[0].slice(0, 4).toUpperCase();
-  }
-  return words.map((w) => w[0]).join('').toUpperCase().slice(0, 6);
+  if (!name || !name.trim()) return 'AS';
+  const ignore = new Set(['of', 'the', 'and', 'in', 'at', 'for', 'to', 'ng', 'sa']);
+  const words = name.trim().split(/\s+/).filter((w) => !ignore.has(w.toLowerCase()));
+  return words.length === 1
+    ? words[0].slice(0, 4).toUpperCase()
+    : words.map((w) => w[0]).join('').toUpperCase().slice(0, 6);
 };
 
 const formatBadge = (count?: number): string => {
@@ -114,12 +92,13 @@ const formatBadge = (count?: number): string => {
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   onSelectTab,
+  onPrefetchTab,
   session,
   userPhoto,
   isCollapsed: controlledCollapsed,
   onToggleCollapse,
-  schoolName = 'Macasandig National High School',
-  schoolId = '55555',
+  schoolName = '',
+  schoolId = '',
   schoolLogo,
   canTeach = false,
   allowedTabs,
@@ -127,567 +106,300 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { tokens, brand } = useTheme();
   const [liveBadges, setLiveBadges] = useState<TabBadgeCounts>({});
-  const [tooltip, setTooltip] = useState<HoverTooltipState | null>(null);
-
-  const [internalCollapsed, setInternalCollapsed] = useState<boolean>(() => {
-    return localStorage.getItem('attendsure_sidebar_collapsed') === 'true';
-  });
+  const [internalCollapsed, setInternalCollapsed] = useState<boolean>(
+    () => localStorage.getItem('attendsure_sidebar_collapsed') === 'true'
+  );
 
   const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
-
-  const handleToggle = () => {
-    const nextState = !isCollapsed;
-    setInternalCollapsed(nextState);
-    localStorage.setItem('attendsure_sidebar_collapsed', String(nextState));
-    if (onToggleCollapse) {
-      onToggleCollapse();
-    }
-  };
-
-  const role = (session?.role || 'ADMIN').toUpperCase();
-  const isLeadership = role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL' || role === 'DEPT_HEAD';
+  const role = (session?.role || 'FACULTY').toUpperCase();
+  const isLeadership = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(role);
 
   useEffect(() => {
-    const handleBadgeSync = (e: Event) => {
-      const customEvent = e as CustomEvent<TabBadgeCounts>;
-      if (customEvent.detail) {
-        setLiveBadges(customEvent.detail);
-      }
+    const onSync = (e: Event) => {
+      const detail = (e as CustomEvent<TabBadgeCounts>).detail;
+      if (detail) setLiveBadges(detail);
     };
-    window.addEventListener('attendsure:notifications-sync', handleBadgeSync);
-    return () => window.removeEventListener('attendsure:notifications-sync', handleBadgeSync);
+    window.addEventListener('attendsure:notifications-sync', onSync);
+    return () => window.removeEventListener('attendsure:notifications-sync', onSync);
   }, []);
 
-  const mergedBadges: TabBadgeCounts = { ...liveBadges, ...propBadgeCounts };
-  const schoolAbbreviation = useMemo(() => getSchoolAbbreviation(schoolName), [schoolName]);
+  const handleToggle = () => {
+    const next = !isCollapsed;
+    setInternalCollapsed(next);
+    localStorage.setItem('attendsure_sidebar_collapsed', String(next));
+    onToggleCollapse?.();
+  };
 
-  const allMenuGroups: NavGroup[] = useMemo(
+  const mergedBadges: TabBadgeCounts = { ...liveBadges, ...propBadgeCounts };
+  const schoolAbbr = useMemo(() => getSchoolAbbreviation(schoolName), [schoolName]);
+
+  const allGroups: NavGroup[] = useMemo(
     () => [
       {
         groupTitle: 'OVERVIEW',
-        items: [
-          { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
-        ],
+        items: [{ key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={17} /> }],
       },
       {
-        groupTitle: 'ACADEMICS',
+        groupTitle: 'CLASSROOM',
         items: [
-          { key: 'classroom-scanner', label: 'USB QR Scanner', icon: <QrCode size={20} /> },
-          { key: 'my-classes', label: 'Classes', icon: <BookOpen size={20} /> },
-          { key: 'advisory-monitor', label: 'Advisory Matrix', icon: <LayoutGrid size={20} /> },
-          { key: 'students', label: 'Students', icon: <GraduationCap size={20} /> },
-          { key: 'facultys', label: 'Faculty', icon: <Users size={20} /> },
-          { key: 'schedules', label: 'Schedules', icon: <CalendarDays size={20} /> },
+          { key: 'classroom-scanner', label: 'QR Scanner', icon: <QrCode size={17} /> },
+          { key: 'my-classes', label: 'My Classes', icon: <BookOpen size={17} /> },
+          { key: 'advisory-monitor', label: 'Advisory Matrix', icon: <LayoutGrid size={17} /> },
+          { key: 'students', label: 'Students', icon: <GraduationCap size={17} /> },
+          { key: 'facultys', label: 'Teachers & Staff', icon: <Users size={17} /> },
+          { key: 'schedules', label: 'Schedules', icon: <CalendarDays size={17} /> },
         ],
       },
       {
         groupTitle: 'ATTENDANCE & ALERTS',
         items: [
-          { key: 'push', label: 'Push Alerts', icon: <Bell size={20} /> },
-          { key: 'gate-passes', label: 'Exit Passes', icon: <Ticket size={20} /> },
-          { key: 'dtr', label: 'Faculty DTR', icon: <Clock size={20} /> },
-          { key: 'geofence', label: 'Campus GPS', icon: <MapPin size={20} /> },
+          { key: 'messages', label: 'Parent Chat', icon: <MessageSquare size={17} /> },
+          { key: 'push', label: 'Push Alerts', icon: <Bell size={17} /> },
+          { key: 'gate-passes', label: 'Exit Passes', icon: <Ticket size={17} /> },
+          { key: 'dtr', label: 'Monthly DTR', icon: <Clock size={17} /> },
+          { key: 'geofence', label: 'Campus GPS', icon: <MapPin size={17} /> },
         ],
       },
       {
-        groupTitle: 'GOVERNANCE',
+        groupTitle: 'ADMINISTRATION',
         items: [
-          { key: 'reports', label: 'Reports', icon: <FileSpreadsheet size={20} /> },
-          { key: 'users', label: 'Users', icon: <UserCheck size={20} /> },
-          { key: 'settings', label: 'Settings', icon: <Settings size={20} /> },
+          { key: 'reports', label: 'DepEd Reports', icon: <FileSpreadsheet size={19} /> },
+          { key: 'users', label: 'User Accounts', icon: <UserCheck size={17} /> },
+          { key: 'settings', label: 'School Settings', icon: <Settings size={17} /> },
         ],
       },
     ],
     []
   );
 
-  const filteredMenuGroups = useMemo(() => {
-    return allMenuGroups
+  const visibleGroups = useMemo(() => {
+    return allGroups
       .map((group) => ({
         ...group,
         items: group.items.filter((item) => {
-          if (allowedTabs && allowedTabs.length > 0) {
-            return allowedTabs.includes(item.key);
-          }
-          if (item.key === 'classroom-scanner') return canTeach || isLeadership;
-          if (item.key === 'my-classes') return canTeach;
-          if (item.key === 'advisory-monitor') return canTeach || isLeadership;
+          if (allowedTabs && allowedTabs.length > 0) return allowedTabs.includes(item.key);
           if (item.key === 'users') return role === 'ADMIN' || role === 'SUPERADMIN';
-          if (['settings', 'push', 'notifications', 'geofence'].includes(item.key)) {
-            return role === 'ADMIN' || role === 'SUPERADMIN' || role === 'PRINCIPAL';
+          if (['settings', 'push', 'geofence'].includes(item.key)) {
+            return ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(role);
           }
-          if (['facultys', 'reports', 'schedules'].includes(item.key)) return isLeadership;
+          if (['facultys', 'schedules'].includes(item.key)) return isLeadership;
+          if (item.key === 'my-classes') return canTeach || isLeadership;
           return true;
         }),
       }))
       .filter((group) => group.items.length > 0);
-  }, [allMenuGroups, allowedTabs, canTeach, role, isLeadership]);
+  }, [allGroups, allowedTabs, canTeach, isLeadership, role]);
 
   const safeLogo = isSafeImageUrl(schoolLogo) ? schoolLogo : null;
   const safeUserPhoto = isSafeImageUrl(userPhoto) ? userPhoto : null;
 
   return (
-    <>
-      <aside
+    <aside
+      style={{
+        width: isCollapsed ? 64 : 196,
+        minWidth: isCollapsed ? 64 : 196,
+        height: '100%',
+        backgroundColor: tokens.bgSurface,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+        transition: 'width 0.2s ease',
+      }}
+    >
+      <div
         style={{
-          width: isCollapsed ? 76 : 224,
-          minWidth: isCollapsed ? 76 : 224,
-          height: '100%',
-          backgroundColor: tokens.bgSurface,
-          border: `1px solid ${tokens.borderSubtle}`,
-          borderRadius: 16,
-          boxShadow: tokens.cardShadow,
+          padding: isCollapsed ? '10px 6px' : '10px 10px',
+          borderBottomWidth: 1,
+          borderBottomStyle: 'solid',
+          borderBottomColor: tokens.borderSubtle,
           display: 'flex',
           flexDirection: 'column',
-          justifyContent: 'space-between',
           alignItems: 'center',
-          boxSizing: 'border-box',
-          overflow: 'hidden',
-          zIndex: 40,
-          flexShrink: 0,
-          transition: 'width 0.22s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.2s ease, border-color 0.2s ease',
+          position: 'relative',
         }}
       >
-        {/* Top Header: School Abbreviation & School ID ABOVE the School Logo */}
-        <div
+        <button
+          type="button"
+          onClick={handleToggle}
+          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           style={{
-            padding: isCollapsed ? '12px 6px 10px 6px' : '14px 12px 10px 12px',
-            borderBottom: `1px solid ${tokens.borderSubtle}`,
+            position: isCollapsed ? 'static' : 'absolute',
+            top: 10,
+            right: 8,
+            marginBottom: isCollapsed ? 4 : 0,
+            width: 22,
+            height: 22,
+            borderRadius: 6,
+            borderWidth: 1,
+            borderStyle: 'solid',
+            borderColor: tokens.borderSubtle,
+            backgroundColor: tokens.bgSurfaceSubtle,
+            color: brand.primary,
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
-            width: '100%',
-            boxSizing: 'border-box',
-            position: 'relative',
+            justifyContent: 'center',
+            cursor: 'pointer',
           }}
         >
-          <button
-            type="button"
-            onClick={handleToggle}
-            title={isCollapsed ? 'Show tab names' : 'Icons only'}
-            style={{
-              position: isCollapsed ? 'static' : 'absolute',
-              top: isCollapsed ? undefined : 12,
-              right: isCollapsed ? undefined : 10,
-              marginBottom: isCollapsed ? 6 : 0,
-              width: 24,
-              height: 24,
-              borderRadius: 6,
-              border: `1px solid ${tokens.borderSubtle}`,
-              backgroundColor: tokens.bgSurfaceSubtle,
-              color: brand.primary,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              padding: 0,
-              transition: 'background-color 0.15s ease',
-            }}
-          >
-            {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-          </button>
+          {isCollapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+        </button>
 
-          <div
-            style={{
-              textAlign: 'center',
-              marginBottom: 6,
-              width: '100%',
-              paddingLeft: 2,
-              paddingRight: 2,
-            }}
-          >
-            <div
-              style={{
-                fontSize: isCollapsed ? '0.78rem' : '0.86rem',
-                fontWeight: 900,
-                color: brand.primary,
-                letterSpacing: '0.6px',
-                lineHeight: 1.15,
-                textTransform: 'uppercase',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              title={schoolName}
-            >
-              {schoolAbbreviation}
-            </div>
-
-            <div
-              style={{
-                fontSize: '0.64rem',
-                fontWeight: 700,
-                color: tokens.textMuted,
-                fontFamily: 'monospace',
-                lineHeight: 1.2,
-                marginTop: 2,
-              }}
-            >
-              ID: {schoolId || '—'}
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
-            onClick={handleToggle}
-            onMouseEnter={(e) => {
-              if (isCollapsed) {
-                const rect = e.currentTarget.getBoundingClientRect();
-                setTooltip({
-                  label: `${schoolName} (ID: ${schoolId})`,
-                  top: rect.top + rect.height / 2,
-                  left: rect.right + 12,
-                });
-              }
-            }}
-            onMouseLeave={() => setTooltip(null)}
-          >
-            {safeLogo ? (
-              <img
-                src={safeLogo}
-                alt="School Logo"
-                style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: '50%',
-                  objectFit: 'cover',
-                  border: `2px solid ${brand.primary}`,
-                }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: '50%',
-                  backgroundColor: brand.primary,
-                  color: '#ffffff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 800,
-                  fontSize: '0.82rem',
-                }}
-              >
-                {schoolAbbreviation.slice(0, 2)}
-              </div>
-            )}
-          </div>
-
-          {!isCollapsed && (
-            <div
-              style={{
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                color: tokens.textSecondary,
-                textAlign: 'center',
-                marginTop: 6,
-                padding: '0 4px',
-                lineHeight: 1.25,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-              }}
-            >
-              {schoolName}
+        <div style={{ textAlign: 'center', marginBottom: 4 }}>
+          <div style={{ fontSize: '0.80rem', fontWeight: 900, color: brand.primary }}>{schoolAbbr}</div>
+          {schoolId && (
+            <div style={{ fontSize: '0.62rem', fontWeight: 700, color: tokens.textMuted, fontFamily: 'monospace' }}>
+              ID: {schoolId}
             </div>
           )}
         </div>
 
-        {/* Navigation Items Rail */}
-        <nav
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            padding: isCollapsed ? '12px 0' : '12px 8px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 12,
-            width: '100%',
-            scrollbarWidth: 'none',
-            boxSizing: 'border-box',
-          }}
-        >
-          {filteredMenuGroups.map((group, gIdx) => (
-            <div
-              key={gIdx}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: isCollapsed ? 'center' : 'stretch',
-                gap: 4,
-                width: '100%',
-              }}
-            >
-              {!isCollapsed && (
-                <div
+        {safeLogo ? (
+          <img
+            src={safeLogo}
+            alt="School Seal"
+            style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', border: `2px solid ${brand.primary}` }}
+          />
+        ) : (
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: '50%',
+              backgroundColor: brand.buttonBg,
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 800,
+              fontSize: '0.76rem',
+            }}
+          >
+            {schoolAbbr.slice(0, 2)}
+          </div>
+        )}
+
+        {!isCollapsed && schoolName && (
+          <div
+            style={{
+              fontSize: '0.70rem',
+              fontWeight: 700,
+              color: tokens.textSecondary,
+              textAlign: 'center',
+              marginTop: 5,
+              lineHeight: 1.25,
+            }}
+          >
+            {schoolName}
+          </div>
+        )}
+      </div>
+
+      <nav style={{ flex: 1, overflowY: 'auto', padding: isCollapsed ? '8px 6px' : '8px 8px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {visibleGroups.map((group) => (
+          <div key={group.groupTitle} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {!isCollapsed && (
+              <div style={{ fontSize: '0.60rem', fontWeight: 800, color: tokens.textMuted, padding: '3px 8px', letterSpacing: '0.5px' }}>
+                {group.groupTitle}
+              </div>
+            )}
+            {group.items.map((item) => {
+              const active = activeTab === item.key;
+              const badge = formatBadge(mergedBadges[item.key]);
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  title={isCollapsed ? item.label : undefined}
+                  onMouseEnter={() => onPrefetchTab?.(item.key)}
+                  onFocus={() => onPrefetchTab?.(item.key)}
+                  onClick={() => onSelectTab(item.key)}
                   style={{
-                    fontSize: '0.62rem',
-                    fontWeight: 800,
-                    color: tokens.textMuted,
-                    letterSpacing: '0.5px',
-                    padding: '6px 8px 2px 8px',
-                    textTransform: 'uppercase',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: isCollapsed ? 'center' : 'flex-start',
+                    gap: 9,
+                    height: 36,
+                    padding: isCollapsed ? 0 : '0 10px',
+                    borderRadius: 9,
+                    borderWidth: 0,
+                    borderStyle: 'none',
+                    backgroundColor: active ? brand.buttonBg : 'transparent',
+                    color: active ? '#ffffff' : tokens.textSecondary,
+                    cursor: 'pointer',
+                    position: 'relative',
                   }}
                 >
-                  {group.groupTitle}
-                </div>
-              )}
-
-              {group.items.map((item) => {
-                const isActive = activeTab === item.key;
-                const rawCount = mergedBadges[item.key as keyof TabBadgeCounts] || 0;
-                const badgeText = formatBadge(rawCount);
-
-                return (
-                  <button
-                    key={item.key}
-                    onClick={() => {
-                      setTooltip(null);
-                      onSelectTab(item.key);
-                    }}
-                    onMouseEnter={(e) => {
-                      if (isCollapsed) {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        setTooltip({
-                          label: item.label,
-                          badge: badgeText,
-                          top: rect.top + rect.height / 2,
-                          left: rect.right + 12,
-                        });
-                      }
-                    }}
-                    onMouseLeave={() => setTooltip(null)}
-                    type="button"
-                    style={{
-                      position: 'relative',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: isCollapsed ? 'center' : 'flex-start',
-                      width: isCollapsed ? 46 : '100%',
-                      height: 42,
-                      padding: isCollapsed ? 0 : '0 12px',
-                      borderRadius: 10,
-                      border: 'none',
-                      backgroundColor: isActive ? brand.primary : 'transparent',
-                      color: isActive ? '#FFFFFF' : tokens.textSecondary,
-                      cursor: 'pointer',
-                      transition: 'background-color 0.15s ease, color 0.15s ease',
-                      boxSizing: 'border-box',
-                      gap: 10,
-                    }}
-                  >
-                    <div
+                  <span style={{ display: 'flex', color: active ? '#ffffff' : tokens.textMuted }}>{item.icon}</span>
+                  {!isCollapsed && (
+                    <span
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: isActive ? '#FFFFFF' : tokens.textMuted,
-                        flexShrink: 0,
+                        fontSize: '0.78rem',
+                        fontWeight: active ? 800 : 600,
+                        color: active ? '#ffffff' : tokens.textPrimary,
+                        flex: 1,
+                        textAlign: 'left',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
                       }}
                     >
-                      {item.icon}
-                    </div>
-
-                    {!isCollapsed && (
-                      <span
-                        style={{
-                          fontSize: '0.80rem',
-                          fontWeight: isActive ? 800 : 600,
-                          color: isActive ? '#FFFFFF' : tokens.textPrimary,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          flex: 1,
-                          textAlign: 'left',
-                        }}
-                      >
-                        {item.label}
-                      </span>
-                    )}
-
-                    {badgeText && (
-                      <span
-                        style={{
-                          position: isCollapsed ? 'absolute' : 'static',
-                          top: isCollapsed ? 4 : undefined,
-                          right: isCollapsed ? 4 : undefined,
-                          minWidth: 16,
-                          height: 16,
-                          padding: '0 4px',
-                          borderRadius: 9999,
-                          backgroundColor: brand.danger,
-                          color: '#FFFFFF',
-                          fontSize: '0.60rem',
-                          fontWeight: 800,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          border: isCollapsed ? `2px solid ${tokens.bgSurface}` : 'none',
-                          lineHeight: 1,
-                          marginLeft: isCollapsed ? 0 : 'auto',
-                        }}
-                      >
-                        {badgeText}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </nav>
-
-        {/* User Avatar Footer */}
-        <div
-          style={{
-            padding: isCollapsed ? '12px 0' : '12px 14px',
-            borderTop: `1px solid ${tokens.borderSubtle}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: isCollapsed ? 'center' : 'flex-start',
-            width: '100%',
-            boxSizing: 'border-box',
-            gap: 10,
-          }}
-          onMouseEnter={(e) => {
-            if (isCollapsed) {
-              const rect = e.currentTarget.getBoundingClientRect();
-              setTooltip({
-                label: `${session?.faculty_name || session?.username || 'User'} (${role})`,
-                top: rect.top + rect.height / 2,
-                left: rect.right + 12,
-              });
-            }
-          }}
-          onMouseLeave={() => setTooltip(null)}
-        >
-          <div style={{ position: 'relative', width: 36, height: 36, flexShrink: 0 }}>
-            {safeUserPhoto ? (
-              <img
-                src={safeUserPhoto}
-                alt="Profile"
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: '50%',
-                  objectFit: 'cover',
-                  border: `2px solid ${brand.primary}`,
-                }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: '50%',
-                  backgroundColor: tokens.primaryLight,
-                  color: brand.primary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 700,
-                  fontSize: '0.85rem',
-                  border: `1.5px solid ${tokens.borderSubtle}`,
-                }}
-              >
-                {session?.faculty_name ? session.faculty_name.charAt(0).toUpperCase() : 'U'}
-              </div>
-            )}
-            <span
-              style={{
-                position: 'absolute',
-                bottom: 0,
-                right: 0,
-                width: 10,
-                height: 10,
-                backgroundColor: brand.success,
-                borderRadius: '50%',
-                border: `2px solid ${tokens.bgSurface}`,
-              }}
-            />
+                      {item.label}
+                    </span>
+                  )}
+                  {badge && (
+                    <span
+                      style={{
+                        backgroundColor: brand.danger,
+                        color: '#ffffff',
+                        fontSize: '0.58rem',
+                        fontWeight: 800,
+                        borderRadius: 9999,
+                        padding: '1px 5px',
+                      }}
+                    >
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
+        ))}
+      </nav>
 
-          {!isCollapsed && (
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div
-                style={{
-                  fontSize: '0.78rem',
-                  fontWeight: 800,
-                  color: tokens.textPrimary,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {session?.faculty_name || session?.username || 'User'}
-              </div>
-              <div
-                style={{
-                  fontSize: '0.64rem',
-                  fontWeight: 600,
-                  color: tokens.textMuted,
-                  textTransform: 'uppercase',
-                }}
-              >
-                {role}
-              </div>
-            </div>
-          )}
-        </div>
-      </aside>
-
-      {tooltip && isCollapsed && (
-        <div
-          style={{
-            position: 'fixed',
-            top: tooltip.top,
-            left: tooltip.left,
-            transform: 'translateY(-50%)',
-            zIndex: 9999,
-            backgroundColor: tokens.bgSurface,
-            color: tokens.textPrimary,
-            border: `1px solid ${tokens.borderSubtle}`,
-            borderRadius: 8,
-            padding: '7px 12px',
-            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.16)',
-            fontSize: '0.80rem',
-            fontWeight: 700,
-            pointerEvents: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            whiteSpace: 'nowrap',
-            animation: 'fadeIn 0.12s ease',
-          }}
-        >
-          <span>{tooltip.label}</span>
-          {tooltip.badge && (
-            <span
-              style={{
-                backgroundColor: brand.danger,
-                color: '#FFFFFF',
-                borderRadius: 9999,
-                padding: '1px 6px',
-                fontSize: '0.64rem',
-                fontWeight: 800,
-              }}
-            >
-              {tooltip.badge}
+      <div
+        style={{
+          padding: isCollapsed ? '8px 0' : '8px 10px',
+          borderTopWidth: 1,
+          borderTopStyle: 'solid',
+          borderTopColor: tokens.borderSubtle,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: isCollapsed ? 'center' : 'flex-start',
+          gap: 8,
+        }}
+      >
+        <div style={{ width: 30, height: 30, borderRadius: '50%', overflow: 'hidden', backgroundColor: tokens.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          {safeUserPhoto ? (
+            <img src={safeUserPhoto} alt="User" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          ) : (
+            <span style={{ fontWeight: 800, fontSize: '0.78rem', color: brand.primary }}>
+              {(session?.faculty_name || session?.username || 'U').charAt(0).toUpperCase()}
             </span>
           )}
         </div>
-      )}
-    </>
+        {!isCollapsed && (
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 800, color: tokens.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {session?.faculty_name || session?.username || 'User'}
+            </div>
+            <div style={{ fontSize: '0.60rem', fontWeight: 700, color: tokens.textMuted }}>{role}</div>
+          </div>
+        )}
+      </div>
+    </aside>
   );
 };
 

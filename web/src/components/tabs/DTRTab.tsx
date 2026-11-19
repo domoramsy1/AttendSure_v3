@@ -1,25 +1,27 @@
 /**
- * AttendSure - Daily Time Record (DTR) Tab
+ * AttendSure - Monthly Time Record (Civil Service Form No. 48)
  * File: web/src/components/tabs/DTRTab.tsx
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient from '../../api/client';
+import { API_ROUTES, extractApiError } from '../../api/routes';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
+import { ControlSwitch } from '../ui/ControlSwitch';
+import { ProfileAvatar } from '../common/ProfileAvatar';
 import { useAlert } from '../../context/AlertContext';
 import { useSchool } from '../../context/SchoolContext';
 import { useTheme } from '../../context/ThemeContext';
+import { sanitizeText } from '../../theme/tokens';
 import {
   Printer,
   Download,
   RefreshCw,
-  User,
   Calendar,
   Clock,
   AlertCircle,
   Loader2,
-  Layers,
   ShieldCheck,
   ShieldAlert,
   Lock,
@@ -28,16 +30,15 @@ import {
   Send,
 } from 'lucide-react';
 
-interface FacultyMember {
+interface TeacherDropdownItem {
   id: number;
   employee_id: string;
   first_name: string;
   last_name: string;
-  middle_name?: string;
-  full_name?: string;
+  full_name: string;
   department?: string;
-  designation?: string;
-  photo?: string | null;
+  position?: string;
+  photo_url?: string | null;
 }
 
 interface DailyDTRRow {
@@ -70,193 +71,177 @@ interface DTRReportData {
   school_head_title?: string;
   dtr_submitted?: boolean;
   dept_head_approved: boolean;
-  approved_by_dept_head_at?: string | null;
-  user_role?: string;
   can_approve_dept?: boolean;
   can_clear_loafing?: boolean;
   rows: DailyDTRRow[];
+  daily_logs?: DailyDTRRow[];
   total_undertime_hours: number;
   total_undertime_minutes: number;
   days_present: number;
 }
 
-interface ProfileAvatarProps {
-  photoUrl?: string | null;
-  name?: string;
-  size?: number;
-  iconSize?: number;
-}
+type FormSide = 'BOTH' | 'FRONT' | 'BACK';
 
-const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
-  photoUrl,
-  name = '',
-  size = 36,
-  iconSize = 18,
-}) => {
-  const [imageFailed, setImageFailed] = useState(false);
-  const { tokens } = useTheme();
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
 
-  useEffect(() => {
-    setImageFailed(false);
-  }, [photoUrl]);
+const HTML2PDF_CDN_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+const HTML2PDF_SRI_HASH =
+  'sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==';
 
-  const hasPhoto = Boolean(
-    photoUrl &&
-    typeof photoUrl === 'string' &&
-    photoUrl.trim() !== '' &&
-    photoUrl.trim().toLowerCase() !== 'null' &&
-    photoUrl.trim().toLowerCase() !== 'undefined'
-  );
+const loadHtml2PdfSecurely = (): Promise<any> => {
+  const existing = (window as unknown as { html2pdf?: any }).html2pdf;
+  if (existing) return Promise.resolve(existing);
 
-  return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        backgroundColor: tokens.bgSurfaceSubtle,
-        border: `1px solid ${tokens.borderSubtle}`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-        flexShrink: 0,
-      }}
-      title={name}
-    >
-      {hasPhoto && !imageFailed ? (
-        <img
-          src={photoUrl!}
-          alt={name}
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          onError={() => setImageFailed(true)}
-        />
-      ) : (
-        <User size={iconSize} color={tokens.textMuted} />
-      )}
-    </div>
-  );
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = HTML2PDF_CDN_URL;
+    script.integrity = HTML2PDF_SRI_HASH;
+    script.crossOrigin = 'anonymous';
+    script.referrerPolicy = 'no-referrer';
+    script.onload = () => resolve((window as unknown as { html2pdf?: any }).html2pdf);
+    script.onerror = () => reject(new Error('Failed to load verified PDF library.'));
+    document.head.appendChild(script);
+  });
 };
 
 export const DTRTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
-  const { tokens, brand } = useTheme();
-  const schoolContext = useSchool() as any;
-  const schoolProfile = schoolContext?.profile;
+  const { tokens, brand, ui } = useTheme();
+  const { school } = useSchool();
 
-  const currentUserRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
+  const currentUserRole = useMemo(
+    () => (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(),
+    []
+  );
   const isFaculty = currentUserRole === 'FACULTY';
 
-  const [facultyList, setFacultyList] = useState<FacultyMember[]>([]);
-  const [selectedFacultyId, setSelectedFacultyId] = useState<string>('');
-  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
-  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const nowDate = useMemo(() => new Date(), []);
+  const yearOptions = useMemo(() => {
+    const cur = nowDate.getFullYear();
+    return [cur - 1, cur, cur + 1];
+  }, [nowDate]);
 
-  const [regularHours, setRegularHours] = useState('');
-  const [saturdayHours, setSaturdayHours] = useState('');
-  const [viewSide, setViewSide] = useState<'BOTH' | 'FRONT' | 'BACK'>('BOTH');
+  const [teacherList, setTeacherList] = useState<TeacherDropdownItem[]>([]);
+  const [selectedTeacherId, setSelectedTeacherId] = useState<string>('');
+  const [selectedMonth, setSelectedMonth] = useState<number>(nowDate.getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState<number>(nowDate.getFullYear());
+
+  const [regularHours, setRegularHours] = useState<string>('');
+  const [saturdayHours, setSaturdayHours] = useState<string>('');
+  const [hoursDirty, setHoursDirty] = useState<boolean>(false);
+  const [viewSide, setViewSide] = useState<FormSide>('BOTH');
 
   const [dtrData, setDtrData] = useState<DTRReportData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [actionProcessing, setActionProcessing] = useState(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [actionProcessing, setActionProcessing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState<boolean>(false);
 
-  const [selectedViolationRow, setSelectedViolationRow] = useState<DailyDTRRow | null>(null);
-  const [pardonRemarks, setPardonRemarks] = useState('');
+  const [selectedAlertRow, setSelectedAlertRow] = useState<DailyDTRRow | null>(null);
+  const [excuseRemarks, setExcuseRemarks] = useState<string>('');
 
   const printAreaRef = useRef<HTMLDivElement>(null);
-  const isInteracting = useRef(false);
-  isInteracting.current = Boolean(selectedViolationRow) || actionProcessing;
+  const abortRef = useRef<AbortController | null>(null);
+  const isInteracting = useRef<boolean>(false);
+  isInteracting.current = Boolean(selectedAlertRow) || actionProcessing || hoursDirty;
 
-  const activeFaculty = facultyList.find((f) => String(f.id) === selectedFacultyId);
+  const activeTeacher = useMemo(
+    () => teacherList.find((t) => String(t.id) === selectedTeacherId),
+    [teacherList, selectedTeacherId]
+  );
 
+  // Load lightweight cached teacher dropdown once for leadership roles
   useEffect(() => {
-    let isMounted = true;
     if (isFaculty) return;
+    let active = true;
 
-    const loadFaculty = async () => {
-      try {
-        let res;
-        try {
-          res = await apiClient.get<any>('/faculty/?page_size=100');
-        } catch (firstErr: any) {
-          if (firstErr?.response?.status === 404) {
-            res = await apiClient.get<any>('/faculty/?page_size=100');
-          } else {
-            throw firstErr;
-          }
+    apiClient
+      .get<TeacherDropdownItem[]>(API_ROUTES.accounts.teachersDropdown)
+      .then((res) => {
+        if (!active) return;
+        const list = Array.isArray(res.data) ? res.data : [];
+        setTeacherList(list);
+        if (list.length > 0) {
+          setSelectedTeacherId((prev) => prev || String(list[0].id));
         }
+      })
+      .catch((err) => {
+        if (active) setError(extractApiError(err, 'Could not load teachers list.'));
+      });
 
-        if (!isMounted || !res) return;
-
-        const raw = res.data;
-        const items: FacultyMember[] = Array.isArray(raw)
-          ? raw
-          : raw?.results && Array.isArray(raw.results)
-          ? raw.results
-          : [];
-
-        setFacultyList(items);
-        if (items.length > 0 && !selectedFacultyId) {
-          setSelectedFacultyId(String(items[0].id));
-        }
-      } catch (err: any) {
-        if (isMounted) {
-          setError(
-            err?.response?.data?.detail ||
-            err?.response?.data?.error ||
-            'Could not load faculty directory.'
-          );
-        }
-      }
-    };
-
-    loadFaculty();
     return () => {
-      isMounted = false;
+      active = false;
     };
-  }, [isFaculty, selectedFacultyId]);
+  }, [isFaculty]);
+
+  // Reset dirty flag whenever target teacher, month, or year changes
+  useEffect(() => {
+    setHoursDirty(false);
+  }, [selectedTeacherId, selectedMonth, selectedYear]);
 
   const fetchDTR = useCallback(
-    async (silent = false) => {
-      const endpoint = isFaculty && !selectedFacultyId
-        ? '/reports/dtr/'
-        : selectedFacultyId
-        ? `/reports/dtr/${selectedFacultyId}/`
-        : '/reports/dtr/';
+    async (silent = false, bypassCache = false) => {
+      if (!isFaculty && !selectedTeacherId && teacherList.length > 0) return;
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const endpoint =
+        !isFaculty && selectedTeacherId
+          ? `${API_ROUTES.reports.dtr}${selectedTeacherId}/`
+          : API_ROUTES.reports.dtr;
 
       if (!silent) setLoading(true);
+      else setRefreshing(true);
       setError(null);
 
       try {
-        const res = await apiClient.get<DTRReportData>(endpoint, {
+        const res = await apiClient.get<any>(endpoint, {
           params: {
             month: selectedMonth,
             year: selectedYear,
+            ...(bypassCache ? { nocache: 1 } : {}),
           },
+          signal: controller.signal,
         });
 
-        const loadedData = res.data;
+        const raw = res.data || {};
+        const rawRows: any[] = Array.isArray(raw.rows)
+          ? raw.rows
+          : Array.isArray(raw.daily_logs)
+          ? raw.daily_logs
+          : [];
 
-        if (loadedData.faculty_id && String(loadedData.faculty_id) !== selectedFacultyId) {
-          setSelectedFacultyId(String(loadedData.faculty_id));
-        }
-
-        if (loadedData.regular_days_hours) {
-          setRegularHours(loadedData.regular_days_hours);
-        }
-        if (loadedData.saturdays_hours) {
-          setSaturdayHours(loadedData.saturdays_hours);
-        }
+        const rowsByDay = new Map<number, any>();
+        rawRows.forEach((r) => {
+          if (r && typeof r.day === 'number') rowsByDay.set(r.day, r);
+        });
 
         const rows31: DailyDTRRow[] = [];
-        const currentRows = loadedData.rows || [];
-
         for (let dayNum = 1; dayNum <= 31; dayNum++) {
-          const found = currentRows.find((r) => r.day === dayNum);
+          const found = rowsByDay.get(dayNum);
           if (found) {
-            rows31.push(found);
+            rows31.push({
+              day: dayNum,
+              date_str: String(found.date_str || found.date || ''),
+              day_of_week: String(found.day_of_week || found.weekday || ''),
+              is_weekend: Boolean(found.is_weekend || found.status === 'WEEKEND'),
+              am_arrival: String(found.am_arrival || ''),
+              am_departure: String(found.am_departure || ''),
+              pm_arrival: String(found.pm_arrival || ''),
+              pm_departure: String(found.pm_departure || ''),
+              undertime_hours: found.undertime_hours ?? '',
+              undertime_minutes: found.undertime_minutes ?? '',
+              is_loafing: Boolean(found.is_loafing),
+              loafing_excused: Boolean(found.loafing_excused),
+              loafing_remarks: String(found.loafing_remarks || ''),
+            });
           } else {
             rows31.push({
               day: dayNum,
@@ -271,72 +256,114 @@ export const DTRTab: React.FC = () => {
               undertime_minutes: '',
               is_loafing: false,
               loafing_excused: false,
+              loafing_remarks: '',
             });
           }
         }
 
+        const resolvedMonthNum = Number(raw.month_number || selectedMonth);
+        const resolvedMonthName =
+          typeof raw.month === 'string' && isNaN(Number(raw.month))
+            ? raw.month
+            : MONTH_NAMES[resolvedMonthNum - 1] || 'Month';
+
+        const regHrs = String(raw.regular_days_hours ?? raw.regular_hours ?? '');
+        const satHrs = String(raw.saturdays_hours ?? raw.saturday_hours ?? '');
+
+        if (!isInteracting.current) {
+          setRegularHours(regHrs);
+          setSaturdayHours(satHrs);
+        }
+
+        if (raw.faculty_id && !selectedTeacherId) {
+          setSelectedTeacherId(String(raw.faculty_id));
+        }
+
         setDtrData({
-          ...loadedData,
+          faculty_id: Number(raw.faculty_id || raw.teacher_id || 0),
+          faculty_name: String(raw.faculty_name || ''),
+          employee_id: String(raw.employee_id || ''),
+          department: String(raw.department || ''),
+          month: resolvedMonthName,
+          month_number: resolvedMonthNum,
+          year: Number(raw.year || selectedYear),
+          regular_days_hours: regHrs,
+          saturdays_hours: satHrs,
+          school_head: String(raw.school_head || raw.school?.school_head || ''),
+          school_head_title: String(raw.school_head_title || raw.school?.principal_title || ''),
+          dtr_submitted: Boolean(raw.dtr_submitted ?? raw.is_submitted),
+          dept_head_approved: Boolean(raw.dept_head_approved ?? raw.is_dept_head_approved),
+          can_approve_dept: Boolean(
+            raw.can_approve_dept ?? ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(currentUserRole)
+          ),
+          can_clear_loafing: Boolean(
+            raw.can_clear_loafing ?? ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(currentUserRole)
+          ),
           rows: rows31,
+          total_undertime_hours: Number(raw.total_undertime_hours || 0),
+          total_undertime_minutes: Number(raw.total_undertime_minutes || 0),
+          days_present: Number(raw.days_present || 0),
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const anyErr = err as { name?: string; code?: string };
+        if (anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
         if (!silent) {
-          setError(
-            err?.response?.data?.detail ||
-            err?.response?.data?.error ||
-            'Failed to retrieve DTR data. You may not be authorized to view this record.'
-          );
+          setError(extractApiError(err, 'Could not load Daily Time Record.'));
         }
       } finally {
-        if (!silent) setLoading(false);
+        setLoading(false);
+        setRefreshing(false);
       }
     },
-    [isFaculty, selectedFacultyId, selectedMonth, selectedYear]
+    [isFaculty, selectedTeacherId, selectedMonth, selectedYear, teacherList.length, currentUserRole]
   );
 
   useEffect(() => {
-    fetchDTR(false);
+    fetchDTR(false, false);
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [fetchDTR]);
 
   useEffect(() => {
-    const liveHeartbeat = setInterval(() => {
-      if (!isInteracting.current) {
-        fetchDTR(true);
+    const timer = setInterval(() => {
+      if (!isInteracting.current && document.visibilityState === 'visible') {
+        fetchDTR(true, true);
       }
-    }, 4000);
-
-    return () => clearInterval(liveHeartbeat);
+    }, 20000);
+    return () => clearInterval(timer);
   }, [fetchDTR]);
 
   const handleSubmitDTR = () => {
     if (!dtrData) return;
 
     showConfirm({
-      title: 'Submit Daily Time Record',
-      message: `Certify and submit your official DTR for ${dtrData.month} ${dtrData.year} to your Department Head for verification?`,
+      title: 'Certify & Submit DTR',
+      message: `Certify and submit your Daily Time Record for ${dtrData.month} ${dtrData.year} to your Department Head for review?`,
       confirmLabel: 'Certify & Submit',
       isDestructive: false,
       onConfirm: async () => {
         setActionProcessing(true);
         try {
-          await apiClient.post(`/reports/dtr/${dtrData.faculty_id}/`, {
+          await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.faculty_id}/`, {
             action: 'SUBMIT_DTR',
             faculty_id: dtrData.faculty_id,
             month: dtrData.month_number,
             year: dtrData.year,
-            regular_days_hours: regularHours,
-            saturdays_hours: saturdayHours,
+            regular_days_hours: sanitizeText(regularHours, 100),
+            saturdays_hours: sanitizeText(saturdayHours, 100),
           });
+          setHoursDirty(false);
           showAlert({
             title: 'DTR Submitted',
-            message: 'Your DTR has been submitted to your Department Head for endorsement.',
+            message: 'Your Daily Time Record was submitted for Department Head approval.',
             type: 'success',
           });
-          fetchDTR(true);
-        } catch (err: any) {
+          fetchDTR(true, true);
+        } catch (err) {
           showAlert({
             title: 'Submission Failed',
-            message: err?.response?.data?.error || 'Failed to submit DTR.',
+            message: extractApiError(err, 'Could not submit DTR.'),
             type: 'error',
           });
         } finally {
@@ -351,28 +378,31 @@ export const DTRTab: React.FC = () => {
 
     showConfirm({
       title: 'Approve Official DTR',
-      message: `Approve official DTR for ${dtrData.faculty_name} (${dtrData.month} ${dtrData.year})? This will endorse records, remove the DRAFT watermark, and unlock official hard-copy printing.`,
-      confirmLabel: 'Approve & Endorse',
+      message: `Approve the Daily Time Record for ${dtrData.faculty_name} (${dtrData.month} ${dtrData.year})? This removes the DRAFT watermark and unlocks printing.`,
+      confirmLabel: 'Approve DTR',
       isDestructive: false,
       onConfirm: async () => {
         setActionProcessing(true);
         try {
-          await apiClient.post(`/reports/dtr/${dtrData.faculty_id}/`, {
+          await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.faculty_id}/`, {
             action: 'APPROVE_DEPT_HEAD',
             faculty_id: dtrData.faculty_id,
             month: dtrData.month_number,
             year: dtrData.year,
+            regular_days_hours: sanitizeText(regularHours, 100),
+            saturdays_hours: sanitizeText(saturdayHours, 100),
           });
+          setHoursDirty(false);
           showAlert({
-            title: 'DTR Endorsed',
-            message: `Official DTR for ${dtrData.faculty_name} has been verified and cleared for printing.`,
+            title: 'DTR Approved',
+            message: `Official DTR for ${dtrData.faculty_name} is now unlocked for printing.`,
             type: 'success',
           });
-          fetchDTR(true);
-        } catch (err: any) {
+          fetchDTR(true, true);
+        } catch (err) {
           showAlert({
             title: 'Approval Failed',
-            message: err?.response?.data?.error || 'Failed to submit Department Head endorsement.',
+            message: extractApiError(err, 'Could not approve DTR.'),
             type: 'error',
           });
         } finally {
@@ -382,13 +412,13 @@ export const DTRTab: React.FC = () => {
     });
   };
 
-  const handleExcuseLoafingByPrincipal = async () => {
-    if (!dtrData || !selectedViolationRow) return;
-
-    if (!pardonRemarks.trim()) {
+  const handleExcuseAlertByPrincipal = async () => {
+    if (!dtrData || !selectedAlertRow) return;
+    const cleanReason = sanitizeText(excuseRemarks, 240);
+    if (!cleanReason) {
       showAlert({
-        title: 'Remarks Required',
-        message: 'Please provide official remarks or justification for excusing this departure.',
+        title: 'Reason Required',
+        message: 'Please enter official remarks explaining why this off-campus alert is excused.',
         type: 'warning',
       });
       return;
@@ -396,24 +426,26 @@ export const DTRTab: React.FC = () => {
 
     setActionProcessing(true);
     try {
-      await apiClient.post(`/reports/dtr/${dtrData.faculty_id}/`, {
+      await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.faculty_id}/`, {
         action: 'EXCUSE_LOAFING',
         faculty_id: dtrData.faculty_id,
-        date_str: selectedViolationRow.date_str,
-        remarks: pardonRemarks.trim(),
+        date_str: selectedAlertRow.date_str,
+        month: dtrData.month_number,
+        year: dtrData.year,
+        remarks: cleanReason,
       });
       showAlert({
-        title: 'Violation Excused',
-        message: `Loafing record on ${selectedViolationRow.date_str} has been excused by the Principal. Salary deduction removed.`,
+        title: 'Alert Excused',
+        message: `Off-campus alert on ${selectedAlertRow.date_str} has been marked as excused.`,
         type: 'success',
       });
-      setSelectedViolationRow(null);
-      setPardonRemarks('');
-      fetchDTR(true);
-    } catch (err: any) {
+      setSelectedAlertRow(null);
+      setExcuseRemarks('');
+      fetchDTR(true, true);
+    } catch (err) {
       showAlert({
         title: 'Action Denied',
-        message: err?.response?.data?.error || 'Only authorized leadership can excuse loafing records.',
+        message: extractApiError(err, 'Only authorized leadership can excuse campus alerts.'),
         type: 'error',
       });
     } finally {
@@ -426,7 +458,7 @@ export const DTRTab: React.FC = () => {
     if (!dtrData.dept_head_approved) {
       showAlert({
         title: 'Approval Required',
-        message: 'This DTR must be approved by the Department Head before exporting official copies. Current view contains the DRAFT watermark.',
+        message: 'Department Head approval is required before exporting official PDF copies.',
         type: 'warning',
       });
       return;
@@ -434,37 +466,16 @@ export const DTRTab: React.FC = () => {
 
     setExportingPdf(true);
     try {
-      let html2pdfInstance = (window as any).html2pdf;
-      if (!html2pdfInstance) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-          script.onload = () => resolve((window as any).html2pdf);
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-        html2pdfInstance = (window as any).html2pdf;
-      }
-
+      const html2pdfInstance = await loadHtml2PdfSecurely();
+      const safeName = (dtrData.faculty_name || 'Teacher').replace(/[^a-zA-Z0-9]/g, '_');
       const opt = {
         margin: [0.15, 0.15, 0.15, 0.15],
-        filename: `CSC_Form_48_${(dtrData.faculty_name || 'Faculty').replace(/[^a-zA-Z0-9]/g, '_')}_${dtrData.month}_${dtrData.year}.pdf`,
+        filename: `CSC_Form_48_${safeName}_${dtrData.month}_${dtrData.year}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          logging: false,
-          scrollX: 0,
-          scrollY: 0,
-        },
-        jsPDF: {
-          unit: 'in',
-          format: 'legal',
-          orientation: 'portrait',
-        },
+        html2canvas: { scale: 2, useCORS: true, logging: false, scrollX: 0, scrollY: 0 },
+        jsPDF: { unit: 'in', format: 'legal', orientation: 'portrait' },
         pagebreak: { mode: ['css', 'legacy'], after: '.csc-print-page' },
       };
-
       await html2pdfInstance().from(printAreaRef.current).set(opt).save();
     } catch {
       window.print();
@@ -477,7 +488,7 @@ export const DTRTab: React.FC = () => {
     if (!dtrData?.dept_head_approved) {
       showAlert({
         title: 'Printing Locked',
-        message: 'Official hard-copy printing is locked until the Department Head endorses this record.',
+        message: 'Printing is locked until the Department Head approves this record.',
         type: 'warning',
       });
       return;
@@ -485,83 +496,8 @@ export const DTRTab: React.FC = () => {
     window.print();
   };
 
-  const resolvedSchoolHead = (
-    dtrData?.school_head ||
-    schoolProfile?.principal_name ||
-    ''
-  ).trim();
-
-  const resolvedSchoolHeadTitle = (
-    dtrData?.school_head_title ||
-    schoolProfile?.principal_title ||
-    ''
-  ).trim();
-
-  // Dynamic Theme-Driven Styles
-  const dynamicStyles = useMemo(() => {
-    return {
-      controlBar: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        backgroundColor: tokens.bgSurface,
-        padding: '12px 18px',
-        borderRadius: 12,
-        border: `1px solid ${tokens.borderSubtle}`,
-        boxShadow: tokens.cardShadow,
-        transition: 'background-color 0.2s ease, border-color 0.2s ease',
-      },
-      scheduleBar: {
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: tokens.bgSurfaceSubtle,
-        padding: '8px 16px',
-        borderRadius: 10,
-        border: `1px solid ${tokens.borderSubtle}`,
-        transition: 'background-color 0.2s ease, border-color 0.2s ease',
-      },
-      selectControl: {
-        padding: '6px 10px',
-        borderRadius: 8,
-        border: `1px solid ${tokens.borderStrong}`,
-        fontSize: '0.82rem',
-        color: tokens.textPrimary,
-        backgroundColor: tokens.bgSurface,
-        outline: 'none',
-        transition: 'background-color 0.2s ease, border-color 0.2s ease',
-      },
-      inputSchedule: {
-        padding: '4px 8px',
-        borderRadius: 6,
-        border: `1px solid ${tokens.borderStrong}`,
-        fontSize: '0.76rem',
-        color: tokens.textPrimary,
-        backgroundColor: tokens.bgSurface,
-        width: 220,
-        outline: 'none',
-      },
-      errorBanner: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '10px 14px',
-        backgroundColor: 'rgba(239, 68, 68, 0.12)',
-        color: brand.danger,
-        borderRadius: 8,
-        fontSize: '0.82rem',
-        border: `1px solid rgba(239, 68, 68, 0.28)`,
-      },
-      paperPreviewWrapper: {
-        overflowX: 'auto' as const,
-        padding: '16px',
-        backgroundColor: tokens.bgSurfaceSubtle,
-        borderRadius: 14,
-        border: `1px solid ${tokens.borderSubtle}`,
-        transition: 'background-color 0.2s ease, border-color 0.2s ease',
-      },
-    };
-  }, [tokens, brand]);
+  const resolvedSchoolHead = (dtrData?.school_head || school.principal_name || '').trim();
+  const resolvedSchoolHeadTitle = (dtrData?.school_head_title || school.principal_title || '').trim();
 
   const renderDTRCopy = () => {
     if (!dtrData) return null;
@@ -572,7 +508,7 @@ export const DTRTab: React.FC = () => {
           <div style={draftWatermarkStyle}>
             <div style={{ transform: 'rotate(-32deg)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <div style={draftWatermarkText}>DRAFT</div>
-              <div style={draftWatermarkSub}>NOT APPROVED BY DEPT HEAD</div>
+              <div style={draftWatermarkSub}>PENDING DEPT HEAD APPROVAL</div>
             </div>
           </div>
         )}
@@ -596,7 +532,7 @@ export const DTRTab: React.FC = () => {
         <div style={{ fontSize: '6.8pt', marginBottom: 4, lineHeight: 1.25 }}>
           <div style={{ borderBottom: '0.8px solid #000', paddingBottom: 2 }}>
             <span>
-              For the month of <u>&nbsp;<strong>{dtrData.month}</strong>&nbsp;</u>, 20<u>&nbsp;<strong>{String(dtrData.year).slice(-2)}</strong>&nbsp;</u>
+              For the month of <u>&nbsp;<strong>{dtrData.month}</strong>&nbsp;</u>, {dtrData.year}
             </span>
           </div>
 
@@ -606,8 +542,8 @@ export const DTRTab: React.FC = () => {
               and departure
             </div>
             <div style={{ width: '54%', fontSize: '6.2pt', lineHeight: 1.15 }}>
-              <div>Regular Days: <u>{regularHours || '\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0'}</u></div>
-              <div style={{ marginTop: 1 }}>Saturdays: <u>{saturdayHours || '\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0'}</u></div>
+              <div>Regular Days: <u>{regularHours || '\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0'}</u></div>
+              <div style={{ marginTop: 1 }}>Saturdays: <u>{saturdayHours || '\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0'}</u></div>
             </div>
           </div>
         </div>
@@ -633,53 +569,49 @@ export const DTRTab: React.FC = () => {
           </thead>
           <tbody>
             {dtrData.rows.map((row) => {
-              const isViolating = row.is_loafing && !row.loafing_excused;
+              const hasOpenAlert = Boolean(row.is_loafing && !row.loafing_excused);
 
               return (
                 <tr
                   key={row.day}
                   style={{
                     height: 14,
-                    backgroundColor: isViolating
-                      ? '#fee2e2'
-                      : row.is_weekend
-                      ? '#fafafa'
-                      : '#ffffff',
+                    backgroundColor: hasOpenAlert ? '#fee2e2' : row.is_weekend ? '#fafafa' : '#ffffff',
                   }}
                 >
                   <td style={{ ...dtrTdCenter, fontWeight: 700 }}>
                     {row.day}
                     {row.is_loafing && (
                       <span
-                        onClick={() => dtrData.can_clear_loafing && setSelectedViolationRow(row)}
-                        title={isViolating ? 'Loafing flag. Click for review.' : 'Excused by Principal'}
+                        onClick={() => dtrData.can_clear_loafing && setSelectedAlertRow(row)}
+                        title={hasOpenAlert ? 'Off-campus alert. Click to review.' : 'Excused by Principal'}
                         style={{
                           marginLeft: 2,
                           fontSize: '5.2pt',
-                          color: isViolating ? '#dc2626' : '#059669',
+                          color: hasOpenAlert ? '#dc2626' : '#059669',
                           cursor: dtrData.can_clear_loafing ? 'pointer' : 'default',
                         }}
                       >
-                        {isViolating ? '(!)' : '(✓)'}
+                        {hasOpenAlert ? '(!)' : '(✓)'}
                       </span>
                     )}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 700 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: hasOpenAlert ? '#dc2626' : '#000', fontWeight: hasOpenAlert ? 700 : 400 }}>
                     {row.am_arrival}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 700 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: hasOpenAlert ? '#dc2626' : '#000', fontWeight: hasOpenAlert ? 700 : 400 }}>
                     {row.am_departure}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 700 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: hasOpenAlert ? '#dc2626' : '#000', fontWeight: hasOpenAlert ? 700 : 400 }}>
                     {row.pm_arrival}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 700 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: hasOpenAlert ? '#dc2626' : '#000', fontWeight: hasOpenAlert ? 700 : 400 }}>
                     {row.pm_departure}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 800 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: hasOpenAlert ? '#dc2626' : '#000', fontWeight: hasOpenAlert ? 800 : 400 }}>
                     {row.undertime_hours}
                   </td>
-                  <td style={{ ...dtrTdCenter, color: isViolating ? '#dc2626' : '#000000', fontWeight: isViolating ? 800 : 'normal' }}>
+                  <td style={{ ...dtrTdCenter, color: hasOpenAlert ? '#dc2626' : '#000', fontWeight: hasOpenAlert ? 800 : 400 }}>
                     {row.undertime_minutes}
                   </td>
                 </tr>
@@ -689,7 +621,7 @@ export const DTRTab: React.FC = () => {
             <tr style={{ height: 16, borderTop: '1.2px solid #000', fontWeight: 800 }}>
               <td style={{ ...dtrTdCenter, fontWeight: 900 }}>TOTAL</td>
               <td colSpan={4} style={{ ...dtrTdCenter, fontSize: '5.6pt' }}>
-                Days Present: <strong>{dtrData.days_present}</strong> &bull; Total Undertime:
+                Days Present: <strong>{dtrData.days_present}</strong> &bull; Undertime:
               </td>
               <td style={dtrTdCenter}>{dtrData.total_undertime_hours || ''}</td>
               <td style={dtrTdCenter}>{dtrData.total_undertime_minutes || ''}</td>
@@ -702,9 +634,9 @@ export const DTRTab: React.FC = () => {
         </div>
 
         <div style={{ marginTop: 16, textAlign: 'center' }}>
-          <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto' }}></div>
+          <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto' }} />
           <div style={{ fontSize: '5.6pt', fontStyle: 'italic', marginTop: 1 }}>
-            (Signature of Faculty / Employee)
+            (Signature of Teacher / Employee)
           </div>
         </div>
 
@@ -729,49 +661,48 @@ export const DTRTab: React.FC = () => {
   const renderInstructionsCopy = () => (
     <div style={formCardContainer}>
       <div style={{ textAlign: 'center', marginBottom: 8, borderBottom: '1px solid #000', paddingBottom: 4 }}>
-        <div style={{ fontSize: '11pt', fontWeight: 900, letterSpacing: '0.8px' }}>
-          INSTRUCTIONS
-        </div>
+        <div style={{ fontSize: '11pt', fontWeight: 900, letterSpacing: '0.8px' }}>INSTRUCTIONS</div>
       </div>
 
       <div style={{ fontSize: '6.0pt', textAlign: 'justify', lineHeight: 1.35, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <p style={{ margin: 0 }}>
-          Civil Service Form No. 48, after completion, Should be filed in the records of the Bureau or Office which submits the monthly report on Civil Service Form No. 3 to the Bureau of Civil Service.
+          Civil Service Form No. 48, after completion, should be filed in the records of the Bureau or Office which submits the monthly report on Civil Service Form No. 3 to the Bureau of Civil Service.
         </p>
-
         <p style={{ margin: 0 }}>
-          In lieu of the above, court interpreters and stenographers who accompany the judges of the Court of First Instance will fill out the daily time reports on this form in triplicate, after which they should be approved by the judge with whom service has been rendered, or by an officer of the Department of Justice authorized to do so. The original should be forwarded promptly after the end of the month to the Bureau of Civil Service, thru the Department of Justice; the duplicate to kept in the department of justice; and the triplicate, in the office of the Clerk of Court where service was rendered.
+          In the space provided for the purpose on the other side will be indicated the office hours the employee is required to observe, as for example, &ldquo;Regular days, 8:00 to 12:00 and 1:00 to 4:00; Saturdays, 8:00 to 1:00.&rdquo;
         </p>
-
-        <p style={{ margin: 0 }}>
-          In the space provided for the purpose on the other side will be indicated the office hours the employee is required to observe, as for example, &ldquo;Regular days, 8:00 to 12:00 and 1:00 to 4:00; Saturdays 8:00 to 1:00.&rdquo;
-        </p>
-
         <p style={{ margin: 0 }}>
           Attention is invited to paragraph 3, Civil Service Rule XV, Executive Order No. 5, series of 1909, which reads as follows:
         </p>
-
         <blockquote style={{ margin: '0 0 0 8px', borderLeft: '1.5px solid #000', paddingLeft: 6, fontStyle: 'italic' }}>
-          &ldquo;Each chief of a Bureau or Office shall require a daily record of attendance of all the officers and employees under him entitled to leave or absence or vacation (including faculty) to be kept on the proper form and also a systematic office record showing for each day all absences from duty from any cause whatever. At the beginning of each month he shall report to the Commissioner on the proper form of all absences from any cause whatever, including the exact amount of undertime of each person for each day. Officers or employees serving in the field or on the water need not be required to keep a daily record, but all absences of such employees must be included in the monthly report of changes and absences. Falsification of time records will render the offending officers or employee liable to summary removal from the service and criminal prosecution.&rdquo;
+          &ldquo;Each chief of a Bureau or Office shall require a daily record of attendance of all the officers and employees under him entitled to leave of absence or vacation (including teachers) to be kept on the proper form and also a systematic office record showing for each day all absences from duty from any cause whatever. At the beginning of each month he shall report to the Commissioner on the proper form of all absences from any cause whatever, including the exact amount of undertime of each person for each day. Falsification of time records will render the offending officer or employee liable to summary removal from the service and criminal prosecution.&rdquo;
         </blockquote>
-
         <p style={{ margin: '4px 0 0 0', fontSize: '5.7pt' }}>
-          <strong>(NOTE</strong> A record made from memory at sometime subsequent to the occurrence of as event is not reliable. Non observance of office hours deprives the employee of the leave privileges although he may have rendered overtime service. Where service rendered outside of the Office for the whole morning or afternoon, notation to that effect should be made clearly.)
+          <strong>(NOTE:</strong> A record made from memory at sometime subsequent to the occurrence of an event is not reliable. Non-observance of office hours deprives the employee of leave privileges although he may have rendered overtime service. Where service is rendered outside of the Office for the whole morning or afternoon, notation to that effect should be made clearly.)
         </p>
       </div>
     </div>
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      
-      {/* 1. Control Header Bar */}
-      <div style={dynamicStyles.controlBar}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2vw, 20px)' }}>
+      {/* 1. Top Control Bar */}
+      <div
+        style={{
+          ...ui.card,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 12,
+          padding: '12px 16px',
+        }}
+      >
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <ProfileAvatar
-              photoUrl={activeFaculty?.photo}
-              name={activeFaculty?.full_name || dtrData?.faculty_name || ''}
+              photoUrl={activeTeacher?.photo_url}
+              name={activeTeacher?.full_name || dtrData?.faculty_name || 'Teacher'}
               size={36}
               iconSize={18}
             />
@@ -779,34 +710,33 @@ export const DTRTab: React.FC = () => {
             {isFaculty ? (
               <div
                 style={{
-                  display: 'flex',
+                  ...ui.subtleBox,
+                  display: 'inline-flex',
                   alignItems: 'center',
                   gap: 6,
                   padding: '6px 12px',
-                  borderRadius: 8,
-                  border: `1px solid ${tokens.borderSubtle}`,
-                  backgroundColor: tokens.bgSurfaceSubtle,
                   fontSize: '0.82rem',
                   fontWeight: 700,
                   color: tokens.textPrimary,
                 }}
-                title="Your view is locked to your personal time record."
+                title="Locked to your personal time record"
               >
                 <Lock size={13} color={tokens.textMuted} />
                 <span>
-                  {dtrData?.faculty_name || ''}{' '}
-                  {dtrData?.employee_id ? `(${dtrData.employee_id})` : ''}
+                  {dtrData?.faculty_name || 'My Time Record'}
+                  {dtrData?.employee_id ? ` (${dtrData.employee_id})` : ''}
                 </span>
               </div>
             ) : (
               <select
-                value={selectedFacultyId}
-                onChange={(e) => setSelectedFacultyId(e.target.value)}
-                style={dynamicStyles.selectControl}
+                aria-label="Select teacher"
+                value={selectedTeacherId}
+                onChange={(e) => setSelectedTeacherId(e.target.value)}
+                style={{ ...ui.input, width: 'auto', minWidth: 220, fontWeight: 700 }}
               >
-                {facultyList.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.full_name || `${f.last_name}, ${f.first_name}`} ({f.employee_id})
+                {teacherList.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.full_name} ({t.employee_id})
                   </option>
                 ))}
               </select>
@@ -816,128 +746,143 @@ export const DTRTab: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Calendar size={15} color={brand.primary} />
             <select
+              aria-label="Select month"
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(Number(e.target.value))}
-              style={dynamicStyles.selectControl}
+              style={{ ...ui.input, width: 'auto', padding: '6px 10px' }}
             >
-              {[
-                'January', 'February', 'March', 'April', 'May', 'June',
-                'July', 'August', 'September', 'October', 'November', 'December',
-              ].map((m, idx) => (
-                <option key={m} value={idx + 1}>{m}</option>
+              {MONTH_NAMES.map((m, idx) => (
+                <option key={m} value={idx + 1}>
+                  {m}
+                </option>
               ))}
             </select>
           </div>
 
           <select
+            aria-label="Select year"
             value={selectedYear}
             onChange={(e) => setSelectedYear(Number(e.target.value))}
-            style={dynamicStyles.selectControl}
+            style={{ ...ui.input, width: 'auto', padding: '6px 10px' }}
           >
-            {[2025, 2026, 2027].map((y) => (
-              <option key={y} value={y}>{y}</option>
+            {yearOptions.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
             ))}
           </select>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Layers size={14} color={tokens.textMuted} />
-            <select
-              value={viewSide}
-              onChange={(e) => setViewSide(e.target.value as any)}
-              style={dynamicStyles.selectControl}
-            >
-              <option value="BOTH">Full Form (Front &amp; Back)</option>
-              <option value="FRONT">Front Side Only (DTR)</option>
-              <option value="BACK">Back Side Only (Instructions)</option>
-            </select>
-          </div>
+          <ControlSwitch<FormSide>
+            options={[
+              { value: 'BOTH', label: 'Front & Back' },
+              { value: 'FRONT', label: 'Front Only' },
+              { value: 'BACK', label: 'Instructions' },
+            ]}
+            value={viewSide}
+            onChange={setViewSide}
+            size="sm"
+            ariaLabel="Form Side View"
+          />
 
-          <Button variant="secondary" size="md" onClick={() => fetchDTR(false)} disabled={loading}>
-            {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
-            <span style={{ marginLeft: 6 }}>Refresh</span>
+          <Button
+            variant="secondary"
+            size="md"
+            type="button"
+            onClick={() => fetchDTR(true, true)}
+            disabled={loading || refreshing}
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            <span>Refresh</span>
           </Button>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {isFaculty && dtrData && !dtrData.dtr_submitted && !dtrData.dept_head_approved && (
             <Button
               variant="primary"
               size="md"
+              type="button"
               onClick={handleSubmitDTR}
               disabled={actionProcessing}
-              style={{ backgroundColor: brand.primary, borderColor: brand.primary }}
             >
               {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <Send size={14} />}
-              <span style={{ marginLeft: 6 }}>Certify &amp; Submit DTR</span>
+              <span>Certify &amp; Submit</span>
             </Button>
           )}
 
-          {dtrData?.can_approve_dept && !dtrData?.dept_head_approved && (
+          {dtrData?.can_approve_dept && !dtrData.dept_head_approved && (
             <Button
               variant="primary"
               size="md"
+              type="button"
               onClick={handleApproveByDeptHead}
               disabled={actionProcessing}
-              style={{ backgroundColor: brand.success, borderColor: brand.success }}
+              style={{ backgroundColor: brand.success }}
             >
               {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
-              <span style={{ marginLeft: 6 }}>Approve as Dept Head</span>
+              <span>Approve DTR</span>
             </Button>
           )}
 
           <Button
             variant="secondary"
             size="md"
+            type="button"
             onClick={handleDownloadPdf}
             disabled={exportingPdf || !dtrData || !dtrData.dept_head_approved}
-            title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before exporting.' : 'Export DTR PDF'}
+            title={!dtrData?.dept_head_approved ? 'Requires Department Head approval first' : 'Download PDF'}
           >
-            {exportingPdf ? <Loader2 className="animate-spin" size={14} /> : !dtrData?.dept_head_approved ? <Lock size={14} color={brand.danger} /> : <Download size={14} />}
-            <span style={{ marginLeft: 6 }}>Export PDF</span>
+            {exportingPdf ? (
+              <Loader2 className="animate-spin" size={14} />
+            ) : !dtrData?.dept_head_approved ? (
+              <Lock size={14} color={brand.danger} />
+            ) : (
+              <Download size={14} />
+            )}
+            <span>Export PDF</span>
           </Button>
 
           <Button
             variant="primary"
             size="md"
+            type="button"
             onClick={handlePrint}
             disabled={!dtrData || !dtrData.dept_head_approved}
-            title={!dtrData?.dept_head_approved ? 'Department Head endorsement required before printing.' : 'Print Hard Copy DTR'}
+            title={!dtrData?.dept_head_approved ? 'Requires Department Head approval first' : 'Print Form 48'}
           >
             {!dtrData?.dept_head_approved ? <Lock size={14} /> : <Printer size={14} />}
-            <span style={{ marginLeft: 6 }}>Print DTR</span>
+            <span>Print DTR</span>
           </Button>
         </div>
       </div>
 
-      {/* 2. Governance Status Banner */}
+      {/* 2. Approval Status Banner */}
       {dtrData && (
         <div
           style={{
+            ...ui.subtleBox,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            padding: '12px 18px',
-            borderRadius: 10,
+            flexWrap: 'wrap',
+            gap: 10,
             backgroundColor: dtrData.dept_head_approved
-              ? 'rgba(16, 185, 129, 0.12)'
+              ? tokens.successLight
               : dtrData.dtr_submitted
-              ? 'rgba(2, 132, 199, 0.12)'
-              : 'rgba(245, 158, 11, 0.12)',
-            border: `1px solid ${
-              dtrData.dept_head_approved
-                ? 'rgba(16, 185, 129, 0.28)'
-                : dtrData.dtr_submitted
-                ? 'rgba(2, 132, 199, 0.28)'
-                : 'rgba(245, 158, 11, 0.28)'
-            }`,
-            transition: 'all 0.2s ease',
+              ? tokens.infoLight
+              : tokens.warningLight,
+            borderColor: dtrData.dept_head_approved
+              ? brand.success
+              : dtrData.dtr_submitted
+              ? brand.secondary
+              : brand.warning,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {dtrData.dept_head_approved ? (
               <ShieldCheck size={20} color={brand.success} />
             ) : (
-              <ShieldAlert size={20} color={dtrData.dtr_submitted ? brand.primary : brand.warning} />
+              <ShieldAlert size={20} color={dtrData.dtr_submitted ? brand.secondary : brand.warning} />
             )}
             <div>
               <div
@@ -947,89 +892,112 @@ export const DTRTab: React.FC = () => {
                   color: dtrData.dept_head_approved
                     ? brand.success
                     : dtrData.dtr_submitted
-                    ? brand.primary
+                    ? brand.secondary
                     : brand.warning,
                 }}
               >
                 {dtrData.dept_head_approved
-                  ? 'DEPARTMENT HEAD APPROVED — OFFICIAL COPY UNLOCKED (DRAFT WATERMARK REMOVED)'
+                  ? 'APPROVED BY DEPARTMENT HEAD — READY TO PRINT'
                   : dtrData.dtr_submitted
-                  ? 'SUBMITTED TO DEPARTMENT HEAD — AWAITING DIGITAL ENDORSEMENT'
-                  : 'DRAFT MODE — PLEASE CERTIFY AND SUBMIT TO YOUR DEPARTMENT HEAD'}
+                  ? 'SUBMITTED — WAITING FOR DEPARTMENT HEAD APPROVAL'
+                  : 'DRAFT — REVIEW WORKING HOURS AND SUBMIT TO DEPARTMENT HEAD'}
               </div>
               <div style={{ fontSize: '0.72rem', color: tokens.textSecondary, marginTop: 2 }}>
                 {dtrData.dept_head_approved
-                  ? 'Official hard-copy printing is unlocked. Submit physical copy to Principal with your signature.'
-                  : 'Digital endorsement from your Department Head is required before official hard-copy printing is unlocked.'}
+                  ? 'Watermark removed. Print two copies and sign above your name.'
+                  : 'Official PDF export and printing unlock once approved by your Department Head.'}
               </div>
             </div>
           </div>
 
-          <div style={{ fontSize: '0.74rem', fontWeight: 700, color: tokens.textPrimary }}>
-            Status:{' '}
-            <span
-              style={{
-                color: dtrData.dept_head_approved
-                  ? brand.success
-                  : dtrData.dtr_submitted
-                  ? brand.primary
-                  : brand.warning,
-              }}
-            >
-              {dtrData.dept_head_approved
-                ? 'APPROVED & CLEARED'
-                : dtrData.dtr_submitted
-                ? 'SUBMITTED / PENDING REVIEW'
-                : 'DRAFT / UNSUBMITTED'}
-            </span>
+          <div style={{ fontSize: '0.76rem', fontWeight: 800, color: tokens.textPrimary }}>
+            Days Logged: <span style={{ color: brand.primary }}>{dtrData.days_present}</span>
           </div>
         </div>
       )}
 
-      {/* 3. Official Working Hours Bar */}
-      <div style={dynamicStyles.scheduleBar}>
+      {/* 3. Working Hours Schedule Inputs */}
+      <div
+        style={{
+          ...ui.subtleBox,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 12,
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.78rem' }}>
-          <Clock size={15} color={tokens.textMuted} />
-          <span style={{ fontWeight: 700, color: tokens.textPrimary }}>Prescribed Hours:</span>
+          <Clock size={15} color={brand.primary} />
+          <span style={{ fontWeight: 700, color: tokens.textPrimary }}>Official Working Hours:</span>
         </div>
+
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.76rem' }}>
-            <span style={{ color: tokens.textSecondary }}>Regular:</span>
+            <span style={{ color: tokens.textSecondary, fontWeight: 600 }}>Regular Days:</span>
             <input
               type="text"
+              maxLength={100}
+              disabled={Boolean(dtrData?.dept_head_approved && isFaculty)}
               value={regularHours}
-              placeholder="Enter regular working hours"
-              onChange={(e) => setRegularHours(e.target.value)}
-              style={dynamicStyles.inputSchedule}
+              placeholder="e.g. 7:30 AM - 12:00 NN, 1:00 - 4:30 PM"
+              onChange={(e) => {
+                setHoursDirty(true);
+                setRegularHours(e.target.value);
+              }}
+              style={{ ...ui.input, width: 250, padding: '5px 10px', fontSize: '0.76rem' }}
             />
           </div>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.76rem' }}>
-            <span style={{ color: tokens.textSecondary }}>Saturdays:</span>
+            <span style={{ color: tokens.textSecondary, fontWeight: 600 }}>Saturdays:</span>
             <input
               type="text"
+              maxLength={100}
+              disabled={Boolean(dtrData?.dept_head_approved && isFaculty)}
               value={saturdayHours}
-              placeholder="Enter Saturday working hours"
-              onChange={(e) => setSaturdayHours(e.target.value)}
-              style={dynamicStyles.inputSchedule}
+              placeholder="e.g. As Required / None"
+              onChange={(e) => {
+                setHoursDirty(true);
+                setSaturdayHours(e.target.value);
+              }}
+              style={{ ...ui.input, width: 190, padding: '5px 10px', fontSize: '0.76rem' }}
             />
           </div>
         </div>
       </div>
 
       {error && (
-        <div style={dynamicStyles.errorBanner}>
-          <AlertCircle size={18} />
+        <div
+          style={{
+            ...ui.subtleBox,
+            backgroundColor: tokens.dangerLight,
+            borderColor: brand.danger,
+            color: brand.danger,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontWeight: 600,
+          }}
+        >
+          <AlertCircle size={17} />
           <span>{error}</span>
         </div>
       )}
 
-      {/* 4. Official Printable Sheets Preview */}
-      <div style={dynamicStyles.paperPreviewWrapper}>
+      {/* 4. Printable CSC Form 48 Sheet Preview */}
+      <div
+        style={{
+          ...ui.subtleBox,
+          overflowX: 'auto',
+          padding: 16,
+        }}
+      >
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 320, gap: 10 }}>
             <Loader2 className="animate-spin" size={26} color={brand.primary} />
-            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: tokens.textMuted }}>
-              Loading attendance logs and verifying clearance...
+            <span style={{ fontSize: '0.86rem', fontWeight: 600, color: tokens.textMuted }}>
+              Loading Daily Time Record from database...
             </span>
           </div>
         ) : dtrData ? (
@@ -1037,7 +1005,7 @@ export const DTRTab: React.FC = () => {
             {(viewSide === 'BOTH' || viewSide === 'FRONT') && (
               <div id="csc-form-48-front" className="csc-print-page" style={printableSheetContainer}>
                 {renderDTRCopy()}
-                <div style={perforationLine}></div>
+                <div style={perforationLine} />
                 {renderDTRCopy()}
               </div>
             )}
@@ -1045,7 +1013,7 @@ export const DTRTab: React.FC = () => {
             {(viewSide === 'BOTH' || viewSide === 'BACK') && (
               <div id="csc-form-48-back" className="csc-print-page" style={printableSheetContainer}>
                 {renderInstructionsCopy()}
-                <div style={perforationLine}></div>
+                <div style={perforationLine} />
                 {renderInstructionsCopy()}
               </div>
             )}
@@ -1053,69 +1021,68 @@ export const DTRTab: React.FC = () => {
         ) : null}
       </div>
 
-      {/* 5. Principal Loafing Violation Review Modal */}
-      {selectedViolationRow && (
+      {/* 5. Principal Off-Campus Alert Review Modal */}
+      {selectedAlertRow && (
         <Modal
-          isOpen={Boolean(selectedViolationRow)}
-          onClose={() => setSelectedViolationRow(null)}
-          title="Principal Discretion: Loafing Violation Review"
+          isOpen={Boolean(selectedAlertRow)}
+          onClose={() => setSelectedAlertRow(null)}
+          title="Principal Review: Off-Campus Boundary Alert"
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, backgroundColor: 'rgba(239, 68, 68, 0.12)', borderRadius: 8, border: '1px solid rgba(239, 68, 68, 0.28)' }}>
-              <AlertTriangle size={24} color={brand.danger} style={{ flexShrink: 0 }} />
-              <div style={{ fontSize: '0.78rem', color: brand.danger, lineHeight: 1.35 }}>
-                An unexcused departure or loafing flag was recorded for <strong>{dtrData?.faculty_name}</strong> on <strong>{selectedViolationRow.date_str}</strong>.
-                If not excused by the Principal, this date will incur a salary deduction.
+            <div
+              style={{
+                ...ui.subtleBox,
+                backgroundColor: tokens.dangerLight,
+                borderColor: brand.danger,
+                color: brand.danger,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              <AlertTriangle size={22} color={brand.danger} style={{ flexShrink: 0 }} />
+              <div style={{ fontSize: '0.78rem', lineHeight: 1.4 }}>
+                An unexcused off-campus alert was recorded for <strong>{dtrData?.faculty_name}</strong> on{' '}
+                <strong>{selectedAlertRow.date_str}</strong>.
               </div>
             </div>
 
             <div style={{ fontSize: '0.80rem', color: tokens.textPrimary }}>
-              <strong>Recorded Gate Note:</strong> {selectedViolationRow.loafing_remarks || 'None'}
+              <strong>Boundary Alert Note:</strong> {selectedAlertRow.loafing_remarks || 'No note recorded'}
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                Principal Pardon Reason / Official Remarks:
-              </label>
+              <label style={ui.label}>Official Reason to Excuse Alert *</label>
               <input
                 type="text"
-                value={pardonRemarks}
-                onChange={(e) => setPardonRemarks(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  borderRadius: 6,
-                  border: `1px solid ${tokens.borderStrong}`,
-                  backgroundColor: tokens.bgSurface,
-                  color: tokens.textPrimary,
-                  fontSize: '0.84rem',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-                placeholder="Enter justification for excusing departure..."
+                maxLength={240}
+                value={excuseRemarks}
+                onChange={(e) => setExcuseRemarks(e.target.value)}
+                style={ui.input}
+                placeholder="e.g. Authorized division seminar / official school errand"
               />
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
-              <Button variant="secondary" size="md" onClick={() => setSelectedViolationRow(null)}>
-                Leave as Deduction
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+              <Button variant="secondary" size="md" type="button" onClick={() => setSelectedAlertRow(null)}>
+                Keep Alert Unexcused
               </Button>
               <Button
                 variant="primary"
                 size="md"
-                onClick={handleExcuseLoafingByPrincipal}
+                type="button"
+                onClick={handleExcuseAlertByPrincipal}
                 disabled={actionProcessing}
-                style={{ backgroundColor: brand.success, borderColor: brand.success }}
+                style={{ backgroundColor: brand.success }}
               >
                 {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
-                <span style={{ marginLeft: 6 }}>Pardon &amp; Clear Deduction</span>
+                <span>Excuse Alert</span>
               </Button>
             </div>
           </div>
         </Modal>
       )}
 
-      {/* High-Precision Print Media Styles */}
       <style>{`
         @media print {
           @page {
@@ -1163,15 +1130,17 @@ const printableSheetContainer: React.CSSProperties = {
   backgroundColor: '#ffffff',
   width: '8.5in',
   margin: '0 auto',
-  padding: '0.35in 0.35in',
+  padding: '0.35in',
   borderRadius: 4,
   boxShadow: '0 4px 18px rgba(0,0,0,0.20)',
   boxSizing: 'border-box',
 };
 
 const perforationLine: React.CSSProperties = {
-  width: '1px',
-  borderLeft: '1px dashed #94a3b8',
+  width: 1,
+  borderLeftWidth: 1,
+  borderLeftStyle: 'dashed',
+  borderLeftColor: '#94a3b8',
   margin: '0 2px',
 };
 
@@ -1201,24 +1170,26 @@ const draftWatermarkStyle: React.CSSProperties = {
 };
 
 const draftWatermarkText: React.CSSProperties = {
-  fontSize: '52pt',
+  fontSize: '50pt',
   fontWeight: 900,
   fontFamily: "'Arial Black', Impact, sans-serif",
-  color: 'rgba(239, 68, 68, 0.22)',
-  border: '5px dashed rgba(239, 68, 68, 0.28)',
-  padding: '4px 28px',
+  color: 'rgba(239, 68, 68, 0.20)',
+  borderWidth: 5,
+  borderStyle: 'dashed',
+  borderColor: 'rgba(239, 68, 68, 0.26)',
+  padding: '4px 26px',
   borderRadius: 10,
-  letterSpacing: '10px',
+  letterSpacing: '8px',
   lineHeight: 1,
   textAlign: 'center',
 };
 
 const draftWatermarkSub: React.CSSProperties = {
-  fontSize: '8pt',
+  fontSize: '7.5pt',
   fontWeight: 800,
   fontFamily: 'Arial, sans-serif',
-  color: 'rgba(239, 68, 68, 0.32)',
-  letterSpacing: '2px',
+  color: 'rgba(239, 68, 68, 0.30)',
+  letterSpacing: '1.5px',
   marginTop: 6,
   textAlign: 'center',
 };

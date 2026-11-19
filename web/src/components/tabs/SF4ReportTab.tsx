@@ -163,7 +163,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     setError(null);
     try {
       const res = await apiClient.get<SF4ReportData>(
-        `/reports/sf4/?month=${selectedMonth}&year=${selectedYear}&school_year=${selectedAcademicYear}`
+        `/v1/reports/sf4/?month=${selectedMonth}&year=${selectedYear}&school_year=${selectedAcademicYear}`
       );
       setReportData(res.data);
     } catch (err: any) {
@@ -231,7 +231,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
-      await apiClient.post('/reports/audit-logs/', {
+      await apiClient.post('/v1/reports/audit-logs/', {
         report_name: 'School Form 4 (SF4)',
         document_tracking_id: auditMeta.trackingId,
         action: actionType,

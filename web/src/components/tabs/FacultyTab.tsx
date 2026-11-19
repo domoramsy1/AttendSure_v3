@@ -200,7 +200,7 @@ export const FacultyTab: React.FC = () => {
         setError(null);
         const isAll = size >= ALL_ROWS_SIZE;
 
-        const res = await apiClient.get<PaginatedResponse<Faculty> | Faculty[]>('/facultys/', {
+        const res = await apiClient.get<PaginatedResponse<Faculty> | Faculty[]>('/v1/accounts/teachers/', {
           params: {
             page: isAll ? 1 : page,
             page_size: isAll ? 'ALL' : size,
@@ -381,7 +381,7 @@ export const FacultyTab: React.FC = () => {
 
     try {
       if (editingFaculty) {
-        const res = await apiClient.put<Faculty>(`/facultys/${editingFaculty.id}/`, cleanPayload);
+        const res = await apiClient.put<Faculty>(`/v1/accounts/teachers/${editingFaculty.id}/`, cleanPayload);
         setFacultys((prev) => prev.map((f) => (f.id === editingFaculty.id ? res.data : f)));
         showAlert({
           title: 'Profile Updated',
@@ -389,7 +389,7 @@ export const FacultyTab: React.FC = () => {
           type: 'success',
         });
       } else {
-        const res = await apiClient.post<Faculty>('/facultys/', cleanPayload);
+        const res = await apiClient.post<Faculty>('/v1/accounts/teachers/', cleanPayload);
         setFacultys((prev) => [res.data, ...prev]);
         showAlert({
           title: 'Faculty Registered',
@@ -425,7 +425,7 @@ export const FacultyTab: React.FC = () => {
       isDestructive: true,
       onConfirm: async () => {
         try {
-          await apiClient.delete(`/facultys/${faculty.id}/`);
+          await apiClient.delete(`/v1/accounts/teachers/${faculty.id}/`);
           setFacultys((prev) => prev.filter((f) => f.id !== faculty.id));
           if (inspectingFaculty?.id === faculty.id) setInspectingFaculty(null);
           showAlert({

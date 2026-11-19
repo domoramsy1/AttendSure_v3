@@ -1,13 +1,21 @@
 /**
- * AttendSure - Students Directory (Full 30-Column DepEd SF1 Schema with Year Level & Section Linking)
+ * AttendSure - Students Directory & DepEd SF1 Enrollment (Zero Mock Data & Role-Aware)
  * File: web/src/components/tabs/StudentsTab.tsx
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient from '../../api/client';
-import { exportToCsv } from '../common/Pagination';
+import { API_ROUTES, extractApiError } from '../../api/routes';
+import { useTheme } from '../../context/ThemeContext';
+import { useSchool } from '../../context/SchoolContext';
+import { isSafeImageUrl, sanitizeText } from '../../theme/tokens';
+import { StatsCard } from '../common/StatsCard';
+import { ProfileAvatar } from '../common/ProfileAvatar';
+import { Pagination, exportToCsv, ALL_ROWS_SIZE } from '../common/Pagination';
+import { ControlSwitch } from '../ui/ControlSwitch';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { useAlert } from '../../context/AlertContext';
 import {
   User,
   Pencil,
@@ -26,11 +34,10 @@ import {
   Plus,
   BookOpen,
   Search,
-  ChevronLeft,
-  ChevronRight,
   Home,
   Users2,
   GraduationCap,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface Student {
@@ -58,7 +65,6 @@ interface Student {
   qr_token?: string;
   current_section?: string;
   section_id?: number;
-  grade_level_id?: number;
   grade_level_name?: string;
   photo?: string | null;
   photo_url?: string | null;
@@ -75,7 +81,6 @@ interface SectionItem {
   id: number;
   name: string;
   code?: string;
-  grade_level_id?: number;
   grade_level?: number | { id: number; name: string };
   grade_level_name?: string;
 }
@@ -89,72 +94,48 @@ interface MetricsData {
 
 type ModalFormTab = 'BASIC' | 'ADDRESS' | 'PARENTS' | 'DEPED';
 
-const isSafeImageUrl = (url?: string | null): boolean => {
-  if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
-  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
-  return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('/') || clean.startsWith('data:image/');
-};
-
-const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
-  const cleanText = String(textToCopy || '').trim();
-  if (!cleanText) return false;
-
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(cleanText);
-      return true;
-    } catch {}
-  }
-
-  if (typeof document !== 'undefined') {
-    const textArea = document.createElement('textarea');
-    textArea.value = cleanText;
-    textArea.setAttribute('readonly', '');
-    textArea.style.position = 'fixed';
-    textArea.style.top = '-9999px';
-    document.body.appendChild(textArea);
-    textArea.select();
-    let copied = false;
-    try {
-      copied = document.execCommand('copy');
-    } catch {
-      copied = false;
-    }
-    document.body.removeChild(textArea);
-    return copied;
-  }
-  return false;
+const maskQrToken = (token?: string): string => {
+  const clean = String(token || '').trim();
+  if (!clean) return '';
+  return clean.length <= 4 ? 'Linked' : `••••${clean.slice(-4)}`;
 };
 
 export const StudentsTab: React.FC = () => {
+  const { tokens, brand, fonts, ui } = useTheme();
+  const { school } = useSchool();
+  const { showAlert, showConfirm } = useAlert();
+
+  const userRole = useMemo(
+    () => (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(),
+    []
+  );
+  const canManageStudents = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
+
   const [students, setStudents] = useState<Student[]>([]);
   const [gradeLevels, setGradeLevels] = useState<GradeLevelItem[]>([]);
   const [sections, setSections] = useState<SectionItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Pagination states
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
-  const [totalCount, setTotalCount] = useState<number>(1000);
+  const [totalCount, setTotalCount] = useState<number>(0);
 
-  // Database metrics
+  // Strictly zero mock numbers — hydrated 100% from PostgreSQL
   const [metrics, setMetrics] = useState<MetricsData>({
-    total: 1000,
-    active: 1000,
+    total: 0,
+    active: 0,
     paired: 0,
-    total_sections: 24,
+    total_sections: 0,
   });
 
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [selectedSectionFilter, setSelectedSectionFilter] = useState<string>('ALL');
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const [badgeStudent, setBadgeStudent] = useState<Student | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
-  // Modal Form State (With Year Level & Section)
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [formTab, setFormTab] = useState<ModalFormTab>('BASIC');
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
@@ -175,149 +156,185 @@ export const StudentsTab: React.FC = () => {
     photo: null as string | null,
     house_street_sitio: '',
     barangay: '',
-    municipality_city: 'Cagayan de Oro City',
-    province: 'Misamis Oriental',
+    municipality_city: '',
+    province: '',
     father_name: '',
     mother_maiden_name: '',
     guardian_name: '',
-    guardian_relationship: 'Parent',
+    guardian_relationship: 'Mother',
     parent_contact: '',
-    mother_tongue: 'Cebuano',
+    mother_tongue: '',
     ethnic_group: '',
-    religion: 'Roman Catholic',
+    religion: '',
   });
 
-  const [confirmDialog, setConfirmDialog] = useState<{
-    isOpen: boolean;
-    title: string;
-    message: string;
-    confirmLabel: string;
-    action: () => Promise<void>;
-  }>({
-    isOpen: false,
-    title: '',
-    message: '',
-    confirmLabel: 'Confirm',
-    action: async () => {},
-  });
-
+  const abortRef = useRef<AbortController | null>(null);
   const isInteracting = useRef<boolean>(false);
-  isInteracting.current = isModalOpen || Boolean(badgeStudent) || confirmDialog.isOpen;
+  isInteracting.current = isModalOpen || Boolean(badgeStudent);
 
-  // Filter sections by selected Grade Level inside the Modal
+  // Debounce search input by 300ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(sanitizeText(searchQuery, 60));
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Load static lookups (Grade Levels & Sections) once on mount
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      apiClient.get(API_ROUTES.school.gradeLevels, { params: { page_size: 200 } }),
+      apiClient.get(API_ROUTES.school.sections, { params: { page_size: 300 } }),
+    ])
+      .then(([glRes, secRes]) => {
+        if (!active) return;
+        setGradeLevels(Array.isArray(glRes.data) ? glRes.data : glRes.data?.results || []);
+        setSections(Array.isArray(secRes.data) ? secRes.data : secRes.data?.results || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const loadMetrics = useCallback(async (bypassCache = false) => {
+    try {
+      const res = await apiClient.get(API_ROUTES.students.metrics, {
+        params: bypassCache ? { nocache: 1 } : undefined,
+      });
+      if (res.data) {
+        setMetrics({
+          total: Number(res.data.total ?? res.data.total_students ?? 0),
+          active: Number(res.data.active ?? res.data.total_students ?? 0),
+          paired: Number(res.data.paired ?? 0),
+          total_sections: Number(res.data.total_sections ?? 0),
+        });
+      }
+    } catch {
+      // Keep existing metrics if offline
+    }
+  }, []);
+
+  const loadStudents = useCallback(
+    async (page: number, size: number, silent = false, bypassCache = false) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      if (!silent) setLoading(true);
+      setError(null);
+
+      try {
+        const isAll = size >= ALL_ROWS_SIZE;
+        const params: Record<string, string | number> = {
+          page: isAll ? 1 : page,
+          page_size: isAll ? 'ALL' : size,
+        };
+        if (debouncedSearch) params.search = debouncedSearch;
+        if (selectedSectionFilter !== 'ALL') params.section_id = selectedSectionFilter;
+        if (bypassCache) params.nocache = 1;
+
+        const res = await apiClient.get(API_ROUTES.students.list, {
+          params,
+          signal: controller.signal,
+        });
+
+        if (res.data && 'results' in res.data) {
+          setStudents(res.data.results);
+          setTotalCount(Number(res.data.count) || 0);
+        } else if (Array.isArray(res.data)) {
+          setStudents(res.data);
+          setTotalCount(res.data.length);
+        }
+      } catch (err: unknown) {
+        const anyErr = err as { name?: string; code?: string };
+        if (anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
+        if (!silent) setError(extractApiError(err, 'Could not load student directory.'));
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [debouncedSearch, selectedSectionFilter]
+  );
+
+  useEffect(() => {
+    loadMetrics(false);
+  }, [loadMetrics]);
+
+  useEffect(() => {
+    loadStudents(currentPage, pageSize, false, false);
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, [currentPage, pageSize, loadStudents]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!isInteracting.current && document.visibilityState === 'visible') {
+        loadStudents(currentPage, pageSize, true, true);
+        loadMetrics(true);
+      }
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [currentPage, pageSize, loadStudents, loadMetrics]);
+
   const modalAvailableSections = useMemo(() => {
     if (!formData.grade_level_id) return sections;
     return sections.filter((sec) => {
-      const glId = typeof sec.grade_level === 'object' && sec.grade_level !== null
-        ? sec.grade_level.id
-        : (sec.grade_level_id || sec.grade_level);
+      const glId =
+        typeof sec.grade_level === 'object' && sec.grade_level !== null
+          ? sec.grade_level.id
+          : sec.grade_level;
       return String(glId) === String(formData.grade_level_id);
     });
   }, [sections, formData.grade_level_id]);
 
-  // 1. Fetch Real Database Metrics
-  const loadMetrics = useCallback(async () => {
-    try {
-      const res = await apiClient.get('/students/metrics/');
-      if (res.data) {
-        setMetrics({
-          total: Number(res.data.total) || 1000,
-          active: Number(res.data.active) || 1000,
-          paired: Number(res.data.paired) || 0,
-          total_sections: Number(res.data.total_sections) || 24,
-        });
-        setTotalCount(Number(res.data.total) || 1000);
-      }
-    } catch {}
-  }, []);
-
-  // 2. Fetch Paginated Student Records & Prerequisites
-  const loadData = useCallback(async (page = currentPage, size = pageSize, silent = false) => {
-    if (!silent) setLoading(true);
-    setError(null);
-    try {
-      const params: Record<string, any> = { page, page_size: size };
-      if (searchQuery.trim()) params.search = searchQuery.trim();
-      if (selectedSectionFilter !== 'ALL') params.section_id = selectedSectionFilter;
-
-      const [studRes, glRes, secRes] = await Promise.all([
-        apiClient.get('/students/', { params }),
-        apiClient.get('/grade-levels/?page_size=500'),
-        apiClient.get('/sections/?page_size=500'),
-      ]);
-
-      setGradeLevels(Array.isArray(glRes.data) ? glRes.data : glRes.data?.results || []);
-      setSections(Array.isArray(secRes.data) ? secRes.data : secRes.data?.results || []);
-
-      if (studRes.data && 'results' in studRes.data) {
-        setStudents(studRes.data.results);
-        setTotalCount(Number(studRes.data.count) || 1000);
-      } else if (Array.isArray(studRes.data)) {
-        setStudents(studRes.data);
-        setTotalCount(studRes.data.length);
-      }
-    } catch (err: any) {
-      if (!silent) {
-        setError(err.response?.data?.detail || err.response?.data?.error || 'Failed to load students.');
-      }
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [currentPage, pageSize, searchQuery, selectedSectionFilter]);
-
-  useEffect(() => {
-    loadMetrics();
-    loadData(1, pageSize, false);
-    setCurrentPage(1);
-  }, [loadMetrics, loadData, pageSize]);
-
-  useEffect(() => {
-    const liveInterval = setInterval(() => {
-      if (!isInteracting.current && document.visibilityState === 'visible') {
-        loadData(currentPage, pageSize, true);
-        loadMetrics();
-      }
-    }, 12000);
-    return () => clearInterval(liveInterval);
-  }, [currentPage, pageSize, loadData, loadMetrics]);
-
   const handleCopy = async (val: string) => {
-    const ok = await copyTextSafely(val);
-    if (ok) {
+    if (!val) return;
+    try {
+      await navigator.clipboard.writeText(val);
       setCopiedValue(val);
       setTimeout(() => setCopiedValue((prev) => (prev === val ? null : prev)), 2000);
+    } catch {
+      // Ignore clipboard failure
     }
   };
 
   const handleExportCsv = async () => {
     setIsExporting(true);
     try {
-      const res = await apiClient.get('/students/?page_size=1000');
-      const allStudents: Student[] = Array.isArray(res.data) ? res.data : res.data?.results || [];
+      const params: Record<string, string | number> = { page_size: 'ALL' };
+      if (debouncedSearch) params.search = debouncedSearch;
+      if (selectedSectionFilter !== 'ALL') params.section_id = selectedSectionFilter;
+
+      const res = await apiClient.get(API_ROUTES.students.list, { params });
+      const list: Student[] = Array.isArray(res.data) ? res.data : res.data?.results || [];
 
       exportToCsv(
-        `AttendSure_All_Students_${new Date().toISOString().slice(0, 10)}.csv`,
+        `AttendSure_Students_${new Date().toISOString().slice(0, 10)}.csv`,
         [
           'LRN',
           'Full Name',
           'Sex',
           'Birthdate',
           'Class Section',
-          'qr_id Card UID',
+          'QR Card Status',
           'Parent Contact',
           'Father Name',
           'Mother Maiden Name',
           'Barangay',
-          'City',
+          'Municipality / City',
           'Status',
         ],
-        allStudents.map((s) => [
+        list.map((s) => [
           s.lrn,
           s.full_name || `${s.last_name}, ${s.first_name}`,
-          s.sex || 'Male',
+          s.sex || '',
           s.birthdate || '',
           s.current_section || 'Unassigned',
-          s.qr_token || '',
+          s.qr_token ? 'Linked' : 'Not Linked',
           s.parent_contact || '',
           s.father_name || '',
           s.mother_maiden_name || '',
@@ -326,43 +343,28 @@ export const StudentsTab: React.FC = () => {
           s.is_active ? 'ACTIVE' : 'INACTIVE',
         ])
       );
-    } catch {
-      alert('Could not export full list. Exporting current page.');
+    } catch (err) {
+      showAlert({ title: 'Export Failed', message: extractApiError(err), type: 'error' });
     } finally {
       setIsExporting(false);
-    }
-  };
-
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
-
-  const handlePageChange = (newPage: number) => {
-    if (newPage >= 1 && newPage <= totalPages) {
-      setCurrentPage(newPage);
-      loadData(newPage, pageSize, false);
     }
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setFormError('Please select a valid image file (JPG, PNG, or WebP).');
+      setFormError('Please upload a JPG, PNG, or WebP photo.');
       return;
     }
-
-    if (file.size > 2 * 1024 * 1024) {
-      setFormError('Profile photo must be smaller than 2 MB.');
+    if (file.size > 2.5 * 1024 * 1024) {
+      setFormError('Photo size must be 2.5 MB or smaller.');
       return;
     }
-
     setFormError(null);
     const reader = new FileReader();
     reader.onloadend = () => {
-      setFormData((prev) => ({
-        ...prev,
-        photo: reader.result as string,
-      }));
+      setFormData((prev) => ({ ...prev, photo: reader.result as string }));
     };
     reader.readAsDataURL(file);
   };
@@ -379,65 +381,63 @@ export const StudentsTab: React.FC = () => {
       suffix: '',
       sex: 'Male',
       birthdate: '2012-01-01',
-      grade_level_id: gradeLevels.length > 0 ? String(gradeLevels[0].id) : '',
+      grade_level_id: gradeLevels[0] ? String(gradeLevels[0].id) : '',
       section_id: '',
       qr_token: '',
       photo: null,
       house_street_sitio: '',
       barangay: '',
-      municipality_city: 'Cagayan de Oro City',
-      province: 'Misamis Oriental',
+      municipality_city: '',
+      province: '',
       father_name: '',
       mother_maiden_name: '',
       guardian_name: '',
-      guardian_relationship: 'Parent',
+      guardian_relationship: 'Mother',
       parent_contact: '',
-      mother_tongue: 'Cebuano',
+      mother_tongue: '',
       ethnic_group: '',
-      religion: 'Roman Catholic',
+      religion: '',
     });
     setIsModalOpen(true);
   };
 
-  const handleOpenEdit = (student: Student) => {
-    setEditingStudent(student);
+  const handleOpenEdit = (st: Student) => {
+    setEditingStudent(st);
     setFormError(null);
     setFormTab('BASIC');
 
-    // Find the student's section to infer grade level
-    const matchedSec = sections.find((s) => s.id === student.section_id || s.name === student.current_section);
-    let inferredGL = '';
-    if (matchedSec) {
-      const glVal = typeof matchedSec.grade_level === 'object' && matchedSec.grade_level !== null
+    const matchedSec = sections.find(
+      (s) => s.id === st.section_id || s.name === st.current_section
+    );
+    const glVal =
+      matchedSec && typeof matchedSec.grade_level === 'object' && matchedSec.grade_level !== null
         ? matchedSec.grade_level.id
-        : (matchedSec.grade_level_id || matchedSec.grade_level);
-      inferredGL = glVal ? String(glVal) : '';
-    }
+        : matchedSec?.grade_level;
 
     setFormData({
-      lrn: student.lrn || '',
-      first_name: student.first_name || '',
-      middle_name: student.middle_name || '',
-      last_name: student.last_name || '',
-      suffix: student.suffix || '',
-      sex: student.sex === 'Female' || student.sex === 'F' ? 'Female' : 'Male',
-      birthdate: student.birthdate || '2012-01-01',
-      grade_level_id: inferredGL || (gradeLevels.length > 0 ? String(gradeLevels[0].id) : ''),
-      section_id: student.section_id ? String(student.section_id) : (matchedSec ? String(matchedSec.id) : ''),
-      qr_token: student.qr_token || '',
-      photo: student.photo_url || student.photo || null,
-      house_street_sitio: student.house_street_sitio || '',
-      barangay: student.barangay || '',
-      municipality_city: student.municipality_city || 'Cagayan de Oro City',
-      province: student.province || 'Misamis Oriental',
-      father_name: student.father_name || '',
-      mother_maiden_name: student.mother_maiden_name || '',
-      guardian_name: student.guardian_name || '',
-      guardian_relationship: student.guardian_relationship || 'Parent',
-      parent_contact: student.parent_contact || '',
-      mother_tongue: student.mother_tongue || 'Cebuano',
-      ethnic_group: student.ethnic_group || '',
-      religion: student.religion || 'Roman Catholic',
+      lrn: st.lrn || '',
+      first_name: st.first_name || '',
+      middle_name: st.middle_name || '',
+      last_name: st.last_name || '',
+      suffix: st.suffix || '',
+      sex: st.sex === 'Female' || st.sex === 'F' ? 'Female' : 'Male',
+      birthdate: st.birthdate || '2012-01-01',
+      grade_level_id: glVal ? String(glVal) : gradeLevels[0] ? String(gradeLevels[0].id) : '',
+      section_id: st.section_id ? String(st.section_id) : matchedSec ? String(matchedSec.id) : '',
+      qr_token: '',
+      photo: isSafeImageUrl(st.photo_url || st.photo) ? (st.photo_url || st.photo || null) : null,
+      house_street_sitio: st.house_street_sitio || '',
+      barangay: st.barangay || '',
+      municipality_city: st.municipality_city || '',
+      province: st.province || '',
+      father_name: st.father_name || '',
+      mother_maiden_name: st.mother_maiden_name || '',
+      guardian_name: st.guardian_name || '',
+      guardian_relationship: st.guardian_relationship || 'Mother',
+      parent_contact: st.parent_contact || '',
+      mother_tongue: st.mother_tongue || '',
+      ethnic_group: st.ethnic_group || '',
+      religion: st.religion || '',
     });
     setIsModalOpen(true);
   };
@@ -447,306 +447,343 @@ export const StudentsTab: React.FC = () => {
     setFormError(null);
 
     if (formData.lrn.trim().length !== 12) {
-      setFormError('Learner Reference Number (LRN) must be exactly 12 digits.');
+      setFormError('LRN must be 12 digits.');
       setFormTab('BASIC');
       return;
     }
-
     if (!formData.section_id) {
-      setFormError('Please assign a Class Section to this learner.');
+      setFormError('Please select a class section.');
       setFormTab('BASIC');
       return;
     }
 
     setSaving(true);
     try {
-      const payload: Record<string, any> = {
+      const payload: Record<string, unknown> = {
         lrn: formData.lrn.trim(),
-        first_name: formData.first_name.trim(),
-        middle_name: formData.middle_name.trim() || '',
-        last_name: formData.last_name.trim(),
-        suffix: formData.suffix.trim() || '',
+        first_name: sanitizeText(formData.first_name, 100),
+        middle_name: sanitizeText(formData.middle_name, 100),
+        last_name: sanitizeText(formData.last_name, 100),
+        suffix: sanitizeText(formData.suffix, 20),
         sex: formData.sex,
         birthdate: formData.birthdate,
-        mother_tongue: formData.mother_tongue.trim() || '',
-        ethnic_group: formData.ethnic_group.trim() || '',
-        religion: formData.religion.trim() || '',
-        house_street_sitio: formData.house_street_sitio.trim() || '',
-        barangay: formData.barangay.trim() || '',
-        municipality_city: formData.municipality_city.trim() || '',
-        province: formData.province.trim() || '',
-        father_name: formData.father_name.trim() || '',
-        mother_maiden_name: formData.mother_maiden_name.trim() || '',
-        guardian_name: formData.guardian_name.trim() || '',
-        guardian_relationship: formData.guardian_relationship.trim() || '',
-        parent_contact: formData.parent_contact.trim().replace(/[\s-]/g, '') || '',
-        qr_token: formData.qr_token?.trim() ? formData.qr_token.trim().toUpperCase() : null,
+        mother_tongue: sanitizeText(formData.mother_tongue, 80),
+        ethnic_group: sanitizeText(formData.ethnic_group, 80),
+        religion: sanitizeText(formData.religion, 80),
+        house_street_sitio: sanitizeText(formData.house_street_sitio, 150),
+        barangay: sanitizeText(formData.barangay, 100),
+        municipality_city: sanitizeText(formData.municipality_city, 100),
+        province: sanitizeText(formData.province, 100),
+        father_name: sanitizeText(formData.father_name, 150),
+        mother_maiden_name: sanitizeText(formData.mother_maiden_name, 150),
+        guardian_name: sanitizeText(formData.guardian_name, 150),
+        guardian_relationship: sanitizeText(formData.guardian_relationship, 60),
+        parent_contact: formData.parent_contact.trim().replace(/[\s-]/g, ''),
         section_id: Number(formData.section_id),
       };
 
-      if (formData.photo !== undefined) payload.photo = formData.photo;
+      if (formData.qr_token.trim()) {
+        payload.qr_token = formData.qr_token.trim().toUpperCase();
+      }
+      if (formData.photo && formData.photo.startsWith('data:image/')) {
+        payload.photo = formData.photo;
+      }
 
       if (editingStudent) {
-        await apiClient.put(`/students/${editingStudent.id}/`, payload);
+        await apiClient.patch(`${API_ROUTES.students.list}${editingStudent.id}/`, payload);
+        showAlert({ title: 'Student Updated', message: 'Student profile saved.', type: 'success' });
       } else {
-        await apiClient.post('/students/', payload);
+        await apiClient.post(API_ROUTES.students.list, payload);
+        showAlert({ title: 'Student Enrolled', message: 'New student enrolled successfully.', type: 'success' });
       }
 
       setIsModalOpen(false);
-      loadMetrics();
-      loadData(currentPage, pageSize, false);
-    } catch (err: any) {
-      setFormError(err.response?.data?.detail || 'Failed to save student profile.');
+      loadMetrics(true);
+      loadStudents(currentPage, pageSize, false, true);
+    } catch (err) {
+      setFormError(extractApiError(err, 'Failed to save student record.'));
     } finally {
       setSaving(false);
     }
   };
 
-  const promptDelete = (student: Student) => {
-    setConfirmDialog({
-      isOpen: true,
+  const handleDelete = (st: Student) => {
+    showConfirm({
       title: 'Delete Student Record',
-      message: `Permanently delete student "${student.full_name || student.first_name}" (LRN: ${student.lrn}) from the school database?`,
+      message: `Permanently delete ${st.full_name} (LRN: ${st.lrn})?`,
       confirmLabel: 'Delete Student',
-      action: async () => {
-        try {
-          await apiClient.delete(`/students/${student.id}/`);
-          loadMetrics();
-          loadData(currentPage, pageSize, true);
-        } catch (err) {
-          console.error(err);
-        }
+      isDestructive: true,
+      onConfirm: async () => {
+        await apiClient.delete(`${API_ROUTES.students.list}${st.id}/`);
+        loadMetrics(true);
+        loadStudents(currentPage, pageSize, true, true);
       },
     });
   };
 
+  const totalPages = pageSize >= ALL_ROWS_SIZE ? 1 : Math.max(1, Math.ceil(totalCount / pageSize));
+  const activeSchoolName = school.school_name || 'Official Student Pass';
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* 1. Four Metric Cards */}
-      <div style={statsGrid}>
-        <div style={statCard}>
-          <div style={statLabel}>TOTAL REGISTERED STUDENTS</div>
-          <div style={{ ...statVal, color: '#0f172a' }}>{metrics.total.toLocaleString()}</div>
-          <div style={statSub}>Enrolled learners in database</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>ACTIVE ON ROSTER</div>
-          <div style={{ ...statVal, color: '#16a34a' }}>{metrics.active.toLocaleString()}</div>
-          <div style={statSub}>Eligible for gate scan tracking</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>qr_id CARDS PAIRED</div>
-          <div style={{ ...statVal, color: '#004b87' }}>
-            {metrics.paired.toLocaleString()} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 600 }}>/ {metrics.total.toLocaleString()}</span>
-          </div>
-          <div style={statSub}>Linked gate security credentials</div>
-        </div>
-
-        <div style={statCard}>
-          <div style={statLabel}>CLASS SECTIONS</div>
-          <div style={{ ...statVal, color: '#d97706' }}>{metrics.total_sections}</div>
-          <div style={statSub}>Active academic class class_lists</div>
-        </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(12px, 2vw, 20px)' }}>
+      {/* 1. Real Database KPI Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
+        <StatsCard
+          label="REGISTERED STUDENTS"
+          value={metrics.total.toLocaleString()}
+          helpText="Students in your accessible scope"
+          badge={<GraduationCap size={18} color={brand.primary} />}
+        />
+        <StatsCard
+          label="ACTIVE CLASS LIST"
+          value={metrics.active.toLocaleString()}
+          valueColor={brand.success}
+          helpText="Cleared for classroom QR scanning"
+          badge={<User size={18} color={brand.success} />}
+        />
+        <StatsCard
+          label="QR CARDS LINKED"
+          value={`${metrics.paired.toLocaleString()} / ${metrics.active.toLocaleString()}`}
+          valueColor={brand.primary}
+          helpText="Active signed QR tokens"
+          badge={<CreditCard size={18} color={brand.primary} />}
+        />
+        <StatsCard
+          label="CLASS SECTIONS"
+          value={metrics.total_sections.toLocaleString()}
+          valueColor={brand.secondary}
+          helpText="Assigned active sections"
+          badge={<BookOpen size={18} color={brand.secondary} />}
+        />
       </div>
 
-      {/* 2. Top Filter and Actions Bar */}
-      <div style={controlBar}>
-        <select
-          value={selectedSectionFilter}
-          onChange={(e) => {
-            setSelectedSectionFilter(e.target.value);
-            setCurrentPage(1);
-          }}
-          style={selectStyle}
-        >
-          <option value="ALL">All Class Sections</option>
-          {sections.map((sec) => (
-            <option key={sec.id} value={sec.id}>
-              {sec.name} {sec.code ? `(${sec.code})` : ''}
-            </option>
-          ))}
-        </select>
+      {/* 2. Section Filter & Actions Bar */}
+      <div
+        style={{
+          ...ui.card,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 12,
+          padding: '12px 16px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <select
+            aria-label="Filter by class section"
+            value={selectedSectionFilter}
+            onChange={(e) => {
+              setSelectedSectionFilter(e.target.value);
+              setCurrentPage(1);
+            }}
+            style={{ ...ui.input, width: 'auto', minWidth: 220, fontWeight: 700, cursor: 'pointer' }}
+          >
+            <option value="ALL">All Class Sections</option>
+            {sections.map((sec) => (
+              <option key={sec.id} value={sec.id}>
+                {sec.grade_level_name ? `${sec.grade_level_name} - ` : ''}
+                {sec.name}
+              </option>
+            ))}
+          </select>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" onClick={handleExportCsv} disabled={isExporting} style={secondaryBtnStyle}>
-            {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-            <span>Export CSV ({metrics.total.toLocaleString()})</span>
-          </button>
-
-          <button type="button" onClick={handleOpenCreate} style={primaryBtnStyle}>
-            <Plus size={16} />
-            <span>Add Student</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 3. Main Directory White Card */}
-      <div style={mainCard}>
-        <div style={mainCardHeader}>
-          <div>
-            <h3 style={titleHeading}>Students Directory</h3>
-            <p style={subtitleText}>Manage verified learner credentials, section assignments, and physical security access.</p>
-          </div>
-
-          <div style={searchWrapper}>
-            <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
+          <div style={{ position: 'relative', width: 250 }}>
+            <Search
+              size={14}
+              color={tokens.textMuted}
+              style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }}
+            />
             <input
               type="text"
-              placeholder="Search by Student Name, LRN..."
+              maxLength={60}
+              placeholder="Search student name or LRN..."
               value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              style={searchInput}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ ...ui.input, paddingLeft: 32 }}
             />
           </div>
         </div>
 
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={isExporting || totalCount === 0}
+            style={ui.btnSecondary}
+          >
+            {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            <span>Export CSV ({totalCount.toLocaleString()})</span>
+          </button>
+
+          {canManageStudents && (
+            <button type="button" onClick={handleOpenCreate} style={ui.btnPrimary}>
+              <Plus size={15} />
+              <span>Add Student</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 3. Students Table */}
+      <div style={{ ...ui.card, padding: 0, overflow: 'hidden' }}>
         {error && (
-          <div style={errorBanner}>
+          <div
+            style={{
+              ...ui.subtleBox,
+              margin: 14,
+              backgroundColor: tokens.dangerLight,
+              borderColor: brand.danger,
+              color: brand.danger,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontWeight: 600,
+            }}
+          >
             <AlertCircle size={16} />
             <span>{error}</span>
           </div>
         )}
 
         {loading ? (
-          <div style={loadingContainer}>
-            <Loader2 size={28} className="animate-spin" color="#004b87" />
-            <span style={{ fontSize: '0.84rem', color: '#64748b' }}>Loading students from database...</span>
+          <div style={{ padding: 48, textAlign: 'center', color: tokens.textMuted }}>
+            <Loader2 size={26} className="animate-spin" color={brand.primary} style={{ margin: '0 auto 8px', display: 'block' }} />
+            <span style={{ fontSize: fonts.size.base, fontWeight: 600 }}>Loading student records...</span>
           </div>
         ) : students.length === 0 ? (
-          <div style={emptyContainer}>
-            <User size={40} color="#cbd5e1" />
-            <p style={{ margin: '8px 0 2px 0', fontWeight: 700, color: '#334155', fontSize: '0.90rem' }}>
-              No students found
-            </p>
-            <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8' }}>
-              No student records match your active search or section filter.
-            </p>
+          <div style={{ padding: 48, textAlign: 'center', color: tokens.textMuted }}>
+            <User size={36} style={{ margin: '0 auto 8px', display: 'block' }} />
+            <div style={{ fontWeight: 800, color: tokens.textPrimary }}>No Students Found</div>
+            <div style={{ fontSize: fonts.size.sm, marginTop: 2 }}>No student records match your current filter.</div>
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
+            <table style={{ width: '100%', minWidth: 740, borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
-                <tr style={tableHeaderRow}>
-                  <th style={thStyle}>Student Member</th>
-                  <th style={thStyle}>Learner LRN</th>
-                  <th style={thStyle}>Class Section</th>
-                  <th style={thStyle}>School Gate Card</th>
-                  <th style={thStyle}>Parent Contact</th>
-                  <th style={thStyle}>Status</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Actions</th>
+                <tr>
+                  <th style={ui.th}>Student</th>
+                  <th style={ui.th}>LRN</th>
+                  <th style={ui.th}>Class Section</th>
+                  <th style={ui.th}>QR ID Card</th>
+                  <th style={ui.th}>Parent Contact</th>
+                  <th style={ui.th}>Status</th>
+                  <th style={{ ...ui.th, textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {students.map((row) => {
-                  const safePhoto = isSafeImageUrl(row.photo_url || row.photo) ? (row.photo_url || row.photo) : null;
                   const fullName = row.full_name || `${row.first_name} ${row.last_name}`;
-
                   return (
-                    <tr key={row.id} style={tableRowStyle}>
-                      <td style={tdStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          <div style={avatarStyle}>
-                            {safePhoto ? (
-                              <img src={safePhoto} alt={fullName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            ) : (
-                              <User size={18} color="#94a3b8" />
-                            )}
-                          </div>
+                    <tr key={row.id}>
+                      <td style={ui.td}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <ProfileAvatar photoUrl={row.photo_url || row.photo} name={fullName} size={36} iconSize={17} />
                           <div>
-                            <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.86rem' }}>
-                              {fullName}
-                            </div>
-                            <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: 1 }}>
-                              {row.sex || 'Learner'} &bull; Grade {row.grade_level_name || '7'}
+                            <div style={{ fontWeight: 800, color: tokens.textPrimary }}>{fullName}</div>
+                            <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>
+                              {row.sex}
+                              {row.grade_level_name ? ` • ${row.grade_level_name}` : ''}
                             </div>
                           </div>
                         </div>
                       </td>
 
-                      <td style={tdStyle}>
-                        <div style={codePill}>
+                      <td style={ui.td}>
+                        <div
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '3px 8px',
+                            backgroundColor: tokens.bgSurfaceSubtle,
+                            borderWidth: 1,
+                            borderStyle: 'solid',
+                            borderColor: tokens.borderSubtle,
+                            borderRadius: 6,
+                            fontFamily: fonts.mono,
+                            fontSize: fonts.size.sm,
+                            fontWeight: 700,
+                          }}
+                        >
                           <span>{row.lrn}</span>
                           <button
                             type="button"
                             onClick={() => handleCopy(row.lrn)}
-                            style={copyBtn}
                             title="Copy LRN"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}
                           >
-                            {copiedValue === row.lrn ? <Check size={11} color="#16a34a" /> : <Copy size={11} color="#64748b" />}
+                            {copiedValue === row.lrn ? (
+                              <Check size={12} color={brand.success} />
+                            ) : (
+                              <Copy size={12} color={tokens.textMuted} />
+                            )}
                           </button>
                         </div>
                       </td>
 
-                      <td style={tdStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>
-                          <BookOpen size={14} color="#004b87" />
+                      <td style={ui.td}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: tokens.textPrimary }}>
+                          <BookOpen size={14} color={brand.primary} />
                           <span>{row.current_section || 'Unassigned'}</span>
-                        </div>
-                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 20, marginTop: 1 }}>
-                          Regular Class List
                         </div>
                       </td>
 
-                      <td style={tdStyle}>
+                      <td style={ui.td}>
                         {row.qr_token ? (
-                          <div style={cardPairedBadge}>
-                            <CreditCard size={13} color="#16a34a" />
-                            <span>{row.qr_token}</span>
-                          </div>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: brand.success, fontFamily: fonts.mono, fontSize: fonts.size.sm }}>
+                            <CreditCard size={13} /> {maskQrToken(row.qr_token)}
+                          </span>
                         ) : (
-                          <div style={cardUnpairedBadge}>
-                            <CreditCard size={13} color="#94a3b8" />
-                            <span>Not Paired</span>
-                          </div>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: tokens.textMuted, fontSize: fonts.size.sm }}>
+                            <CreditCard size={13} /> Not Linked
+                          </span>
                         )}
                       </td>
 
-                      <td style={tdStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', color: '#334155' }}>
-                          <Phone size={13} color="#64748b" />
-                          <span>{row.parent_contact || 'None'}</span>
-                        </div>
+                      <td style={ui.td}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: fonts.size.sm, color: tokens.textSecondary }}>
+                          <Phone size={13} color={tokens.textMuted} /> {row.parent_contact || '—'}
+                        </span>
                       </td>
 
-                      <td style={tdStyle}>
-                        <span style={activePill}>
+                      <td style={ui.td}>
+                        <span style={ui.badge(row.is_active ? tokens.successLight : tokens.dangerLight, row.is_active ? brand.success : brand.danger)}>
                           {row.is_active ? 'ACTIVE' : 'INACTIVE'}
                         </span>
                       </td>
 
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>
-                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <td style={{ ...ui.td, textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: 6 }}>
                           <button
                             type="button"
                             onClick={() => setBadgeStudent(row)}
-                            style={actionBtn}
-                            title="Print / View QR Pass"
+                            title="View / Print Student QR ID"
+                            style={{ ...ui.btnSecondary, padding: '6px 8px' }}
                           >
-                            <QrCode size={14} color="#004b87" />
+                            <QrCode size={14} color={brand.primary} />
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEdit(row)}
-                            style={actionBtn}
-                            title="Edit Student Profile"
-                          >
-                            <Pencil size={14} color="#004b87" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => promptDelete(row)}
-                            style={{ ...actionBtn, backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}
-                            title="Delete Student Record"
-                          >
-                            <Trash2 size={14} color="#dc2626" />
-                          </button>
+                          {canManageStudents && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEdit(row)}
+                                title="Edit Student"
+                                style={{ ...ui.btnSecondary, padding: '6px 8px' }}
+                              >
+                                <Pencil size={14} color={brand.primary} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(row)}
+                                title="Delete Student"
+                                style={{ ...ui.btnSecondary, padding: '6px 8px', color: brand.danger }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -757,994 +794,213 @@ export const StudentsTab: React.FC = () => {
           </div>
         )}
 
-        {/* 4. Server-Side Pagination Bar */}
-        <div style={paginationFooter}>
-          <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
-            Showing <strong>{(currentPage - 1) * pageSize + 1}</strong> to{' '}
-            <strong>{Math.min(currentPage * pageSize, totalCount)}</strong> of{' '}
-            <strong>{totalCount.toLocaleString()}</strong> students
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: '#64748b' }}>
-              <span>Rows per page:</span>
-              <select
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value));
-                  setCurrentPage(1);
-                }}
-                style={pageSelectStyle}
-              >
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={1000}>All (1000)</option>
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <button
-                type="button"
-                onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage === 1 || loading}
-                style={{ ...pageNavBtn, opacity: currentPage === 1 ? 0.4 : 1 }}
-              >
-                <ChevronLeft size={16} />
-              </button>
-
-              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a' }}>
-                Page {currentPage} of {totalPages}
-              </span>
-
-              <button
-                type="button"
-                onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage === totalPages || loading}
-                style={{ ...pageNavBtn, opacity: currentPage === totalPages ? 0.4 : 1 }}
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          </div>
-        </div>
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalCount={totalCount}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={(nextSize) => {
+            setPageSize(nextSize);
+            setCurrentPage(1);
+          }}
+          itemLabel="students"
+          style={{ backgroundColor: tokens.bgSurface, borderTop: `1px solid ${tokens.borderSubtle}` }}
+        />
       </div>
 
-      {/* 5. Full 30-Column Modal (With Linked Year Level & Section) */}
+      {/* 4. Enroll / Edit Student Modal (Leadership Only) */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingStudent ? `Edit Learner: ${editingStudent.full_name || editingStudent.first_name}` : 'Enroll New Learner (DepEd SF1)'}
+        title={editingStudent ? `Edit Student: ${editingStudent.full_name}` : 'Enroll New Student (DepEd SF1)'}
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {formError && (
-            <div style={errorBanner}>
-              <AlertCircle size={16} />
-              <span>{formError}</span>
+            <div style={{ ...ui.subtleBox, backgroundColor: tokens.dangerLight, borderColor: brand.danger, color: brand.danger, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <AlertCircle size={15} /> <span>{formError}</span>
             </div>
           )}
 
-          {/* Sub-Tabs */}
-          <div style={modalTabContainer}>
-            <button
-              type="button"
-              onClick={() => setFormTab('BASIC')}
-              style={formTab === 'BASIC' ? modalActiveTab : modalInactiveTab}
-            >
-              <User size={13} /> 1. Basic &amp; Gate ID
-            </button>
-            <button
-              type="button"
-              onClick={() => setFormTab('ADDRESS')}
-              style={formTab === 'ADDRESS' ? modalActiveTab : modalInactiveTab}
-            >
-              <Home size={13} /> 2. Address
-            </button>
-            <button
-              type="button"
-              onClick={() => setFormTab('PARENTS')}
-              style={formTab === 'PARENTS' ? modalActiveTab : modalInactiveTab}
-            >
-              <Users2 size={13} /> 3. Parents &amp; Guardian
-            </button>
-            <button
-              type="button"
-              onClick={() => setFormTab('DEPED')}
-              style={formTab === 'DEPED' ? modalActiveTab : modalInactiveTab}
-            >
-              <GraduationCap size={13} /> 4. DepEd Profile
-            </button>
-          </div>
+          <ControlSwitch<ModalFormTab>
+            options={[
+              { value: 'BASIC', label: '1. Basic', icon: <User size={13} /> },
+              { value: 'ADDRESS', label: '2. Address', icon: <Home size={13} /> },
+              { value: 'PARENTS', label: '3. Guardian', icon: <Users2 size={13} /> },
+              { value: 'DEPED', label: '4. DepEd', icon: <GraduationCap size={13} /> },
+            ]}
+            value={formTab}
+            onChange={setFormTab}
+            size="sm"
+          />
 
-          {/* TAB 1: Basic & Gate ID (Includes Linked Year Level & Section) */}
           {formTab === 'BASIC' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              
-              {/* Profile Photo Uploader */}
-              <div style={photoUploadContainer}>
-                <div style={photoPreviewCircle}>
-                  {formData.photo ? (
-                    <img
-                      src={formData.photo}
-                      alt="Preview"
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    />
-                  ) : (
-                    <User size={30} color="#94a3b8" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ ...ui.subtleBox, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <ProfileAvatar photoUrl={formData.photo} name={formData.first_name || 'Student'} size={50} iconSize={22} />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <label style={ui.btnPrimary}>
+                    <Camera size={13} /> Upload Photo
+                    <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoUpload} style={{ display: 'none' }} />
+                  </label>
+                  {formData.photo && (
+                    <button type="button" onClick={() => setFormData((p) => ({ ...p, photo: null }))} style={{ ...ui.btnSecondary, color: brand.danger }}>
+                      <X size={13} /> Remove
+                    </button>
                   )}
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <label style={uploadPhotoLabelBtn}>
-                      <Camera size={13} />
-                      <span>{formData.photo ? 'Change Photo' : 'Upload Profile Picture'}</span>
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        onChange={handlePhotoUpload}
-                        style={{ display: 'none' }}
-                      />
-                    </label>
-
-                    {formData.photo && (
-                      <button
-                        type="button"
-                        onClick={() => setFormData((prev) => ({ ...prev, photo: null }))}
-                        style={removePhotoBtn}
-                      >
-                        <X size={13} />
-                        <span>Remove</span>
-                      </button>
-                    )}
-                  </div>
-                  <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                    JPG, PNG, or WebP format (max file size: 2 MB)
-                  </span>
                 </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 10 }}>
                 <div>
-                  <label style={formLabel}>12-Digit Learner Reference Number (LRN) *</label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={12}
-                    value={formData.lrn}
-                    onChange={(e) => setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })}
-                    style={formInput}
-                    placeholder="e.g. 128936000093"
-                  />
+                  <label style={ui.label}>12-Digit LRN *</label>
+                  <input required maxLength={12} value={formData.lrn} onChange={(e) => setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })} style={ui.input} placeholder="128936000001" />
                 </div>
                 <div>
-                  <label style={formLabel}>Birthdate *</label>
-                  <input
-                    type="date"
-                    required
-                    value={formData.birthdate}
-                    onChange={(e) => setFormData({ ...formData, birthdate: e.target.value })}
-                    style={formInput}
-                  />
+                  <label style={ui.label}>Birthdate *</label>
+                  <input type="date" required value={formData.birthdate} onChange={(e) => setFormData({ ...formData, birthdate: e.target.value })} style={ui.input} />
                 </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={formLabel}>First Name *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.first_name}
-                    onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                    style={formInput}
-                    placeholder="First name"
-                  />
-                </div>
-                <div>
-                  <label style={formLabel}>Last Name *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.last_name}
-                    onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                    style={formInput}
-                    placeholder="Last name"
-                  />
-                </div>
+                <div><label style={ui.label}>First Name *</label><input required value={formData.first_name} onChange={(e) => setFormData({ ...formData, first_name: e.target.value })} style={ui.input} /></div>
+                <div><label style={ui.label}>Last Name *</label><input required value={formData.last_name} onChange={(e) => setFormData({ ...formData, last_name: e.target.value })} style={ui.input} /></div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.8fr 0.9fr', gap: 10 }}>
+                <div><label style={ui.label}>Middle Name</label><input value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })} style={ui.input} /></div>
                 <div>
-                  <label style={formLabel}>Middle Name</label>
-                  <input
-                    type="text"
-                    value={formData.middle_name}
-                    onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })}
-                    style={formInput}
-                    placeholder="Optional"
-                  />
-                </div>
-                <div>
-                  <label style={formLabel}>Suffix</label>
-                  <select
-                    value={formData.suffix}
-                    onChange={(e) => setFormData({ ...formData, suffix: e.target.value })}
-                    style={formInput}
-                  >
+                  <label style={ui.label}>Suffix</label>
+                  <select value={formData.suffix} onChange={(e) => setFormData({ ...formData, suffix: e.target.value })} style={ui.input}>
                     <option value="">None</option>
                     <option value="Jr.">Jr.</option>
                     <option value="Sr.">Sr.</option>
                     <option value="II">II</option>
                     <option value="III">III</option>
-                    <option value="IV">IV</option>
                   </select>
                 </div>
                 <div>
-                  <label style={formLabel}>Sex *</label>
-                  <select
-                    value={formData.sex}
-                    onChange={(e) => setFormData({ ...formData, sex: e.target.value })}
-                    style={formInput}
-                  >
+                  <label style={ui.label}>Sex *</label>
+                  <select value={formData.sex} onChange={(e) => setFormData({ ...formData, sex: e.target.value })} style={ui.input}>
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
                   </select>
                 </div>
               </div>
 
-              {/* 2-Tier Linking: Year Level filters the Class Section dropdown */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 10 }}>
                 <div>
-                  <label style={formLabel}>Year Level (Dropdown) *</label>
+                  <label style={ui.label}>Grade Level *</label>
                   <select
+                    required
                     value={formData.grade_level_id}
-                    onChange={(e) => {
-                      const newGL = e.target.value;
-                      setFormData({
-                        ...formData,
-                        grade_level_id: newGL,
-                        section_id: '', // Reset section when year level changes
-                      });
-                    }}
-                    style={formInput}
-                    required
+                    onChange={(e) => setFormData({ ...formData, grade_level_id: e.target.value, section_id: '' })}
+                    style={ui.input}
                   >
-                    <option value="">-- Choose Year Level --</option>
+                    <option value="">-- Select Grade --</option>
                     {gradeLevels.map((gl) => (
-                      <option key={gl.id} value={gl.id}>
-                        {gl.name} ({gl.code})
-                      </option>
+                      <option key={gl.id} value={gl.id}>{gl.name}</option>
                     ))}
                   </select>
                 </div>
-
                 <div>
-                  <label style={formLabel}>Class Section (Dropdown) *</label>
-                  <select
-                    value={formData.section_id}
-                    onChange={(e) => setFormData({ ...formData, section_id: e.target.value })}
-                    style={formInput}
-                    required
-                    disabled={!formData.grade_level_id && modalAvailableSections.length === 0}
-                  >
-                    <option value="">
-                      {formData.grade_level_id ? '-- Select Section --' : 'Select Year Level First'}
-                    </option>
+                  <label style={ui.label}>Class Section *</label>
+                  <select required value={formData.section_id} onChange={(e) => setFormData({ ...formData, section_id: e.target.value })} style={ui.input}>
+                    <option value="">-- Select Section --</option>
                     {modalAvailableSections.map((sec) => (
-                      <option key={sec.id} value={sec.id}>
-                        {sec.name} {sec.code ? `(${sec.code})` : ''}
-                      </option>
+                      <option key={sec.id} value={sec.id}>{sec.name}</option>
                     ))}
                   </select>
                 </div>
               </div>
-
-              <div>
-                <label style={formLabel}>School Gate qr_id UID (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 6B69D870"
-                  value={formData.qr_token}
-                  onChange={(e) => setFormData({ ...formData, qr_token: e.target.value.toUpperCase() })}
-                  style={{ ...formInput, fontFamily: 'monospace' }}
-                />
-              </div>
             </div>
           )}
 
-          {/* TAB 2: Address */}
           {formTab === 'ADDRESS' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div>
-                <label style={formLabel}>House / Street / Sitio</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Zone 2, Purok Apple"
-                  value={formData.house_street_sitio}
-                  onChange={(e) => setFormData({ ...formData, house_street_sitio: e.target.value })}
-                  style={formInput}
-                />
-              </div>
-
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div><label style={ui.label}>House # / Street / Sitio</label><input value={formData.house_street_sitio} onChange={(e) => setFormData({ ...formData, house_street_sitio: e.target.value })} style={ui.input} /></div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={formLabel}>Barangay</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Macasandig, Lumbia"
-                    value={formData.barangay}
-                    onChange={(e) => setFormData({ ...formData, barangay: e.target.value })}
-                    style={formInput}
-                  />
-                </div>
-                <div>
-                  <label style={formLabel}>Municipality / City</label>
-                  <input
-                    type="text"
-                    value={formData.municipality_city}
-                    onChange={(e) => setFormData({ ...formData, municipality_city: e.target.value })}
-                    style={formInput}
-                  />
-                </div>
+                <div><label style={ui.label}>Barangay</label><input value={formData.barangay} onChange={(e) => setFormData({ ...formData, barangay: e.target.value })} style={ui.input} /></div>
+                <div><label style={ui.label}>Municipality / City</label><input value={formData.municipality_city} onChange={(e) => setFormData({ ...formData, municipality_city: e.target.value })} style={ui.input} /></div>
               </div>
-
-              <div>
-                <label style={formLabel}>Province</label>
-                <input
-                  type="text"
-                  value={formData.province}
-                  onChange={(e) => setFormData({ ...formData, province: e.target.value })}
-                  style={formInput}
-                />
-              </div>
+              <div><label style={ui.label}>Province</label><input value={formData.province} onChange={(e) => setFormData({ ...formData, province: e.target.value })} style={ui.input} /></div>
             </div>
           )}
 
-          {/* TAB 3: Parents & Guardian */}
           {formTab === 'PARENTS' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={formLabel}>Father's Full Name</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Juan Santos Cruz"
-                    value={formData.father_name}
-                    onChange={(e) => setFormData({ ...formData, father_name: e.target.value })}
-                    style={formInput}
-                  />
-                </div>
-                <div>
-                  <label style={formLabel}>Mother's Maiden Name</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Maria Lopez Reyes"
-                    value={formData.mother_maiden_name}
-                    onChange={(e) => setFormData({ ...formData, mother_maiden_name: e.target.value })}
-                    style={formInput}
-                  />
-                </div>
+                <div><label style={ui.label}>Father&apos;s Name</label><input value={formData.father_name} onChange={(e) => setFormData({ ...formData, father_name: e.target.value })} style={ui.input} /></div>
+                <div><label style={ui.label}>Mother&apos;s Maiden Name</label><input value={formData.mother_maiden_name} onChange={(e) => setFormData({ ...formData, mother_maiden_name: e.target.value })} style={ui.input} /></div>
               </div>
-
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={formLabel}>Guardian Name (if not with parents)</label>
-                  <input
-                    type="text"
-                    placeholder="Guardian full name"
-                    value={formData.guardian_name}
-                    onChange={(e) => setFormData({ ...formData, guardian_name: e.target.value })}
-                    style={formInput}
-                  />
-                </div>
-                <div>
-                  <label style={formLabel}>Relationship</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Aunt, Grandmother"
-                    value={formData.guardian_relationship}
-                    onChange={(e) => setFormData({ ...formData, guardian_relationship: e.target.value })}
-                    style={formInput}
-                  />
-                </div>
+                <div><label style={ui.label}>Guardian Name</label><input value={formData.guardian_name} onChange={(e) => setFormData({ ...formData, guardian_name: e.target.value })} style={ui.input} /></div>
+                <div><label style={ui.label}>Relationship</label><input value={formData.guardian_relationship} onChange={(e) => setFormData({ ...formData, guardian_relationship: e.target.value })} style={ui.input} /></div>
               </div>
-
-              <div>
-                <label style={formLabel}>Parent Contact Mobile (11 digits for push Alerts) *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. 09170000093"
-                  value={formData.parent_contact}
-                  onChange={(e) => setFormData({ ...formData, parent_contact: e.target.value })}
-                  style={formInput}
-                />
-              </div>
+              <div><label style={ui.label}>Parent Mobile Number (11 Digits) *</label><input required value={formData.parent_contact} onChange={(e) => setFormData({ ...formData, parent_contact: e.target.value })} style={ui.input} placeholder="09171234567" /></div>
             </div>
           )}
 
-          {/* TAB 4: DepEd Demographics */}
           {formTab === 'DEPED' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={formLabel}>Mother Tongue</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Cebuano, Tagalog"
-                    value={formData.mother_tongue}
-                    onChange={(e) => setFormData({ ...formData, mother_tongue: e.target.value })}
-                    style={formInput}
-                  />
-                </div>
-                <div>
-                  <label style={formLabel}>Ethnic Group / Indigenous Community</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Higaonon, None"
-                    value={formData.ethnic_group}
-                    onChange={(e) => setFormData({ ...formData, ethnic_group: e.target.value })}
-                    style={formInput}
-                  />
-                </div>
+                <div><label style={ui.label}>Mother Tongue</label><input value={formData.mother_tongue} onChange={(e) => setFormData({ ...formData, mother_tongue: e.target.value })} style={ui.input} /></div>
+                <div><label style={ui.label}>IP / Ethnic Group</label><input value={formData.ethnic_group} onChange={(e) => setFormData({ ...formData, ethnic_group: e.target.value })} style={ui.input} /></div>
               </div>
-
-              <div>
-                <label style={formLabel}>Religion / Faith Tradition</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Roman Catholic, Islam, Seventh-Day Adventist"
-                  value={formData.religion}
-                  onChange={(e) => setFormData({ ...formData, religion: e.target.value })}
-                  style={formInput}
-                />
-              </div>
+              <div><label style={ui.label}>Religion</label><input value={formData.religion} onChange={(e) => setFormData({ ...formData, religion: e.target.value })} style={ui.input} /></div>
             </div>
           )}
 
-          {/* Modal Navigation Buttons */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {formTab !== 'BASIC' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (formTab === 'ADDRESS') setFormTab('BASIC');
-                    else if (formTab === 'PARENTS') setFormTab('ADDRESS');
-                    else if (formTab === 'DEPED') setFormTab('PARENTS');
-                  }}
-                  style={secondaryBtnStyle}
-                >
-                  &larr; Previous Tab
-                </button>
-              )}
-              {formTab !== 'DEPED' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (formTab === 'BASIC') setFormTab('ADDRESS');
-                    else if (formTab === 'ADDRESS') setFormTab('PARENTS');
-                    else if (formTab === 'PARENTS') setFormTab('DEPED');
-                  }}
-                  style={secondaryBtnStyle}
-                >
-                  Next Tab &rarr;
-                </button>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button variant="primary" size="md" type="submit" disabled={saving}>
-                {saving ? <Loader2 className="animate-spin" size={16} /> : editingStudent ? 'Save Learner Profile' : 'Enroll Learner (SF1)'}
-              </Button>
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+            <Button variant="secondary" type="button" onClick={() => setIsModalOpen(false)}>Cancel</Button>
+            <Button variant="primary" type="submit" loading={saving}>
+              {editingStudent ? 'Save Changes' : 'Enroll Student'}
+            </Button>
           </div>
         </form>
       </Modal>
 
-      {/* ID Pass View/Print Modal */}
+      {/* 5. Student QR Pass Modal */}
       {badgeStudent && (
-        <Modal
-          isOpen={Boolean(badgeStudent)}
-          onClose={() => setBadgeStudent(null)}
-          title="Student Gate & Classroom Pass"
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '6px 0' }}>
-            <div style={{ width: 300, backgroundColor: '#ffffff', border: '2px solid #004b87', borderRadius: 14, overflow: 'hidden' }}>
-              <div style={{ background: '#004b87', color: '#ffffff', padding: '12px 14px' }}>
-                <div style={{ fontSize: '0.72rem', fontWeight: 800 }}>ATTENDSURE STUDENT PASS</div>
-                <div style={{ fontSize: '0.60rem', color: '#e0f2fe', marginTop: 2 }}>Department of Education &bull; Student Pass</div>
+        <Modal isOpen={Boolean(badgeStudent)} onClose={() => setBadgeStudent(null)} title="Student QR ID Card">
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <div style={{ width: 292, backgroundColor: tokens.bgSurface, borderWidth: 2, borderStyle: 'solid', borderColor: brand.primary, borderRadius: 14, overflow: 'hidden', boxShadow: tokens.cardShadow }}>
+              <div style={{ backgroundColor: brand.buttonBg, color: '#ffffff', padding: '12px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: fonts.size.xs, fontWeight: 800 }}>
+                  <ShieldCheck size={14} /> OFFICIAL STUDENT QR PASS
+                </div>
+                <div style={{ fontSize: '0.64rem', opacity: 0.9, marginTop: 2 }}>{activeSchoolName}</div>
               </div>
 
               <div style={{ padding: '16px 14px' }}>
-                <div style={{ width: 68, height: 68, borderRadius: '50%', margin: '0 auto 8px auto', overflow: 'hidden', backgroundColor: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #004b87' }}>
-                  {badgeStudent.photo_url ? (
-                    <img
-                      src={badgeStudent.photo_url}
-                      alt={badgeStudent.full_name || badgeStudent.first_name}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    />
-                  ) : (
-                    <User size={34} color="#94a3b8" />
-                  )}
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
+                  <ProfileAvatar photoUrl={badgeStudent.photo_url || badgeStudent.photo} name={badgeStudent.full_name} size={56} iconSize={26} />
                 </div>
-
-                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0f172a' }}>
-                  {badgeStudent.full_name || `${badgeStudent.first_name} ${badgeStudent.last_name}`}
-                </div>
-                <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 2 }}>
-                  Section: {badgeStudent.current_section || 'Unassigned'}
-                </div>
-                <div style={{ margin: '8px 0', padding: '4px 10px', backgroundColor: '#f1f5f9', borderRadius: 6, fontFamily: 'monospace', fontWeight: 700 }}>
+                <div style={{ fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>{badgeStudent.full_name}</div>
+                <div style={{ fontSize: fonts.size.sm, color: tokens.textSecondary, marginTop: 2 }}>{badgeStudent.current_section || 'Enrolled Student'}</div>
+                <div style={{ margin: '8px auto', padding: '3px 10px', backgroundColor: tokens.bgSurfaceSubtle, borderRadius: 6, fontFamily: fonts.mono, fontWeight: 700, fontSize: fonts.size.sm, display: 'inline-block' }}>
                   LRN: {badgeStudent.lrn}
                 </div>
-                <div style={{ width: 120, height: 120, margin: '10px auto', padding: 6, border: '1px solid #e2e8f0', borderRadius: 10 }}>
+                <div style={{ width: 122, height: 122, margin: '8px auto', padding: 6, backgroundColor: '#ffffff', borderWidth: 1, borderStyle: 'solid', borderColor: tokens.borderSubtle, borderRadius: 10 }}>
                   <img
                     src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(badgeStudent.lrn)}`}
-                    alt="QR"
-                    style={{ width: '100%', height: '100%' }}
+                    alt="Student QR"
+                    referrerPolicy="no-referrer"
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 </div>
               </div>
-
-              <div style={{ backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', padding: '8px 12px', fontSize: '0.70rem', color: '#64748b' }}>
-                Card UID: <strong>{badgeStudent.qr_token || 'No Card Linked'}</strong>
-              </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-              <Button variant="secondary" size="md" type="button" onClick={() => setBadgeStudent(null)}>
-                Close
-              </Button>
-              <Button variant="primary" size="md" type="button" onClick={() => window.print()}>
-                <Printer size={15} style={{ marginRight: 6 }} />
-                Print ID Card
-              </Button>
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <Button variant="secondary" type="button" onClick={() => setBadgeStudent(null)}>Close</Button>
+              <Button variant="primary" type="button" onClick={() => window.print()} icon={<Printer size={14} />}>Print Pass</Button>
             </div>
           </div>
         </Modal>
       )}
-
-      {/* Delete Confirmation Dialog */}
-      <Modal
-        isOpen={confirmDialog.isOpen}
-        onClose={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
-        title={confirmDialog.title}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <p style={{ fontSize: '0.84rem', color: '#334155', margin: 0 }}>
-            {confirmDialog.message}
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <Button variant="secondary" size="md" type="button" onClick={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="md"
-              type="button"
-              onClick={async () => {
-                await confirmDialog.action();
-                setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
-              }}
-              style={{ backgroundColor: '#dc2626', borderColor: '#dc2626' }}
-            >
-              {confirmDialog.confirmLabel}
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 };
 
 export default StudentsTab;
-
-// Styles
-const statsGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
-  gap: 12,
-};
-
-const statCard: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 10,
-  border: '1px solid #e2e8f0',
-  padding: '14px 18px',
-};
-
-const statLabel: React.CSSProperties = {
-  fontSize: '0.66rem',
-  fontWeight: 800,
-  color: '#64748b',
-  letterSpacing: '0.4px',
-  textTransform: 'uppercase',
-};
-
-const statVal: React.CSSProperties = {
-  fontSize: '1.60rem',
-  fontWeight: 800,
-  marginTop: 4,
-  lineHeight: 1.1,
-};
-
-const statSub: React.CSSProperties = {
-  fontSize: '0.72rem',
-  color: '#94a3b8',
-  marginTop: 3,
-};
-
-const controlBar: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  flexWrap: 'wrap',
-  gap: 12,
-};
-
-const selectStyle: React.CSSProperties = {
-  padding: '8px 14px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  fontSize: '0.82rem',
-  color: '#334155',
-  fontWeight: 600,
-  outline: 'none',
-  cursor: 'pointer',
-  minWidth: 200,
-};
-
-const secondaryBtnStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  backgroundColor: '#ffffff',
-  color: '#0f172a',
-  border: '1px solid #cbd5e1',
-  padding: '8px 14px',
-  borderRadius: 6,
-  fontWeight: 700,
-  fontSize: '0.80rem',
-  cursor: 'pointer',
-};
-
-const primaryBtnStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  backgroundColor: '#004b87',
-  color: '#ffffff',
-  border: 'none',
-  padding: '8px 16px',
-  borderRadius: 6,
-  fontWeight: 700,
-  fontSize: '0.80rem',
-  cursor: 'pointer',
-};
-
-const mainCard: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  padding: '20px 24px',
-  border: '1px solid #e2e8f0',
-};
-
-const mainCardHeader: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-start',
-  flexWrap: 'wrap',
-  gap: 14,
-  marginBottom: 16,
-};
-
-const titleHeading: React.CSSProperties = {
-  margin: 0,
-  fontSize: '1.20rem',
-  fontWeight: 800,
-  color: '#0f172a',
-};
-
-const subtitleText: React.CSSProperties = {
-  margin: '4px 0 0 0',
-  fontSize: '0.80rem',
-  color: '#64748b',
-};
-
-const searchWrapper: React.CSSProperties = {
-  position: 'relative',
-  width: '100%',
-  maxWidth: 290,
-};
-
-const searchInput: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 14px 8px 34px',
-  borderRadius: 8,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.80rem',
-  outline: 'none',
-  boxSizing: 'border-box',
-  color: '#0f172a',
-};
-
-const tableStyle: React.CSSProperties = {
-  width: '100%',
-  minWidth: 700,
-  borderCollapse: 'collapse',
-  textAlign: 'left',
-};
-
-const tableHeaderRow: React.CSSProperties = {
-  borderBottom: '2px solid #e2e8f0',
-};
-
-const thStyle: React.CSSProperties = {
-  padding: '12px 14px',
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  color: '#475569',
-};
-
-const tableRowStyle: React.CSSProperties = {
-  borderBottom: '1px solid #f1f5f9',
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '14px 14px',
-  verticalAlign: 'middle',
-};
-
-const avatarStyle: React.CSSProperties = {
-  width: 38,
-  height: 38,
-  borderRadius: '50%',
-  backgroundColor: '#f1f5f9',
-  border: '1px solid #e2e8f0',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  overflow: 'hidden',
-  flexShrink: 0,
-};
-
-const codePill: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '3px 8px',
-  backgroundColor: '#f8fafc',
-  border: '1px solid #e2e8f0',
-  borderRadius: 6,
-  fontFamily: 'monospace',
-  fontSize: '0.76rem',
-  fontWeight: 700,
-  color: '#0f172a',
-};
-
-const copyBtn: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  padding: 0,
-  display: 'flex',
-  alignItems: 'center',
-};
-
-const cardPairedBadge: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontSize: '0.76rem',
-  fontWeight: 700,
-  color: '#16a34a',
-  fontFamily: 'monospace',
-};
-
-const cardUnpairedBadge: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontSize: '0.76rem',
-  color: '#94a3b8',
-};
-
-const activePill: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  padding: '3px 10px',
-  borderRadius: 14,
-  fontSize: '0.70rem',
-  fontWeight: 800,
-  backgroundColor: '#f0fdf4',
-  border: '1px solid #bbf7d0',
-  color: '#16a34a',
-};
-
-const actionBtn: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  padding: '6px 8px',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const errorBanner: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  backgroundColor: '#fef2f2',
-  border: '1px solid #fecaca',
-  color: '#991b1b',
-  borderRadius: 6,
-  padding: '10px 14px',
-  marginBottom: 14,
-  fontSize: '0.80rem',
-};
-
-const loadingContainer: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 10,
-  padding: '40px 0',
-};
-
-const emptyContainer: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '40px 0',
-};
-
-const paginationFooter: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  marginTop: 16,
-  paddingTop: 12,
-  borderTop: '1px solid #f1f5f9',
-  flexWrap: 'wrap',
-  gap: 10,
-};
-
-const pageSelectStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  fontSize: '0.76rem',
-  fontWeight: 600,
-  color: '#334155',
-  cursor: 'pointer',
-};
-
-const pageNavBtn: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 28,
-  height: 28,
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  cursor: 'pointer',
-  color: '#0f172a',
-};
-
-const modalTabContainer: React.CSSProperties = {
-  display: 'flex',
-  gap: 4,
-  backgroundColor: '#f1f5f9',
-  padding: 4,
-  borderRadius: 8,
-  border: '1px solid #e2e8f0',
-  flexWrap: 'wrap',
-};
-
-const modalBaseTab: React.CSSProperties = {
-  flex: 1,
-  minWidth: 105,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 5,
-  border: 'none',
-  padding: '6px 4px',
-  borderRadius: 6,
-  fontSize: '0.72rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const modalActiveTab: React.CSSProperties = {
-  ...modalBaseTab,
-  backgroundColor: '#ffffff',
-  color: '#004b87',
-  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.08)',
-};
-
-const modalInactiveTab: React.CSSProperties = {
-  ...modalBaseTab,
-  backgroundColor: 'transparent',
-  color: '#64748b',
-};
-
-const formLabel: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.74rem',
-  fontWeight: 700,
-  color: '#334155',
-  marginBottom: 4,
-};
-
-const formInput: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 12px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.82rem',
-  outline: 'none',
-  boxSizing: 'border-box',
-};
-
-const photoUploadContainer: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 14,
-  padding: '10px 14px',
-  backgroundColor: '#f8fafc',
-  borderRadius: 8,
-  border: '1px solid #e2e8f0',
-};
-
-const photoPreviewCircle: React.CSSProperties = {
-  width: 58,
-  height: 58,
-  borderRadius: '50%',
-  backgroundColor: '#ffffff',
-  border: '2px solid #004b87',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  overflow: 'hidden',
-  flexShrink: 0,
-};
-
-const uploadPhotoLabelBtn: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '6px 12px',
-  backgroundColor: '#004b87',
-  color: '#ffffff',
-  borderRadius: 6,
-  fontSize: '0.76rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const removePhotoBtn: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '6px 10px',
-  backgroundColor: '#ffffff',
-  color: '#dc2626',
-  border: '1px solid #fecaca',
-  borderRadius: 6,
-  fontSize: '0.74rem',
-  fontWeight: 600,
-  cursor: 'pointer',
-};

@@ -32,7 +32,7 @@ CSRF_TRUSTED_ORIGINS = [
     o.strip()
     for o in os.getenv(
         "CSRF_TRUSTED_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,http://lapasan.attendsure.com.ph,https://lapasan.attendsure.com.ph",
+        "http://localhost:5173,http://127.0.0.1:5173,http://macasandig.attendsure.com.ph,https://macasandig.attendsure.com.ph",
     ).split(",")
     if o.strip()
 ]
@@ -103,7 +103,8 @@ elif "postgres" in DB_ENGINE:
             "PASSWORD": os.getenv("DB_PASSWORD", ""),
             "HOST": os.getenv("DB_HOST", "127.0.0.1"),
             "PORT": os.getenv("DB_PORT", "5432"),
-            "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", 60)),
+            # "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", 60)),
+            "CONN_MAX_AGE": 600,
             "CONN_HEALTH_CHECKS": True,
             "OPTIONS": {"connect_timeout": 5},
         }
@@ -213,7 +214,7 @@ LOGGING = {
         # Silences duplicate uncolored runserver lines so RequestLoggerMiddleware owns terminal output
         "django.server": {
             "handlers": ["console"],
-            "level": "WARNING",
+            "level": "ERROR",
             "propagate": False,
         },
         "django.request": {

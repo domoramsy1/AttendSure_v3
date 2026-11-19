@@ -1,113 +1,254 @@
 /**
- * AttendSure Web API Client - Direct Host Resolution & Security Layer
+ * AttendSure Web API Client - Strict /api/v1/ Enforcement, SWR Cache & JWT Layer
  * File: web/src/api/client.ts
  */
 
-import axios, { type InternalAxiosRequestConfig, AxiosError } from 'axios';
-import rootEndpoints from '../../../endpoints.json';
+import axios, {
+  AxiosError,
+  CanceledError,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios';
+import { API_ROUTES } from './routes';
 
-// Detects private and local network hostnames
-const isLocalOrLanNetwork = (hostname: string): boolean => {
-  return (
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname.startsWith('192.168.') ||
-    hostname.startsWith('10.') ||
-    hostname.startsWith('172.') ||
-    hostname.endsWith('.local')
-  );
+const FRESH_TTL_MS = 25_000;
+const STALE_TTL_MS = 300_000;
+const MAX_CACHE_ENTRIES = 150;
+
+interface CacheEntry {
+  freshUntil: number;
+  staleUntil: number;
+  response: AxiosResponse;
+}
+
+type CacheListener = (data: unknown) => void;
+
+const responseCache = new Map<string, CacheEntry>();
+const inflightGetMap = new Map<string, Promise<AxiosResponse>>();
+const cacheListeners = new Map<string, Set<CacheListener>>();
+
+// Safety map ensuring any residual unversioned path resolves to its canonical /v1/ endpoint
+const LEGACY_TO_V1_PREFIXES: ReadonlyArray<[RegExp, string]> = [
+  [/^me\/?$/i, 'v1/accounts/me/'],
+  [/^users(\/|$)/i, 'v1/accounts/users$1'],
+  [/^facultys(\/|$)/i, 'v1/accounts/teachers$1'],
+  [/^faculty\/dropdown\/?$/i, 'v1/accounts/teachers/dropdown/'],
+  [/^faculty\/(\d+)\/reset-device\/?$/i, 'v1/accounts/teachers/$1/reset-device/'],
+  [/^faculty(\/|$)/i, 'v1/accounts/teachers$1'],
+  [/^activity-logs(\/|$)/i, 'v1/accounts/audit-logs$1'],
+  [/^settings\/school\/?$/i, 'v1/school/settings/'],
+  [/^academic-years(\/|$)/i, 'v1/school/school-years$1'],
+  [/^grade-levels(\/|$)/i, 'v1/school/grade-levels$1'],
+  [/^rooms(\/|$)/i, 'v1/school/rooms$1'],
+  [/^subjects(\/|$)/i, 'v1/school/subjects$1'],
+  [/^sections(\/|$)/i, 'v1/school/sections$1'],
+  [/^schedules(\/|$)/i, 'v1/school/periods$1'],
+  [/^students(\/|$)/i, 'v1/students$1'],
+  [/^gate-passes(\/|$)/i, 'v1/attendance/exit-passes$1'],
+  [/^classroom\/adviser-matrix\/?$/i, 'v1/attendance/adviser-matrix/'],
+  [/^classroom\/(student_list|class_list)\/?$/i, 'v1/attendance/classes/'],
+  [/^geofence\/audit\/?$/i, 'v1/campus/audit/'],
+  [/^geofence(\/|$)/i, 'v1/campus/boundary$1'],
+  [/^enterprise\/emergency-rollcall\/?$/i, 'v1/campus/roll-call/'],
+  [/^enterprise\/sdg-impact\/?$/i, 'v1/reports/sdg-impact/'],
+  [/^enterprise\/sardo-early-warning\/?$/i, 'v1/reports/dropout-risk/'],
+  [/^dashboard\/overview\/?$/i, 'v1/reports/dashboard/'],
+  [/^system\/status\/?$/i, 'v1/reports/system-status/'],
+  [/^reports(\/|$)/i, 'v1/reports$1'],
+  [/^notifications(\/|$)/i, 'v1/messaging/notifications$1'],
+  [/^chat\/threads\/?$/i, 'v1/messaging/threads/'],
+  [/^chat\/messages\/?$/i, 'v1/messaging/messages/'],
+  [/^core\/maintenance\/db-check\/?$/i, 'v1/health/db/'],
+  [/^core\/maintenance\/flush-cache\/?$/i, 'v1/cache/flush/'],
+];
+
+const notifyCacheListeners = (key: string, data: unknown): void => {
+  const listeners = cacheListeners.get(key);
+  if (!listeners) return;
+  listeners.forEach((fn) => {
+    try {
+      fn(data);
+    } catch {
+      // Isolate listener errors
+    }
+  });
 };
 
-const resolveBaseUrl = (): string => {
-  // 1. Highest Priority: Explicit Vite Environment Override (.env)
-  const envUrl = import.meta.env.VITE_API_URL;
+const pruneCacheIfNeeded = (): void => {
+  if (responseCache.size <= MAX_CACHE_ENTRIES) return;
+  const oldestKey = responseCache.keys().next().value;
+  if (oldestKey) responseCache.delete(oldestKey);
+};
+
+export const clearApiClientCache = (): void => {
+  responseCache.clear();
+  inflightGetMap.clear();
+};
+
+export const invalidateApiCache = (): void => {
+  const now = Date.now();
+  responseCache.forEach((entry) => {
+    entry.freshUntil = now - 1;
+  });
+};
+
+const isLocalOrLanHost = (hostname: string): boolean =>
+  hostname === 'localhost' ||
+  hostname === '127.0.0.1' ||
+  hostname.startsWith('192.168.') ||
+  hostname.startsWith('10.') ||
+  hostname.startsWith('172.') ||
+  hostname.endsWith('.local');
+
+export const resolveBaseUrl = (): string => {
+  const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
   if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
-    return envUrl.trim().replace(/\/+$/, '').replace(/\/api$/i, '');
+    return envUrl.trim().replace(/\/+$/, '').replace(/\/api(\/v1)?$/i, '');
   }
 
-  // 2. Active Browser Host Detection
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location;
-
-    // Local development or school LAN (e.g., 192.168.100.4)
-    if (isLocalOrLanNetwork(hostname)) {
-      return `${protocol}//${hostname}:8000`;
-    }
-
-    // Official Production Domain
-    if (hostname.includes('attendsure.com.ph')) {
-      if (!port || port === '80' || port === '443') {
+    if (port === '80' || port === '443' || port === '5173' || !port) {
+      if (hostname.includes('attendsure.com.ph') || hostname.includes('trycloudflare.com')) {
         return `${protocol}//${hostname}`;
       }
-      return `${protocol}//${hostname}:${port}`;
     }
-
-    // Active Live Cloudflare Tunnel (only when the web page is loaded through Cloudflare)
-    if (hostname.includes('trycloudflare.com')) {
-      return `${protocol}//${hostname}`;
+    if (isLocalOrLanHost(hostname)) {
+      return `${protocol}//${hostname}:8000`;
     }
-
-    if (port && port !== '80' && port !== '443') {
-      return `${protocol}//${hostname}:${port}`;
-    }
-    return `${protocol}//${hostname}`;
+    return port && port !== '80' && port !== '443'
+      ? `${protocol}//${hostname}:${port}`
+      : `${protocol}//${hostname}`;
   }
 
-  // 3. Fallback to active_tunnel_url only if not on local machine
-  const tunnelUrl = rootEndpoints?.active_tunnel_url;
-  if (
-    tunnelUrl &&
-    typeof tunnelUrl === 'string' &&
-    tunnelUrl.trim() &&
-    !tunnelUrl.includes('course-converted-thin-wells.trycloudflare.com')
-  ) {
-    return tunnelUrl.trim().replace(/\/+$/, '').replace(/\/api$/i, '');
-  }
-
-  // 4. Safe Default to Local Django Backend
   return 'http://127.0.0.1:8000';
 };
 
+export const normalizeApiPath = (rawUrl: string): string => {
+  const trimmed = rawUrl.trim();
+  if (/^(javascript|vbscript|data):/i.test(trimmed)) {
+    throw new Error('Blocked unsafe URL protocol.');
+  }
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+
+  let clean = trimmed
+    .replace(/^\/+/, '')
+    .replace(/\.\.\//g, '')
+    .replace(/^(api\/)+/i, '');
+
+  if (!clean.startsWith('v1/')) {
+    const qIdx = clean.indexOf('?');
+    const pathPart = qIdx >= 0 ? clean.slice(0, qIdx) : clean;
+    const queryPart = qIdx >= 0 ? clean.slice(qIdx) : '';
+
+    let mapped = pathPart;
+    for (const [pattern, replacement] of LEGACY_TO_V1_PREFIXES) {
+      if (pattern.test(pathPart)) {
+        mapped = pathPart.replace(pattern, replacement);
+        break;
+      }
+    }
+    clean = (mapped.startsWith('v1/') ? mapped : `v1/${mapped}`) + queryPart;
+  }
+
+  return `/api/${clean}`;
+};
+
+const serializeParams = (params?: Record<string, unknown>): string => {
+  if (!params || typeof params !== 'object') return '';
+  const entries = Object.entries(params)
+    .filter(([k, v]) => v !== undefined && v !== '' && k !== 'nocache' && k !== '_t' && k !== 'silent')
+    .sort(([a], [b]) => a.localeCompare(b));
+  return entries.length > 0 ? JSON.stringify(entries) : '';
+};
+
+export const buildApiCacheKey = (url: string, params?: Record<string, unknown>): string => {
+  const normUrl = normalizeApiPath(url);
+  const userScope =
+    localStorage.getItem('attendsure_user_id') ||
+    localStorage.getItem('attendsure_username') ||
+    'guest';
+  return `${userScope}:${normUrl}?${serializeParams(params)}`;
+};
+
+export function peekApiCache<T = unknown>(url: string, params?: Record<string, unknown>): T | undefined {
+  const key = buildApiCacheKey(url, params);
+  const hit = responseCache.get(key);
+  if (!hit || hit.staleUntil <= Date.now()) return undefined;
+  return hit.response.data as T;
+}
+
+export const subscribeApiCache = (
+  url: string,
+  params: Record<string, unknown> | undefined,
+  listener: CacheListener
+): (() => void) => {
+  const key = buildApiCacheKey(url, params);
+  let set = cacheListeners.get(key);
+  if (!set) {
+    set = new Set();
+    cacheListeners.set(key, set);
+  }
+  set.add(listener);
+  return () => {
+    const current = cacheListeners.get(key);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) cacheListeners.delete(key);
+  };
+};
+
+const clearStoredAuth = (): void => {
+  const keys = [
+    'attendsure_access',
+    'attendsure_refresh',
+    'attendsure_token',
+    'auth_token',
+    'token',
+    'attendsure_username',
+    'attendsure_faculty_name',
+    'attendsure_role',
+    'attendsure_user_id',
+    'attendsure_user_photo',
+    'attendsure_can_teach',
+  ];
+  keys.forEach((k) => localStorage.removeItem(k));
+  clearApiClientCache();
+};
+
 const apiClient = axios.create({
-  timeout: 6000, // 6-second timeout prevents interface hanging on dropped connections
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  timeout: Number(import.meta.env.VITE_API_TIMEOUT_MS) || 10000,
+  headers: { 'Content-Type': 'application/json' },
 });
 
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     config.baseURL = resolveBaseUrl();
+    config.url = normalizeApiPath(config.url || '');
 
-    // Cybersecurity shield: Prevent malicious pseudo-protocol injection
-    let requestPath = config.url || '';
-    if (
-      requestPath.startsWith('javascript:') ||
-      requestPath.startsWith('vbscript:') ||
-      requestPath.startsWith('data:')
-    ) {
-      return Promise.reject(new Error('Blocked dangerous URL protocol.'));
+    const method = (config.method || 'get').toLowerCase();
+    if (method !== 'get') {
+      invalidateApiCache();
     }
 
-    // Cybersecurity shield: Prevent path traversal and enforce single /api/ prefix
-    if (!requestPath.startsWith('http://') && !requestPath.startsWith('https://')) {
-      const sanitized = requestPath
-        .replace(/^\/+/, '')
-        .replace(/\.\.\//g, '') // Strips '../' directory traversal attempts
-        .replace(/^(api\/)+/i, '');
-      config.url = `/api/${sanitized}`;
-    }
+    if (config.headers && !config.headers.Authorization) {
+      const jwtAccess = localStorage.getItem('attendsure_access')?.trim().replace(/[\r\n]/g, '');
+      const legacyToken = (
+        localStorage.getItem('attendsure_token') ||
+        localStorage.getItem('auth_token') ||
+        localStorage.getItem('token') ||
+        ''
+      )
+        .trim()
+        .replace(/[\r\n]/g, '');
 
-    // Cybersecurity shield: Attach token with CRLF injection protection
-    const rawToken =
-      localStorage.getItem('attendsure_token') ||
-      localStorage.getItem('auth_token') ||
-      localStorage.getItem('token');
-
-    if (rawToken && config.headers && !config.headers.Authorization) {
-      const sanitizedToken = rawToken.trim().replace(/[\r\n]/g, '');
-      if (sanitizedToken) {
-        config.headers.Authorization = `Token ${sanitizedToken}`;
+      if (jwtAccess) {
+        config.headers.Authorization = `Bearer ${jwtAccess}`;
+      } else if (legacyToken) {
+        config.headers.Authorization = `Token ${legacyToken}`;
       }
     }
 
@@ -116,23 +257,54 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+let refreshPromise: Promise<string | null> | null = null;
+
 apiClient.interceptors.response.use(
   (response) => response,
-  (error: AxiosError) => {
-    const isLoginEndpoint =
-      error.config?.url?.includes('/auth/login/') ||
-      error.config?.url?.includes('/token/');
+  async (error: AxiosError) => {
+    const originalRequest = error.config as (InternalAxiosRequestConfig & { _retried?: boolean }) | undefined;
+    const reqUrl = originalRequest?.url || '';
+    const isAuthRoute = reqUrl.includes('/login/') || reqUrl.includes('/token/');
 
-    // Automatically clear local session on authentication expiration
-    if (error.response?.status === 401 && !isLoginEndpoint) {
-      localStorage.removeItem('attendsure_token');
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('token');
-      localStorage.removeItem('attendsure_username');
-      localStorage.removeItem('attendsure_faculty_name');
-      localStorage.removeItem('attendsure_role');
-      localStorage.removeItem('attendsure_user_photo');
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retried && !isAuthRoute) {
+      const refreshToken = localStorage.getItem('attendsure_refresh')?.trim();
+      if (refreshToken) {
+        originalRequest._retried = true;
+        if (!refreshPromise) {
+          refreshPromise = axios
+            .post(`${resolveBaseUrl()}/api/v1/accounts/token/refresh/`, { refresh: refreshToken }, { timeout: 6000 })
+            .then((res) => {
+              const nextAccess = res.data?.access as string | undefined;
+              const nextRefresh = res.data?.refresh as string | undefined;
+              if (nextAccess) {
+                localStorage.setItem('attendsure_access', nextAccess);
+                if (nextRefresh) localStorage.setItem('attendsure_refresh', nextRefresh);
+                return nextAccess;
+              }
+              return null;
+            })
+            .catch(() => null)
+            .finally(() => {
+              refreshPromise = null;
+            });
+        }
 
+        const newAccess = await refreshPromise;
+        if (newAccess) {
+          originalRequest.headers.Authorization = `Bearer ${newAccess}`;
+          return apiClient(originalRequest);
+        }
+      }
+
+      const fallbackToken = localStorage.getItem('attendsure_token')?.trim();
+      if (fallbackToken && String(originalRequest.headers?.Authorization || '').startsWith('Bearer ')) {
+        originalRequest._retried = true;
+        localStorage.removeItem('attendsure_access');
+        originalRequest.headers.Authorization = `Token ${fallbackToken}`;
+        return apiClient(originalRequest);
+      }
+
+      clearStoredAuth();
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('attendsure:auth-expired'));
       }
@@ -141,5 +313,122 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+interface GenericAbortSignal {
+  readonly aborted: boolean;
+  addEventListener?: (type: string, listener: () => void, options?: { once?: boolean }) => void;
+  removeEventListener?: (type: string, listener: () => void) => void;
+}
+
+const withCallerAbort = <R>(promise: Promise<R>, signal?: GenericAbortSignal): Promise<R> => {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(new CanceledError('canceled'));
+  }
+  return new Promise<R>((resolve, reject) => {
+    const onAbort = () => reject(new CanceledError('canceled'));
+    signal.addEventListener?.('abort', onAbort, { once: true });
+    promise.then(
+      (val) => {
+        signal.removeEventListener?.('abort', onAbort);
+        resolve(val);
+      },
+      (err) => {
+        signal.removeEventListener?.('abort', onAbort);
+        reject(err);
+      }
+    );
+  });
+};
+
+const rawGet = apiClient.get.bind(apiClient);
+
+const fetchAndPopulateCache = <T = unknown, D = unknown>(
+  url: string,
+  key: string,
+  config?: AxiosRequestConfig<D>
+): Promise<AxiosResponse<T>> => {
+  const existing = inflightGetMap.get(key);
+  if (existing) return existing as Promise<AxiosResponse<T>>;
+
+  const sharedConfig: AxiosRequestConfig<D> = { ...(config || {}), signal: undefined };
+  const req = rawGet<T, AxiosResponse<T>, D>(url, sharedConfig)
+    .then((res) => {
+      const now = Date.now();
+      pruneCacheIfNeeded();
+      responseCache.set(key, {
+        freshUntil: now + FRESH_TTL_MS,
+        staleUntil: now + STALE_TTL_MS,
+        response: res,
+      });
+      notifyCacheListeners(key, res.data);
+      return res;
+    })
+    .finally(() => {
+      inflightGetMap.delete(key);
+    });
+
+  inflightGetMap.set(key, req);
+  return req;
+};
+
+apiClient.get = function swrGet<T = any, R = AxiosResponse<T>, D = any>(
+  url: string,
+  config?: AxiosRequestConfig<D>
+): Promise<R> {
+  const paramsObj = (config?.params || undefined) as Record<string, unknown> | undefined;
+  const forceNetwork = Boolean(paramsObj?._t || paramsObj?.nocache);
+  const key = buildApiCacheKey(url, paramsObj);
+  const now = Date.now();
+
+  if (!forceNetwork) {
+    const hit = responseCache.get(key);
+    if (hit && hit.freshUntil > now) {
+      return withCallerAbort(Promise.resolve(hit.response as unknown as R), config?.signal as GenericAbortSignal);
+    }
+    if (hit && hit.staleUntil > now) {
+      void fetchAndPopulateCache<T, D>(url, key, config).catch(() => {});
+      return withCallerAbort(Promise.resolve(hit.response as unknown as R), config?.signal as GenericAbortSignal);
+    }
+  }
+
+  return withCallerAbort(
+    fetchAndPopulateCache<T, D>(url, key, config) as unknown as Promise<R>,
+    config?.signal as GenericAbortSignal
+  );
+};
+
+export const prefetchApiGet = (url: string, params?: Record<string, unknown>): void => {
+  const hasToken = Boolean(localStorage.getItem('attendsure_access') || localStorage.getItem('attendsure_token'));
+  if (!hasToken) return;
+  const key = buildApiCacheKey(url, params);
+  const hit = responseCache.get(key);
+  if (hit && hit.freshUntil > Date.now()) return;
+  void fetchAndPopulateCache(url, key, { params }).catch(() => {});
+};
+
+let lastWarmupUser = '';
+
+/** Gently preloads only 3 lightweight (<1KB) lookup endpoints once per user login. */
+export const warmupRoleEndpoints = (role: string, canTeach: boolean): void => {
+  const userScope = localStorage.getItem('attendsure_username') || '';
+  if (!userScope || lastWarmupUser === userScope) return;
+  lastWarmupUser = userScope;
+
+  const upper = role.toUpperCase();
+  const isLeader = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(upper);
+
+  const queue: Array<[string, Record<string, unknown>?]> = [
+    [API_ROUTES.students.metrics, undefined],
+    [API_ROUTES.school.sections, { page_size: 300 }],
+  ];
+  if (canTeach || isLeader) {
+    queue.push([API_ROUTES.attendance.classes, { summary: 1 }]);
+  }
+
+  queue.forEach(([endpoint, params], index) => {
+    setTimeout(() => prefetchApiGet(endpoint, params), 400 + index * 450);
+  });
+};
 
 export default apiClient;

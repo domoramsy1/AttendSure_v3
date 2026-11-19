@@ -254,9 +254,9 @@ export const SchedulesTab: React.FC = () => {
     setError('');
     try {
       const results = await Promise.allSettled([
-        apiClient.get('/schedules/?page_size=500'),
-        apiClient.get('/sections/?page_size=500'),
-        apiClient.get('/faculty/dropdown/'),
+        apiClient.get('/v1/school/periods/?page_size=500'),
+        apiClient.get('/v1/school/sections/?page_size=500'),
+        apiClient.get('/v1/accounts/teachers/dropdown/'),
       ]);
 
       if (!isMounted.current) return;
@@ -339,7 +339,7 @@ export const SchedulesTab: React.FC = () => {
       isDestructive: true,
       onConfirm: async () => {
         try {
-          await apiClient.delete(`/schedules/${id}/`);
+          await apiClient.delete(`/v1/school/periods/${id}/`);
           if (isMounted.current) {
             setSchedules((prev) => prev.filter((item) => item.id !== id));
           }
