@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, time as dt_time, timedelta
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -9,13 +9,18 @@ from common.gps import verify_campus_gps
 from common.media import build_media_url
 from common.permissions import is_school_leader
 from common.qr_signer import verify_student_qr
-from apps.accounts.selectors import get_teacher_student_ids, resolve_teacher_for_user
 from apps.campus.selectors import get_active_campus_coords
 from apps.messaging.services import notify_student_parent
-from apps.school.models import ClassPeriod
+from apps.school.models import ClassPeriod, Subject
 from apps.school.selectors import format_section_label
 from apps.students.models import Enrollment, Student
 from .models import ClassAttendance, DailyAttendance, ExitPass
+from .selectors import (
+    FacultyModel,
+    PERIOD_FACULTY_FIELD,
+    get_faculty_student_ids,
+    resolve_faculty_for_user,
+)
 
 
 def determine_arrival_status(period: ClassPeriod | None, scanned_at, grace_minutes: int = 15) -> str:
@@ -41,10 +46,10 @@ def record_student_qr_scan(
     is_mock_location: bool = False,
     request=None,
 ) -> dict:
-    teacher = resolve_teacher_for_user(user)
+    faculty_member = resolve_faculty_for_user(user)
     leader = is_school_leader(user)
-    if not teacher and not leader:
-        raise AppError("FORBIDDEN", "Only teachers and administrators can scan QR cards.", 403)
+    if not faculty_member and not leader:
+        raise AppError("FORBIDDEN", "Only faculty and school admins can scan student QR cards.", 403)
 
     if latitude is not None and longitude is not None and not leader:
         c_lat, c_lon, radius, _ = get_active_campus_coords()
@@ -60,16 +65,30 @@ def record_student_qr_scan(
         if not gps["is_inside"]:
             raise AppError("OUTSIDE_CAMPUS", gps["reason"], 403)
 
-    qr_data = verify_student_qr(raw_qr, allow_legacy_unsigned=True)
+    clean_raw = str(raw_qr or "").strip()
+    if clean_raw.upper().startswith("ATTENDSURE:FACULTY:") or "ATTENDSURE_FACULTY_PASS" in clean_raw.upper():
+        raise AppError(
+            "FACULTY_QR_SCANNED",
+            "That is a Faculty ID Pass. Please scan a Student QR card from the Students or My Classes tab.",
+            400,
+        )
+
+    qr_data = verify_student_qr(clean_raw)
     if not qr_data:
-        raise AppError("INVALID_QR", "Invalid or tampered student QR card.", 400)
+        raise AppError(
+            "INVALID_QR",
+            "This QR card is old or invalid. Open the student's QR card in the Students tab and save the new QR image.",
+            400,
+        )
 
     student = Student.objects.filter(
-        Q(qr_token=qr_data.qr_token) | Q(lrn__iexact=qr_data.lrn),
+        Q(qr_token=qr_data.qr_token) & Q(lrn__iexact=qr_data.lrn)
+        if qr_data.is_signed
+        else (Q(qr_token=qr_data.qr_token) | Q(lrn__iexact=qr_data.lrn)),
         is_active=True,
     ).first()
     if not student:
-        raise AppError("STUDENT_NOT_FOUND", "Unregistered student QR card.", 404)
+        raise AppError("STUDENT_NOT_FOUND", "This student QR card is not registered.", 404)
 
     enrollment = (
         Enrollment.objects.filter(student=student, status="ENROLLED")
@@ -78,7 +97,11 @@ def record_student_qr_scan(
         .first()
     )
     if not enrollment or not enrollment.section:
-        raise AppError("NOT_ENROLLED", f"{student.full_name} has no active section.", 400)
+        raise AppError(
+            "NOT_ENROLLED",
+            f"{student.full_name} has no class section yet. Assign a section in the Students tab first.",
+            400,
+        )
 
     section = enrollment.section
     section_label = format_section_label(
@@ -89,16 +112,41 @@ def record_student_qr_scan(
     active_period = None
     if period_id:
         active_period = period_qs.filter(id=period_id).first()
-    if not active_period and teacher:
-        active_period = period_qs.filter(teacher=teacher).first()
+    if not active_period and faculty_member:
+        active_period = period_qs.filter(**{PERIOD_FACULTY_FIELD: faculty_member}).first()
 
-    is_adviser = bool(teacher and section.adviser_id == teacher.id)
-    if not (leader or is_adviser or (active_period and teacher and active_period.teacher_id == teacher.id)):
+    is_adviser = bool(faculty_member and section.adviser_id == faculty_member.id)
+    active_faculty_id = getattr(active_period, f"{PERIOD_FACULTY_FIELD}_id", None) if active_period else None
+    if not (
+        leader
+        or is_adviser
+        or (active_period and faculty_member and active_faculty_id == faculty_member.id)
+    ):
         raise AppError("FORBIDDEN_SECTION", f"You are not assigned to {section_label}.", 403)
 
     target_period = active_period or period_qs.order_by("start_time").first()
     if not target_period:
-        raise AppError("NO_SCHEDULE", f"No active class period found for {section_label}.", 400)
+        homeroom_subj, _ = Subject.objects.get_or_create(
+            code="HOMEROOM",
+            defaults={
+                "title": "Advisory Homeroom",
+                "grade_level": section.grade_level,
+                "units": 1,
+            },
+        )
+        target_period = ClassPeriod.objects.create(
+            code=f"HR-{section.id}",
+            schedule_code=f"HR-{section.id}",
+            section=section,
+            subject=homeroom_subj,
+            room=section.room,
+            room_number=section.room_number or "",
+            start_time=dt_time(7, 30),
+            end_time=dt_time(8, 30),
+            days_of_week="MON-FRI",
+            is_active=True,
+            **{PERIOD_FACULTY_FIELD: section.adviser or faculty_member},
+        )
 
     now = timezone.now()
     today = timezone.localdate()
@@ -115,18 +163,23 @@ def record_student_qr_scan(
         .count()
     )
     note = (
-        f"CUTTING ALERT: Missed {missed_count} earlier period(s) today."
+        f"CUTTING ALERT: Missed {missed_count} earlier class(es) today."
         if missed_count > 0
-        else "Classroom QR attendance verified."
+        else "Classroom QR attendance saved."
     )
 
     arrival_status = determine_arrival_status(target_period, now)
+    period_faculty = getattr(target_period, PERIOD_FACULTY_FIELD, None)
+    recorder = period_faculty or faculty_member or FacultyModel.objects.filter(is_active=True).order_by("id").first()
+    if not recorder:
+        raise AppError("NO_FACULTY_PROFILE", "Add at least one active faculty member first.", 400)
+
     record, created = ClassAttendance.objects.get_or_create(
         student=student,
         class_period=target_period,
         attendance_date=today,
         defaults={
-            "recorded_by": target_period.teacher or teacher,
+            "recorded_by": recorder,
             "scanned_at": now,
             "scan_method": "QR",
             "status": arrival_status,
@@ -145,7 +198,7 @@ def record_student_qr_scan(
             student=student,
             title=f"Cutting Alert: {student.first_name}" if missed_count > 0 else f"Attendance: {student.first_name} ({arrival_status})",
             message=(
-                f"{student.full_name} scanned into {subject_name} at {time_display}, missing {missed_count} earlier period(s)."
+                f"{student.full_name} scanned into {subject_name} at {time_display}, missing {missed_count} earlier class(es)."
                 if missed_count > 0
                 else f"{student.full_name} was marked {arrival_status} in {subject_name} at {time_display}."
             ),
@@ -169,14 +222,14 @@ def record_student_qr_scan(
 
 @transaction.atomic
 def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
-    teacher = resolve_teacher_for_user(user)
-    if not teacher and not is_school_leader(user):
-        raise AppError("FORBIDDEN", "Only teachers and administrators can sync offline scans.", 403)
+    faculty_member = resolve_faculty_for_user(user)
+    if not faculty_member and not is_school_leader(user):
+        raise AppError("FORBIDDEN", "Only faculty and school admins can sync offline scans.", 403)
 
     parsed = []
     tokens = set()
     for item in raw_scans[:500]:
-        qr_data = verify_student_qr(item.get("qr_token") or item.get("code") or "", allow_legacy_unsigned=True)
+        qr_data = verify_student_qr(item.get("qr_token") or item.get("code") or "")
         if not qr_data:
             continue
         tokens.add(qr_data.qr_token)
@@ -202,7 +255,13 @@ def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
     rejected = len(raw_scans) - len(parsed)
 
     for entry in parsed:
-        st = student_lookup.get(entry["qr"].qr_token) or student_lookup.get(entry["qr"].lrn)
+        st = student_lookup.get(entry["qr"].qr_token)
+        if not st and not entry["qr"].is_signed:
+            st = student_lookup.get(entry["qr"].lrn)
+        if st and entry["qr"].is_signed and st.lrn.lower() != entry["qr"].lrn.lower():
+            rejected += 1
+            continue
+
         sec = enrollments.get(st.id) if st else None
         if not st or not sec:
             rejected += 1
@@ -218,6 +277,12 @@ def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
             rejected += 1
             continue
 
+        period_faculty = getattr(period, PERIOD_FACULTY_FIELD, None)
+        recorder = period_faculty or faculty_member
+        if not recorder:
+            rejected += 1
+            continue
+
         scan_dt = entry["scanned_at"]
         if timezone.is_naive(scan_dt):
             scan_dt = timezone.make_aware(scan_dt, timezone.get_current_timezone())
@@ -229,7 +294,7 @@ def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
             class_period=period,
             attendance_date=scan_date,
             defaults={
-                "recorded_by": period.teacher or teacher,
+                "recorded_by": recorder,
                 "scanned_at": scan_dt,
                 "scan_method": "QR",
                 "status": status_val,
@@ -267,8 +332,10 @@ def save_manual_attendance(
     if not student:
         raise AppError("STUDENT_NOT_FOUND", "Student not found.", 404)
 
-    teacher = resolve_teacher_for_user(user)
-    if not is_school_leader(user) and (not teacher or student.id not in get_teacher_student_ids(teacher)):
+    faculty_member = resolve_faculty_for_user(user)
+    if not is_school_leader(user) and (
+        not faculty_member or student.id not in get_faculty_student_ids(faculty_member)
+    ):
         raise AppError("FORBIDDEN", "Access denied for this student.", 403)
 
     enr = Enrollment.objects.filter(student=student, status="ENROLLED").select_related("section").first()
@@ -288,12 +355,17 @@ def save_manual_attendance(
         except ValueError:
             pass
 
+    period_faculty = getattr(period, PERIOD_FACULTY_FIELD, None)
+    recorder = faculty_member or period_faculty or FacultyModel.objects.filter(is_active=True).order_by("id").first()
+    if not recorder:
+        raise AppError("NO_FACULTY_PROFILE", "Add at least one active faculty member first.", 400)
+
     log, _ = ClassAttendance.objects.update_or_create(
         student=student,
         class_period=period,
         attendance_date=target_date,
         defaults={
-            "recorded_by": teacher or period.teacher,
+            "recorded_by": recorder,
             "status": clean_status,
             "scan_method": "MANUAL",
             "scanned_at": timezone.now(),
@@ -303,7 +375,7 @@ def save_manual_attendance(
         DailyAttendance.objects.update_or_create(
             student=student,
             attendance_date=target_date,
-            defaults={"section": sec, "status": clean_status, "remarks": "Manual teacher update."},
+            defaults={"section": sec, "status": clean_status, "remarks": "Manual faculty update."},
         )
     return log
 
@@ -311,7 +383,7 @@ def save_manual_attendance(
 @transaction.atomic
 def change_exit_pass_status(*, user, exit_pass: ExitPass, next_status: str) -> ExitPass:
     if next_status in ("ACTIVE", "REVOKED") and not is_school_leader(user):
-        raise AppError("FORBIDDEN", "Only school leadership can approve or decline passes.", 403)
+        raise AppError("FORBIDDEN", "Only school admins can approve or decline passes.", 403)
     if next_status == "USED":
         if exit_pass.status != "ACTIVE":
             raise AppError("INVALID_PASS_STATE", f"Pass is currently {exit_pass.status}.", 400)

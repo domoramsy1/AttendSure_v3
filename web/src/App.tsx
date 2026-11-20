@@ -270,7 +270,6 @@ const AppContent: React.FC = () => {
   const effectiveReport: 'sf1' | 'sf2' | 'sf4' =
     !canViewSf4 && selectedReport === 'sf4' ? 'sf1' : selectedReport;
 
-  // Automatically reset selectedReport to 'sf1' if a non-leadership account is active
   useEffect(() => {
     if (!canViewSf4 && selectedReport === 'sf4') {
       setSelectedReport('sf1');
@@ -461,7 +460,7 @@ const AppContent: React.FC = () => {
       case 'classroom-scanner':
         return 'Classroom QR Attendance Scanner';
       case 'my-classes':
-        return 'My Classes & Student Lists';
+        return 'My Classes & Class Lists';
       case 'advisory-monitor':
         return 'Advisory Attendance & Cutting Matrix';
       case 'students':

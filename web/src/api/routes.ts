@@ -36,6 +36,7 @@ export const API_ROUTES = {
   },
   students: {
     list: '/v1/students/',
+    bulkImport: '/v1/students/bulk-import/',
     metrics: '/v1/students/metrics/',
     dropdown: '/v1/students/dropdown/',
     qrCards: '/v1/students/qr-cards/',
@@ -78,7 +79,6 @@ export const API_ROUTES = {
   },
 } as const;
 
-/** Escapes untrusted text before inserting into HTML templates. */
 export const escapeHtml = (raw: unknown): string => {
   return String(raw ?? '')
     .replace(/&/g, '&amp;')
@@ -88,7 +88,6 @@ export const escapeHtml = (raw: unknown): string => {
     .replace(/'/g, '&#39;');
 };
 
-/** Checks that an error string is safe plain text (not HTML or a server traceback). */
 const isSafeUserFacingText = (text: string): boolean => {
   const trimmed = text.trim();
   if (!trimmed) return false;
@@ -99,7 +98,6 @@ const isSafeUserFacingText = (text: string): boolean => {
   return true;
 };
 
-/** Extracts readable plain-English error messages without leaking raw server tracebacks or HTML. */
 export const extractApiError = (err: unknown, fallback = 'Request could not be completed. Please try again.'): string => {
   const anyErr = err as {
     response?: { data?: Record<string, unknown> | string; status?: number };

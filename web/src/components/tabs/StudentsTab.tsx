@@ -1,5 +1,5 @@
 /**
- * AttendSure - Students Directory & DepEd SF1 Enrollment
+ * AttendSure - Students Directory, DepEd SF1 Enrollment & Bulk CSV Class List Import
  * File: web/src/components/tabs/StudentsTab.tsx
  */
 
@@ -32,6 +32,8 @@ import {
   X,
   AlertCircle,
   Download,
+  Upload,
+  FileSpreadsheet,
   Plus,
   BookOpen,
   Search,
@@ -93,6 +95,14 @@ interface MetricsData {
   active: number;
   paired: number;
   total_sections: number;
+}
+
+interface CsvImportSummary {
+  ok: boolean;
+  created_count: number;
+  updated_count: number;
+  skipped_count: number;
+  errors: Array<{ row: number; lrn: string; reason: string }>;
 }
 
 type ModalFormTab = 'BASIC' | 'ADDRESS' | 'PARENTS' | 'DEPED';
@@ -158,6 +168,15 @@ export const StudentsTab: React.FC = () => {
   const [badgeStudent, setBadgeStudent] = useState<Student | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
+  // Bulk CSV Import Modal State
+  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [importDefaultSectionId, setImportDefaultSectionId] = useState<string>('');
+  const [autoCreateSections, setAutoCreateSections] = useState<boolean>(true);
+  const [importingCsv, setImportingCsv] = useState<boolean>(false);
+  const [importSummary, setImportSummary] = useState<CsvImportSummary | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [formTab, setFormTab] = useState<ModalFormTab>('BASIC');
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
@@ -195,7 +214,7 @@ export const StudentsTab: React.FC = () => {
   const metricsAbortRef = useRef<AbortController | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInteracting = useRef<boolean>(false);
-  isInteracting.current = isModalOpen || Boolean(badgeStudent);
+  isInteracting.current = isModalOpen || isImportModalOpen || Boolean(badgeStudent);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -205,13 +224,12 @@ export const StudentsTab: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  useEffect(() => {
-    const controller = new AbortController();
+  const loadAcademicLookups = useCallback((signal?: AbortSignal) => {
     Promise.allSettled([
-      apiClient.get(API_ROUTES.school.gradeLevels, { params: { page_size: 200 }, signal: controller.signal }),
-      apiClient.get(API_ROUTES.school.sections, { params: { page_size: 300 }, signal: controller.signal }),
+      apiClient.get(API_ROUTES.school.gradeLevels, { params: { page_size: 200, nocache: 1 }, signal }),
+      apiClient.get(API_ROUTES.school.sections, { params: { page_size: 300, nocache: 1 }, signal }),
     ]).then(([glRes, secRes]) => {
-      if (controller.signal.aborted) return;
+      if (signal?.aborted) return;
       if (glRes.status === 'fulfilled' && glRes.value?.data) {
         setGradeLevels(Array.isArray(glRes.value.data) ? glRes.value.data : glRes.value.data?.results || []);
       }
@@ -219,10 +237,13 @@ export const StudentsTab: React.FC = () => {
         setSections(Array.isArray(secRes.value.data) ? secRes.value.data : secRes.value.data?.results || []);
       }
     });
-    return () => {
-      controller.abort();
-    };
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadAcademicLookups(controller.signal);
+    return () => controller.abort();
+  }, [loadAcademicLookups]);
 
   useEffect(() => {
     return () => {
@@ -359,6 +380,95 @@ export const StudentsTab: React.FC = () => {
       }, 2000);
     } catch {
       // Ignore clipboard failure
+    }
+  };
+
+  const handleDownloadCsvTemplate = () => {
+    exportToCsv(
+      'AttendSure_ClassList_Import_Template.csv',
+      [
+        'lrn',
+        'first_name',
+        'middle_name',
+        'last_name',
+        'suffix',
+        'sex',
+        'birthdate',
+        'section_name',
+        'grade_level',
+        'parent_contact',
+        'barangay',
+        'municipality_city',
+        'province',
+      ],
+      [
+        [
+          '128936000001',
+          'FirstName',
+          'MiddleName',
+          'LastName',
+          '',
+          'Male',
+          '2012-06-15',
+          sections[0]?.name || 'SectionA',
+          sections[0]?.grade_level_name || 'Grade 7',
+          '09170000000',
+          'BarangayName',
+          'CityName',
+          'ProvinceName',
+        ],
+      ]
+    );
+  };
+
+  const handleOpenCsvImport = () => {
+    setCsvFile(null);
+    setImportSummary(null);
+    setImportError(null);
+    setImportDefaultSectionId(selectedSectionFilter !== 'ALL' ? selectedSectionFilter : '');
+    setAutoCreateSections(true);
+    setIsImportModalOpen(true);
+  };
+
+  const handleRunCsvImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setImportError(null);
+    setImportSummary(null);
+
+    if (!csvFile) {
+      setImportError('Please select a .csv class list file first.');
+      return;
+    }
+    if (!csvFile.name.toLowerCase().endsWith('.csv')) {
+      setImportError('Only .csv spreadsheet files are accepted.');
+      return;
+    }
+    if (csvFile.size > 5 * 1024 * 1024) {
+      setImportError('CSV file must be 5 MB or smaller.');
+      return;
+    }
+
+    setImportingCsv(true);
+    try {
+      const payload = new FormData();
+      payload.append('file', csvFile);
+      if (importDefaultSectionId) {
+        payload.append('section_id', importDefaultSectionId);
+      }
+      payload.append('auto_create_sections', String(autoCreateSections));
+
+      const res = await apiClient.post<CsvImportSummary>(API_ROUTES.students.bulkImport, payload, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setImportSummary(res.data);
+      loadAcademicLookups();
+      await loadMetrics(true);
+      await loadStudents(1, pageSize, false, true);
+      setCurrentPage(1);
+    } catch (err) {
+      setImportError(extractApiError(err, 'Could not import CSV class list.'));
+    } finally {
+      setImportingCsv(false);
     }
   };
 
@@ -597,7 +707,7 @@ export const StudentsTab: React.FC = () => {
       onConfirm: async () => {
         try {
           await apiClient.delete(`${API_ROUTES.students.list}${st.id}/`);
-          showAlert({ title: 'Student Removed', message: `${st.full_name} was removed from the student list.`, type: 'info' });
+          showAlert({ title: 'Student Removed', message: `${st.full_name} was removed from the class list.`, type: 'info' });
           await loadMetrics(true);
           await loadStudents(currentPage, pageSize, true, true);
         } catch (err) {
@@ -701,10 +811,21 @@ export const StudentsTab: React.FC = () => {
           </button>
 
           {canManageStudents && (
-            <button type="button" onClick={handleOpenCreate} style={ui.btnPrimary}>
-              <Plus size={15} />
-              <span>Add Student</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={handleOpenCsvImport}
+                style={ui.btnSecondary}
+              >
+                <Upload size={14} color={brand.primary} />
+                <span>Import CSV Class List</span>
+              </button>
+
+              <button type="button" onClick={handleOpenCreate} style={ui.btnPrimary}>
+                <Plus size={15} />
+                <span>Add Student</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -901,6 +1022,155 @@ export const StudentsTab: React.FC = () => {
           style={{ backgroundColor: tokens.bgSurface, borderTop: `1px solid ${tokens.borderSubtle}` }}
         />
       </div>
+
+      {/* Bulk CSV Class List Import Modal */}
+      <Modal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        title="Bulk Import CSV Class List"
+      >
+        <form onSubmit={handleRunCsvImport} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div
+            style={{
+              ...ui.subtleBox,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 10,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <FileSpreadsheet size={20} color={brand.primary} />
+              <div>
+                <div style={{ fontSize: fonts.size.sm, fontWeight: 800, color: tokens.textPrimary }}>
+                  2-Minute School Onboarding
+                </div>
+                <div style={{ fontSize: fonts.size.xs, color: tokens.textSecondary }}>
+                  Upload up to 2,000 students at once (.csv, max 5 MB). Signed QR IDs generate automatically.
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleDownloadCsvTemplate}
+              style={ui.btnSecondary}
+            >
+              <Download size={13} />
+              <span>Download Sample CSV Template</span>
+            </button>
+          </div>
+
+          {importError && (
+            <div
+              style={{
+                ...ui.subtleBox,
+                backgroundColor: tokens.dangerLight,
+                borderColor: brand.danger,
+                color: brand.danger,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontWeight: 600,
+              }}
+            >
+              <AlertCircle size={15} />
+              <span>{importError}</span>
+            </div>
+          )}
+
+          <div>
+            <label style={ui.label}>Select CSV File *</label>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => {
+                setCsvFile(e.target.files?.[0] || null);
+                setImportSummary(null);
+                setImportError(null);
+              }}
+              style={ui.input}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 10 }}>
+            <div>
+              <label style={ui.label}>Fallback Section (If row has no section_name)</label>
+              <select
+                value={importDefaultSectionId}
+                onChange={(e) => setImportDefaultSectionId(e.target.value)}
+                style={ui.input}
+              >
+                <option value="">-- Use section_name from CSV --</option>
+                {sections.map((sec) => (
+                  <option key={sec.id} value={sec.id}>
+                    {sec.grade_level_name ? `${sec.grade_level_name} - ` : ''}
+                    {sec.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', paddingTop: 18 }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: fonts.size.sm, fontWeight: 600, color: tokens.textPrimary, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={autoCreateSections}
+                  onChange={(e) => setAutoCreateSections(e.target.checked)}
+                  style={{ accentColor: brand.primary }}
+                />
+                Auto-create new sections from CSV
+              </label>
+            </div>
+          </div>
+
+          {importSummary && (
+            <div
+              style={{
+                ...ui.subtleBox,
+                backgroundColor: tokens.successLight,
+                borderColor: brand.success,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <div style={{ fontWeight: 800, color: brand.success, fontSize: fonts.size.sm }}>
+                Import Complete: {importSummary.created_count} Created &bull; {importSummary.updated_count} Updated &bull; {importSummary.skipped_count} Skipped
+              </div>
+              {importSummary.errors.length > 0 && (
+                <div
+                  style={{
+                    maxHeight: 130,
+                    overflowY: 'auto',
+                    backgroundColor: tokens.bgSurface,
+                    padding: 8,
+                    borderRadius: 6,
+                    fontSize: fonts.size.xs,
+                    color: tokens.textSecondary,
+                  }}
+                >
+                  {importSummary.errors.map((errItem, idx) => (
+                    <div key={`${errItem.row}-${idx}`}>
+                      Row {errItem.row} ({errItem.lrn || 'No LRN'}): {errItem.reason}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
+            <Button variant="secondary" type="button" onClick={() => setIsImportModalOpen(false)}>
+              Close
+            </Button>
+            <Button variant="primary" type="submit" loading={importingCsv} disabled={!csvFile}>
+              Upload &amp; Import Class List
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       <Modal
         isOpen={isModalOpen}

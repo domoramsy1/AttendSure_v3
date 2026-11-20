@@ -1,44 +1,40 @@
 /**
- * AttendSure - DepEd School Form 2 (SF 2) Daily Attendance Report of Learners
+ * AttendSure - Official DepEd School Form 2 (SF2) Daily Attendance Report of Learners
  * File: web/src/components/tabs/SF2ReportTab.tsx
  */
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
+import { exportToCsv } from '../common/Pagination';
+import { PageSetupModal } from '../common/PageSetupModal';
+import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
+import {
+  ReportViewerShell,
+  ReportHeaderBar,
+  DEFAULT_DEPED_LANDSCAPE_SETUP,
+  resolvePaperDimensionsInches,
+} from '../reports/ReportViewerShell';
+import {
+  buildAuditStamp,
+  exportElementToExcel,
+  exportElementToLocalPdf,
+  exportElementToWord,
+  exportReportJson,
+  logOfficialReportAudit,
+  saveBlobWithOptionalPicker,
+} from '../../utils/reportExporters';
+import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
-import { useTheme } from '../../context/ThemeContext';
-import { exportToCsv } from '../common/Pagination';
-import { ReportNavBar } from '../reports/ReportNavBar';
-import { PageSetupModal } from '../common/PageSetupModal';
-import { usePageSetup } from '../../hooks/usePageSetup';
-import { PAPER_SIZES } from '../../types/pageSetup';
-import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
-import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
-import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
+import type { PageSetupConfig } from '../../types/pageSetup';
+import { BookOpen, Calendar, RefreshCw, Search } from 'lucide-react';
 
-const HTML2PDF_CDN_URL =
-  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-const HTML2PDF_SRI_HASH =
-  'sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==';
-
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-
-const sanitizeSearch = (raw: string): string =>
-  String(raw || '')
-    .replace(/[\u0000-\u001F\u007F<>]/g, '')
-    .trim()
-    .slice(0, 80);
-
-const getDynamicSchoolYear = (): string => {
-  const now = new Date();
-  const year = now.getFullYear();
-  return now.getMonth() >= 5 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
-};
+interface SectionOption {
+  id: number;
+  name: string;
+  grade_level_name?: string;
+}
 
 export interface SchoolDay {
   dateNumber: number;
@@ -51,7 +47,7 @@ export interface SF2Learner {
   lrn: string;
   name: string;
   sex: 'M' | 'F';
-  attendance: { [dayNumber: number]: string | number };
+  attendance: Record<number, string | number>;
   total_absent: number;
   total_tardy: number;
   remarks: string;
@@ -71,6 +67,7 @@ export interface SF2Metrics {
   average_daily_attendance: MetricCounts;
   percentage_attendance: MetricCounts;
   consecutive_5_absent_count: MetricCounts;
+  consecutive_5?: MetricCounts;
   drop_out: MetricCounts;
   transferred_out: MetricCounts;
   transferred_in: MetricCounts;
@@ -94,9 +91,9 @@ export interface SF2ReportData {
   school_email?: string;
   left_logo?: string | null;
   right_logo?: string | null;
+  school_logo?: string | null;
   school_days: SchoolDay[];
   has_enrolled_students?: boolean;
-  notice?: string;
   males: SF2Learner[];
   females: SF2Learner[];
   metrics: SF2Metrics;
@@ -107,6 +104,23 @@ export interface SF2ReportTabProps {
   activeReportId?: string;
   onSelectReport?: (reportId: string) => void;
 }
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+const PRESENT_STATUSES = new Set(['present', 'late', 'tardy', 'cutting', 'excused']);
 
 const SVG_DIAGONAL_ONLY =
   'data:image/svg+xml;utf8,' +
@@ -132,8 +146,6 @@ const SVG_CUTTING =
     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16" preserveAspectRatio="none"><polygon points="24,0 24,16 0,16" fill="#000000"/><line x1="0" y1="16" x2="24" y2="0" stroke="#000000" stroke-width="0.75"/></svg>'
   );
 
-const PRESENT_STATUSES = new Set(['present', 'late', 'tardy', 'cutting', 'excused']);
-
 const AttendanceCell: React.FC<{ status?: string | number | null; isSchoolDay?: boolean }> = ({
   status,
   isSchoolDay = true,
@@ -144,14 +156,14 @@ const AttendanceCell: React.FC<{ status?: string | number | null; isSchoolDay?: 
 
   const s = String(status ?? '').toLowerCase().trim();
   let src = SVG_DIAGONAL_ONLY;
-  let alt = 'Blank / Present';
+  let alt = 'Present';
 
   if (s === 'absent' || s === 'x' || s === '1' || s === 'a') {
     src = SVG_ABSENT;
     alt = 'Absent (X)';
   } else if (s === 'tardy' || s === 'late' || s === '2' || s === 't') {
     src = SVG_TARDY;
-    alt = 'Tardy';
+    alt = 'Late';
   } else if (s === 'cutting' || s === 'cc' || s === '3' || s === 'c') {
     src = SVG_CUTTING;
     alt = 'Cutting Classes';
@@ -172,284 +184,216 @@ const AttendanceCell: React.FC<{ status?: string | number | null; isSchoolDay?: 
       <img
         src={src}
         alt={alt}
-        style={{
-          width: '100%',
-          height: '100%',
-          display: 'block',
-          objectFit: 'fill',
-        }}
+        style={{ width: '100%', height: '100%', display: 'block', objectFit: 'fill' }}
       />
     </div>
   );
 };
 
-const getCurrentMonthName = (): string => {
-  const idx = new Date().getMonth();
-  return MONTH_NAMES[idx] || MONTH_NAMES[0];
-};
+const sanitizeSearchText = (raw: string): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, 80);
 
 export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
   sectionId,
   activeReportId = 'sf2',
-  onSelectReport = () => {},
+  onSelectReport,
 }) => {
-  const { school } = useSchool();
-  const { showAlert } = useAlert();
   const { tokens, brand } = useTheme();
+  const { school: globalSchool } = useSchool();
+  const { showAlert } = useAlert();
 
-  const cachedSections = peekApiCache<any>(API_ROUTES.school.sections);
-  const initialSections = Array.isArray(cachedSections) ? cachedSections : cachedSections?.results || [];
+  const now = useMemo(() => new Date(), []);
+  const yearOptions = useMemo(() => {
+    const y = now.getFullYear();
+    return [y - 1, y, y + 1];
+  }, [now]);
 
-  const [sections, setSections] = useState<any[]>(initialSections);
+  const cachedSectionsPayload = peekApiCache<any>(API_ROUTES.school.sections, { page_size: 250 });
+  const initialSections: SectionOption[] = Array.isArray(cachedSectionsPayload)
+    ? cachedSectionsPayload
+    : cachedSectionsPayload?.results || [];
+
+  const [sections, setSections] = useState<SectionOption[]>(initialSections);
   const [selectedSectionId, setSelectedSectionId] = useState<string>(
     sectionId ? String(sectionId) : initialSections[0] ? String(initialSections[0].id) : ''
   );
-  const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('');
-  const [selectedGradeLevel, setSelectedGradeLevel] = useState<string>('ALL');
-  const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonthName);
-  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<string>(
+    () => MONTH_NAMES[now.getMonth()] || 'October'
+  );
+  const [selectedYear, setSelectedYear] = useState<number>(now.getFullYear());
   const [searchQuery, setSearchQuery] = useState<string>('');
+
   const [reportData, setReportData] = useState<SF2ReportData | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [exportingPdf, setExportingPdf] = useState<boolean>(false);
-  const [isPrinting, setIsPrinting] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [isPageSetupOpen, setIsPageSetupOpen] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+  const [isPrinting, setIsPrinting] = useState<boolean>(false);
 
-  const { config: savedPageConfig, saveConfig: savePageConfig } = usePageSetup('sf2');
-  const [activePageConfig, setActivePageConfig] = useState<PageSetupConfig>(savedPageConfig);
+  const [auditMeta, setAuditMeta] = useState(() => buildAuditStamp('SF2'));
+  const [pageConfig, setPageConfig] = useState<PageSetupConfig>(DEFAULT_DEPED_LANDSCAPE_SETUP);
+  const [isPageSetupOpen, setIsPageSetupOpen] = useState<boolean>(false);
 
-  useEffect(() => {
-    setActivePageConfig(savedPageConfig);
-  }, [savedPageConfig]);
-
-  const paper = useMemo(() => {
-    return PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.folio || { width: 8.5, height: 13 };
-  }, [activePageConfig.paperSize]);
-
-  const isLandscape = activePageConfig.orientation === 'landscape';
-  const pageWidthInches = isLandscape ? paper.height : paper.width;
-  const pageHeightInches = isLandscape ? paper.width : paper.height;
-
-  const [zoomScale, setZoomScale] = useState<number>(1);
-  const [fitToWidth, setFitToWidth] = useState<boolean>(true);
-  const viewportContainerRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
-  const reportAbortRef = useRef<AbortController | null>(null);
-  const printTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const { widthIn: pageWidthInches, heightIn: pageHeightInches } = useMemo(
+    () => resolvePaperDimensionsInches(pageConfig),
+    [pageConfig]
+  );
+
+  const refreshAuditMeta = useCallback(() => {
+    const next = buildAuditStamp('SF2', reportData?.school_id || globalSchool.school_id);
+    setAuditMeta(next);
+    return next;
+  }, [reportData?.school_id, globalSchool.school_id]);
 
   useEffect(() => {
-    const handleBeforePrint = () => setIsPrinting(true);
-    const handleAfterPrint = () => setIsPrinting(false);
-    window.addEventListener('beforeprint', handleBeforePrint);
-    window.addEventListener('afterprint', handleAfterPrint);
-    return () => {
-      window.removeEventListener('beforeprint', handleBeforePrint);
-      window.removeEventListener('afterprint', handleAfterPrint);
-      if (printTimerRef.current) {
-        clearTimeout(printTimerRef.current);
-        printTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (sectionId) setSelectedSectionId(String(sectionId));
+    if (sectionId) {
+      setSelectedSectionId(String(sectionId));
+    }
   }, [sectionId]);
 
   useEffect(() => {
     const controller = new AbortController();
-    const fetchSections = async () => {
-      try {
-        const res = await apiClient.get(API_ROUTES.school.sections, { signal: controller.signal });
+    apiClient
+      .get(API_ROUTES.school.sections, {
+        params: { page_size: 250 },
+        signal: controller.signal,
+      })
+      .then((res) => {
         if (controller.signal.aborted) return;
-        const data = Array.isArray(res.data) ? res.data : res.data?.results || [];
-        setSections(data);
-        if (data.length > 0) {
-          setSelectedSectionId((prev) => prev || String(data[0].id));
+        const list: SectionOption[] = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        setSections(list);
+        if (list.length > 0) {
+          setSelectedSectionId((prev) => prev || String(list[0].id));
+        } else {
+          setLoading(false);
         }
-      } catch (err: unknown) {
+      })
+      .catch((err: unknown) => {
         const anyErr = err as { name?: string; code?: string };
         if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
           return;
         }
-      }
-    };
-    void fetchSections();
+        setError(extractApiError(err, 'Could not load class sections.'));
+        setLoading(false);
+      });
     return () => {
       controller.abort();
     };
   }, []);
 
-  const fetchSF2 = useCallback(async () => {
-    if (!selectedSectionId) return;
-    reportAbortRef.current?.abort();
-    const controller = new AbortController();
-    reportAbortRef.current = controller;
+  const fetchSF2 = useCallback(
+    async (silent = false, bypassCache = false) => {
+      if (!selectedSectionId) return;
 
-    const endpoint = `${API_ROUTES.reports.sf2}${selectedSectionId}/`;
-    const baseParams: Record<string, string | number> = {
-      month: selectedMonth,
-      year: selectedYear,
-    };
-    if (selectedAcademicYear) {
-      baseParams.academic_year = selectedAcademicYear;
-      baseParams.school_year = selectedAcademicYear;
-    }
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-    const cached = peekApiCache<SF2ReportData>(endpoint, baseParams);
-    if (cached) {
-      setReportData(cached);
-      setLoading(false);
-    } else {
-      setLoading(true);
-    }
-    setError(null);
+      const endpoint = `${API_ROUTES.reports.sf2}${encodeURIComponent(selectedSectionId)}/`;
+      const baseParams = { month: selectedMonth, year: selectedYear };
+      const warmHit = !bypassCache ? peekApiCache<SF2ReportData>(endpoint, baseParams) : undefined;
 
-    try {
-      const res = await apiClient.get<SF2ReportData>(endpoint, {
-        params: {
-          ...baseParams,
-          nocache: 1,
-        },
-        signal: controller.signal,
-      });
-      if (controller.signal.aborted) return;
-      setReportData(res.data);
-    } catch (err: unknown) {
-      const anyErr = err as { name?: string; code?: string };
-      if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
-        return;
-      }
-      setError(extractApiError(err, 'Failed to retrieve attendance register from database.'));
-    } finally {
-      if (!controller.signal.aborted) {
+      if (warmHit) {
+        setReportData(warmHit);
         setLoading(false);
+        if (silent) setRefreshing(true);
+      } else if (!silent) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
       }
-    }
-  }, [selectedSectionId, selectedMonth, selectedYear, selectedAcademicYear]);
+      setError(null);
+
+      try {
+        const res = await apiClient.get<SF2ReportData>(endpoint, {
+          params: bypassCache ? { ...baseParams, nocache: 1 } : baseParams,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        setReportData(res.data);
+        const stamp = buildAuditStamp('SF2', res.data?.school_id || globalSchool.school_id);
+        setAuditMeta(stamp);
+        void logOfficialReportAudit({
+          reportName: 'SF2',
+          trackingId: stamp.trackingId,
+          printedAt: stamp.printedAt,
+          action: 'VIEW',
+          sectionId: selectedSectionId,
+        });
+      } catch (err: unknown) {
+        const anyErr = err as { name?: string; code?: string };
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
+        if (!silent) {
+          setError(extractApiError(err, 'Could not generate DepEd SF2 Daily Attendance Report.'));
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [selectedSectionId, selectedMonth, selectedYear, globalSchool.school_id]
+  );
 
   useEffect(() => {
-    void fetchSF2();
+    void fetchSF2(false, false);
     return () => {
-      reportAbortRef.current?.abort();
+      abortRef.current?.abort();
     };
   }, [fetchSF2]);
 
-  const updateFitScale = useCallback(() => {
-    if (!viewportContainerRef.current) return;
-    const containerWidth = viewportContainerRef.current.clientWidth - 48;
-    const targetWidth = pageWidthInches * 96;
-    if (containerWidth > 0 && targetWidth > 0) {
-      const scale = containerWidth / targetWidth;
-      setZoomScale(Number(Math.min(1.15, Math.max(0.35, scale)).toFixed(3)));
-    }
-  }, [pageWidthInches]);
-
   useEffect(() => {
-    if (fitToWidth && !isPrinting && !exportingPdf) {
-      const timer = setTimeout(updateFitScale, 50);
-      window.addEventListener('resize', updateFitScale);
-      return () => {
-        clearTimeout(timer);
-        window.removeEventListener('resize', updateFitScale);
-      };
-    }
-  }, [fitToWidth, isPrinting, exportingPdf, updateFitScale, reportData, activePageConfig]);
+    const handleBeforePrint = () => {
+      refreshAuditMeta();
+      setIsPrinting(true);
+    };
+    const handleAfterPrint = () => {
+      setIsPrinting(false);
+    };
+    window.addEventListener('beforeprint', handleBeforePrint);
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
+    };
+  }, [refreshAuditMeta]);
 
-  const availableAcademicYears = useMemo(() => {
-    const years = Array.from(
-      new Set(
-        [
-          reportData?.academic_year,
-          school.academic_year,
-          ...sections.map((s) => s.academic_year || s.school_year_code),
-        ].filter(Boolean)
-      )
-    ) as string[];
-    return years.length > 0 ? years : [getDynamicSchoolYear()];
-  }, [reportData, school.academic_year, sections]);
-
-  const auditMeta = useMemo(() => {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const dateFormatted = now.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-    const timeFormatted = now.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true,
-    });
-    const printedAt = `${dateFormatted} at ${timeFormatted}`;
-
-    const schoolIdStr = reportData?.school_id || school.school_id || '';
-    const dateStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-    const timeCode = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const trackingId = `DOC-SF2-${schoolIdStr}-${dateStamp}-${timeCode}`;
-
-    return { printedAt, trackingId };
-  }, [reportData, school]);
-
-  const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
-    try {
-      await apiClient.post(API_ROUTES.reports.auditLogs, {
-        report_name: 'School Form 2 (SF2)',
-        document_tracking_id: auditMeta.trackingId,
-        section_id: selectedSectionId,
-        action: actionType,
-        printed_at: auditMeta.printedAt,
-        timestamp: new Date().toISOString(),
-      });
-    } catch {
-      // Non-blocking audit fallback
-    }
-  };
-
-  const getBaseFilename = () => {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const cleanGrade = (reportData?.grade_level || 'Grade').replace(/[^a-zA-Z0-9]/g, '_');
-    const cleanSection = (reportData?.section_name || 'Section').replace(/[^a-zA-Z0-9]/g, '_');
-    return `SF2_Report_${cleanGrade}_${cleanSection}_${selectedMonth}_${timestamp}`;
-  };
-
-  const triggerDownload = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  };
-
-  const cleanSearch = useMemo(() => sanitizeSearch(searchQuery).toLowerCase(), [searchQuery]);
+  const cleanSearch = useMemo(() => sanitizeSearchText(searchQuery).toLowerCase(), [searchQuery]);
 
   const males = useMemo(() => {
-    const list = reportData?.males || [];
+    const list = Array.isArray(reportData?.males) ? reportData!.males : [];
     if (!cleanSearch) return list;
-    return list.filter((m) => m.name.toLowerCase().includes(cleanSearch) || m.lrn.toLowerCase().includes(cleanSearch));
+    return list.filter(
+      (m) => m.name.toLowerCase().includes(cleanSearch) || m.lrn.toLowerCase().includes(cleanSearch)
+    );
   }, [reportData, cleanSearch]);
 
   const females = useMemo(() => {
-    const list = reportData?.females || [];
+    const list = Array.isArray(reportData?.females) ? reportData!.females : [];
     if (!cleanSearch) return list;
-    return list.filter((f) => f.name.toLowerCase().includes(cleanSearch) || f.lrn.toLowerCase().includes(cleanSearch));
+    return list.filter(
+      (f) => f.name.toLowerCase().includes(cleanSearch) || f.lrn.toLowerCase().includes(cleanSearch)
+    );
   }, [reportData, cleanSearch]);
 
-  // Accurate per-day attendance totals: counts only recorded present/late/tardy/cutting/excused (never blank unrecorded days)
   const dailyAttendanceTotals = useMemo(() => {
-    if (!reportData || !reportData.school_days) return { males: [], females: [], combined: [] };
     const maxCols = 25;
     const malesCount: number[] = new Array(maxCols).fill(0);
     const femalesCount: number[] = new Array(maxCols).fill(0);
     const combinedCount: number[] = new Array(maxCols).fill(0);
+
+    if (!reportData?.school_days) {
+      return { males: malesCount, females: femalesCount, combined: combinedCount };
+    }
 
     reportData.school_days.forEach((day, idx) => {
       if (idx >= maxCols) return;
@@ -457,17 +401,13 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
       let fPresent = 0;
 
       males.forEach((m) => {
-        const status = String(m.attendance?.[day.dateNumber] ?? '').toLowerCase().trim();
-        if (PRESENT_STATUSES.has(status)) {
-          mPresent++;
-        }
+        const st = String(m.attendance?.[day.dateNumber] ?? '').toLowerCase().trim();
+        if (PRESENT_STATUSES.has(st)) mPresent++;
       });
 
       females.forEach((f) => {
-        const status = String(f.attendance?.[day.dateNumber] ?? '').toLowerCase().trim();
-        if (PRESENT_STATUSES.has(status)) {
-          fPresent++;
-        }
+        const st = String(f.attendance?.[day.dateNumber] ?? '').toLowerCase().trim();
+        if (PRESENT_STATUSES.has(st)) fPresent++;
       });
 
       malesCount[idx] = mPresent;
@@ -479,159 +419,178 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
   }, [reportData, males, females]);
 
   const fitsOnSinglePage = useMemo(() => {
-    if (activePageConfig.layoutMode === 'pageless') return true;
+    if (pageConfig.layoutMode === 'pageless') return true;
     const printableHeight =
-      pageHeightInches - (activePageConfig.margins.top || 0.25) - (activePageConfig.margins.bottom || 0.25);
-    const singlePageOverhead = 5.95;
-    const rowHeight = 0.17;
-    const totalRows = (males.length || 0) + (females.length || 0);
-    return singlePageOverhead + totalRows * rowHeight <= printableHeight;
-  }, [activePageConfig, males.length, females.length, pageHeightInches]);
+      pageHeightInches - (pageConfig.margins.top || 0.25) - (pageConfig.margins.bottom || 0.25);
+    const totalRows = males.length + females.length;
+    return 5.4 + totalRows * 0.17 <= printableHeight;
+  }, [pageConfig, males.length, females.length, pageHeightInches]);
 
-  const handleToggleLayoutMode = (newMode: LayoutMode) => {
-    const updated: PageSetupConfig = { ...activePageConfig, layoutMode: newMode };
-    savePageConfig(updated, false);
-    setActivePageConfig(updated);
+  const getBaseFilename = () => {
+    const secClean = (reportData?.section_name || 'Section').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `DepEd_SF2_${secClean}_${reportData?.month || selectedMonth}_${selectedYear}`;
   };
 
-  const handlePrint = () => {
-    void logReportAudit('PRINT');
+  const handleDirectPrint = () => {
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF2',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'PRINT',
+      sectionId: selectedSectionId,
+    });
     setIsPrinting(true);
-    if (printTimerRef.current) clearTimeout(printTimerRef.current);
-    printTimerRef.current = setTimeout(() => {
+    setTimeout(() => {
       window.print();
-      setIsPrinting(false);
-      printTimerRef.current = null;
-    }, 120);
+      setTimeout(() => setIsPrinting(false), 400);
+    }, 180);
   };
 
-  const handleDownloadPDF = async () => {
-    if (!reportRef.current || !reportData) return;
-    setExportingPdf(true);
-    void logReportAudit('PDF');
+  const handleExportPdf = async (usePicker = false) => {
+    if (!reportData || !reportRef.current) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF2',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'PDF',
+      sectionId: selectedSectionId,
+    });
 
+    setIsExportingPdf(true);
+    setIsPrinting(true);
     try {
-      let html2pdfInstance = (window as any).html2pdf;
-      if (!html2pdfInstance) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = HTML2PDF_CDN_URL;
-          script.integrity = HTML2PDF_SRI_HASH;
-          script.crossOrigin = 'anonymous';
-          script.referrerPolicy = 'no-referrer';
-          script.onload = () => resolve((window as any).html2pdf);
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-        html2pdfInstance = (window as any).html2pdf;
-      }
-
-      const opt = {
-        margin: [0, 0, 0, 0],
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await exportElementToLocalPdf({
+        element: reportRef.current,
         filename: `${getBaseFilename()}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          logging: false,
-          backgroundColor: activePageConfig.pageColor || '#ffffff',
-        },
-        jsPDF: {
-          unit: 'in',
-          format: [pageWidthInches, pageHeightInches],
-          orientation: activePageConfig.orientation,
-        },
-        pagebreak: activePageConfig.layoutMode === 'pageless' ? { mode: [] } : { mode: ['css', 'legacy'] },
-      };
-
-      const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
-      triggerDownload(pdfBlob, `${getBaseFilename()}.pdf`);
-      showAlert({ title: 'PDF Exported', message: 'School Form 2 successfully exported.', type: 'success' });
+        pageWidthInches,
+        pageHeightInches,
+        orientation: pageConfig.orientation,
+        pageColor: pageConfig.pageColor,
+        pageless: pageConfig.layoutMode === 'pageless',
+        usePicker,
+      });
     } catch {
-      handlePrint();
+      showAlert({
+        title: 'Opening Print Dialog',
+        message: 'Choose "Save as PDF" in your browser print dialog.',
+        type: 'info',
+      });
+      handleDirectPrint();
     } finally {
-      setExportingPdf(false);
+      setIsPrinting(false);
+      setIsExportingPdf(false);
     }
   };
 
-  const handleExportExcel = () => {
-    if (!reportRef.current || !reportData) return;
-    void logReportAudit('EXCEL');
-    const html = `<html><head><meta charset="utf-8"></head><body>${reportRef.current.innerHTML}</body></html>`;
-    triggerDownload(new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' }), `${getBaseFilename()}.xls`);
-    showAlert({ title: 'Excel Exported', message: 'SF2 spreadsheet saved.', type: 'success' });
-  };
+  const buildCsvData = () => {
+    if (!reportData) return { headers: [] as string[], rows: [] as Array<Array<string | number>> };
+    const schoolDays = Array.isArray(reportData.school_days) ? reportData.school_days : [];
+    const dayHeaders = schoolDays.map((d) => `${d.dateNumber} (${d.dayOfWeek})`);
+    const headers = ['LRN', 'Learner Name', 'Sex', ...dayHeaders, 'Total Absent', 'Total Tardy', 'Remarks'];
 
-  const handleExportWord = () => {
-    if (!reportRef.current || !reportData) return;
-    void logReportAudit('WORD');
-    const html = `<html><head><meta charset="utf-8"></head><body>${reportRef.current.innerHTML}</body></html>`;
-    triggerDownload(new Blob([html], { type: 'application/msword;charset=utf-8;' }), `${getBaseFilename()}.doc`);
-    showAlert({ title: 'Word Exported', message: 'SF2 document saved.', type: 'success' });
-  };
-
-  const handleExportCsv = () => {
-    if (!reportData) return;
-    void logReportAudit('CSV');
-    const dayCols = (reportData.school_days || []).map((d) => `${d.dateNumber} (${d.dayOfWeek})`);
-    const headers = ['LRN', 'Learner Name', 'Sex', ...dayCols, 'Total Absent', 'Total Tardy', 'Remarks'];
     const rows = [...males, ...females].map((st) => [
       st.lrn,
       st.name,
       st.sex,
-      ...(reportData.school_days || []).map((d) => st.attendance?.[d.dateNumber] || ''),
+      ...schoolDays.map((d) => st.attendance?.[d.dateNumber] || ''),
       st.total_absent || 0,
       st.total_tardy || 0,
       st.remarks || '',
     ]);
-    if (exportToCsv(`${getBaseFilename()}.csv`, headers, rows)) {
-      showAlert({ title: 'CSV Exported', message: 'SF2 CSV saved.', type: 'success' });
+    return { headers, rows };
+  };
+
+  const handleExportCsv = async (usePicker = false) => {
+    if (!reportData) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF2',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'CSV',
+      sectionId: selectedSectionId,
+    });
+    const { headers, rows } = buildCsvData();
+    const filename = `${getBaseFilename()}.csv`;
+
+    if (usePicker) {
+      const escapeCell = (val: unknown) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+      const csvString =
+        '\uFEFF' + [headers.map(escapeCell).join(','), ...rows.map((r) => r.map(escapeCell).join(','))].join('\r\n');
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+      await saveBlobWithOptionalPicker(blob, filename, 'text/csv', 'csv', 'CSV Spreadsheet (*.csv)');
     } else {
-      showAlert({ title: 'No Records', message: 'No attendance records to export.', type: 'warning' });
+      exportToCsv(filename, headers, rows);
     }
   };
 
-  const handleExportJson = () => {
-    if (!reportData) return;
-    void logReportAudit('JSON');
-    const payload = {
-      tracking_id: auditMeta.trackingId,
-      date_and_time_printed: auditMeta.printedAt,
-      report_data: reportData,
-    };
-    triggerDownload(
-      new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
-      `${getBaseFilename()}.json`
-    );
-    showAlert({ title: 'JSON Exported', message: 'SF2 JSON saved.', type: 'success' });
+  const handleExportExcel = async (usePicker = false) => {
+    if (!reportData || !reportRef.current) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF2',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'EXCEL',
+      sectionId: selectedSectionId,
+    });
+    await exportElementToExcel(reportRef.current, getBaseFilename(), meta, usePicker);
   };
 
-  const isListEmpty =
-    !reportData ||
-    reportData.has_enrolled_students === false ||
-    ((!reportData.males || reportData.males.length === 0) && (!reportData.females || reportData.females.length === 0));
+  const handleExportWord = async (usePicker = false) => {
+    if (!reportData || !reportRef.current) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF2',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'WORD',
+      sectionId: selectedSectionId,
+    });
+    await exportElementToWord(reportRef.current, getBaseFilename(), meta, usePicker);
+  };
+
+  const handleExportJson = async (usePicker = false) => {
+    if (!reportData) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF2',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'JSON',
+      sectionId: selectedSectionId,
+    });
+    await exportReportJson(getBaseFilename(), meta, reportData, usePicker);
+  };
+
+  const schoolDays = Array.isArray(reportData?.school_days) ? reportData!.school_days : [];
+  const isListEmpty = males.length === 0 && females.length === 0;
+  const schoolHead = reportData?.school_head || globalSchool.principal_name || '';
 
   const renderTableHeader = () => (
     <thead>
       <tr>
-        <th rowSpan={2} style={{ width: '1.8%', ...thCell }}>#</th>
-        <th rowSpan={2} style={{ width: '16.0%', ...thCell }}>
+        <th rowSpan={2} style={{ width: '2.0%', ...thCell }}>#</th>
+        <th rowSpan={2} style={{ width: '16.5%', ...thCell }}>
           LEARNER&apos;S NAME<br />
-          <span style={{ fontSize: '4.2pt', fontWeight: 400, fontStyle: 'italic', color: '#000000' }}>
+          <span style={{ fontSize: '4.4pt', fontWeight: 400, fontStyle: 'italic' }}>
             (Last Name, First Name, Middle Name)
           </span>
         </th>
-        <th colSpan={25} style={{ width: '61.25%', ...thCell, fontSize: '4.8pt' }}>
+        <th colSpan={25} style={{ width: '61.25%', ...thCell, fontSize: '4.9pt' }}>
           (1st row for date, 2nd row for Day: M, T, W, TH, F)
         </th>
-        <th colSpan={2} style={{ width: '5.4%', ...thCell }}>Total for Month</th>
-        <th rowSpan={2} style={{ width: '15.55%', ...thCell, fontSize: '4.5pt', lineHeight: 1.15, padding: '2px 4px' }}>
-          REMARK/S
+        <th colSpan={2} style={{ width: '5.5%', ...thCell }}>Total for the<br />Month</th>
+        <th rowSpan={2} style={{ width: '14.75%', ...thCell, fontSize: '4.6pt', lineHeight: 1.12 }}>
+          REMARK/S (If DROPPED OUT, state reason; if TRANSFERRED IN/OUT, write name of School)
         </th>
       </tr>
       <tr>
         {Array.from({ length: 25 }).map((_, i) => {
-          const day = reportData?.school_days ? reportData.school_days[i] : undefined;
+          const day = schoolDays[i];
           return (
             <th key={`day-col-${i}`} style={{ width: '2.45%', ...thDateCell }}>
               <div>{day ? day.dateNumber : ''}</div>
@@ -639,820 +598,663 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
             </th>
           );
         })}
-        <th style={{ width: '2.7%', ...thCell, fontSize: '4.5pt' }}>ABSENT</th>
-        <th style={{ width: '2.7%', ...thCell, fontSize: '4.5pt' }}>TARDY</th>
+        <th style={{ width: '2.75%', ...thCell, fontSize: '4.5pt' }}>ABSENT</th>
+        <th style={{ width: '2.75%', ...thCell, fontSize: '4.5pt' }}>TARDY</th>
       </tr>
     </thead>
   );
 
-  const renderSummaryFooter = () => (
-    <div style={{ marginTop: 8, width: '100%' }}>
-      <div style={footerContainerStyle}>
-        <div style={guidelinesPanelStyle}>
-          <div style={{ fontWeight: 800, fontSize: '5.8pt', marginBottom: 3, color: '#000000' }}>GUIDELINES:</div>
-          <div style={ruleTextStyle}>1. Attendance accomplished daily. Refer to codes.</div>
-          <div style={ruleTextStyle}>2. Dates written beside learner name.</div>
-          <div style={ruleTextStyle}>3. Computations per official DepEd guidelines.</div>
-        </div>
-
-        <div style={legendPanelStyle}>
-          <div style={{ fontWeight: 800, fontSize: '5.4pt', paddingBottom: 2, borderBottom: '1px solid #000000', color: '#000000' }}>
-            1. ATTENDANCE CODES
+  const renderSummaryFooter = () => {
+    const m = reportData?.metrics;
+    return (
+      <div style={{ marginTop: 8, width: '100%' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '38% 34% 26%',
+            gap: '1%',
+            alignItems: 'start',
+            fontSize: '5.5pt',
+            lineHeight: 1.18,
+          }}
+        >
+          <div style={{ border: '1px solid #000', padding: '4px 6px' }}>
+            <div style={{ fontWeight: 800, marginBottom: 2 }}>GUIDELINES:</div>
+            <div>1. The attendance shall be accomplished daily. Refer to the codes for checking learners&apos; attendance.</div>
+            <div>2. Dates shall be written in the columns beside Learner&apos;s Name.</div>
+            <div>3. Compute the following at the end of the month:</div>
+            <div style={{ paddingLeft: 6 }}>
+              <strong>a. % of Enrolment = </strong> (Registered Learners end of month / Enrolment 1st Friday of June) x 100
+            </div>
+            <div style={{ paddingLeft: 6 }}>
+              <strong>b. Average Daily Attendance = </strong> Total Daily Attendance / Number of School Days in month
+            </div>
+            <div style={{ paddingLeft: 6 }}>
+              <strong>c. % of Attendance = </strong> (Average daily attendance / Registered Learners end of month) x 100
+            </div>
+            <div style={{ marginTop: 3 }}>
+              <strong>CODES FOR CHECKING ATTENDANCE:</strong><br />
+              <strong>blank</strong> - Present; <strong>(X)</strong> - Absent; <strong>Tardy</strong> (Upper shaded = Late Comer, Lower shaded = Cutting Classes)
+            </div>
           </div>
-          <div style={{ fontSize: '4.6pt', margin: '3px 0 6px 0', color: '#000000' }}>
-            <strong>blank</strong>-Present; <strong>(x)</strong>-Absent; Tardy (Upper=Late, Lower=Cutting)
-          </div>
-        </div>
 
-        <div style={summaryPanelStyle}>
-          <table style={metricsTableStyle}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid #000', fontSize: '5.4pt' }}>
             <thead>
-              <tr>
-                <th style={{ width: '27%', ...thCell, textAlign: 'left', paddingLeft: 4 }}>Month: {reportData?.month}</th>
-                <th style={{ width: '31%', ...thCell, textAlign: 'left', paddingLeft: 4 }}>
-                  Days: {reportData?.school_days ? reportData.school_days.length : 0}
-                </th>
-                <th colSpan={3} style={{ width: '42%', ...thCell, fontSize: '4.8pt' }}>Summary for Month</th>
+              <tr style={{ backgroundColor: '#f1f5f9' }}>
+                <th style={sumTh}>Month: {reportData?.month}</th>
+                <th style={sumTh}>Days of Classes: {schoolDays.length}</th>
+                <th colSpan={3} style={sumTh}>Summary</th>
               </tr>
-              <tr>
-                <th colSpan={2} style={{ ...thCell, backgroundColor: '#ffffff', borderTop: 'none' }}></th>
-                <th style={{ width: '14%', ...thCell, fontSize: '4.8pt' }}>M</th>
-                <th style={{ width: '14%', ...thCell, fontSize: '4.8pt' }}>F</th>
-                <th style={{ width: '14%', ...thCell, fontSize: '4.8pt' }}>TOTAL</th>
+              <tr style={{ backgroundColor: '#f8fafc' }}>
+                <th colSpan={2} style={sumTh}>Indicator</th>
+                <th style={{ ...sumTh, width: '13%' }}>M</th>
+                <th style={{ ...sumTh, width: '13%' }}>F</th>
+                <th style={{ ...sumTh, width: '15%' }}>TOTAL</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td colSpan={2} style={metricsLabelCell}>Registered Learner end of month</td>
-                <td style={centerCell}>{reportData?.metrics?.registered_end?.m ?? 0}</td>
-                <td style={centerCell}>{reportData?.metrics?.registered_end?.f ?? 0}</td>
-                <td style={{ ...centerCell, fontWeight: 700 }}>{reportData?.metrics?.registered_end?.total ?? 0}</td>
+                <td colSpan={2} style={sumTd}>* Enrolment as of (1st Friday of June)</td>
+                <td style={sumTdNum}>{m?.enrolment_june?.m ?? 0}</td>
+                <td style={sumTdNum}>{m?.enrolment_june?.f ?? 0}</td>
+                <td style={sumTdNum}>{m?.enrolment_june?.total ?? 0}</td>
               </tr>
               <tr>
-                <td colSpan={2} style={metricsLabelCell}>Average Daily Attendance</td>
-                <td style={centerCell}>{(reportData?.metrics?.average_daily_attendance?.m ?? 0).toFixed(1)}</td>
-                <td style={centerCell}>{(reportData?.metrics?.average_daily_attendance?.f ?? 0).toFixed(1)}</td>
-                <td style={{ ...centerCell, fontWeight: 700 }}>
-                  {(reportData?.metrics?.average_daily_attendance?.total ?? 0).toFixed(1)}
-                </td>
+                <td colSpan={2} style={sumTd}>Late Enrollment during the month</td>
+                <td style={sumTdNum}>{m?.late_enrolment?.m ?? 0}</td>
+                <td style={sumTdNum}>{m?.late_enrolment?.f ?? 0}</td>
+                <td style={sumTdNum}>{m?.late_enrolment?.total ?? 0}</td>
+              </tr>
+              <tr style={{ fontWeight: 800 }}>
+                <td colSpan={2} style={sumTd}>Registered Learners as of end of the month</td>
+                <td style={sumTdNum}>{m?.registered_end?.m ?? 0}</td>
+                <td style={sumTdNum}>{m?.registered_end?.f ?? 0}</td>
+                <td style={sumTdNum}>{m?.registered_end?.total ?? 0}</td>
               </tr>
               <tr>
-                <td colSpan={2} style={metricsLabelCell}>Percentage of Attendance</td>
-                <td style={centerCell}>{(reportData?.metrics?.percentage_attendance?.m ?? 0).toFixed(1)}%</td>
-                <td style={centerCell}>{(reportData?.metrics?.percentage_attendance?.f ?? 0).toFixed(1)}%</td>
-                <td style={{ ...centerCell, fontWeight: 700 }}>
-                  {(reportData?.metrics?.percentage_attendance?.total ?? 0).toFixed(1)}%
-                </td>
+                <td colSpan={2} style={sumTd}>Percentage of Enrolment as of end of the month</td>
+                <td style={sumTdNum}>{m?.percentage_enrolment?.m ?? 0}%</td>
+                <td style={sumTdNum}>{m?.percentage_enrolment?.f ?? 0}%</td>
+                <td style={sumTdNum}>{m?.percentage_enrolment?.total ?? 0}%</td>
+              </tr>
+              <tr>
+                <td colSpan={2} style={sumTd}>Average Daily Attendance</td>
+                <td style={sumTdNum}>{(m?.average_daily_attendance?.m ?? 0).toFixed(1)}</td>
+                <td style={sumTdNum}>{(m?.average_daily_attendance?.f ?? 0).toFixed(1)}</td>
+                <td style={sumTdNum}>{(m?.average_daily_attendance?.total ?? 0).toFixed(1)}</td>
+              </tr>
+              <tr style={{ fontWeight: 800 }}>
+                <td colSpan={2} style={sumTd}>Percentage of Attendance for the month</td>
+                <td style={sumTdNum}>{(m?.percentage_attendance?.m ?? 0).toFixed(1)}%</td>
+                <td style={sumTdNum}>{(m?.percentage_attendance?.f ?? 0).toFixed(1)}%</td>
+                <td style={sumTdNum}>{(m?.percentage_attendance?.total ?? 0).toFixed(1)}%</td>
+              </tr>
+              <tr>
+                <td colSpan={2} style={sumTd}>Number of students absent for 5 consecutive days</td>
+                <td style={sumTdNum}>{m?.consecutive_5_absent_count?.m ?? 0}</td>
+                <td style={sumTdNum}>{m?.consecutive_5_absent_count?.f ?? 0}</td>
+                <td style={sumTdNum}>{m?.consecutive_5_absent_count?.total ?? 0}</td>
+              </tr>
+              <tr>
+                <td colSpan={2} style={sumTd}><strong>Dropped out</strong></td>
+                <td style={sumTdNum}>{m?.drop_out?.m ?? 0}</td>
+                <td style={sumTdNum}>{m?.drop_out?.f ?? 0}</td>
+                <td style={sumTdNum}>{m?.drop_out?.total ?? 0}</td>
+              </tr>
+              <tr>
+                <td colSpan={2} style={sumTd}><strong>Transferred out</strong></td>
+                <td style={sumTdNum}>{m?.transferred_out?.m ?? 0}</td>
+                <td style={sumTdNum}>{m?.transferred_out?.f ?? 0}</td>
+                <td style={sumTdNum}>{m?.transferred_out?.total ?? 0}</td>
+              </tr>
+              <tr>
+                <td colSpan={2} style={sumTd}><strong>Transferred in</strong></td>
+                <td style={sumTdNum}>{m?.transferred_in?.m ?? 0}</td>
+                <td style={sumTdNum}>{m?.transferred_in?.f ?? 0}</td>
+                <td style={sumTdNum}>{m?.transferred_in?.total ?? 0}</td>
               </tr>
             </tbody>
           </table>
 
-          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', width: '100%' }}>
-            <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>
-              I certify that this is true and correct:
+          <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ fontStyle: 'italic', fontSize: '5.5pt' }}>
+              I certify that this is a true and correct report:
             </div>
-            <div style={sigLineStyle}>{reportData?.adviser_name || '\u00A0'}</div>
-            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, marginBottom: 8, color: '#000000' }}>
-              (Signature of Faculty over Printed Name)
+            <div>
+              <div style={{ borderBottom: '1px solid #000', textAlign: 'center', fontWeight: 800, textTransform: 'uppercase', fontSize: '6.5pt', minHeight: 13 }}>
+                {reportData?.adviser_name}
+              </div>
+              <div style={{ textAlign: 'center', fontSize: '5.2pt', marginTop: 1 }}>
+                (Signature of Adviser over Printed Name)
+              </div>
             </div>
 
-            <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>Attested by:</div>
-            <div style={sigLineStyle}>{reportData?.school_head || school.principal_name || '\u00A0'}</div>
-            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, color: '#000000' }}>
-              (Signature of School Head over Printed Name)
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <DepEdReportFooter
-        sealUrl={school.school_logo}
-        address={reportData?.school_address || school.address}
-        contactNumber={reportData?.school_contact || school.contact_number}
-        email={reportData?.school_email || school.email}
-        reportData={reportData}
-      />
-    </div>
-  );
-
-  const effectiveAcademicYear = selectedAcademicYear || reportData?.academic_year || availableAcademicYears[0] || '';
-
-  return (
-    <div className="report-tab-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: tokens.bgApp }}>
-      <ReportNavBar
-        activeReportId={activeReportId}
-        onSelectReport={onSelectReport}
-        academicYears={availableAcademicYears}
-        selectedAcademicYear={effectiveAcademicYear}
-        onAcademicYearChange={setSelectedAcademicYear}
-        showAcademicYearFilter={true}
-        sections={sections}
-        selectedSectionId={selectedSectionId}
-        onSectionChange={setSelectedSectionId}
-        selectedGradeLevel={selectedGradeLevel}
-        onGradeLevelChange={setSelectedGradeLevel}
-        showGradeLevelFilter={true}
-        showMonthFilter={true}
-        selectedMonth={selectedMonth}
-        onMonthChange={setSelectedMonth}
-        showCalendarYearFilter={true}
-        selectedCalendarYear={selectedYear}
-        onCalendarYearChange={setSelectedYear}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        showSearch={true}
-        layoutMode={activePageConfig.layoutMode}
-        onToggleLayoutMode={handleToggleLayoutMode}
-        showLayoutModeToggle={true}
-        onRefresh={fetchSF2}
-        isRefreshing={loading}
-        onOpenPageSetup={() => setIsPageSetupOpen(true)}
-        exportHandlers={{
-          onExportPdf: handleDownloadPDF,
-          onExportExcel: handleExportExcel,
-          onExportGoogleSheets: () => {
-            window.open('https://sheets.new', '_blank', 'noopener,noreferrer');
-          },
-          onExportWord: handleExportWord,
-          onExportGoogleDocs: () => {
-            window.open('https://docs.new', '_blank', 'noopener,noreferrer');
-          },
-          onExportCsv: handleExportCsv,
-          onExportJson: handleExportJson,
-        }}
-        onPrint={handlePrint}
-        isExporting={exportingPdf}
-      />
-
-      <div
-        className="no-print"
-        style={{
-          ...controlStripStyle,
-          backgroundColor: tokens.bgSurface,
-          borderBottom: `1px solid ${tokens.borderSubtle}`,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: '0.80rem', fontWeight: 700, color: tokens.textPrimary }}>
-            {selectedMonth} {selectedYear} &bull; Section {reportData?.section_name || '—'}
-          </span>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button
-            type="button"
-            onClick={() => {
-              setFitToWidth(true);
-              updateFitScale();
-            }}
-            style={{
-              ...toggleBtnStyle,
-              backgroundColor: fitToWidth ? tokens.primaryLight : tokens.bgSurfaceSubtle,
-              border: `1px solid ${fitToWidth ? brand.primary : tokens.borderStrong}`,
-              color: fitToWidth ? brand.primary : tokens.textSecondary,
-            }}
-          >
-            <Maximize2 size={13} /> Fit Screen ({Math.round(zoomScale * 100)}%)
-          </button>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <button
-              type="button"
-              aria-label="Zoom out"
-              onClick={() => {
-                setFitToWidth(false);
-                setZoomScale((prev) => Math.max(0.35, Number((prev - 0.05).toFixed(2))));
-              }}
-              style={{
-                ...zoomBtnStyle,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                border: `1px solid ${tokens.borderStrong}`,
-                color: tokens.textPrimary,
-              }}
-            >
-              <ZoomOut size={13} />
-            </button>
-            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem', color: tokens.textPrimary }}>
-              {Math.round(zoomScale * 100)}%
-            </span>
-            <button
-              type="button"
-              aria-label="Zoom in"
-              onClick={() => {
-                setFitToWidth(false);
-                setZoomScale((prev) => Math.min(1.4, Number((prev + 0.05).toFixed(2))));
-              }}
-              style={{
-                ...zoomBtnStyle,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                border: `1px solid ${tokens.borderStrong}`,
-                color: tokens.textPrimary,
-              }}
-            >
-              <ZoomIn size={13} />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div ref={viewportContainerRef} className="report-viewer-viewport" style={viewerScrollContainerStyle}>
-        {loading ? (
-          <div style={{ ...loadingStateStyle, color: tokens.textSecondary }}>
-            <Loader2 className="animate-spin" size={28} color={brand.primary} />
-            <span>Generating School Form 2...</span>
-          </div>
-        ) : error ? (
-          <div
-            style={{
-              ...errorStateStyle,
-              color: brand.danger,
-              backgroundColor: tokens.dangerLight,
-              border: `1px solid ${brand.danger}`,
-            }}
-          >
-            <AlertCircle size={24} color={brand.danger} />
-            <span>{error}</span>
-          </div>
-        ) : reportData ? (
-          <div
-            style={{
-              width: isPrinting ? '100%' : `${pageWidthInches * zoomScale}in`,
-              maxWidth: '100%',
-              margin: '0 auto',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-            }}
-          >
-            <div
-              style={{
-                transform: isPrinting ? 'none' : `scale(${zoomScale})`,
-                transformOrigin: 'top center',
-                width: isPrinting ? '100%' : `${pageWidthInches}in`,
-                minWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                transition: isPrinting ? 'none' : 'transform 0.15s ease-out',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-              }}
-            >
-              <div id="sf2-print-document" ref={reportRef} style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {fitsOnSinglePage ? (
-                  <div
-                    className="sf2-page-sheet"
-                    style={{
-                      ...sheetWrapperStyle,
-                      width: isPrinting ? '100%' : `${pageWidthInches}in`,
-                      minWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                      maxWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                      minHeight: activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
-                      boxShadow: isPrinting ? 'none' : '0 4px 24px rgba(0,0,0,0.12)',
-                      padding: `${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in`,
-                      backgroundColor: activePageConfig.pageColor || '#ffffff',
-                    }}
-                  >
-                    <DepEdReportHeader
-                      formTitle="School Form 2 (SF 2) Daily Attendance Report of Learners"
-                      formSubtitle="(Master List Daily Attendance Recording Profile)"
-                      formType="SF2"
-                      reportData={reportData}
-                    />
-
-                    <table style={mainTableStyle}>
-                      {renderTableHeader()}
-                      <tbody>
-                        {isListEmpty ? (
-                          <tr>
-                            <td colSpan={30} style={emptyNoticeCellStyle}>
-                              Notice: There are no students enrolled in Section {reportData.section_name} for {reportData.month} {reportData.year}.
-                            </td>
-                          </tr>
-                        ) : (
-                          <>
-                            <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800, height: 16 }}>
-                              <td colSpan={30} style={{ ...leftCell, paddingLeft: 6, fontSize: '5.4pt' }}>MALE</td>
-                            </tr>
-                            {males.map((m, idx) => (
-                              <tr key={`m-single-${m.id}`} style={dataRowStyle}>
-                                <td style={centerCell}>{idx + 1}</td>
-                                <td style={{ ...leftCell, fontWeight: 700 }}>{m.name}</td>
-                                {Array.from({ length: 25 }).map((_, i) => {
-                                  const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                  const status = day ? m.attendance?.[day.dateNumber] : undefined;
-                                  return (
-                                    <td key={`m-${m.id}-d-${i}`} style={cellDateWrapper}>
-                                      <AttendanceCell status={status} isSchoolDay={Boolean(day)} />
-                                    </td>
-                                  );
-                                })}
-                                <td style={{ ...centerCell, fontWeight: 700 }}>{m.total_absent || ''}</td>
-                                <td style={{ ...centerCell, fontWeight: 700 }}>{m.total_tardy || ''}</td>
-                                <td style={leftCell}>{m.remarks || ''}</td>
-                              </tr>
-                            ))}
-                            <tr style={summaryRowStyle}>
-                              <td colSpan={2} style={{ ...leftCell, fontWeight: 800 }}>&larr; MALE | TOTAL Per Day &rarr;</td>
-                              {Array.from({ length: 25 }).map((_, i) => {
-                                const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                return (
-                                  <td key={`m-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>
-                                    {day ? dailyAttendanceTotals.males[i] : ''}
-                                  </td>
-                                );
-                              })}
-                              <td style={{ ...centerCell, fontWeight: 800 }}>{males.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}</td>
-                              <td style={{ ...centerCell, fontWeight: 800 }}>{males.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}</td>
-                              <td style={centerCell}></td>
-                            </tr>
-
-                            <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800, height: 16 }}>
-                              <td colSpan={30} style={{ ...leftCell, paddingLeft: 6, fontSize: '5.4pt' }}>FEMALE</td>
-                            </tr>
-                            {females.map((f, idx) => (
-                              <tr key={`f-single-${f.id}`} style={dataRowStyle}>
-                                <td style={centerCell}>{idx + 1}</td>
-                                <td style={{ ...leftCell, fontWeight: 700 }}>{f.name}</td>
-                                {Array.from({ length: 25 }).map((_, i) => {
-                                  const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                  const status = day ? f.attendance?.[day.dateNumber] : undefined;
-                                  return (
-                                    <td key={`f-${f.id}-d-${i}`} style={cellDateWrapper}>
-                                      <AttendanceCell status={status} isSchoolDay={Boolean(day)} />
-                                    </td>
-                                  );
-                                })}
-                                <td style={{ ...centerCell, fontWeight: 700 }}>{f.total_absent || ''}</td>
-                                <td style={{ ...centerCell, fontWeight: 700 }}>{f.total_tardy || ''}</td>
-                                <td style={leftCell}>{f.remarks || ''}</td>
-                              </tr>
-                            ))}
-                            <tr style={summaryRowStyle}>
-                              <td colSpan={2} style={{ ...leftCell, fontWeight: 800 }}>&larr; FEMALE | TOTAL Per Day &rarr;</td>
-                              {Array.from({ length: 25 }).map((_, i) => {
-                                const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                return (
-                                  <td key={`f-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>
-                                    {day ? dailyAttendanceTotals.females[i] : ''}
-                                  </td>
-                                );
-                              })}
-                              <td style={{ ...centerCell, fontWeight: 800 }}>{females.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}</td>
-                              <td style={{ ...centerCell, fontWeight: 800 }}>{females.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}</td>
-                              <td style={centerCell}></td>
-                            </tr>
-
-                            <tr style={{ ...summaryRowStyle, backgroundColor: '#e2e8f0' }}>
-                              <td colSpan={2} style={{ ...leftCell, fontWeight: 900 }}>Combined TOTAL PER DAY</td>
-                              {Array.from({ length: 25 }).map((_, i) => {
-                                const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                return (
-                                  <td key={`c-tot-${i}`} style={{ ...centerCell, fontWeight: 900 }}>
-                                    {day ? dailyAttendanceTotals.combined[i] : ''}
-                                  </td>
-                                );
-                              })}
-                              <td style={{ ...centerCell, fontWeight: 900 }}>
-                                {males.reduce((acc, cur) => acc + (cur.total_absent || 0), 0) +
-                                  females.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}
-                              </td>
-                              <td style={{ ...centerCell, fontWeight: 900 }}>
-                                {males.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0) +
-                                  females.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}
-                              </td>
-                              <td style={centerCell}></td>
-                            </tr>
-                          </>
-                        )}
-                      </tbody>
-                    </table>
-
-                    {renderSummaryFooter()}
-
-                    <div style={auditFooterContainerStyle}>
-                      <div>
-                        <span>Document Tracking ID: <strong>{auditMeta.trackingId}</strong></span>
-                      </div>
-                      <div>
-                        <span>Date and Time Printed: <strong>{auditMeta.printedAt}</strong></span>
-                        <span> &bull; Page 1 of 1</span>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    {/* PAGE 1: MALE COHORT */}
-                    <div
-                      className="sf2-page-sheet"
-                      style={{
-                        ...sheetWrapperStyle,
-                        width: isPrinting ? '100%' : `${pageWidthInches}in`,
-                        minWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                        maxWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                        minHeight: activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
-                        boxShadow: isPrinting ? 'none' : '0 4px 24px rgba(0,0,0,0.12)',
-                        padding: `${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in`,
-                        backgroundColor: activePageConfig.pageColor || '#ffffff',
-                      }}
-                    >
-                      <DepEdReportHeader
-                        formTitle="School Form 2 (SF 2) Daily Attendance Report of Learners"
-                        formSubtitle="(Master List Daily Attendance Recording Profile)"
-                        formType="SF2"
-                        reportData={reportData}
-                      />
-                      <table style={mainTableStyle}>
-                        {renderTableHeader()}
-                        <tbody>
-                          {isListEmpty ? (
-                            <tr>
-                              <td colSpan={30} style={emptyNoticeCellStyle}>
-                                Notice: There are no students enrolled in Section {reportData.section_name} for {reportData.month} {reportData.year}.
-                              </td>
-                            </tr>
-                          ) : (
-                            <>
-                              <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800, height: 16 }}>
-                                <td colSpan={30} style={{ ...leftCell, paddingLeft: 6, fontSize: '5.4pt' }}>MALE</td>
-                              </tr>
-                              {males.map((m, idx) => (
-                                <tr key={`male-${m.id}`} style={dataRowStyle}>
-                                  <td style={centerCell}>{idx + 1}</td>
-                                  <td style={{ ...leftCell, fontWeight: 700 }}>{m.name}</td>
-                                  {Array.from({ length: 25 }).map((_, i) => {
-                                    const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                    const status = day ? m.attendance?.[day.dateNumber] : undefined;
-                                    return (
-                                      <td key={`m-${m.id}-d-${i}`} style={cellDateWrapper}>
-                                        <AttendanceCell status={status} isSchoolDay={Boolean(day)} />
-                                      </td>
-                                    );
-                                  })}
-                                  <td style={{ ...centerCell, fontWeight: 700 }}>{m.total_absent || ''}</td>
-                                  <td style={{ ...centerCell, fontWeight: 700 }}>{m.total_tardy || ''}</td>
-                                  <td style={leftCell}>{m.remarks || ''}</td>
-                                </tr>
-                              ))}
-                              <tr style={summaryRowStyle}>
-                                <td colSpan={2} style={{ ...leftCell, fontWeight: 800 }}>&larr; MALE | TOTAL Per Day &rarr;</td>
-                                {Array.from({ length: 25 }).map((_, i) => {
-                                  const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                  return (
-                                    <td key={`m-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>
-                                      {day ? dailyAttendanceTotals.males[i] : ''}
-                                    </td>
-                                  );
-                                })}
-                                <td style={{ ...centerCell, fontWeight: 800 }}>{males.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}</td>
-                                <td style={{ ...centerCell, fontWeight: 800 }}>{males.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}</td>
-                                <td style={centerCell}></td>
-                              </tr>
-                            </>
-                          )}
-                        </tbody>
-                      </table>
-
-                      <div style={auditFooterContainerStyle}>
-                        <div>
-                          <span>Document Tracking ID: <strong>{auditMeta.trackingId}</strong></span>
-                        </div>
-                        <div>
-                          <span>Date and Time Printed: <strong>{auditMeta.printedAt}</strong></span>
-                          <span> &bull; Page 1 of 2</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* PAGE 2: FEMALE COHORT & SUMMARY */}
-                    <div
-                      className="sf2-page-sheet"
-                      style={{
-                        ...sheetWrapperStyle,
-                        width: isPrinting ? '100%' : `${pageWidthInches}in`,
-                        minWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                        maxWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                        minHeight: activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
-                        boxShadow: isPrinting ? 'none' : '0 4px 24px rgba(0,0,0,0.12)',
-                        padding: `${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in`,
-                        backgroundColor: activePageConfig.pageColor || '#ffffff',
-                        pageBreakBefore: 'always',
-                      }}
-                    >
-                      <table style={mainTableStyle}>
-                        {renderTableHeader()}
-                        <tbody>
-                          {isListEmpty ? (
-                            <tr>
-                              <td colSpan={30} style={emptyNoticeCellStyle}>
-                                Notice: There are no students enrolled in Section {reportData.section_name} for {reportData.month} {reportData.year}.
-                              </td>
-                            </tr>
-                          ) : (
-                            <>
-                              <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800, height: 16 }}>
-                                <td colSpan={30} style={{ ...leftCell, paddingLeft: 6, fontSize: '5.4pt' }}>FEMALE</td>
-                              </tr>
-                              {females.map((f, idx) => (
-                                <tr key={`female-${f.id}`} style={dataRowStyle}>
-                                  <td style={centerCell}>{idx + 1}</td>
-                                  <td style={{ ...leftCell, fontWeight: 700 }}>{f.name}</td>
-                                  {Array.from({ length: 25 }).map((_, i) => {
-                                    const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                    const status = day ? f.attendance?.[day.dateNumber] : undefined;
-                                    return (
-                                      <td key={`f-${f.id}-d-${i}`} style={cellDateWrapper}>
-                                        <AttendanceCell status={status} isSchoolDay={Boolean(day)} />
-                                      </td>
-                                    );
-                                  })}
-                                  <td style={{ ...centerCell, fontWeight: 700 }}>{f.total_absent || ''}</td>
-                                  <td style={{ ...centerCell, fontWeight: 700 }}>{f.total_tardy || ''}</td>
-                                  <td style={leftCell}>{f.remarks || ''}</td>
-                                </tr>
-                              ))}
-                              <tr style={summaryRowStyle}>
-                                <td colSpan={2} style={{ ...leftCell, fontWeight: 800 }}>&larr; FEMALE | TOTAL Per Day &rarr;</td>
-                                {Array.from({ length: 25 }).map((_, i) => {
-                                  const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                  return (
-                                    <td key={`f-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>
-                                      {day ? dailyAttendanceTotals.females[i] : ''}
-                                    </td>
-                                  );
-                                })}
-                                <td style={{ ...centerCell, fontWeight: 800 }}>{females.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}</td>
-                                <td style={{ ...centerCell, fontWeight: 800 }}>{females.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}</td>
-                                <td style={centerCell}></td>
-                              </tr>
-
-                              <tr style={{ ...summaryRowStyle, backgroundColor: '#e2e8f0' }}>
-                                <td colSpan={2} style={{ ...leftCell, fontWeight: 900 }}>Combined TOTAL PER DAY</td>
-                                {Array.from({ length: 25 }).map((_, i) => {
-                                  const day = reportData.school_days ? reportData.school_days[i] : undefined;
-                                  return (
-                                    <td key={`c-tot-${i}`} style={{ ...centerCell, fontWeight: 900 }}>
-                                      {day ? dailyAttendanceTotals.combined[i] : ''}
-                                    </td>
-                                  );
-                                })}
-                                <td style={{ ...centerCell, fontWeight: 900 }}>
-                                  {males.reduce((acc, cur) => acc + (cur.total_absent || 0), 0) +
-                                    females.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}
-                                </td>
-                                <td style={{ ...centerCell, fontWeight: 900 }}>
-                                  {males.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0) +
-                                    females.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}
-                                </td>
-                                <td style={centerCell}></td>
-                              </tr>
-                            </>
-                          )}
-                        </tbody>
-                      </table>
-
-                      {renderSummaryFooter()}
-
-                      <div style={auditFooterContainerStyle}>
-                        <div>
-                          <span>Document Tracking ID: <strong>{auditMeta.trackingId}</strong></span>
-                        </div>
-                        <div>
-                          <span>Date and Time Printed: <strong>{auditMeta.printedAt}</strong></span>
-                          <span> &bull; Page 2 of 2</span>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
+            <div style={{ fontStyle: 'italic', fontSize: '5.5pt', marginTop: 4 }}>Attested by:</div>
+            <div>
+              <div style={{ borderBottom: '1px solid #000', textAlign: 'center', fontWeight: 800, textTransform: 'uppercase', fontSize: '6.5pt', minHeight: 13 }}>
+                {schoolHead}
+              </div>
+              <div style={{ textAlign: 'center', fontSize: '5.2pt', marginTop: 1 }}>
+                (Signature of School Head over Printed Name)
               </div>
             </div>
           </div>
-        ) : null}
+        </div>
+
+        <DepEdReportFooter
+          sealUrl={globalSchool.school_logo}
+          address={reportData?.school_address || globalSchool.address}
+          contactNumber={reportData?.school_contact || globalSchool.contact_number}
+          email={reportData?.school_email || globalSchool.email}
+          reportData={reportData}
+        />
       </div>
+    );
+  };
+
+  const sheetBaseStyle: React.CSSProperties = {
+    backgroundColor: pageConfig.pageColor || '#ffffff',
+    color: '#000000',
+    width: isPrinting ? '100%' : `${pageWidthInches}in`,
+    minHeight: pageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
+    paddingTop: `${pageConfig.margins.top}in`,
+    paddingRight: `${pageConfig.margins.right}in`,
+    paddingBottom: `${pageConfig.margins.bottom}in`,
+    paddingLeft: `${pageConfig.margins.left}in`,
+    marginBottom: isPrinting ? 0 : '20px',
+    boxShadow: isPrinting ? 'none' : '0 4px 20px rgba(0, 0, 0, 0.22)',
+    border: isPrinting ? 'none' : '1px solid #cbd5e1',
+    boxSizing: 'border-box',
+    fontFamily: 'Arial, Helvetica, sans-serif',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+  };
+
+  return (
+    <div
+      className="report-tab-root"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
+        backgroundColor: tokens.bgApp,
+      }}
+    >
+      <div className="no-print">
+        <ReportHeaderBar
+          activeReportId={activeReportId}
+          onSelectReport={onSelectReport}
+          documentTitle={
+            reportData
+              ? `SF2_Attendance_${reportData.section_name}_${reportData.month}_${reportData.year}`
+              : 'DepEd_SF2_Daily_Attendance'
+          }
+          subtitle="Official DepEd School Form 2 (SF2) Daily Attendance Report"
+          isSavingPdf={isExportingPdf}
+          onOpenPageSetup={() => setIsPageSetupOpen(true)}
+          onPrint={handleDirectPrint}
+          onSavePdf={() => void handleExportPdf(false)}
+          onSavePdfAs={() => void handleExportPdf(true)}
+          onDownloadExcel={() => void handleExportExcel(false)}
+          onSaveExcelAs={() => void handleExportExcel(true)}
+          onDownloadCsv={() => void handleExportCsv(false)}
+          onSaveCsvAs={() => void handleExportCsv(true)}
+          onDownloadWord={() => void handleExportWord(false)}
+          onSaveWordAs={() => void handleExportWord(true)}
+          onDownloadJson={() => void handleExportJson(false)}
+          onSaveJsonAs={() => void handleExportJson(true)}
+        />
+      </div>
+
+      <ReportViewerShell
+        loading={loading}
+        loadingMessage="Generating Official DepEd SF2 Daily Attendance..."
+        error={error}
+        hasData={Boolean(reportData)}
+        isPrinting={isPrinting}
+        isExportingPdf={isExportingPdf}
+        pageWidthInches={pageWidthInches}
+        pageHeightInches={pageHeightInches}
+        pageConfig={pageConfig}
+        sheetClassName="sf2-sheet-page"
+        documentId="sf2-official-document"
+        reportRef={reportRef}
+        leftToolbarContent={
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <BookOpen size={15} color={brand.primary} />
+              <select
+                aria-label="Select Class Section"
+                value={selectedSectionId}
+                onChange={(e) => setSelectedSectionId(e.target.value)}
+                style={{
+                  padding: '5px 10px',
+                  borderRadius: 6,
+                  fontSize: '0.80rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.bgInput,
+                  color: tokens.textPrimary,
+                }}
+              >
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.grade_level_name ? `${s.grade_level_name} - ` : ''}
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Calendar size={15} color={brand.primary} />
+              <select
+                aria-label="Select Month"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                style={{
+                  padding: '5px 10px',
+                  borderRadius: 6,
+                  fontSize: '0.80rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.bgInput,
+                  color: tokens.textPrimary,
+                }}
+              >
+                {MONTH_NAMES.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                aria-label="Select Year"
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                style={{
+                  padding: '5px 10px',
+                  borderRadius: 6,
+                  fontSize: '0.80rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.bgInput,
+                  color: tokens.textPrimary,
+                }}
+              >
+                {yearOptions.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 10px',
+                borderRadius: 6,
+                border: `1px solid ${tokens.borderStrong}`,
+                backgroundColor: tokens.bgInput,
+              }}
+            >
+              <Search size={13} color={tokens.textMuted} />
+              <input
+                type="text"
+                maxLength={80}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search name or LRN..."
+                style={{
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: tokens.textPrimary,
+                  fontSize: '0.78rem',
+                  width: 145,
+                }}
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void fetchSF2(true, true)}
+              disabled={loading || refreshing}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '5px 10px',
+                borderRadius: 6,
+                fontSize: '0.76rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                color: tokens.textPrimary,
+              }}
+            >
+              <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+              <span>Refresh</span>
+            </button>
+          </>
+        }
+      >
+        {reportData &&
+          (fitsOnSinglePage ? (
+            <div className="sf2-sheet-page" style={{ ...sheetBaseStyle, marginBottom: 0 }}>
+              <div>
+                <DepEdReportHeader
+                  formTitle="School Form 2 (SF 2) Daily Attendance Report of Learners"
+                  formSubtitle="(This replaces Form 1, Form 2 & STS Form 4 - Absenteeism and Dropout Profile)"
+                  formType="SF2"
+                  reportData={reportData}
+                />
+
+                <table style={sf2Table}>
+                  {renderTableHeader()}
+                  <tbody>
+                    {isListEmpty ? (
+                      <tr>
+                        <td colSpan={30} style={{ ...tdCenter, padding: '20px', fontStyle: 'italic' }}>
+                          No learners enrolled in Section {reportData.section_name} for {reportData.month} {reportData.year}.
+                        </td>
+                      </tr>
+                    ) : (
+                      <>
+                        <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                          <td colSpan={30} style={{ ...tdLeft, paddingLeft: 6 }}>MALE</td>
+                        </tr>
+                        {males.map((m, idx) => (
+                          <tr key={`m-${m.id}`}>
+                            <td style={tdCenter}>{idx + 1}</td>
+                            <td style={{ ...tdLeft, fontWeight: 700 }}>{m.name}</td>
+                            {Array.from({ length: 25 }).map((_, i) => {
+                              const day = schoolDays[i];
+                              const st = day ? m.attendance?.[day.dateNumber] : undefined;
+                              return (
+                                <td key={`m-${m.id}-d-${i}`} style={tdDateCell}>
+                                  <AttendanceCell status={st} isSchoolDay={Boolean(day)} />
+                                </td>
+                              );
+                            })}
+                            <td style={{ ...tdCenter, fontWeight: 700 }}>{m.total_absent || ''}</td>
+                            <td style={{ ...tdCenter, fontWeight: 700 }}>{m.total_tardy || ''}</td>
+                            <td style={tdLeft}>{m.remarks || ''}</td>
+                          </tr>
+                        ))}
+                        <tr style={subtotalRowStyle}>
+                          <td colSpan={2} style={{ ...tdLeft, fontWeight: 800 }}>&larr; MALE | TOTAL Per Day &rarr;</td>
+                          {Array.from({ length: 25 }).map((_, i) => (
+                            <td key={`m-tot-${i}`} style={{ ...tdCenter, fontWeight: 800 }}>
+                              {schoolDays[i] ? dailyAttendanceTotals.males[i] : ''}
+                            </td>
+                          ))}
+                          <td style={{ ...tdCenter, fontWeight: 800 }}>{males.reduce((a, c) => a + (c.total_absent || 0), 0)}</td>
+                          <td style={{ ...tdCenter, fontWeight: 800 }}>{males.reduce((a, c) => a + (c.total_tardy || 0), 0)}</td>
+                          <td style={tdCenter} />
+                        </tr>
+
+                        <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                          <td colSpan={30} style={{ ...tdLeft, paddingLeft: 6 }}>FEMALE</td>
+                        </tr>
+                        {females.map((f, idx) => (
+                          <tr key={`f-${f.id}`}>
+                            <td style={tdCenter}>{idx + 1}</td>
+                            <td style={{ ...tdLeft, fontWeight: 700 }}>{f.name}</td>
+                            {Array.from({ length: 25 }).map((_, i) => {
+                              const day = schoolDays[i];
+                              const st = day ? f.attendance?.[day.dateNumber] : undefined;
+                              return (
+                                <td key={`f-${f.id}-d-${i}`} style={tdDateCell}>
+                                  <AttendanceCell status={st} isSchoolDay={Boolean(day)} />
+                                </td>
+                              );
+                            })}
+                            <td style={{ ...tdCenter, fontWeight: 700 }}>{f.total_absent || ''}</td>
+                            <td style={{ ...tdCenter, fontWeight: 700 }}>{f.total_tardy || ''}</td>
+                            <td style={tdLeft}>{f.remarks || ''}</td>
+                          </tr>
+                        ))}
+                        <tr style={subtotalRowStyle}>
+                          <td colSpan={2} style={{ ...tdLeft, fontWeight: 800 }}>&larr; FEMALE | TOTAL Per Day &rarr;</td>
+                          {Array.from({ length: 25 }).map((_, i) => (
+                            <td key={`f-tot-${i}`} style={{ ...tdCenter, fontWeight: 800 }}>
+                              {schoolDays[i] ? dailyAttendanceTotals.females[i] : ''}
+                            </td>
+                          ))}
+                          <td style={{ ...tdCenter, fontWeight: 800 }}>{females.reduce((a, c) => a + (c.total_absent || 0), 0)}</td>
+                          <td style={{ ...tdCenter, fontWeight: 800 }}>{females.reduce((a, c) => a + (c.total_tardy || 0), 0)}</td>
+                          <td style={tdCenter} />
+                        </tr>
+
+                        <tr style={{ ...subtotalRowStyle, backgroundColor: '#e2e8f0' }}>
+                          <td colSpan={2} style={{ ...tdLeft, fontWeight: 900 }}>Combined TOTAL PER DAY</td>
+                          {Array.from({ length: 25 }).map((_, i) => (
+                            <td key={`c-tot-${i}`} style={{ ...tdCenter, fontWeight: 900 }}>
+                              {schoolDays[i] ? dailyAttendanceTotals.combined[i] : ''}
+                            </td>
+                          ))}
+                          <td style={{ ...tdCenter, fontWeight: 900 }}>
+                            {males.reduce((a, c) => a + (c.total_absent || 0), 0) +
+                              females.reduce((a, c) => a + (c.total_absent || 0), 0)}
+                          </td>
+                          <td style={{ ...tdCenter, fontWeight: 900 }}>
+                            {males.reduce((a, c) => a + (c.total_tardy || 0), 0) +
+                              females.reduce((a, c) => a + (c.total_tardy || 0), 0)}
+                          </td>
+                          <td style={tdCenter} />
+                        </tr>
+                      </>
+                    )}
+                  </tbody>
+                </table>
+
+                {renderSummaryFooter()}
+              </div>
+
+              <div style={auditFooterStyle}>
+                <span>School Form 2 (SF2) — Page 1 of 1</span>
+                <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                  PRINTED: {auditMeta.printedAt} &nbsp;|&nbsp; TRACKING ID: {auditMeta.trackingId}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="sf2-sheet-page" style={sheetBaseStyle}>
+                <div>
+                  <DepEdReportHeader
+                    formTitle="School Form 2 (SF 2) Daily Attendance Report of Learners"
+                    formSubtitle="(This replaces Form 1, Form 2 & STS Form 4 - Absenteeism and Dropout Profile)"
+                    formType="SF2"
+                    reportData={reportData}
+                  />
+                  <table style={sf2Table}>
+                    {renderTableHeader()}
+                    <tbody>
+                      <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                        <td colSpan={30} style={{ ...tdLeft, paddingLeft: 6 }}>MALE</td>
+                      </tr>
+                      {males.map((m, idx) => (
+                        <tr key={`m-p1-${m.id}`}>
+                          <td style={tdCenter}>{idx + 1}</td>
+                          <td style={{ ...tdLeft, fontWeight: 700 }}>{m.name}</td>
+                          {Array.from({ length: 25 }).map((_, i) => {
+                            const day = schoolDays[i];
+                            const st = day ? m.attendance?.[day.dateNumber] : undefined;
+                            return (
+                              <td key={`mp1-${m.id}-d-${i}`} style={tdDateCell}>
+                                <AttendanceCell status={st} isSchoolDay={Boolean(day)} />
+                              </td>
+                            );
+                          })}
+                          <td style={{ ...tdCenter, fontWeight: 700 }}>{m.total_absent || ''}</td>
+                          <td style={{ ...tdCenter, fontWeight: 700 }}>{m.total_tardy || ''}</td>
+                          <td style={tdLeft}>{m.remarks || ''}</td>
+                        </tr>
+                      ))}
+                      <tr style={subtotalRowStyle}>
+                        <td colSpan={2} style={{ ...tdLeft, fontWeight: 800 }}>&larr; MALE | TOTAL Per Day &rarr;</td>
+                        {Array.from({ length: 25 }).map((_, i) => (
+                          <td key={`mp1-tot-${i}`} style={{ ...tdCenter, fontWeight: 800 }}>
+                            {schoolDays[i] ? dailyAttendanceTotals.males[i] : ''}
+                          </td>
+                        ))}
+                        <td style={{ ...tdCenter, fontWeight: 800 }}>{males.reduce((a, c) => a + (c.total_absent || 0), 0)}</td>
+                        <td style={{ ...tdCenter, fontWeight: 800 }}>{males.reduce((a, c) => a + (c.total_tardy || 0), 0)}</td>
+                        <td style={tdCenter} />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={auditFooterStyle}>
+                  <span>School Form 2 (SF2) — Page 1 of 2</span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                    PRINTED: {auditMeta.printedAt} &nbsp;|&nbsp; TRACKING ID: {auditMeta.trackingId}
+                  </span>
+                </div>
+              </div>
+
+              <div className="sf2-sheet-page" style={{ ...sheetBaseStyle, marginBottom: 0 }}>
+                <div>
+                  <table style={sf2Table}>
+                    {renderTableHeader()}
+                    <tbody>
+                      <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                        <td colSpan={30} style={{ ...tdLeft, paddingLeft: 6 }}>FEMALE</td>
+                      </tr>
+                      {females.map((f, idx) => (
+                        <tr key={`f-p2-${f.id}`}>
+                          <td style={tdCenter}>{idx + 1}</td>
+                          <td style={{ ...tdLeft, fontWeight: 700 }}>{f.name}</td>
+                          {Array.from({ length: 25 }).map((_, i) => {
+                            const day = schoolDays[i];
+                            const st = day ? f.attendance?.[day.dateNumber] : undefined;
+                            return (
+                              <td key={`fp2-${f.id}-d-${i}`} style={tdDateCell}>
+                                <AttendanceCell status={st} isSchoolDay={Boolean(day)} />
+                              </td>
+                            );
+                          })}
+                          <td style={{ ...tdCenter, fontWeight: 700 }}>{f.total_absent || ''}</td>
+                          <td style={{ ...tdCenter, fontWeight: 700 }}>{f.total_tardy || ''}</td>
+                          <td style={tdLeft}>{f.remarks || ''}</td>
+                        </tr>
+                      ))}
+                      <tr style={subtotalRowStyle}>
+                        <td colSpan={2} style={{ ...tdLeft, fontWeight: 800 }}>&larr; FEMALE | TOTAL Per Day &rarr;</td>
+                        {Array.from({ length: 25 }).map((_, i) => (
+                          <td key={`fp2-tot-${i}`} style={{ ...tdCenter, fontWeight: 800 }}>
+                            {schoolDays[i] ? dailyAttendanceTotals.females[i] : ''}
+                          </td>
+                        ))}
+                        <td style={{ ...tdCenter, fontWeight: 800 }}>{females.reduce((a, c) => a + (c.total_absent || 0), 0)}</td>
+                        <td style={{ ...tdCenter, fontWeight: 800 }}>{females.reduce((a, c) => a + (c.total_tardy || 0), 0)}</td>
+                        <td style={tdCenter} />
+                      </tr>
+
+                      <tr style={{ ...subtotalRowStyle, backgroundColor: '#e2e8f0' }}>
+                        <td colSpan={2} style={{ ...tdLeft, fontWeight: 900 }}>Combined TOTAL PER DAY</td>
+                        {Array.from({ length: 25 }).map((_, i) => (
+                          <td key={`cp2-tot-${i}`} style={{ ...tdCenter, fontWeight: 900 }}>
+                            {schoolDays[i] ? dailyAttendanceTotals.combined[i] : ''}
+                          </td>
+                        ))}
+                        <td style={{ ...tdCenter, fontWeight: 900 }}>
+                          {males.reduce((a, c) => a + (c.total_absent || 0), 0) +
+                            females.reduce((a, c) => a + (c.total_absent || 0), 0)}
+                        </td>
+                        <td style={{ ...tdCenter, fontWeight: 900 }}>
+                          {males.reduce((a, c) => a + (c.total_tardy || 0), 0) +
+                            females.reduce((a, c) => a + (c.total_tardy || 0), 0)}
+                        </td>
+                        <td style={tdCenter} />
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  {renderSummaryFooter()}
+                </div>
+
+                <div style={auditFooterStyle}>
+                  <span>School Form 2 (SF2) — Page 2 of 2</span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                    PRINTED: {auditMeta.printedAt} &nbsp;|&nbsp; TRACKING ID: {auditMeta.trackingId}
+                  </span>
+                </div>
+              </div>
+            </>
+          ))}
+      </ReportViewerShell>
 
       <PageSetupModal
         isOpen={isPageSetupOpen}
-        onClose={() => {
-          setActivePageConfig(savedPageConfig);
-          setIsPageSetupOpen(false);
-        }}
-        currentConfig={activePageConfig}
-        onLiveChange={(liveCfg) => setActivePageConfig(liveCfg)}
-        onApply={(finalCfg: PageSetupConfig, setAsDefault: boolean) => {
-          savePageConfig(finalCfg, setAsDefault);
-          setActivePageConfig(finalCfg);
-          setIsPageSetupOpen(false);
-        }}
+        currentConfig={pageConfig}
+        onLiveChange={setPageConfig}
+        onApply={(cfg) => setPageConfig(cfg)}
+        onClose={() => setIsPageSetupOpen(false)}
         reportTitle="SF2 Daily Attendance"
       />
-
-      <style>{`
-        @media print {
-          @page {
-            size: ${pageWidthInches}in ${pageHeightInches}in;
-            margin: 0 !important;
-          }
-
-          .no-print,
-          nav,
-          aside,
-          header,
-          footer,
-          button,
-          input,
-          select {
-            display: none !important;
-          }
-
-          html,
-          body,
-          #root,
-          #root > div,
-          main,
-          .report-tab-root,
-          .report-viewer-viewport {
-            margin: 0 !important;
-            padding: 0 !important;
-            width: 100% !important;
-            min-width: 100% !important;
-            max-width: 100% !important;
-            height: auto !important;
-            min-height: 0 !important;
-            overflow: visible !important;
-            display: block !important;
-            background: #ffffff !important;
-            background-color: #ffffff !important;
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-          }
-
-          * {
-            -webkit-transform: none !important;
-            transform: none !important;
-            zoom: 1 !important;
-          }
-
-          #sf2-print-document {
-            width: 100% !important;
-            max-width: 100% !important;
-            min-width: 100% !important;
-            margin: 0 auto !important;
-            padding: 0 !important;
-            display: block !important;
-          }
-
-          .sf2-page-sheet {
-            width: ${pageWidthInches}in !important;
-            min-width: ${pageWidthInches}in !important;
-            max-width: ${pageWidthInches}in !important;
-            min-height: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`} !important;
-            box-sizing: border-box !important;
-            margin: 0 auto !important;
-            padding: ${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in !important;
-            box-shadow: none !important;
-            border: none !important;
-            background-color: ${activePageConfig.pageColor || '#ffffff'} !important;
-            page-break-after: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : 'always'} !important;
-            break-after: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : 'page'} !important;
-          }
-
-          .sf2-page-sheet:last-child {
-            page-break-after: avoid !important;
-            break-after: avoid !important;
-          }
-
-          table {
-            width: 100% !important;
-            max-width: 100% !important;
-            table-layout: fixed !important;
-            page-break-inside: auto;
-          }
-
-          tr {
-            page-break-inside: avoid !important;
-            break-inside: avoid !important;
-          }
-        }
-      `}</style>
     </div>
   );
 };
 
-export default SF2ReportTab;
-
-const controlStripStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '8px 24px',
-  flexWrap: 'wrap',
-  gap: 10,
-};
-
-const toggleBtnStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '4px 10px',
-  borderRadius: 6,
-  cursor: 'pointer',
-  fontSize: '0.76rem',
-  fontWeight: 700,
-};
-
-const zoomBtnStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 6,
-  cursor: 'pointer',
-};
-
-const viewerScrollContainerStyle: React.CSSProperties = {
-  flex: 1,
-  overflowY: 'auto',
-  overflowX: 'auto',
-  padding: '16px 20px',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  width: '100%',
-  boxSizing: 'border-box',
-};
-
-const sheetWrapperStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  boxShadow: '0 4px 24px rgba(0,0,0,0.14)',
-  margin: '0 auto 24px auto',
-  boxSizing: 'border-box',
-  fontFamily: 'Arial, sans-serif',
-  color: '#000000',
-  transition: 'all 0.15s ease',
-};
-
-const mainTableStyle: React.CSSProperties = {
+const sf2Table: React.CSSProperties = {
   width: '100%',
   tableLayout: 'fixed',
   borderCollapse: 'collapse',
-  fontSize: '5pt',
+  fontSize: '5.2pt',
   border: '1.2px solid #000000',
-  boxSizing: 'border-box',
 };
 
 const thCell: React.CSSProperties = {
   border: '1px solid #000000',
   padding: '2px 1px',
-  backgroundColor: '#ffffff',
-  fontWeight: 700,
+  backgroundColor: '#f1f5f9',
+  fontWeight: 800,
   textAlign: 'center',
   verticalAlign: 'middle',
-  boxSizing: 'border-box',
   color: '#000000',
 };
 
 const thDateCell: React.CSSProperties = {
   border: '1px solid #000000',
   padding: '1px 0',
-  backgroundColor: '#ffffff',
+  backgroundColor: '#f1f5f9',
   fontWeight: 700,
   textAlign: 'center',
   verticalAlign: 'middle',
   fontSize: '4.8pt',
   lineHeight: 1.1,
-  boxSizing: 'border-box',
-  color: '#000000',
 };
 
-const dataRowStyle: React.CSSProperties = {
-  borderBottom: '1px solid #000000',
-  verticalAlign: 'middle',
-  height: '16px',
-};
-
-const summaryRowStyle: React.CSSProperties = {
-  borderTop: '1px solid #000000',
-  borderBottom: '1px solid #000000',
-  backgroundColor: '#f1f5f9',
-  height: '16px',
-  color: '#000000',
-};
-
-const centerCell: React.CSSProperties = {
+const tdCenter: React.CSSProperties = {
   textAlign: 'center',
   border: '1px solid #000000',
-  padding: '0px',
+  padding: '1px 1px',
   verticalAlign: 'middle',
-  boxSizing: 'border-box',
-  color: '#000000',
 };
 
-const cellDateWrapper: React.CSSProperties = {
+const tdDateCell: React.CSSProperties = {
   textAlign: 'center',
   border: '1px solid #000000',
-  padding: '0px',
+  padding: 0,
   verticalAlign: 'middle',
-  boxSizing: 'border-box',
   height: '16px',
 };
 
-const leftCell: React.CSSProperties = {
+const tdLeft: React.CSSProperties = {
   textAlign: 'left',
   border: '1px solid #000000',
   padding: '1px 3px',
@@ -1460,122 +1262,41 @@ const leftCell: React.CSSProperties = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
-  boxSizing: 'border-box',
-  color: '#000000',
 };
 
-const emptyNoticeCellStyle: React.CSSProperties = {
-  textAlign: 'center',
-  padding: '30px 14px',
-  fontSize: '6.4pt',
-  fontWeight: 700,
-  color: '#000000',
-  backgroundColor: '#ffffff',
+const subtotalRowStyle: React.CSSProperties = {
+  backgroundColor: '#f1f5f9',
+  height: '16px',
+};
+
+const sumTh: React.CSSProperties = {
   border: '1px solid #000000',
-};
-
-const footerContainerStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '4.4fr 2.5fr 3.1fr',
-  gap: 8,
-  marginTop: 6,
-  alignItems: 'start',
-  width: '100%',
-  boxSizing: 'border-box',
-  color: '#000000',
-};
-
-const guidelinesPanelStyle: React.CSSProperties = {
-  fontSize: '4.5pt',
-  lineHeight: 1.15,
-  boxSizing: 'border-box',
-  minWidth: 0,
-  color: '#000000',
-};
-
-const ruleTextStyle: React.CSSProperties = {
-  marginBottom: 2,
-  color: '#000000',
-};
-
-const legendPanelStyle: React.CSSProperties = {
-  border: '1.2px solid #000000',
-  padding: '4px 6px',
-  boxSizing: 'border-box',
-  minWidth: 0,
-  color: '#000000',
-};
-
-const summaryPanelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  width: '100%',
-  boxSizing: 'border-box',
-  minWidth: 0,
-  color: '#000000',
-};
-
-const metricsTableStyle: React.CSSProperties = {
-  width: '100%',
-  tableLayout: 'fixed',
-  borderCollapse: 'collapse',
-  fontSize: '4.5pt',
-  border: '1.2px solid #000000',
-  boxSizing: 'border-box',
-  color: '#000000',
-};
-
-const metricsLabelCell: React.CSSProperties = {
-  border: '1px solid #000000',
-  padding: '1px 3px',
-  textAlign: 'left',
-  boxSizing: 'border-box',
-  color: '#000000',
-};
-
-const sigLineStyle: React.CSSProperties = {
-  borderBottom: '1px solid #000000',
-  minHeight: 14,
-  display: 'flex',
-  alignItems: 'flex-end',
-  justifyContent: 'center',
+  padding: '2px 3px',
   fontWeight: 800,
-  fontSize: '5.8pt',
-  textTransform: 'uppercase',
-  paddingBottom: 1,
-  width: '100%',
-  boxSizing: 'border-box',
-  color: '#000000',
+  textAlign: 'center',
 };
 
-const auditFooterContainerStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  fontSize: '5pt',
-  color: '#000000',
+const sumTd: React.CSSProperties = {
+  border: '1px solid #000000',
+  padding: '1.5px 3px',
+};
+
+const sumTdNum: React.CSSProperties = {
+  border: '1px solid #000000',
+  padding: '1.5px 3px',
+  textAlign: 'center',
+  fontWeight: 700,
+};
+
+const auditFooterStyle: React.CSSProperties = {
   marginTop: 6,
   paddingTop: 3,
   borderTop: '0.8px dashed #000000',
-  width: '100%',
-  boxSizing: 'border-box',
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  fontSize: '5.5pt',
+  color: '#000000',
 };
 
-const loadingStateStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  gap: 12,
-  marginTop: 80,
-  fontWeight: 600,
-};
-
-const errorStateStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  marginTop: 80,
-  fontWeight: 600,
-  padding: '12px 20px',
-  borderRadius: 8,
-};
+export default SF2ReportTab;

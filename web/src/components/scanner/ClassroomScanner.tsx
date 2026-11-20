@@ -1,9 +1,11 @@
 /**
- * AttendSure - Classroom QR Attendance Scanner (USB QR Scanner, Camera & Offline Sync)
+ * AttendSure - Classroom QR Attendance Scanner (USB QR Scanner, Laptop Webcam & Offline Sync)
  * File: web/src/components/scanner/ClassroomScanner.tsx
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { AxiosResponse } from 'axios';
+import jsQR from 'jsqr';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
@@ -72,7 +74,8 @@ const loadOfflineQueue = (): OfflineScanEntry[] => {
 const playFeedbackChime = (type: 'SUCCESS' | 'WARNING' | 'ERROR') => {
   try {
     const AudioCtx =
-      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
     const osc = ctx.createOscillator();
@@ -95,7 +98,9 @@ const playFeedbackChime = (type: 'SUCCESS' | 'WARNING' | 'ERROR') => {
 
 const MAX_QR_INPUT_LENGTH = 256;
 const sanitizeQrInput = (raw: string): string =>
-  String(raw || '').replace(/[\u0000-\u001F\u007F<>]/g, '').slice(0, MAX_QR_INPUT_LENGTH);
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .slice(0, MAX_QR_INPUT_LENGTH);
 
 export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isModal = false }) => {
   const { tokens, brand, ui } = useTheme();
@@ -123,11 +128,13 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
 
   const mountedRef = useRef(true);
   const loadingRef = useRef(false);
+  const cooldownRef = useRef(false);
   const processScanRef = useRef<(rawCode: string) => Promise<void>>(async () => {});
   const keyBuffer = useRef('');
   const lastKeyTime = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const frameRef = useRef<number | null>(null);
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -149,8 +156,11 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
   useEffect(() => {
     const controller = new AbortController();
     apiClient
-      .get(API_ROUTES.attendance.classes, { params: { summary: 1 }, signal: controller.signal })
-      .then((res) => {
+      .get<ClassPeriodOption[]>(API_ROUTES.attendance.classes, {
+        params: { summary: 1 },
+        signal: controller.signal,
+      })
+      .then((res: AxiosResponse<ClassPeriodOption[]>) => {
         if (controller.signal.aborted) return;
         const rawList: ClassPeriodOption[] = Array.isArray(res.data) ? res.data : [];
         const validList = rawList.filter((p) => p.id > 0);
@@ -270,12 +280,14 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
           setInputCode('');
           if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
           focusTimerRef.current = setTimeout(() => {
-            inputRef.current?.focus();
+            if (scannerMode === 'USB_GUN') {
+              inputRef.current?.focus();
+            }
           }, 40);
         }
       }
     },
-    [selectedPeriodId, soundEnabled, showAlert]
+    [selectedPeriodId, soundEnabled, showAlert, scannerMode]
   );
 
   processScanRef.current = handleProcessScan;
@@ -300,61 +312,109 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Stable camera lifecycle: depends ONLY on scannerMode so scans never restart the webcam
   useEffect(() => {
     if (scannerMode !== 'CAMERA') {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
       if (cameraCooldownTimerRef.current) clearTimeout(cameraCooldownTimerRef.current);
+      cooldownRef.current = false;
       return;
     }
 
     setCameraMessage(null);
+
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      const portSuffix = window.location.port ? `:${window.location.port}` : '';
+      setCameraMessage(
+        `Browser security blocks webcam access on non-HTTPS domains (${window.location.origin}). Open http://localhost${portSuffix} in your browser to use your laptop webcam, or paste a signed QR string in USB QR Scanner mode.`
+      );
+      return;
+    }
+
     let active = true;
-    navigator.mediaDevices
-      ?.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } } })
-      .then((stream) => {
-        if (!active) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
+    const startCameraStream = async () => {
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+
+      if (!active) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+
+      if (!canvasRef.current) {
+        canvasRef.current = document.createElement('canvas');
+      }
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+      const scanFrame = async () => {
+        if (!active) return;
+        const video = videoRef.current;
+        if (
+          video &&
+          ctx &&
+          video.readyState >= video.HAVE_ENOUGH_DATA &&
+          video.videoWidth > 0 &&
+          video.videoHeight > 0 &&
+          !loadingRef.current &&
+          !cooldownRef.current
+        ) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const decoded = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'dontInvert',
+          });
+
+          if (decoded?.data) {
+            cooldownRef.current = true;
+            await processScanRef.current(decoded.data);
+            if (cameraCooldownTimerRef.current) clearTimeout(cameraCooldownTimerRef.current);
+            cameraCooldownTimerRef.current = setTimeout(() => {
+              cooldownRef.current = false;
+            }, 1400);
+          }
         }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(() => {});
-        }
-        if ('BarcodeDetector' in window) {
-          const Detector = (
-            window as unknown as {
-              BarcodeDetector: new (opts: { formats: string[] }) => {
-                detect: (el: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
-              };
-            }
-          ).BarcodeDetector;
-          const detector = new Detector({ formats: ['qr_code', 'code_128'] });
-          const tick = async () => {
-            if (!active) return;
-            if (videoRef.current && videoRef.current.readyState >= 2 && !loadingRef.current) {
-              const codes = await detector.detect(videoRef.current).catch(() => []);
-              if (codes[0]?.rawValue) {
-                await processScanRef.current(codes[0].rawValue);
-                await new Promise<void>((resolve) => {
-                  if (cameraCooldownTimerRef.current) clearTimeout(cameraCooldownTimerRef.current);
-                  cameraCooldownTimerRef.current = setTimeout(resolve, 1300);
-                });
-              }
-            }
-            if (active) frameRef.current = requestAnimationFrame(tick);
-          };
-          frameRef.current = requestAnimationFrame(tick);
-        }
-      })
-      .catch(() => {
         if (active) {
-          setCameraMessage('Camera permission denied. Allow camera access in your browser bar or use USB Scanner mode.');
+          frameRef.current = requestAnimationFrame(() => {
+            void scanFrame();
+          });
         }
+      };
+
+      frameRef.current = requestAnimationFrame(() => {
+        void scanFrame();
       });
+    };
+
+    startCameraStream().catch((err: unknown) => {
+      if (!active) return;
+      const errName = (err as { name?: string })?.name || '';
+      if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        setCameraMessage('No webcam was detected on this laptop. Check if your camera is enabled in Windows Settings.');
+      } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
+        setCameraMessage('Your webcam is currently in use by another app (such as Zoom, Teams, or Camera). Close the other app and try again.');
+      } else {
+        setCameraMessage(
+          'Camera permission was blocked. Click the lock/tune icon in your browser address bar, set Camera to Allow, and refresh.'
+        );
+      }
+    });
 
     return () => {
       active = false;
@@ -362,6 +422,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
       streamRef.current = null;
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
       if (cameraCooldownTimerRef.current) clearTimeout(cameraCooldownTimerRef.current);
+      cooldownRef.current = false;
     };
   }, [scannerMode]);
 
@@ -474,7 +535,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                 </div>
                 <div style={{ fontSize: '1rem', fontWeight: 800, color: tokens.textPrimary }}>USB QR Scanner Ready</div>
                 <p style={{ fontSize: '0.76rem', color: tokens.textSecondary, margin: '6px auto 14px', maxWidth: 400 }}>
-                  Scan an official signed student QR ID card below.
+                  Scan an official signed student QR ID card (or paste its signed QR code below to test without a scanner).
                 </p>
                 <form
                   onSubmit={(e) => {
@@ -490,7 +551,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                     maxLength={MAX_QR_INPUT_LENGTH}
                     value={inputCode}
                     onChange={(e) => setInputCode(sanitizeQrInput(e.target.value))}
-                    placeholder="Scan signed QR card..."
+                    placeholder="Scan or paste signed QR pass..."
                     style={{ ...ui.input, fontFamily: 'monospace' }}
                   />
                   <button type="submit" disabled={loading || !inputCode.trim()} style={ui.btnPrimary}>
@@ -501,7 +562,9 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
             ) : (
               <div style={ui.card}>
                 {cameraMessage ? (
-                  <div style={{ ...ui.subtleBox, color: brand.warning }}>{cameraMessage}</div>
+                  <div style={{ ...ui.subtleBox, color: brand.warning, lineHeight: 1.5, fontSize: '0.80rem', fontWeight: 600 }}>
+                    {cameraMessage}
+                  </div>
                 ) : (
                   <div
                     style={{
@@ -519,9 +582,9 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                     <div
                       style={{
                         position: 'absolute',
-                        width: 165,
-                        height: 165,
-                        border: `2px solid ${brand.primary}`,
+                        width: 175,
+                        height: 175,
+                        border: `2.5px solid ${brand.primary}`,
                         borderRadius: 12,
                         pointerEvents: 'none',
                       }}

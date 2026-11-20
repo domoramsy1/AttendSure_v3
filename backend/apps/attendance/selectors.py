@@ -1,19 +1,81 @@
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils import timezone
 from common.media import build_media_url
 from common.permissions import get_user_role, is_school_leader
-from apps.accounts.selectors import (
-    get_teacher_section_ids,
-    get_teacher_student_ids,
-    resolve_teacher_for_user,
-)
+from common.qr_signer import sign_student_qr
 from apps.school.models import ClassPeriod, Section
 from apps.school.selectors import format_section_label
 from apps.students.models import Enrollment
 from .models import ClassAttendance, DailyAttendance, ExitPass
 
+FacultyModel = Section._meta.get_field("adviser").related_model
+PERIOD_FACULTY_FIELD = next(
+    f.name for f in ClassPeriod._meta.fields if f.db_column == "faculty_id"
+)
+PASS_FACULTY_FIELD = next(
+    f.name for f in ExitPass._meta.fields if f.db_column == "faculty_id"
+)
 
-def format_roster_items(
+
+def resolve_faculty_for_user(user):
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    if get_user_role(user) == "PARENT":
+        return None
+
+    by_account = (
+        FacultyModel.objects.select_related("account")
+        .filter(account__user=user, is_active=True)
+        .first()
+    )
+    if by_account:
+        return by_account
+
+    lookup = Q()
+    clean_username = str(getattr(user, "username", "") or "").strip()
+    clean_email = str(getattr(user, "email", "") or "").strip()
+    if clean_username:
+        lookup |= Q(employee_id__iexact=clean_username)
+    if clean_email:
+        lookup |= Q(email__iexact=clean_email)
+
+    if lookup:
+        return (
+            FacultyModel.objects.select_related("account")
+            .filter(lookup, is_active=True)
+            .first()
+        )
+    return None
+
+
+def get_faculty_section_ids(faculty_member) -> set[int]:
+    if not faculty_member:
+        return set()
+    advisory_ids = set(
+        Section.objects.filter(adviser=faculty_member, is_active=True).values_list("id", flat=True)
+    )
+    period_sec_ids = set(
+        faculty_member.assigned_periods.filter(is_active=True, section__is_active=True)
+        .exclude(section_id__isnull=True)
+        .values_list("section_id", flat=True)
+    )
+    return advisory_ids | period_sec_ids
+
+
+def get_faculty_student_ids(faculty_member) -> set[int]:
+    section_ids = get_faculty_section_ids(faculty_member)
+    if not section_ids:
+        return set()
+    return set(
+        Enrollment.objects.filter(
+            section_id__in=section_ids,
+            status__in=["ENROLLED", "TRANSFERRED_IN"],
+            student__is_active=True,
+        ).values_list("student_id", flat=True)
+    )
+
+
+def format_class_list_items(
     students,
     request=None,
     period_logs=None,
@@ -45,33 +107,32 @@ def format_roster_items(
             ),
             "parent_contact": st.parent_contact,
             "qr_token": st.qr_token,
+            "qr_payload": sign_student_qr(st.lrn, st.qr_token),
         }
         for st in students
     ]
 
 
-def get_assigned_classes_with_rosters(
+def get_assigned_classes_with_class_lists(
     *,
     user,
     view_all: bool = False,
     include_students: bool = True,
     request=None,
 ) -> list[dict]:
-    from django.db.models import Count
-
-    teacher = resolve_teacher_for_user(user)
+    faculty_member = resolve_faculty_for_user(user)
     leader = is_school_leader(user)
     today = timezone.localdate()
 
     periods_qs = ClassPeriod.objects.none()
     extra_sections_qs = Section.objects.none()
 
-    if teacher and not view_all:
+    if faculty_member and not view_all:
         own_periods = ClassPeriod.objects.filter(
-            Q(teacher=teacher) | Q(section__adviser=teacher),
+            Q(**{PERIOD_FACULTY_FIELD: faculty_member}) | Q(section__adviser=faculty_member),
             is_active=True,
         ).distinct()
-        own_advisory = Section.objects.filter(adviser=teacher, is_active=True)
+        own_advisory = Section.objects.filter(adviser=faculty_member, is_active=True)
 
         if own_periods.exists() or own_advisory.exists():
             periods_qs = own_periods
@@ -84,7 +145,9 @@ def get_assigned_classes_with_rosters(
         extra_sections_qs = Section.objects.filter(is_active=True)
 
     periods = list(
-        periods_qs.select_related("section", "section__grade_level", "subject", "teacher").order_by("start_time")
+        periods_qs.select_related(
+            "section", "section__grade_level", "subject", PERIOD_FACULTY_FIELD
+        ).order_by("start_time")
     )
     covered_section_ids = {p.section_id for p in periods if p.section_id}
     extra_sections = list(
@@ -99,7 +162,9 @@ def get_assigned_classes_with_rosters(
 
     if not include_students:
         counts_by_sec = dict(
-            Enrollment.objects.filter(section_id__in=all_section_ids, status="ENROLLED", student__is_active=True)
+            Enrollment.objects.filter(
+                section_id__in=all_section_ids, status="ENROLLED", student__is_active=True
+            )
             .values("section_id")
             .annotate(cnt=Count("id"))
             .values_list("section_id", "cnt")
@@ -126,12 +191,14 @@ def get_assigned_classes_with_rosters(
                 "time_display": f"{start_s} - {end_s}".strip(" -"),
                 "total_students": cnt,
                 "students": [],
-                "is_adviser": bool(teacher and p.section.adviser_id == teacher.id),
+                "is_adviser": bool(faculty_member and p.section.adviser_id == faculty_member.id),
             })
         return results
 
     enrollments = (
-        Enrollment.objects.filter(section_id__in=all_section_ids, status="ENROLLED", student__is_active=True)
+        Enrollment.objects.filter(
+            section_id__in=all_section_ids, status="ENROLLED", student__is_active=True
+        )
         .select_related("student")
         .order_by("student__last_name", "student__first_name")
     )
@@ -150,6 +217,7 @@ def get_assigned_classes_with_rosters(
         key = (row["class_period_id"], row["student_id"])
         period_logs[key] = row["status"]
         period_record_ids[key] = row["id"]
+
     daily_logs = dict(
         DailyAttendance.objects.filter(
             attendance_date=today,
@@ -161,7 +229,7 @@ def get_assigned_classes_with_rosters(
     for p in periods:
         if not p.section:
             continue
-        roster = format_roster_items(
+        class_list = format_class_list_items(
             students_by_sec.get(p.section_id, []),
             request=request,
             period_logs=period_logs,
@@ -185,13 +253,15 @@ def get_assigned_classes_with_rosters(
             "start_time": start_s,
             "end_time": end_s,
             "time_display": f"{start_s} - {end_s}".strip(" -"),
-            "total_students": len(roster),
-            "students": roster,
-            "is_adviser": bool(teacher and p.section.adviser_id == teacher.id),
+            "total_students": len(class_list),
+            "students": class_list,
+            "is_adviser": bool(faculty_member and p.section.adviser_id == faculty_member.id),
         })
 
     for sec in extra_sections:
-        roster = format_roster_items(students_by_sec.get(sec.id, []), request=request, daily_logs=daily_logs)
+        class_list = format_class_list_items(
+            students_by_sec.get(sec.id, []), request=request, daily_logs=daily_logs
+        )
         results.append({
             "id": sec.id,
             "schedule_id": sec.id,
@@ -206,20 +276,21 @@ def get_assigned_classes_with_rosters(
             "start_time": "",
             "end_time": "",
             "time_display": "Homeroom",
-            "total_students": len(roster),
-            "students": roster,
-            "is_adviser": bool(teacher and sec.adviser_id == teacher.id),
+            "total_students": len(class_list),
+            "students": class_list,
+            "is_adviser": bool(faculty_member and sec.adviser_id == faculty_member.id),
         })
 
     return results
 
-def get_section_student_roster(*, user, section_id: int | None = None, request=None) -> list[dict]:
+
+def get_section_class_list(*, user, section_id: int | None = None, request=None) -> list[dict]:
     if not section_id:
-        return get_assigned_classes_with_rosters(user=user, request=request)
+        return get_assigned_classes_with_class_lists(user=user, request=request)
 
     if not is_school_leader(user):
-        teacher = resolve_teacher_for_user(user)
-        if not teacher or section_id not in get_teacher_section_ids(teacher):
+        faculty_member = resolve_faculty_for_user(user)
+        if not faculty_member or section_id not in get_faculty_section_ids(faculty_member):
             return []
 
     today = timezone.localdate()
@@ -243,18 +314,20 @@ def get_section_student_roster(*, user, section_id: int | None = None, request=N
             "student_id", "status"
         )
     )
-    return format_roster_items(students, request=request, period_logs=period_logs, daily_logs=daily_logs)
+    return format_class_list_items(
+        students, request=request, period_logs=period_logs, daily_logs=daily_logs
+    )
 
 
 def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> dict:
     today = timezone.localdate()
     now_time = timezone.localtime().time()
-    teacher = resolve_teacher_for_user(user)
+    faculty_member = resolve_faculty_for_user(user)
     leader = is_school_leader(user)
 
     advisory_ids = (
-        set(Section.objects.filter(adviser=teacher, is_active=True).values_list("id", flat=True))
-        if teacher
+        set(Section.objects.filter(adviser=faculty_member, is_active=True).values_list("id", flat=True))
+        if faculty_member
         else set()
     )
 
@@ -264,9 +337,9 @@ def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> 
             .select_related("grade_level")
             .order_by("grade_level__level_order", "name")
         )
-    elif teacher:
+    elif faculty_member:
         sections_qs = (
-            Section.objects.filter(id__in=get_teacher_section_ids(teacher), is_active=True)
+            Section.objects.filter(id__in=get_faculty_section_ids(faculty_member), is_active=True)
             .select_related("grade_level")
             .order_by("grade_level__level_order", "name")
         )
@@ -299,7 +372,7 @@ def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> 
 
     periods = list(
         ClassPeriod.objects.filter(section=target, is_active=True)
-        .select_related("subject", "teacher")
+        .select_related("subject", PERIOD_FACULTY_FIELD)
         .order_by("start_time")
     )
     students = [
@@ -389,6 +462,17 @@ def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> 
             "subjects": subj_cells,
         })
 
+    schedules_list = []
+    for p in periods:
+        period_faculty = getattr(p, PERIOD_FACULTY_FIELD, None)
+        schedules_list.append({
+            "schedule_id": p.id,
+            "subject_code": p.subject.code if p.subject else "",
+            "subject_name": p.subject.title if p.subject else "",
+            "faculty_name": period_faculty.full_name if period_faculty else "Unassigned",
+            "time_window": f"{str(p.start_time)[:5]} - {str(p.end_time)[:5]}" if p.start_time else "",
+        })
+
     return {
         "has_advisory_class": True,
         "is_adviser": target.id in advisory_ids,
@@ -397,18 +481,10 @@ def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> 
         "grade_level": target.grade_level.name if target.grade_level else "",
         "total_students": len(students),
         "available_sections": available,
-        "schedules": [
-            {
-                "schedule_id": p.id,
-                "subject_code": p.subject.code if p.subject else "",
-                "subject_name": p.subject.title if p.subject else "",
-                "faculty_name": p.teacher.full_name if p.teacher else "Unassigned",
-                "time_window": f"{str(p.start_time)[:5]} - {str(p.end_time)[:5]}" if p.start_time else "",
-            }
-            for p in periods
-        ],
+        "schedules": schedules_list,
         "matrix": matrix,
     }
+
 
 def get_attendance_logs(
     *,
@@ -430,10 +506,10 @@ def get_attendance_logs(
     )
 
     if not is_school_leader(user):
-        teacher = resolve_teacher_for_user(user)
-        if not teacher:
+        faculty_member = resolve_faculty_for_user(user)
+        if not faculty_member:
             return []
-        qs = qs.filter(student_id__in=get_teacher_student_ids(teacher))
+        qs = qs.filter(student_id__in=get_faculty_student_ids(faculty_member))
 
     if section_id:
         qs = qs.filter(class_period__section_id=section_id)
@@ -462,9 +538,10 @@ def get_attendance_logs(
         for item in qs[:300]
     ]
 
+
 def get_exit_passes_for_user(*, user, status_filter: str = "ALL", search: str = ""):
     role = get_user_role(user)
-    qs = ExitPass.objects.select_related("student", "teacher", "issued_by").order_by("-created_at")
+    qs = ExitPass.objects.select_related("student", PASS_FACULTY_FIELD, "issued_by").order_by("-created_at")
 
     if status_filter and status_filter.upper() != "ALL":
         clean_st = status_filter.upper()
@@ -477,19 +554,19 @@ def get_exit_passes_for_user(*, user, status_filter: str = "ALL", search: str = 
             Q(pass_number__icontains=search)
             | Q(student__first_name__icontains=search)
             | Q(student__last_name__icontains=search)
-            | Q(teacher__first_name__icontains=search)
-            | Q(teacher__last_name__icontains=search)
+            | Q(**{f"{PASS_FACULTY_FIELD}__first_name__icontains": search})
+            | Q(**{f"{PASS_FACULTY_FIELD}__last_name__icontains": search})
             | Q(reason__icontains=search)
         )
     if role == "PARENT":
         return qs.filter(student__parent_user=user)
     if not is_school_leader(user):
-        teacher = resolve_teacher_for_user(user)
-        if not teacher:
+        faculty_member = resolve_faculty_for_user(user)
+        if not faculty_member:
             return qs.none()
         qs = qs.filter(
-            Q(teacher=teacher)
-            | Q(issued_by=teacher)
-            | Q(student_id__in=get_teacher_student_ids(teacher))
+            Q(**{PASS_FACULTY_FIELD: faculty_member})
+            | Q(issued_by=faculty_member)
+            | Q(student_id__in=get_faculty_student_ids(faculty_member))
         )
     return qs

@@ -29,25 +29,51 @@ from .serializers import (
 )
 
 
+def _wants_fresh_cache(request) -> bool:
+    flag = str(request.query_params.get("nocache", "")).strip().lower()
+    return flag in ("1", "true", "yes")
+
+
+def _resolve_clean_school_id(school_obj: SchoolSettings | None, meta: dict) -> str:
+    if school_obj and getattr(school_obj, "school_id", None):
+        clean_db_id = str(school_obj.school_id).strip()
+        if clean_db_id:
+            return clean_db_id
+    return str(meta.get("school_id") or meta.get("deped_school_id") or "").strip()
+
+
 class PublicSchoolBrandingView(APIView):
     """Returns non-sensitive public school letterhead info for Web & Mobile Sign-In screens."""
 
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        meta = get_school_metadata(request)
+        if _wants_fresh_cache(request):
+            cache.delete(SCHOOL_META_CACHE_KEY)
+
+        school = SchoolSettings.objects.select_related("principal_teacher").first()
+        meta = get_school_metadata(request, school=school) if school else get_school_metadata(request)
+        resolved_school_id = _resolve_clean_school_id(school, meta)
+
         return Response(
             {
-                "school_id": meta.get("school_id", ""),
-                "school_name": meta.get("school_name", ""),
-                "region": meta.get("region", ""),
-                "division": meta.get("division", ""),
-                "district": meta.get("district", ""),
+                "school_id": resolved_school_id,
+                "deped_school_id": resolved_school_id,
+                "school_name": (school.school_name if school and school.school_name else meta.get("school_name", "")) or "",
+                "short_name": (getattr(school, "short_name", "") if school else meta.get("short_name", "")) or "",
+                "region": (school.region if school and school.region else meta.get("region", "")) or "",
+                "division": (school.division if school and school.division else meta.get("division", "")) or "",
+                "district": (school.district if school and school.district else meta.get("district", "")) or "",
+                "address": (getattr(school, "address", "") if school else meta.get("address", "")) or "",
+                "contact_number": (getattr(school, "contact_number", "") if school else meta.get("contact_number", "")) or "",
+                "email": (getattr(school, "email", "") if school else meta.get("email", "")) or "",
+                "principal_name": meta.get("principal_name") or (getattr(school, "principal_name", "") if school else "") or "",
+                "principal_title": meta.get("principal_title") or (getattr(school, "principal_title", "") if school else "") or "",
                 "academic_year": meta.get("academic_year", ""),
                 "school_logo": meta.get("school_logo"),
                 "left_logo": meta.get("left_logo"),
                 "right_logo": meta.get("right_logo"),
-                "is_configured": meta.get("is_configured", False),
+                "is_configured": bool(school and (resolved_school_id or school.school_name)) or bool(meta.get("is_configured", False)),
             }
         )
 
@@ -56,36 +82,71 @@ class SchoolSettingsView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
 
     def get(self, request):
+        if _wants_fresh_cache(request):
+            cache.delete(SCHOOL_META_CACHE_KEY)
+
         school = SchoolSettings.objects.select_related("principal_teacher").first()
         if not school:
-            return Response(get_school_metadata(request))
+            meta = get_school_metadata(request)
+            sid = str(meta.get("school_id") or "").strip()
+            meta["school_id"] = sid
+            meta["deped_school_id"] = sid
+            return Response(meta)
+
         school = migrate_inline_logos_to_files(school)
-        data = dict(SchoolSettingsSerializer(school, context={"request": request}).data)
-        data.update(get_school_metadata(request, school=school))
-        return Response(data)
+        serialized = dict(SchoolSettingsSerializer(school, context={"request": request}).data)
+        meta = get_school_metadata(request, school=school)
+
+        # Merge metadata without allowing a blank cached value to erase real DB columns
+        merged = {**meta, **{k: v for k, v in serialized.items() if v not in (None, "")}}
+        resolved_school_id = _resolve_clean_school_id(school, merged)
+        merged["school_id"] = resolved_school_id
+        merged["deped_school_id"] = resolved_school_id
+
+        for logo_key in ("school_logo", "left_logo", "right_logo"):
+            if meta.get(logo_key):
+                merged[logo_key] = meta[logo_key]
+
+        if meta.get("academic_year"):
+            merged["academic_year"] = meta["academic_year"]
+
+        return Response(merged)
 
     @transaction.atomic
     def put(self, request):
         school = SchoolSettings.objects.first()
+        raw_payload = (
+            {k: request.data.get(k) for k in request.data.keys()}
+            if hasattr(request.data, "keys")
+            else dict(request.data)
+        )
+
+        # Support deped_school_id alias cleanly if sent by frontend forms
+        if not raw_payload.get("school_id") and raw_payload.get("deped_school_id"):
+            raw_payload["school_id"] = str(raw_payload["deped_school_id"]).strip()[:30]
+
         if school:
             serializer = SchoolSettingsSerializer(
-                school, data=request.data, partial=True, context={"request": request}
+                school, data=raw_payload, partial=True, context={"request": request}
             )
         else:
-            payload = (
-                {k: request.data.get(k) for k in request.data.keys()}
-                if hasattr(request.data, "keys")
-                else dict(request.data)
-            )
-            payload.setdefault("school_id", "000000")
-            payload.setdefault("school_name", "AttendSure School")
-            serializer = SchoolSettingsSerializer(data=payload, context={"request": request})
+            if not str(raw_payload.get("school_name") or "").strip():
+                return Response(
+                    {"error": "School name is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            serializer = SchoolSettingsSerializer(data=raw_payload, context={"request": request})
 
         serializer.is_valid(raise_exception=True)
         saved = migrate_inline_logos_to_files(serializer.save())
         cache.delete_many([SCHOOL_META_CACHE_KEY, "reports:system_status"])
 
-        radius_val = max(20, int(saved.geofence_radius_meters or 150))
+        try:
+            parsed_radius = int(saved.geofence_radius_meters or 150)
+        except (TypeError, ValueError):
+            parsed_radius = 150
+        radius_val = min(5000, max(20, parsed_radius))
+
         boundary = CampusBoundary.objects.filter(is_active=True).first() or CampusBoundary.objects.first()
         if boundary:
             boundary.name = (saved.school_name or boundary.name or "Campus Boundary")[:100]
@@ -110,9 +171,17 @@ class SchoolSettingsView(APIView):
             action="UPDATE",
             changed_fields=list(serializer.validated_data.keys()),
         )
-        data = dict(SchoolSettingsSerializer(saved, context={"request": request}).data)
-        data.update(get_school_metadata(request, school=saved))
-        return Response(data)
+
+        serialized = dict(SchoolSettingsSerializer(saved, context={"request": request}).data)
+        meta = get_school_metadata(request, school=saved)
+        merged = {**meta, **{k: v for k, v in serialized.items() if v not in (None, "")}}
+        resolved_school_id = _resolve_clean_school_id(saved, merged)
+        merged["school_id"] = resolved_school_id
+        merged["deped_school_id"] = resolved_school_id
+        for logo_key in ("school_logo", "left_logo", "right_logo"):
+            if meta.get(logo_key):
+                merged[logo_key] = meta[logo_key]
+        return Response(merged)
 
     def post(self, request):
         return self.put(request)
@@ -122,7 +191,7 @@ class SchoolSettingsView(APIView):
 
     def delete(self, request):
         school = SchoolSettings.objects.first()
-        field = request.query_params.get("field") or request.data.get("field")
+        field = str(request.query_params.get("field") or request.data.get("field") or "").strip()
         if school and field in ("school_logo", "left_logo", "right_logo"):
             setattr(school, field, None)
             school.save(update_fields=[field, "updated_at"])
@@ -164,16 +233,26 @@ class SchoolHolidayViewSet(AuditedModelViewSet):
         """Handles collection-level PATCH /api/calendar/exceptions/ for weekend rest toggle."""
         if "pk" not in kwargs:
             if not is_school_leader(request.user):
-                return Response({"error": "School leadership access required."}, status=status.HTTP_403_FORBIDDEN)
+                return Response(
+                    {"error": "School leadership access required."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             return self.partial_update_settings(request)
         return super().partial_update(request, *args, **kwargs)
 
     def partial_update_settings(self, request):
         if not is_school_leader(request.user):
-            return Response({"error": "School leadership access required."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "School leadership access required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         val = request.data.get("weekend_rest_enabled")
         if val is not None:
-            enabled = bool(val) if isinstance(val, bool) else str(val).strip().lower() in ("true", "1", "yes")
+            enabled = (
+                bool(val)
+                if isinstance(val, bool)
+                else str(val).strip().lower() in ("true", "1", "yes")
+            )
             cache.set(WEEKEND_REST_CACHE_KEY, enabled, timeout=None)
             record_audit_log(
                 request=request,
@@ -184,7 +263,9 @@ class SchoolHolidayViewSet(AuditedModelViewSet):
             )
             return Response({"ok": True, "weekend_rest_enabled": enabled})
         current = cache.get(WEEKEND_REST_CACHE_KEY)
-        return Response({"ok": True, "weekend_rest_enabled": True if current is None else bool(current)})
+        return Response(
+            {"ok": True, "weekend_rest_enabled": True if current is None else bool(current)}
+        )
 
 
 class RoomViewSet(AuditedModelViewSet):

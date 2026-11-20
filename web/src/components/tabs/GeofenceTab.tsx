@@ -1,9 +1,11 @@
 /**
- * AttendSure - Campus GPS Boundary & Location Audit
+ * AttendSure - Campus GPS Boundary & Location Audit (Local Bundled Leaflet)
  * File: web/src/components/tabs/GeofenceTab.tsx
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, escapeHtml, extractApiError } from '../../api/routes';
 import { isSafeImageUrl } from '../../theme/tokens';
@@ -130,12 +132,6 @@ export interface AuditRecord {
   bound_device_id?: string | null;
 }
 
-declare global {
-  interface Window {
-    L: any;
-  }
-}
-
 const sanitizeInput = (raw: string, maxLength = 80): string =>
   String(raw || '')
     .replace(/[\u0000-\u001F\u007F<>]/g, '')
@@ -168,11 +164,11 @@ export const GeofenceTab: React.FC = () => {
   const [activeScreen, setActiveScreen] = useState<'LIVE_MAP' | 'AUDIT_SCREEN'>('LIVE_MAP');
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const circleInstanceRef = useRef<any>(null);
-  const markerInstanceRef = useRef<any>(null);
-  const userMarkersLayerRef = useRef<any>(null);
-  const tileLayerRef = useRef<any>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const circleInstanceRef = useRef<L.Circle | null>(null);
+  const markerInstanceRef = useRef<L.Marker | null>(null);
+  const userMarkersLayerRef = useRef<L.LayerGroup | null>(null);
+  const tileLayerRef = useRef<(L.TileLayer & { _layerType?: string }) | null>(null);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const geoAbortRef = useRef<AbortController | null>(null);
   const auditAbortRef = useRef<AbortController | null>(null);
@@ -181,7 +177,6 @@ export const GeofenceTab: React.FC = () => {
   const [loading, setLoading] = useState(!cachedGeo);
   const [saving, setSaving] = useState(false);
   const [resettingId, setResettingId] = useState<number | null>(null);
-  const [leafletReady, setLeafletReady] = useState(false);
   const [mapLayer, setMapLayer] = useState<'streets' | 'satellite'>('streets');
   const [geoData, setGeoData] = useState<GeofenceData | null>(cachedGeo ?? null);
 
@@ -225,43 +220,9 @@ export const GeofenceTab: React.FC = () => {
   const isAdmin = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL'].includes(userRole);
 
   useEffect(() => {
-    let active = true;
-    const onLeafletLoaded = () => {
-      if (active) setLeafletReady(true);
-    };
-
-    if (window.L) {
-      setLeafletReady(true);
-    } else {
-      if (!document.getElementById('leaflet-css')) {
-        const link = document.createElement('link');
-        link.id = 'leaflet-css';
-        link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        link.crossOrigin = 'anonymous';
-        link.referrerPolicy = 'no-referrer';
-        document.head.appendChild(link);
-      }
-
-      const existingScript = document.getElementById('leaflet-js') as HTMLScriptElement | null;
-      if (!existingScript) {
-        const script = document.createElement('script');
-        script.id = 'leaflet-js';
-        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-        script.crossOrigin = 'anonymous';
-        script.referrerPolicy = 'no-referrer';
-        script.async = true;
-        script.addEventListener('load', onLeafletLoaded);
-        document.head.appendChild(script);
-      } else {
-        existingScript.addEventListener('load', onLeafletLoaded);
-      }
-    }
-
     return () => {
-      active = false;
-      const existingScript = document.getElementById('leaflet-js');
-      existingScript?.removeEventListener('load', onLeafletLoaded);
+      geoAbortRef.current?.abort();
+      auditAbortRef.current?.abort();
       if (resizeTimerRef.current) {
         clearTimeout(resizeTimerRef.current);
         resizeTimerRef.current = null;
@@ -274,13 +235,6 @@ export const GeofenceTab: React.FC = () => {
         }
         mapInstanceRef.current = null;
       }
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      geoAbortRef.current?.abort();
-      auditAbortRef.current?.abort();
     };
   }, []);
 
@@ -417,11 +371,10 @@ export const GeofenceTab: React.FC = () => {
     }
   }, [activeScreen, fetchAuditHistory]);
 
-  // Leaflet Map Initialization with Tab Remount Recovery
+  // Local Bundled Leaflet Initialization (works offline even when tile servers are unreachable)
   useEffect(() => {
-    if (activeScreen !== 'LIVE_MAP' || !leafletReady || !mapContainerRef.current) return;
+    if (activeScreen !== 'LIVE_MAP' || !mapContainerRef.current) return;
     if (lat === null || lng === null) return;
-    const L = window.L;
 
     const getTileUrl = (layer: 'streets' | 'satellite') => {
       if (layer === 'satellite') {
@@ -455,11 +408,12 @@ export const GeofenceTab: React.FC = () => {
         zoomControl: true,
       });
 
-      tileLayerRef.current = L.tileLayer(getTileUrl(mapLayer), {
+      const tileLayer = L.tileLayer(getTileUrl(mapLayer), {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap contributors',
-      }).addTo(map);
-      (tileLayerRef.current as any)._layerType = mapLayer;
+      }).addTo(map) as L.TileLayer & { _layerType?: string };
+      tileLayer._layerType = mapLayer;
+      tileLayerRef.current = tileLayer;
 
       userMarkersLayerRef.current = L.layerGroup().addTo(map);
       mapInstanceRef.current = map;
@@ -468,7 +422,7 @@ export const GeofenceTab: React.FC = () => {
         map.invalidateSize();
       }, 250);
 
-      map.on('click', (e: any) => {
+      map.on('click', (e: L.LeafletMouseEvent) => {
         if (!isAdmin) return;
         isDirtyRef.current = true;
         setLat(parseFloat(e.latlng.lat.toFixed(6)));
@@ -482,10 +436,13 @@ export const GeofenceTab: React.FC = () => {
 
     const currentMap = mapInstanceRef.current;
 
-    if (tileLayerRef.current && (tileLayerRef.current as any)._layerType !== mapLayer) {
+    if (tileLayerRef.current && tileLayerRef.current._layerType !== mapLayer) {
       currentMap.removeLayer(tileLayerRef.current);
-      tileLayerRef.current = L.tileLayer(getTileUrl(mapLayer), { maxZoom: 19 }).addTo(currentMap);
-      (tileLayerRef.current as any)._layerType = mapLayer;
+      const nextTile = L.tileLayer(getTileUrl(mapLayer), { maxZoom: 19 }).addTo(currentMap) as L.TileLayer & {
+        _layerType?: string;
+      };
+      nextTile._layerType = mapLayer;
+      tileLayerRef.current = nextTile;
     }
 
     const campusCenterIcon = L.divIcon({
@@ -510,9 +467,9 @@ export const GeofenceTab: React.FC = () => {
         draggable: isAdmin,
       }).addTo(currentMap);
 
-      markerInstanceRef.current.on('dragend', (e: any) => {
+      markerInstanceRef.current.on('dragend', (e: L.DragEndEvent) => {
         isDirtyRef.current = true;
-        const pos = e.target.getLatLng();
+        const pos = (e.target as L.Marker).getLatLng();
         setLat(parseFloat(pos.lat.toFixed(6)));
         setLng(parseFloat(pos.lng.toFixed(6)));
       });
@@ -533,7 +490,7 @@ export const GeofenceTab: React.FC = () => {
         }).addTo(currentMap);
       }
     }
-  }, [activeScreen, leafletReady, lat, lng, radius, mapLayer, isAdmin]);
+  }, [activeScreen, lat, lng, radius, mapLayer, isAdmin]);
 
   const renderSignalBars = (percentage: number | null | undefined) => {
     if (percentage === null || percentage === undefined) {
@@ -564,10 +521,8 @@ export const GeofenceTab: React.FC = () => {
     );
   };
 
-  // XSS-Safe Leaflet Faculty Markers & Breach Lines
   useEffect(() => {
-    if (activeScreen !== 'LIVE_MAP' || !leafletReady || !mapInstanceRef.current || !userMarkersLayerRef.current) return;
-    const L = window.L;
+    if (activeScreen !== 'LIVE_MAP' || !mapInstanceRef.current || !userMarkersLayerRef.current) return;
     const layer = userMarkersLayerRef.current;
     layer.clearLayers();
 
@@ -709,11 +664,10 @@ export const GeofenceTab: React.FC = () => {
         opacity: 0.98,
       });
     });
-  }, [activeScreen, leafletReady, geoData, lat, lng, radius]);
+  }, [activeScreen, geoData, lat, lng, radius]);
 
   const handleFitAllOnMap = () => {
-    if (!mapInstanceRef.current || !window.L || lat === null || lng === null) return;
-    const L = window.L;
+    if (!mapInstanceRef.current || lat === null || lng === null) return;
     const bounds = L.latLngBounds([[lat, lng]]);
 
     (geoData?.faculty_list || []).forEach((u) => {

@@ -1,5 +1,5 @@
 /**
- * AttendSure Mobile - Main Tab Navigator
+ * AttendSure Mobile - Role-Aware Main Tab Navigator (Faculty & Parent Modes)
  * File: mobile/src/navigation/MainTabNavigator.tsx
  */
 
@@ -19,10 +19,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
 import { getFriendlyErrorMessage, type ThemePalette } from '../constants/theme';
 
 import DashboardScreen from '../screens/DashboardScreen';
+import ParentPortalScreen from '../screens/ParentPortalScreen';
 import CalendarScreen from '../screens/CalendarScreen';
 import ScannerScreen from '../screens/ScannerScreen';
 import ReportsScreen from '../screens/ReportsScreen';
@@ -60,9 +62,15 @@ const showNotice = (title: string, message: string): void => {
 
 export const MainTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const { palette, fonts } = useThemeMode();
   const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
   const [activeTab, setActiveTab] = useState<TabType>('home');
+
+  const isParentUser = useMemo(() => {
+    const role = String(user?.role || user?.system_role || '').trim().toUpperCase();
+    return role === 'PARENT';
+  }, [user?.role, user?.system_role]);
 
   const [dtrMonth, setDtrMonth] = useState<number>(new Date().getMonth() + 1);
   const [dtrYear, setDtrYear] = useState<number>(new Date().getFullYear());
@@ -75,6 +83,7 @@ export const MainTabNavigator: React.FC = () => {
 
   const fetchDTR = useCallback(
     async (silent = false) => {
+      if (isParentUser) return;
       dtrAbortRef.current?.abort();
       const controller = new AbortController();
       dtrAbortRef.current = controller;
@@ -106,7 +115,7 @@ export const MainTabNavigator: React.FC = () => {
         }
       }
     },
-    [dtrMonth, dtrYear]
+    [dtrMonth, dtrYear, isParentUser]
   );
 
   useEffect(() => {
@@ -118,13 +127,13 @@ export const MainTabNavigator: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'dtr') {
+    if (activeTab === 'dtr' && !isParentUser) {
       void fetchDTR(false);
     }
     return () => {
       dtrAbortRef.current?.abort();
     };
-  }, [activeTab, fetchDTR]);
+  }, [activeTab, fetchDTR, isParentUser]);
 
   const handleSubmitDtr = async () => {
     if (!dtrData || dtrSubmitting) return;
@@ -180,27 +189,49 @@ export const MainTabNavigator: React.FC = () => {
     label: string;
     icon: keyof typeof Ionicons.glyphMap;
     activeIcon: keyof typeof Ionicons.glyphMap;
-  }> = [
-    { key: 'home', label: 'Home', icon: 'home-outline', activeIcon: 'home' },
-    { key: 'class_list', label: 'Classes', icon: 'book-outline', activeIcon: 'book' },
-    { key: 'gate_pass', label: 'Passes', icon: 'clipboard-outline', activeIcon: 'clipboard' },
-    { key: 'chat', label: 'Messages', icon: 'chatbubble-outline', activeIcon: 'chatbubble' },
-    { key: 'menu', label: 'Profile', icon: 'person-outline', activeIcon: 'person' },
-  ];
+  }> = useMemo(
+    () =>
+      isParentUser
+        ? [
+            { key: 'home', label: 'Children', icon: 'people-outline', activeIcon: 'people' },
+            { key: 'gate_pass', label: 'Passes', icon: 'clipboard-outline', activeIcon: 'clipboard' },
+            { key: 'chat', label: 'Messages', icon: 'chatbubble-outline', activeIcon: 'chatbubble' },
+            { key: 'settings', label: 'Account', icon: 'person-outline', activeIcon: 'person' },
+          ]
+        : [
+            { key: 'home', label: 'Home', icon: 'home-outline', activeIcon: 'home' },
+            { key: 'class_list', label: 'Classes', icon: 'book-outline', activeIcon: 'book' },
+            { key: 'gate_pass', label: 'Passes', icon: 'clipboard-outline', activeIcon: 'clipboard' },
+            { key: 'chat', label: 'Messages', icon: 'chatbubble-outline', activeIcon: 'chatbubble' },
+            { key: 'menu', label: 'Profile', icon: 'person-outline', activeIcon: 'person' },
+          ],
+    [isParentUser]
+  );
 
   const menuSubTabs: TabType[] = ['menu', 'settings', 'calendar', 'dtr', 'reports', 'scanner'];
-  const resolvedNavKey: TabType = menuSubTabs.includes(activeTab) ? 'menu' : activeTab;
+  const resolvedNavKey: TabType = isParentUser
+    ? activeTab
+    : menuSubTabs.includes(activeTab)
+      ? 'menu'
+      : activeTab;
 
   return (
     <View style={styles.container}>
       <View style={styles.screenContainer}>
-        {activeTab === 'home' && <DashboardScreen onNavigate={setActiveTab} />}
-        {activeTab === 'class_list' && <AdvisoryMatrixScreen />}
+        {activeTab === 'home' &&
+          (isParentUser ? (
+            <ParentPortalScreen onNavigate={setActiveTab} />
+          ) : (
+            <DashboardScreen onNavigate={setActiveTab} />
+          ))}
+        {activeTab === 'class_list' && !isParentUser && <AdvisoryMatrixScreen />}
         {activeTab === 'gate_pass' && <GatePassScreen onBack={() => setActiveTab('home')} />}
         {activeTab === 'chat' && <ChatScreen />}
-        {activeTab === 'menu' && <MenuScreen onSelectScreen={setActiveTab} />}
-        {activeTab === 'scanner' && <ScannerScreen onBack={() => setActiveTab('menu')} />}
-        {activeTab === 'reports' && (
+        {activeTab === 'menu' && !isParentUser && <MenuScreen onSelectScreen={setActiveTab} />}
+        {activeTab === 'scanner' && !isParentUser && (
+          <ScannerScreen onBack={() => setActiveTab('menu')} />
+        )}
+        {activeTab === 'reports' && !isParentUser && (
           <View style={styles.subScreenFill}>
             {renderSubHeader('School Reports', 'SF1, SF2, SF4 and Form 48 records', 'menu')}
             <ReportsScreen embedded />
@@ -208,17 +239,25 @@ export const MainTabNavigator: React.FC = () => {
         )}
         {activeTab === 'calendar' && (
           <View style={styles.subScreenFill}>
-            {renderSubHeader('School Calendar', 'Suspensions, holidays and schedules', 'menu')}
+            {renderSubHeader(
+              'School Calendar',
+              'Suspensions, holidays and schedules',
+              isParentUser ? 'home' : 'menu'
+            )}
             <CalendarScreen />
           </View>
         )}
         {activeTab === 'settings' && (
           <View style={styles.subScreenFill}>
-            {renderSubHeader('Settings', 'Profile, color mode and server address', 'menu')}
+            {renderSubHeader(
+              'Settings',
+              'Profile, color mode and server address',
+              isParentUser ? 'home' : 'menu'
+            )}
             <SettingsScreen />
           </View>
         )}
-        {activeTab === 'dtr' && (
+        {activeTab === 'dtr' && !isParentUser && (
           <View style={styles.subScreenFill}>
             {renderSubHeader('Daily Time Record', 'Civil Service Form No. 48', 'menu')}
             <ScrollView

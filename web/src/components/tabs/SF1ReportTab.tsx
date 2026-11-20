@@ -1,41 +1,44 @@
 /**
- * AttendSure - DepEd School Form 1 (SF 1) School Register
+ * AttendSure - Official DepEd School Form 1 (SF1) School Register
  * File: web/src/components/tabs/SF1ReportTab.tsx
  */
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
+import { exportToCsv } from '../common/Pagination';
+import { PageSetupModal } from '../common/PageSetupModal';
+import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
+import {
+  ReportViewerShell,
+  ReportHeaderBar,
+  DEFAULT_DEPED_LANDSCAPE_SETUP,
+  resolvePaperDimensionsInches,
+} from '../reports/ReportViewerShell';
+import {
+  buildAuditStamp,
+  exportElementToExcel,
+  exportElementToLocalPdf,
+  exportElementToWord,
+  exportReportJson,
+  logOfficialReportAudit,
+  saveBlobWithOptionalPicker,
+} from '../../utils/reportExporters';
+import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
-import { useTheme } from '../../context/ThemeContext';
-import { exportToCsv } from '../common/Pagination';
-import { ReportNavBar } from '../reports/ReportNavBar';
-import { PageSetupModal } from '../common/PageSetupModal';
-import { usePageSetup } from '../../hooks/usePageSetup';
-import { PAPER_SIZES } from '../../types/pageSetup';
-import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
-import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2, Users, Split } from 'lucide-react';
-import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
+import type { PageSetupConfig } from '../../types/pageSetup';
+import { BookOpen, RefreshCw, Search, Users, Split } from 'lucide-react';
 
-const HTML2PDF_CDN_URL =
-  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-const HTML2PDF_SRI_HASH =
-  'sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==';
+interface SectionOption {
+  id: number;
+  name: string;
+  code?: string;
+  grade_level_name?: string;
+  adviser_name?: string;
+}
 
-const sanitizeSearch = (raw: string): string =>
-  String(raw || '')
-    .replace(/[\u0000-\u001F\u007F<>]/g, '')
-    .trim()
-    .slice(0, 80);
-
-const getDynamicSchoolYear = (): string => {
-  const now = new Date();
-  const year = now.getFullYear();
-  return now.getMonth() >= 5 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
-};
-
-interface Learner {
+interface SF1LearnerRow {
   id: number;
   lrn: string;
   name: string;
@@ -46,54 +49,44 @@ interface Learner {
   mother_tongue: string;
   ethnic_group: string;
   religion: string;
-  house_street: string;
-  barangay: string;
-  municipality_city: string;
-  province: string;
+  address?: string;
+  house_street?: string;
+  house_street_sitio?: string;
+  barangay?: string;
+  municipality_city?: string;
+  province?: string;
   father_name: string;
   mother_maiden_name: string;
   guardian_name: string;
-  guardian_relationship: string;
+  guardian_rel?: string;
+  guardian_relationship?: string;
   parent_contact: string;
   remarks: string;
 }
 
-interface SF1Data {
+interface SF1ReportResponse {
   school_id: string;
   school_name: string;
   region: string;
   division: string;
   district: string;
-  school_head: string;
-  adviser_name: string;
   academic_year: string;
-  as_of_date?: string;
-  section_name: string;
   grade_level: string;
+  section_name: string;
+  adviser_name: string;
+  school_head: string;
   school_address?: string;
   school_contact?: string;
   school_email?: string;
   left_logo?: string | null;
   right_logo?: string | null;
   school_logo?: string | null;
-  has_enrolled_students?: boolean;
-  notice?: string;
+  students: SF1LearnerRow[];
+  males: SF1LearnerRow[];
+  females: SF1LearnerRow[];
   total_male: number;
   total_female: number;
   total_combined: number;
-  males?: Learner[];
-  females?: Learner[];
-  students?: Learner[];
-  learners?: Learner[];
-}
-
-export interface SF1PageChunk {
-  pageNumber: number;
-  totalPages: number;
-  learners: Learner[];
-  startIndex: number;
-  showFullHeader: boolean;
-  showFooter: boolean;
 }
 
 export interface SF1ReportTabProps {
@@ -102,1521 +95,1070 @@ export interface SF1ReportTabProps {
   onSelectReport?: (reportId: string) => void;
 }
 
+const sanitizeSearchText = (raw: string): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, 80);
+
+const parseGuardianFields = (name?: string, rel?: string) => {
+  const roles = ['MOTHER', 'FATHER', 'AUNT', 'UNCLE', 'GRANDMOTHER', 'GRANDFATHER', 'GUARDIAN'];
+  const cleanName = String(name || '').trim();
+  const cleanRel = String(rel || '').trim();
+
+  if (roles.includes(cleanName.toUpperCase()) && !roles.includes(cleanRel.toUpperCase())) {
+    return { gName: cleanRel, gRel: cleanName };
+  }
+  return {
+    gName: cleanName,
+    gRel: cleanRel.toLowerCase() === 'mather' ? 'Mother' : cleanRel,
+  };
+};
+
+const splitAddressParts = (st: SF1LearnerRow) => {
+  const street = st.house_street_sitio || st.house_street || '';
+  const brgy = st.barangay || '';
+  const city = st.municipality_city || '';
+  const prov = st.province || '';
+
+  if (street || brgy || city || prov) {
+    return { street, brgy, city, prov };
+  }
+
+  const parts = String(st.address || '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  return {
+    street: parts[0] || '',
+    brgy: parts[1] || '',
+    city: parts[2] || '',
+    prov: parts[3] || '',
+  };
+};
+
 export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   sectionId,
   activeReportId = 'sf1',
-  onSelectReport = () => {},
+  onSelectReport,
 }) => {
-  const { school } = useSchool();
+  const { tokens, brand } = useTheme();
+  const { school: globalSchool } = useSchool();
   const { showAlert } = useAlert();
-  const { tokens, brand, ui } = useTheme();
 
-  const cachedSections = peekApiCache<any>(API_ROUTES.school.sections);
-  const initialSections = Array.isArray(cachedSections) ? cachedSections : cachedSections?.results || [];
+  const cachedSectionsPayload = peekApiCache<any>(API_ROUTES.school.sections, { page_size: 250 });
+  const initialSections: SectionOption[] = Array.isArray(cachedSectionsPayload)
+    ? cachedSectionsPayload
+    : cachedSectionsPayload?.results || [];
 
-  const [sections, setSections] = useState<any[]>(initialSections);
+  const [sections, setSections] = useState<SectionOption[]>(initialSections);
   const [selectedSectionId, setSelectedSectionId] = useState<string>(
     sectionId ? String(sectionId) : initialSections[0] ? String(initialSections[0].id) : ''
   );
-  const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('');
-  const [selectedGradeLevel, setSelectedGradeLevel] = useState<string>('ALL');
-  const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [reportData, setReportData] = useState<SF1Data | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [exportingPdf, setExportingPdf] = useState(false);
-  const [isPrinting, setIsPrinting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [isPageSetupOpen, setIsPageSetupOpen] = useState(false);
 
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [groupingMode, setGroupingMode] = useState<'COMBINED' | 'SEPARATED'>('COMBINED');
 
-  const { config: savedPageConfig, saveConfig: savePageConfig } = usePageSetup('sf1');
-  const [activePageConfig, setActivePageConfig] = useState<PageSetupConfig>(savedPageConfig);
+  const [reportData, setReportData] = useState<SF1ReportResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+  const [isPrinting, setIsPrinting] = useState<boolean>(false);
 
-  useEffect(() => {
-    setActivePageConfig(savedPageConfig);
-  }, [savedPageConfig]);
+  const [auditMeta, setAuditMeta] = useState(() => buildAuditStamp('SF1'));
+  const [pageConfig, setPageConfig] = useState<PageSetupConfig>(DEFAULT_DEPED_LANDSCAPE_SETUP);
+  const [isPageSetupOpen, setIsPageSetupOpen] = useState<boolean>(false);
 
-  const paper = useMemo(() => {
-    return PAPER_SIZES[activePageConfig.paperSize] || PAPER_SIZES.folio || { width: 8.5, height: 13 };
-  }, [activePageConfig.paperSize]);
-
-  const isLandscape = activePageConfig.orientation === 'landscape';
-  const pageWidthInches = isLandscape ? paper.height : paper.width;
-  const pageHeightInches = isLandscape ? paper.width : paper.height;
-
-  const [zoomScale, setZoomScale] = useState<number>(1);
-  const [fitToWidth, setFitToWidth] = useState<boolean>(true);
-  const viewportContainerRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
-  const reportAbortRef = useRef<AbortController | null>(null);
-  const printTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const { widthIn: pageWidthInches, heightIn: pageHeightInches } = useMemo(
+    () => resolvePaperDimensionsInches(pageConfig),
+    [pageConfig]
+  );
+
+  const refreshAuditMeta = useCallback(() => {
+    const next = buildAuditStamp('SF1', reportData?.school_id || globalSchool.school_id);
+    setAuditMeta(next);
+    return next;
+  }, [reportData?.school_id, globalSchool.school_id]);
 
   useEffect(() => {
-    const handleBeforePrint = () => setIsPrinting(true);
-    const handleAfterPrint = () => setIsPrinting(false);
-    window.addEventListener('beforeprint', handleBeforePrint);
-    window.addEventListener('afterprint', handleAfterPrint);
-    return () => {
-      window.removeEventListener('beforeprint', handleBeforePrint);
-      window.removeEventListener('afterprint', handleAfterPrint);
-      if (printTimerRef.current) {
-        clearTimeout(printTimerRef.current);
-        printTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (sectionId) setSelectedSectionId(String(sectionId));
+    if (sectionId) {
+      setSelectedSectionId(String(sectionId));
+    }
   }, [sectionId]);
 
   useEffect(() => {
     const controller = new AbortController();
-    const fetchSections = async () => {
-      try {
-        const res = await apiClient.get(API_ROUTES.school.sections, { signal: controller.signal });
+    apiClient
+      .get(API_ROUTES.school.sections, {
+        params: { page_size: 250 },
+        signal: controller.signal,
+      })
+      .then((res) => {
         if (controller.signal.aborted) return;
-        const data = Array.isArray(res.data) ? res.data : res.data?.results || [];
-        setSections(data);
-        if (data.length > 0) {
-          setSelectedSectionId((prev) => prev || String(data[0].id));
+        const list: SectionOption[] = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        setSections(list);
+        if (list.length > 0) {
+          setSelectedSectionId((prev) => prev || String(list[0].id));
+        } else {
+          setLoading(false);
         }
-      } catch (err: unknown) {
+      })
+      .catch((err: unknown) => {
         const anyErr = err as { name?: string; code?: string };
         if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
           return;
         }
-      }
-    };
-    void fetchSections();
+        setError(extractApiError(err, 'Could not load class sections.'));
+        setLoading(false);
+      });
     return () => {
       controller.abort();
     };
   }, []);
 
-  const fetchSF1 = useCallback(async () => {
-    if (!selectedSectionId) return;
-    reportAbortRef.current?.abort();
-    const controller = new AbortController();
-    reportAbortRef.current = controller;
+  const fetchSF1 = useCallback(
+    async (silent = false, bypassCache = false) => {
+      if (!selectedSectionId) return;
 
-    const endpoint = `${API_ROUTES.reports.sf1}${selectedSectionId}/`;
-    const params = {
-      as_of_date: selectedDate || '',
-      date: selectedDate || '',
-      academic_year: selectedAcademicYear || '',
-      school_year: selectedAcademicYear || '',
-    };
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-    const cached = peekApiCache<SF1Data>(endpoint, params);
-    if (cached) {
-      setReportData(cached);
-      setLoading(false);
-    } else {
-      setLoading(true);
-    }
-    setError(null);
+      const endpoint = `${API_ROUTES.reports.sf1}${encodeURIComponent(selectedSectionId)}/`;
+      const warmHit = !bypassCache ? peekApiCache<SF1ReportResponse>(endpoint) : undefined;
 
-    try {
-      const res = await apiClient.get<SF1Data>(endpoint, {
-        params,
-        signal: controller.signal,
-      });
-      if (controller.signal.aborted) return;
-      setReportData(res.data);
-    } catch (err: unknown) {
-      const anyErr = err as { name?: string; code?: string };
-      if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
-        return;
-      }
-      setError(extractApiError(err, 'Failed to generate official SF1 report.'));
-    } finally {
-      if (!controller.signal.aborted) {
+      if (warmHit) {
+        setReportData(warmHit);
         setLoading(false);
+        if (silent) setRefreshing(true);
+      } else if (!silent) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
       }
-    }
-  }, [selectedSectionId, selectedAcademicYear, selectedDate]);
+      setError(null);
+
+      try {
+        const res = await apiClient.get<SF1ReportResponse>(endpoint, {
+          params: bypassCache ? { nocache: 1 } : undefined,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        const payload = res.data;
+        setReportData(payload);
+        const stamp = buildAuditStamp('SF1', payload?.school_id || globalSchool.school_id);
+        setAuditMeta(stamp);
+        void logOfficialReportAudit({
+          reportName: 'SF1',
+          trackingId: stamp.trackingId,
+          printedAt: stamp.printedAt,
+          action: 'VIEW',
+          sectionId: selectedSectionId,
+        });
+      } catch (err: unknown) {
+        const anyErr = err as { name?: string; code?: string };
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
+        if (!silent) {
+          setError(extractApiError(err, 'Could not load DepEd SF1 School Register.'));
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [selectedSectionId, globalSchool.school_id]
+  );
 
   useEffect(() => {
-    void fetchSF1();
+    void fetchSF1(false, false);
     return () => {
-      reportAbortRef.current?.abort();
+      abortRef.current?.abort();
     };
   }, [fetchSF1]);
 
-  const updateFitScale = useCallback(() => {
-    if (!viewportContainerRef.current) return;
-    const containerWidth = viewportContainerRef.current.clientWidth - 48;
-    const targetWidth = pageWidthInches * 96;
-    if (containerWidth > 0 && targetWidth > 0) {
-      const scale = containerWidth / targetWidth;
-      setZoomScale(Number(Math.min(1.15, Math.max(0.35, scale)).toFixed(3)));
-    }
-  }, [pageWidthInches]);
-
   useEffect(() => {
-    if (fitToWidth && !isPrinting && !exportingPdf) {
-      const timer = setTimeout(updateFitScale, 50);
-      window.addEventListener('resize', updateFitScale);
-      return () => {
-        clearTimeout(timer);
-        window.removeEventListener('resize', updateFitScale);
-      };
-    }
-  }, [fitToWidth, isPrinting, exportingPdf, updateFitScale, reportData, activePageConfig]);
-
-  const fontSizes = useMemo(() => {
-    const raw = (activePageConfig as any)?.fontSize;
-    let base = 5.2;
-
-    if (typeof raw === 'number' && raw > 0) {
-      base = raw;
-    } else if (raw === 'small' || raw === 'compact') {
-      base = 4.6;
-    } else if (raw === 'large') {
-      base = 5.8;
-    } else if (raw === 'xlarge') {
-      base = 6.4;
-    }
-
-    return {
-      table: `${base}pt`,
-      header: `${(base * 0.96).toFixed(1)}pt`,
-      subHeader: `${(base * 0.8).toFixed(1)}pt`,
-      legend: `${(base * 0.88).toFixed(1)}pt`,
-      footer: `${(base * 0.9).toFixed(1)}pt`,
+    const handleBeforePrint = () => {
+      refreshAuditMeta();
+      setIsPrinting(true);
     };
-  }, [activePageConfig]);
+    const handleAfterPrint = () => {
+      setIsPrinting(false);
+    };
+    window.addEventListener('beforeprint', handleBeforePrint);
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
+    };
+  }, [refreshAuditMeta]);
 
-  const availableAcademicYears = useMemo(() => {
-    const years = Array.from(
-      new Set(
-        [
-          reportData?.academic_year,
-          school.academic_year,
-          ...sections.map((s) => s.academic_year || s.school_year_code),
-        ].filter(Boolean)
-      )
-    ) as string[];
-    return years.length > 0 ? years : [getDynamicSchoolYear()];
-  }, [reportData, school.academic_year, sections]);
+  const cleanSearch = useMemo(() => sanitizeSearchText(searchQuery).toLowerCase(), [searchQuery]);
 
-  const cleanSearch = useMemo(() => sanitizeSearch(searchQuery).toLowerCase(), [searchQuery]);
-
-  const sortedCombinedLearners = useMemo(() => {
-    if (!reportData || reportData.has_enrolled_students === false) return [];
-    const raw = reportData.students || reportData.learners || [];
-    const sorted = [...raw].sort((a, b) => a.name.localeCompare(b.name));
-    if (!cleanSearch) return sorted;
-
-    return sorted.filter(
-      (l) => l.name.toLowerCase().includes(cleanSearch) || l.lrn.toLowerCase().includes(cleanSearch)
-    );
-  }, [reportData, cleanSearch]);
-
-  const { maleLearners, femaleLearners } = useMemo(() => {
-    if (!reportData || reportData.has_enrolled_students === false) {
-      return { maleLearners: [], femaleLearners: [] };
+  const { maleLearners, femaleLearners, combinedLearners } = useMemo(() => {
+    if (!reportData) {
+      return { maleLearners: [], femaleLearners: [], combinedLearners: [] };
     }
+    const rawAll = Array.isArray(reportData.students) ? reportData.students : [];
+    const rawMales = Array.isArray(reportData.males)
+      ? reportData.males
+      : rawAll.filter((s) => String(s.sex || '').toUpperCase().startsWith('M'));
+    const rawFemales = Array.isArray(reportData.females)
+      ? reportData.females
+      : rawAll.filter((s) => !String(s.sex || '').toUpperCase().startsWith('M'));
 
-    const rawMales =
-      reportData.males ||
-      (reportData.students || reportData.learners || []).filter(
-        (l) => l.sex === 'M' || l.sex === 'Male'
-      );
-    const rawFemales =
-      reportData.females ||
-      (reportData.students || reportData.learners || []).filter(
-        (l) => l.sex === 'F' || l.sex === 'Female'
-      );
+    const match = (s: SF1LearnerRow) =>
+      !cleanSearch ||
+      String(s.name || '').toLowerCase().includes(cleanSearch) ||
+      String(s.lrn || '').toLowerCase().includes(cleanSearch);
 
-    const sortedMales = [...rawMales].sort((a, b) => a.name.localeCompare(b.name));
-    const sortedFemales = [...rawFemales].sort((a, b) => a.name.localeCompare(b.name));
-
-    if (!cleanSearch) {
-      return { maleLearners: sortedMales, femaleLearners: sortedFemales };
-    }
+    const sortedAll = [...rawAll].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const sortedM = [...rawMales].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const sortedF = [...rawFemales].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
     return {
-      maleLearners: sortedMales.filter(
-        (l) => l.name.toLowerCase().includes(cleanSearch) || l.lrn.toLowerCase().includes(cleanSearch)
-      ),
-      femaleLearners: sortedFemales.filter(
-        (l) => l.name.toLowerCase().includes(cleanSearch) || l.lrn.toLowerCase().includes(cleanSearch)
-      ),
+      maleLearners: sortedM,
+      femaleLearners: sortedF,
+      combinedLearners: sortedAll,
     };
   }, [reportData, cleanSearch]);
 
-  const maleCount = useMemo(
-    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_male ?? maleLearners.length),
-    [reportData, maleLearners]
-  );
-  const femaleCount = useMemo(
-    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_female ?? femaleLearners.length),
-    [reportData, femaleLearners]
-  );
-  const totalCount = useMemo(
-    () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_combined ?? (maleCount + femaleCount)),
-    [reportData, maleCount, femaleCount]
+  const activeLearnerList = useMemo(
+    () => (groupingMode === 'COMBINED' ? combinedLearners : [...maleLearners, ...femaleLearners]),
+    [groupingMode, combinedLearners, maleLearners, femaleLearners]
   );
 
-  const activeStudentList = useMemo(() => {
-    return groupingMode === 'COMBINED' ? sortedCombinedLearners : [...maleLearners, ...femaleLearners];
-  }, [groupingMode, sortedCombinedLearners, maleLearners, femaleLearners]);
+  const maleCount = reportData?.total_male ?? maleLearners.length;
+  const femaleCount = reportData?.total_female ?? femaleLearners.length;
+  const totalCount = reportData?.total_combined ?? maleCount + femaleCount;
 
-  const isListEmpty = activeStudentList.length === 0;
-
-  const auditMeta = useMemo(() => {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const dateFormatted = now.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-    const timeFormatted = now.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true,
-    });
-    const printedAt = `${dateFormatted} at ${timeFormatted}`;
-
-    const schoolIdStr = reportData?.school_id || school.school_id || '';
-    const dateStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-    const timeCode = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const trackingId = `DOC-SF1-${schoolIdStr}-${dateStamp}-${timeCode}`;
-
-    return { printedAt, trackingId };
-  }, [reportData, school]);
-
-  const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
-    try {
-      await apiClient.post(API_ROUTES.reports.auditLogs, {
-        report_name: 'School Form 1 (SF1)',
-        document_tracking_id: auditMeta.trackingId,
-        section_id: selectedSectionId,
-        action: actionType,
-        printed_at: auditMeta.printedAt,
-        timestamp: new Date().toISOString(),
-      });
-    } catch {
-      // Non-blocking offline fallback
+  const paginatedLearners = useMemo(() => {
+    if (!reportData) return [];
+    if (pageConfig.layoutMode === 'pageless' || activeLearnerList.length === 0) {
+      return [activeLearnerList];
     }
-  };
+    const baseFirstRows = pageConfig.orientation === 'portrait' ? 26 : 18;
+    const baseNextRows = pageConfig.orientation === 'portrait' ? 36 : 26;
+    const heightScale = pageHeightInches / 8.5;
+    const rowsFirst = Math.max(10, Math.floor(baseFirstRows * heightScale));
+    const rowsNext = Math.max(14, Math.floor(baseNextRows * heightScale));
 
-  // Clean 2-Page Pagination without Blank Page Glitches
-  const paginatedPages = useMemo(() => {
-    if (activePageConfig.layoutMode === 'pageless') {
-      return [
-        {
-          pageNumber: 1,
-          totalPages: 1,
-          learners: activeStudentList,
-          startIndex: 0,
-          showFullHeader: true,
-          showFooter: true,
-        },
-      ];
+    if (activeLearnerList.length <= rowsFirst) {
+      return [activeLearnerList];
     }
 
-    const printableHeight = Math.max(
-      4,
-      pageHeightInches - (activePageConfig.margins.top || 0.25) - (activePageConfig.margins.bottom || 0.25)
-    );
-
-    const fullHeaderH = 1.35;
-    const theadH = 0.40;
-    const trackingH = 0.22;
-    const footerH = 2.45;
-    const rowH = 0.20;
-
-    const singlePageOverhead = fullHeaderH + theadH + footerH + trackingH;
-    const singlePageCapacity = Math.floor((printableHeight - singlePageOverhead) / rowH);
-
-    if (activeStudentList.length <= singlePageCapacity) {
-      return [
-        {
-          pageNumber: 1,
-          totalPages: 1,
-          learners: activeStudentList,
-          startIndex: 0,
-          showFullHeader: true,
-          showFooter: true,
-        },
-      ];
+    const pages: SF1LearnerRow[][] = [];
+    pages.push(activeLearnerList.slice(0, rowsFirst));
+    let idx = rowsFirst;
+    while (idx < activeLearnerList.length) {
+      pages.push(activeLearnerList.slice(idx, idx + rowsNext));
+      idx += rowsNext;
     }
-
-    // Clean 2-Page split: Page 1 holds full header & ~24 rows; Page 2 holds rest + summary/footer
-    const page1Capacity = Math.max(10, Math.floor((printableHeight - (fullHeaderH + theadH + trackingH)) / rowH));
-    const page1Learners = activeStudentList.slice(0, page1Capacity);
-    const page2Learners = activeStudentList.slice(page1Capacity);
-
-    return [
-      {
-        pageNumber: 1,
-        totalPages: 2,
-        learners: page1Learners,
-        startIndex: 0,
-        showFullHeader: true,
-        showFooter: false,
-      },
-      {
-        pageNumber: 2,
-        totalPages: 2,
-        learners: page2Learners,
-        startIndex: page1Capacity,
-        showFullHeader: false,
-        showFooter: true,
-      },
-    ];
-  }, [activePageConfig, activeStudentList, pageHeightInches]);
-
-  const parseGuardian = (name: string, rel: string) => {
-    const commonRel = ['MOTHER', 'FATHER', 'AUNT', 'UNCLE', 'GRANDMOTHER', 'GRANDFATHER', 'GUARDIAN'];
-    const cleanName = (name || '').trim();
-    const cleanRel = (rel || '').trim();
-
-    if (commonRel.includes(cleanName.toUpperCase()) && !commonRel.includes(cleanRel.toUpperCase())) {
-      return { gName: cleanRel, gRel: cleanName };
-    }
-    return { gName: cleanName, gRel: cleanRel === 'Mather' ? 'Mother' : cleanRel };
-  };
+    return pages;
+  }, [reportData, activeLearnerList, pageConfig.layoutMode, pageConfig.orientation, pageHeightInches]);
 
   const getBaseFilename = () => {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const cleanGrade = (reportData?.grade_level || 'Grade').replace(/[^a-zA-Z0-9]/g, '_');
-    const cleanSection = (reportData?.section_name || 'Section').replace(/[^a-zA-Z0-9]/g, '_');
-    return `SF1_Report_${cleanGrade}_${cleanSection}_${timestamp}`;
+    const sectionClean = (reportData?.section_name || 'Section').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const syClean = (reportData?.academic_year || 'SY').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `DepEd_SF1_${sectionClean}_${syClean}`;
   };
 
-  const handleToggleLayoutMode = (newMode: LayoutMode) => {
-    const updated: PageSetupConfig = { ...activePageConfig, layoutMode: newMode };
-    savePageConfig(updated, false);
-    setActivePageConfig(updated);
-  };
-
-  const saveFileWithPicker = async (
-    blob: Blob,
-    suggestedName: string,
-    mimeType: string,
-    extension: string,
-    description: string
-  ) => {
-    if ('showSaveFilePicker' in window) {
-      try {
-        const handle = await (window as any).showSaveFilePicker({
-          suggestedName,
-          types: [{ description, accept: { [mimeType]: [`.${extension}`] } }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        return;
-      } catch (err: any) {
-        if (err.name === 'AbortError') return;
-      }
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = suggestedName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  };
-
-  const handlePrint = () => {
-    void logReportAudit('PRINT');
+  const handleDirectPrint = () => {
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF1',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'PRINT',
+      sectionId: selectedSectionId,
+    });
     setIsPrinting(true);
-    if (printTimerRef.current) clearTimeout(printTimerRef.current);
-    printTimerRef.current = setTimeout(() => {
+    setTimeout(() => {
       window.print();
-      setIsPrinting(false);
-      printTimerRef.current = null;
-    }, 120);
+      setTimeout(() => setIsPrinting(false), 400);
+    }, 180);
   };
 
-  const handleDownloadPDF = async () => {
-    if (!reportRef.current || !reportData) return;
-    setExportingPdf(true);
-    void logReportAudit('PDF');
-    try {
-      let html2pdfInstance = (window as any).html2pdf;
-      if (!html2pdfInstance) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = HTML2PDF_CDN_URL;
-          script.integrity = HTML2PDF_SRI_HASH;
-          script.crossOrigin = 'anonymous';
-          script.referrerPolicy = 'no-referrer';
-          script.onload = () => resolve((window as any).html2pdf);
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-        html2pdfInstance = (window as any).html2pdf;
-      }
-
-      const opt = {
-        margin: [0, 0, 0, 0],
-        filename: `${getBaseFilename()}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          logging: false,
-          backgroundColor: activePageConfig.pageColor || '#ffffff',
-        },
-        jsPDF: {
-          unit: 'in',
-          format: [pageWidthInches, pageHeightInches],
-          orientation: activePageConfig.orientation,
-        },
-        pagebreak: activePageConfig.layoutMode === 'pageless' ? { mode: [] } : { mode: ['css', 'legacy'] },
-      };
-
-      const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
-      await saveFileWithPicker(pdfBlob, `${getBaseFilename()}.pdf`, 'application/pdf', 'pdf', 'PDF Document (*.pdf)');
-      showAlert({ title: 'PDF Exported', message: 'School Form 1 successfully saved.', type: 'success' });
-    } catch {
-      handlePrint();
-    } finally {
-      setExportingPdf(false);
-    }
-  };
-
-  const handleExportExcel = async () => {
-    if (!reportRef.current || !reportData) return;
-    logReportAudit('EXCEL');
-    const excelContent = `
-      <html>
-        <head><meta charset="utf-8"></head>
-        <body>
-          ${reportRef.current.innerHTML}
-          <br/>
-          <table border="0" style="font-size:7pt; color:#000000; font-family:Arial;">
-            <tr>
-              <td><strong>DOCUMENT TRACKING ID:</strong> ${auditMeta.trackingId}</td>
-              <td><strong>DATE &amp; TIME PRINTED:</strong> ${auditMeta.printedAt}</td>
-            </tr>
-          </table>
-        </body>
-      </html>
-    `;
-    const blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    await saveFileWithPicker(blob, `${getBaseFilename()}.xls`, 'application/vnd.ms-excel', 'xls', 'Excel Worksheet (*.xls)');
-    showAlert({ title: 'Excel Exported', message: 'SF1 spreadsheet exported successfully.', type: 'success' });
-  };
-
-  const handleExportWord = async () => {
-    if (!reportRef.current || !reportData) return;
-    logReportAudit('WORD');
-    const wordContent = `
-      <html>
-        <head><meta charset="utf-8"></head>
-        <body>
-          ${reportRef.current.innerHTML}
-          <br/>
-          <p style="font-size:7pt; color:#000000; font-family:Arial;">
-            <strong>DOCUMENT TRACKING ID:</strong> ${auditMeta.trackingId} &bull; 
-            <strong>DATE &amp; TIME PRINTED:</strong> ${auditMeta.printedAt}
-          </p>
-        </body>
-      </html>
-    `;
-    const blob = new Blob([wordContent], { type: 'application/msword;charset=utf-8;' });
-    await saveFileWithPicker(blob, `${getBaseFilename()}.doc`, 'application/msword', 'doc', 'Word Document (*.doc)');
-    showAlert({ title: 'Word Exported', message: 'SF1 document exported successfully.', type: 'success' });
-  };
-
-  const handleExportCSV = async () => {
-    if (!reportData) return;
-    void logReportAudit('CSV');
-    const headers = [
-      'No', 'LRN', 'Learner Name', 'Sex', 'Birth Date', 'Age',
-      'Birth Place', 'Mother Tongue', 'IP Ethnic Group', 'Religion',
-      'House Street', 'Barangay', 'Municipality City', 'Province',
-      'Father Name', 'Mother Maiden Name', 'Guardian Name', 'Guardian Relationship',
-      'Contact Number', 'Remarks',
-    ];
-
-    const rows = activeStudentList.map((l, idx) => {
-      const rawRel = l.guardian_relationship || (l as unknown as { guardian_rel?: string }).guardian_rel || '';
-      const { gName, gRel } = parseGuardian(l.guardian_name || '', rawRel);
-      return [
-        idx + 1,
-        l.lrn,
-        l.name,
-        l.sex || '',
-        l.birthdate || '',
-        l.age ?? '',
-        l.birth_place || l.province || '',
-        l.mother_tongue || '',
-        l.ethnic_group || '',
-        l.religion || '',
-        l.house_street || '',
-        l.barangay || '',
-        l.municipality_city || '',
-        l.province || '',
-        l.father_name || '',
-        l.mother_maiden_name || '',
-        gName,
-        gRel,
-        l.parent_contact || '',
-        l.remarks || '',
-      ];
+  const handleExportPdf = async (usePicker = false) => {
+    if (!reportData || !reportRef.current) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF1',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'PDF',
+      sectionId: selectedSectionId,
     });
 
-    if (exportToCsv(`${getBaseFilename()}.csv`, headers, rows)) {
-      showAlert({ title: 'CSV Exported', message: 'SF1 CSV export ready.', type: 'success' });
-    } else {
-      showAlert({ title: 'No Records', message: 'No enrolled student records to export.', type: 'warning' });
+    setIsExportingPdf(true);
+    setIsPrinting(true);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await exportElementToLocalPdf({
+        element: reportRef.current,
+        filename: `${getBaseFilename()}.pdf`,
+        pageWidthInches,
+        pageHeightInches,
+        orientation: pageConfig.orientation,
+        pageColor: pageConfig.pageColor,
+        pageless: pageConfig.layoutMode === 'pageless',
+        usePicker,
+      });
+    } catch {
+      showAlert({
+        title: 'Opening Print Dialog',
+        message: 'Choose "Save as PDF" in your browser print dialog.',
+        type: 'info',
+      });
+      handleDirectPrint();
+    } finally {
+      setIsPrinting(false);
+      setIsExportingPdf(false);
     }
   };
 
-  const handleExportJSON = async () => {
-    if (!reportData) return;
-    logReportAudit('JSON');
-    const exportPayload = {
-      tracking_id: auditMeta.trackingId,
-      date_and_time_printed: auditMeta.printedAt,
-      report_data: reportData,
-    };
-    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
-    await saveFileWithPicker(blob, `${getBaseFilename()}.json`, 'application/json', 'json', 'JSON Document (*.json)');
-    showAlert({ title: 'JSON Exported', message: 'SF1 JSON export ready.', type: 'success' });
+  const buildCsvRows = () => {
+    if (!reportData) return { headers: [] as string[], rows: [] as Array<Array<string | number>> };
+    const headers = [
+      'No',
+      'LRN',
+      'Learner Name (Last, First, Middle)',
+      'Sex',
+      'Birth Date',
+      'Age',
+      'Mother Tongue',
+      'IP (Ethnic Group)',
+      'Religion',
+      'House # / Street / Sitio / Purok',
+      'Barangay',
+      'Municipality / City',
+      'Province',
+      'Father Name',
+      'Mother Maiden Name',
+      'Guardian Name',
+      'Relationship',
+      'Contact Number',
+      'Remarks',
+    ];
+    const rows = activeLearnerList.map((st, idx) => {
+      const addr = splitAddressParts(st);
+      const { gName, gRel } = parseGuardianFields(st.guardian_name, st.guardian_relationship || st.guardian_rel);
+      return [
+        idx + 1,
+        st.lrn || '',
+        st.name || '',
+        st.sex || '',
+        st.birthdate || '',
+        st.age ?? '',
+        st.mother_tongue || '',
+        st.ethnic_group || '',
+        st.religion || '',
+        addr.street,
+        addr.brgy,
+        addr.city,
+        addr.prov,
+        st.father_name || '',
+        st.mother_maiden_name || '',
+        gName,
+        gRel,
+        st.parent_contact || '',
+        st.remarks || '',
+      ];
+    });
+    return { headers, rows };
   };
 
-  const renderTableHeader = () => (
-    <thead>
-      <tr>
-        <th rowSpan={2} style={{ width: '1.8%', ...headerCell, fontSize: fontSizes.header }}>#</th>
-        <th rowSpan={2} style={{ width: '6.6%', ...headerCell, fontSize: fontSizes.header }}>LRN</th>
-        <th rowSpan={2} style={{ width: '13.0%', ...headerCell, fontSize: fontSizes.header }}>
-          NAME<br />
-          <span style={subHeaderSpan}>(Last Name, First Name, Middle Name)</span>
-        </th>
-        <th rowSpan={2} style={{ width: '2.4%', ...headerCell, fontSize: fontSizes.header }}>Sex (M/F)</th>
-        <th rowSpan={2} style={{ width: '4.6%', ...headerCell, fontSize: fontSizes.header }}>
-          BIRTH DATE<br />
-          <span style={subHeaderSpan}>(mm/dd/yyyy)</span>
-        </th>
-        <th rowSpan={2} style={{ width: '3.4%', ...headerCell, fontSize: fontSizes.header }}>
-          AGE as of 1st<br />
-          <span style={subHeaderSpan}>Friday June</span>
-        </th>
-        <th rowSpan={2} style={{ width: '4.6%', ...headerCell, fontSize: fontSizes.header }}>
-          BIRTH PLACE<br />
-          <span style={subHeaderSpan}>(Province)</span>
-        </th>
-        <th rowSpan={2} style={{ width: '4.2%', ...headerCell, fontSize: fontSizes.header }}>MOTHER TONGUE</th>
-        <th rowSpan={2} style={{ width: '4.0%', ...headerCell, fontSize: fontSizes.header }}>
-          IP<br />
-          <span style={subHeaderSpan}>(Ethnic Group)</span>
-        </th>
-        <th rowSpan={2} style={{ width: '4.2%', ...headerCell, fontSize: fontSizes.header }}>RELIGION</th>
-        <th colSpan={4} style={{ textAlign: 'center', ...headerCell, fontSize: fontSizes.header }}>ADDRESS</th>
-        <th colSpan={2} style={{ textAlign: 'center', ...headerCell, fontSize: fontSizes.header }}>PARENTS</th>
-        <th colSpan={2} style={{ textAlign: 'center', ...headerCell, fontSize: fontSizes.header }}>GUARDIAN (if not Parent)</th>
-        <th rowSpan={2} style={{ width: '6.0%', ...headerCell, fontSize: fontSizes.header }}>
-          Contact Number of Parent or<br />Guardian
-        </th>
-        <th style={{ width: '6.2%', ...headerCell, fontSize: fontSizes.header }}>REMARKS</th>
+  const handleExportCsv = async (usePicker = false) => {
+    if (!reportData) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF1',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'CSV',
+      sectionId: selectedSectionId,
+    });
+    const { headers, rows } = buildCsvRows();
+    const filename = `${getBaseFilename()}.csv`;
+
+    if (usePicker) {
+      const escapeCell = (val: unknown) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+      const csvString =
+        '\uFEFF' + [headers.map(escapeCell).join(','), ...rows.map((r) => r.map(escapeCell).join(','))].join('\r\n');
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+      await saveBlobWithOptionalPicker(blob, filename, 'text/csv', 'csv', 'CSV Spreadsheet (*.csv)');
+    } else {
+      exportToCsv(filename, headers, rows);
+    }
+  };
+
+  const handleExportExcel = async (usePicker = false) => {
+    if (!reportData || !reportRef.current) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF1',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'EXCEL',
+      sectionId: selectedSectionId,
+    });
+    await exportElementToExcel(reportRef.current, getBaseFilename(), meta, usePicker);
+  };
+
+  const handleExportWord = async (usePicker = false) => {
+    if (!reportData || !reportRef.current) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF1',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'WORD',
+      sectionId: selectedSectionId,
+    });
+    await exportElementToWord(reportRef.current, getBaseFilename(), meta, usePicker);
+  };
+
+  const handleExportJson = async (usePicker = false) => {
+    if (!reportData) return;
+    const meta = refreshAuditMeta();
+    void logOfficialReportAudit({
+      reportName: 'SF1',
+      trackingId: meta.trackingId,
+      printedAt: meta.printedAt,
+      action: 'JSON',
+      sectionId: selectedSectionId,
+    });
+    await exportReportJson(getBaseFilename(), meta, reportData, usePicker);
+  };
+
+  const renderLearnerRow = (st: SF1LearnerRow, rowNum: number) => {
+    const addr = splitAddressParts(st);
+    const { gName, gRel } = parseGuardianFields(st.guardian_name, st.guardian_relationship || st.guardian_rel);
+    return (
+      <tr key={`${st.id || st.lrn}-${rowNum}`}>
+        <td style={tdCenter}>{rowNum}</td>
+        <td style={{ ...tdCenter, fontFamily: 'monospace', fontWeight: 700 }}>{st.lrn}</td>
+        <td style={{ ...tdLeft, fontWeight: 700 }}>{st.name}</td>
+        <td style={tdCenter}>{st.sex}</td>
+        <td style={tdCenter}>{st.birthdate}</td>
+        <td style={tdCenter}>{st.age}</td>
+        <td style={tdCenter}>{st.mother_tongue}</td>
+        <td style={tdCenter}>{st.ethnic_group}</td>
+        <td style={tdCenter}>{st.religion}</td>
+        <td style={tdLeft}>{addr.street}</td>
+        <td style={tdLeft}>{addr.brgy}</td>
+        <td style={tdLeft}>{addr.city}</td>
+        <td style={tdLeft}>{addr.prov}</td>
+        <td style={tdLeft}>{st.father_name}</td>
+        <td style={tdLeft}>{st.mother_maiden_name}</td>
+        <td style={tdLeft}>{gName}</td>
+        <td style={tdCenter}>{gRel}</td>
+        <td style={{ ...tdCenter, fontFamily: 'monospace' }}>{st.parent_contact}</td>
+        <td style={tdCenter}>{st.remarks}</td>
       </tr>
-      <tr>
-        <th style={{ width: '4.8%', ...headerCell, fontSize: fontSizes.subHeader }}>House #/ Street/ Sitio/ Purok</th>
-        <th style={{ width: '4.0%', ...headerCell, fontSize: fontSizes.subHeader }}>Barangay</th>
-        <th style={{ width: '4.4%', ...headerCell, fontSize: fontSizes.subHeader }}>Municipality/ City</th>
-        <th style={{ width: '4.0%', ...headerCell, fontSize: fontSizes.subHeader }}>Province</th>
-        <th style={{ width: '6.8%', ...headerCell, fontSize: fontSizes.subHeader }}>Father&apos;s Name</th>
-        <th style={{ width: '6.8%', ...headerCell, fontSize: fontSizes.subHeader }}>Mother&apos;s Maiden Name</th>
-        <th style={{ width: '4.6%', ...headerCell, fontSize: fontSizes.subHeader }}>Name</th>
-        <th style={{ width: '3.6%', ...headerCell, fontSize: fontSizes.subHeader }}>Relationship</th>
-        <th style={{ width: '6.2%', ...headerCell, fontSize: fontSizes.subHeader, lineHeight: 1.05 }}>
-          (Please refer to the<br />legend on last page)
-        </th>
-      </tr>
-    </thead>
-  );
+    );
+  };
 
-  const renderSummaryFooter = () => (
-    <div style={{ marginTop: 8, width: '100%' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', border: 'none' }}>
-        <tbody>
-          <tr style={{ verticalAlign: 'bottom' }}>
-            <td style={{ width: '56%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
-              <div style={{ fontWeight: 800, fontSize: '5.8pt', textAlign: 'center', marginBottom: 2, color: '#000000' }}>
-                List and Code of Indicators under REMARKS column
-              </div>
-              <table style={indicatorsTableStyle}>
-                <thead>
-                  <tr>
-                    <th style={{ width: '15%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Indicator</th>
-                    <th style={{ width: '5%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Code</th>
-                    <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Required Information</th>
-                    <th style={{ width: '15%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Indicator</th>
-                    <th style={{ width: '5%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Code</th>
-                    <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.legend }}>Required Information</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Transferred Out</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>T/O</td>
-                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of Public (P) Private (PR) School &amp; Effectivity Date</td>
-                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>CCT Recipient</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>CCT</td>
-                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>CCT Control Number &amp; Effectivity Date</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Transferred IN</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>T/I</td>
-                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of Public (P) Private (PR) School &amp; Effectivity Date</td>
-                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Balik-Aral</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>B/A</td>
-                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Name of school last attended &amp; Year</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Dropped</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>DRP</td>
-                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Reason and Effectivity Date</td>
-                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Learner With Disability</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>LWD</td>
-                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Specify</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Late Enrollment</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>LE</td>
-                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Reason (Enrollment beyond 1st Friday of June)</td>
-                    <td style={{ ...indicatorCellBold, fontSize: fontSizes.legend }}>Accelerated</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.legend }}>ACL</td>
-                    <td style={{ ...indicatorCellText, fontSize: fontSizes.legend }}>Specify Level &amp; Effectivity Date</td>
-                  </tr>
-                </tbody>
-              </table>
-            </td>
-
-            <td style={{ width: '14%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
-              <table style={summaryTableStyle}>
-                <thead>
-                  <tr>
-                    <th style={{ width: '40%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>REGISTERED</th>
-                    <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>BoSY</th>
-                    <th style={{ width: '30%', ...indicatorHeaderCell, fontSize: fontSizes.footer }}>EoSY</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>MALE</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.footer }}>{maleCount}</td>
-                    <td style={indicatorCellCenter}></td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>FEMALE</td>
-                    <td style={{ ...indicatorCellCenter, fontSize: fontSizes.footer }}>{femaleCount}</td>
-                    <td style={indicatorCellCenter}></td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...indicatorCellCenter, fontWeight: 700, fontSize: fontSizes.footer }}>TOTAL</td>
-                    <td style={{ ...indicatorCellCenter, fontWeight: 800, fontSize: fontSizes.footer }}>{totalCount}</td>
-                    <td style={indicatorCellCenter}></td>
-                  </tr>
-                </tbody>
-              </table>
-            </td>
-
-            <td style={{ width: '15%', paddingRight: 8, verticalAlign: 'bottom', border: 'none' }}>
-              <div style={signatureBlockStyle}>
-                <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 14, color: '#000000' }}>Prepared by :</div>
-                <div style={signatureLineStyle}>{reportData?.adviser_name}</div>
-                <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 2, color: '#000000' }}>(Signature of Adviser over Printed Name)</div>
-                <div style={datesRowStyle}>
-                  <span>BoSY Date: ________</span><span>EoSY Date: ________</span>
-                </div>
-              </div>
-            </td>
-
-            <td style={{ width: '15%', verticalAlign: 'bottom', border: 'none' }}>
-              <div style={signatureBlockStyle}>
-                <div style={{ fontSize: '5.2pt', fontWeight: 700, textAlign: 'left', marginBottom: 14, color: '#000000' }}>Certified Correct:</div>
-                <div style={signatureLineStyle}>{reportData?.school_head || school.principal_name}</div>
-                <div style={{ fontSize: '4.8pt', textAlign: 'center', marginTop: 2, color: '#000000' }}>(Signature of School Head over Printed Name)</div>
-                <div style={datesRowStyle}>
-                  <span>BoSY Date: ________</span><span>EoSY Date: ________</span>
-                </div>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      {/* Centralized Dynamic DepEd DMOS Footer Sourced From Database */}
-      <DepEdReportFooter
-        sealUrl={school.school_logo}
-        address={reportData?.school_address || school.address}
-        contactNumber={reportData?.school_contact || school.contact_number}
-        email={reportData?.school_email || school.email}
-        reportData={reportData}
-      />
-    </div>
-  );
-
-  const effectiveAcademicYear = selectedAcademicYear || reportData?.academic_year || availableAcademicYears[0] || '';
+  const schoolName = reportData?.school_name || globalSchool.school_name || '';
+  const schoolId = reportData?.school_id || globalSchool.school_id || '';
+  const schoolHead = reportData?.school_head || globalSchool.principal_name || '';
 
   return (
-    <div className="report-tab-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: tokens.bgApp }}>
-      <ReportNavBar
-        activeReportId={activeReportId}
-        onSelectReport={onSelectReport}
-        academicYears={availableAcademicYears}
-        selectedAcademicYear={effectiveAcademicYear}
-        onAcademicYearChange={setSelectedAcademicYear}
-        showAcademicYearFilter={true}
-        sections={sections}
-        selectedSectionId={selectedSectionId}
-        onSectionChange={setSelectedSectionId}
-        selectedGradeLevel={selectedGradeLevel}
-        onGradeLevelChange={setSelectedGradeLevel}
-        showGradeLevelFilter={true}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        showSearch={true}
-        layoutMode={activePageConfig.layoutMode}
-        onToggleLayoutMode={handleToggleLayoutMode}
-        showLayoutModeToggle={true}
-        onRefresh={fetchSF1}
-        isRefreshing={loading}
-        onOpenPageSetup={() => setIsPageSetupOpen(true)}
-        exportHandlers={{
-          onExportPdf: handleDownloadPDF,
-          onExportExcel: handleExportExcel,
-          onExportGoogleSheets: () => {
-            window.open('https://sheets.new', '_blank', 'noopener,noreferrer');
-          },
-          onExportWord: handleExportWord,
-          onExportGoogleDocs: () => {
-            window.open('https://docs.new', '_blank', 'noopener,noreferrer');
-          },
-          onExportCsv: handleExportCSV,
-          onExportJson: handleExportJSON,
-        }}
-        onPrint={handlePrint}
-        isExporting={exportingPdf}
-      />
+    <div
+      className="report-tab-root"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
+        backgroundColor: tokens.bgApp,
+      }}
+    >
+      <div className="no-print">
+        <ReportHeaderBar
+          activeReportId={activeReportId}
+          onSelectReport={onSelectReport}
+          documentTitle={
+            reportData
+              ? `SF1_Register_${reportData.section_name}_${reportData.academic_year}`
+              : 'DepEd_SF1_School_Register'
+          }
+          subtitle="Official DepEd School Form 1 (SF1) School Register"
+          isSavingPdf={isExportingPdf}
+          onOpenPageSetup={() => setIsPageSetupOpen(true)}
+          onPrint={handleDirectPrint}
+          onSavePdf={() => void handleExportPdf(false)}
+          onSavePdfAs={() => void handleExportPdf(true)}
+          onDownloadExcel={() => void handleExportExcel(false)}
+          onSaveExcelAs={() => void handleExportExcel(true)}
+          onDownloadCsv={() => void handleExportCsv(false)}
+          onSaveCsvAs={() => void handleExportCsv(true)}
+          onDownloadWord={() => void handleExportWord(false)}
+          onSaveWordAs={() => void handleExportWord(true)}
+          onDownloadJson={() => void handleExportJson(false)}
+          onSaveJsonAs={() => void handleExportJson(true)}
+        />
+      </div>
 
-      <div
-        className="no-print"
-        style={{
-          ...controlStripStyle,
-          backgroundColor: tokens.bgSurface,
-          borderBottom: `1px solid ${tokens.borderSubtle}`,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <label style={{ fontWeight: 700, color: tokens.textPrimary, fontSize: '0.80rem' }}>As of Date:</label>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              style={{ ...ui.input, width: 'auto', padding: '4px 8px', fontSize: '0.80rem' }}
-            />
-          </div>
+      <ReportViewerShell
+        loading={loading}
+        loadingMessage="Generating Official DepEd SF1 School Register..."
+        error={error}
+        hasData={Boolean(reportData)}
+        isPrinting={isPrinting}
+        isExportingPdf={isExportingPdf}
+        pageWidthInches={pageWidthInches}
+        pageHeightInches={pageHeightInches}
+        pageConfig={pageConfig}
+        sheetClassName="sf1-sheet-page"
+        documentId="sf1-official-document"
+        reportRef={reportRef}
+        leftToolbarContent={
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <BookOpen size={15} color={brand.primary} />
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary }}>Section:</span>
+              <select
+                aria-label="Select Class Section"
+                value={selectedSectionId}
+                onChange={(e) => setSelectedSectionId(e.target.value)}
+                style={{
+                  padding: '5px 10px',
+                  borderRadius: 6,
+                  fontSize: '0.80rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.bgInput,
+                  color: tokens.textPrimary,
+                }}
+              >
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.grade_level_name ? `${s.grade_level_name} - ` : ''}
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div style={{ height: 20, width: 1, backgroundColor: tokens.borderStrong }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.bgInput,
+                }}
+              >
+                <Search size={13} color={tokens.textMuted} />
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search name or LRN..."
+                  style={{
+                    border: 'none',
+                    outline: 'none',
+                    background: 'transparent',
+                    color: tokens.textPrimary,
+                    fontSize: '0.78rem',
+                    width: 155,
+                  }}
+                />
+              </div>
+            </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary }}>Class List Layout:</span>
-            <div style={{ display: 'flex', backgroundColor: tokens.bgSurfaceSubtle, padding: 2, borderRadius: 6, border: `1px solid ${tokens.borderStrong}` }}>
+            <div
+              style={{
+                display: 'flex',
+                backgroundColor: tokens.bgSurfaceSubtle,
+                padding: 2,
+                borderRadius: 6,
+                border: `1px solid ${tokens.borderStrong}`,
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setGroupingMode('COMBINED')}
                 style={{
-                  ...formatToggleBtn,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '4px 9px',
+                  borderRadius: 5,
+                  border: 'none',
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
                   backgroundColor: groupingMode === 'COMBINED' ? brand.buttonBg : 'transparent',
                   color: groupingMode === 'COMBINED' ? '#ffffff' : tokens.textSecondary,
                 }}
-                title="Single combined alphabetical class list (Default)"
               >
-                <Users size={12} />
-                <span>One List (Default)</span>
+                <Users size={12} /> One List
               </button>
-
               <button
                 type="button"
                 onClick={() => setGroupingMode('SEPARATED')}
                 style={{
-                  ...formatToggleBtn,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '4px 9px',
+                  borderRadius: 5,
+                  border: 'none',
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
                   backgroundColor: groupingMode === 'SEPARATED' ? brand.buttonBg : 'transparent',
                   color: groupingMode === 'SEPARATED' ? '#ffffff' : tokens.textSecondary,
                 }}
-                title="Separate male and female class list sections"
               >
-                <Split size={12} />
-                <span>Separate by Sex</span>
+                <Split size={12} /> By Sex
               </button>
             </div>
-          </div>
-        </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button
-            type="button"
-            onClick={() => {
-              setFitToWidth(true);
-              updateFitScale();
-            }}
-            style={{
-              ...toggleBtnStyle,
-              backgroundColor: fitToWidth ? tokens.primaryLight : tokens.bgSurfaceSubtle,
-              border: `1px solid ${fitToWidth ? brand.primary : tokens.borderStrong}`,
-              color: fitToWidth ? brand.primary : tokens.textSecondary,
-            }}
-          >
-            <Maximize2 size={13} /> Fit Screen ({Math.round(zoomScale * 100)}%)
-          </button>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button
               type="button"
-              aria-label="Zoom out"
-              onClick={() => {
-                setFitToWidth(false);
-                setZoomScale((prev) => Math.max(0.35, Number((prev - 0.05).toFixed(2))));
-              }}
+              onClick={() => void fetchSF1(true, true)}
+              disabled={loading || refreshing}
               style={{
-                ...zoomBtnStyle,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                border: `1px solid ${tokens.borderStrong}`,
-                color: tokens.textPrimary,
-              }}
-            >
-              <ZoomOut size={13} />
-            </button>
-            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem', color: tokens.textPrimary }}>
-              {Math.round(zoomScale * 100)}%
-            </span>
-            <button
-              type="button"
-              aria-label="Zoom in"
-              onClick={() => {
-                setFitToWidth(false);
-                setZoomScale((prev) => Math.min(1.4, Number((prev + 0.05).toFixed(2))));
-              }}
-              style={{
-                ...zoomBtnStyle,
-                backgroundColor: tokens.bgSurfaceSubtle,
-                border: `1px solid ${tokens.borderStrong}`,
-                color: tokens.textPrimary,
-              }}
-            >
-              <ZoomIn size={13} />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div ref={viewportContainerRef} className="report-viewer-viewport" style={viewerScrollContainerStyle}>
-        {loading ? (
-          <div style={{ ...loadingStateStyle, color: tokens.textSecondary }}>
-            <Loader2 className="animate-spin" size={28} color={brand.primary} />
-            <span>Generating School Form 1...</span>
-          </div>
-        ) : error ? (
-          <div
-            style={{
-              ...errorStateStyle,
-              color: brand.danger,
-              backgroundColor: tokens.dangerLight,
-              border: `1px solid ${brand.danger}`,
-            }}
-          >
-            <AlertCircle size={24} color={brand.danger} />
-            <span>{error}</span>
-          </div>
-        ) : reportData ? (
-          <div
-            style={{
-              width: isPrinting ? '100%' : `${pageWidthInches * zoomScale}in`,
-              maxWidth: '100%',
-              margin: '0 auto',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-            }}
-          >
-            <div
-              style={{
-                transform: isPrinting ? 'none' : `scale(${zoomScale})`,
-                transformOrigin: 'top center',
-                width: isPrinting ? '100%' : `${pageWidthInches}in`,
-                minWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                transition: isPrinting ? 'none' : 'transform 0.15s ease-out',
-                display: 'flex',
-                flexDirection: 'column',
+                display: 'inline-flex',
                 alignItems: 'center',
+                gap: 6,
+                padding: '5px 10px',
+                borderRadius: 6,
+                fontSize: '0.76rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                color: tokens.textPrimary,
               }}
             >
+              <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+              <span>Refresh</span>
+            </button>
+          </>
+        }
+      >
+        {reportData &&
+          paginatedLearners.map((pageRows, pageIdx) => {
+            const isFirstPage = pageIdx === 0;
+            const isLastPage = pageIdx === paginatedLearners.length - 1;
+            const totalSheetCount = paginatedLearners.length;
+            const startIdx = paginatedLearners.slice(0, pageIdx).reduce((sum, rows) => sum + rows.length, 0);
+
+            const pageMales = pageRows.filter((s) => String(s.sex || '').toUpperCase().startsWith('M'));
+            const pageFemales = pageRows.filter((s) => !String(s.sex || '').toUpperCase().startsWith('M'));
+
+            return (
               <div
-                id="sf1-print-document"
-                ref={reportRef}
-                style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+                key={pageIdx}
+                className="sf1-sheet-page"
+                style={{
+                  backgroundColor: pageConfig.pageColor || '#ffffff',
+                  color: '#000000',
+                  width: isPrinting ? '100%' : `${pageWidthInches}in`,
+                  minHeight: pageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
+                  paddingTop: `${pageConfig.margins.top}in`,
+                  paddingRight: `${pageConfig.margins.right}in`,
+                  paddingBottom: `${pageConfig.margins.bottom}in`,
+                  paddingLeft: `${pageConfig.margins.left}in`,
+                  marginBottom: isPrinting || isLastPage ? 0 : '20px',
+                  boxShadow: isPrinting ? 'none' : '0 4px 20px rgba(0, 0, 0, 0.22)',
+                  border: isPrinting ? 'none' : '1px solid #cbd5e1',
+                  boxSizing: 'border-box',
+                  fontFamily: 'Arial, Helvetica, sans-serif',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                }}
               >
-                {paginatedPages.map((page) => (
-                  <div
-                    key={`sf1-page-${page.pageNumber}`}
-                    className="sf1-page-sheet"
-                    style={{
-                      ...sheetWrapperStyle,
-                      width: isPrinting ? '100%' : `${pageWidthInches}in`,
-                      minWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                      maxWidth: isPrinting ? '100%' : `${pageWidthInches}in`,
-                      minHeight: activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
-                      boxShadow: isPrinting ? 'none' : '0 4px 24px rgba(0,0,0,0.12)',
-                      padding: `${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in`,
-                      backgroundColor: activePageConfig.pageColor || '#ffffff',
-                      fontSize: fontSizes.table,
-                    }}
-                  >
-                    {/* Header strictly on Page 1 */}
-                    {page.pageNumber === 1 && (
-                      <DepEdReportHeader
-                        formTitle="School Form 1 (SF 1) School Register"
-                        formSubtitle="(This replaces Form 1, Master List & STS Form 2-Family Background and Profile)"
-                        formType="SF1"
+                <div>
+                  {isFirstPage ? (
+                    <DepEdReportHeader
+                      formTitle="School Form 1 (SF 1) School Register"
+                      formSubtitle="(This replaces Form 1, Master List & STS Form 2-Family Background and Profile)"
+                      formType="SF1"
+                      reportData={reportData}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        borderBottom: '1.5px solid #000',
+                        paddingBottom: 4,
+                        marginBottom: 6,
+                        fontSize: '7.5pt',
+                        fontWeight: 700,
+                      }}
+                    >
+                      <span>
+                        School Form 1 (SF1) School Register — {schoolName} ({schoolId})
+                      </span>
+                      <span>
+                        {reportData.grade_level} - {reportData.section_name} | SY {reportData.academic_year} (Page {pageIdx + 1} of {totalSheetCount})
+                      </span>
+                    </div>
+                  )}
+
+                  <table style={sf1MainTable}>
+                    <thead>
+                      <tr>
+                        <th rowSpan={2} style={{ ...thCell, width: '2.2%' }}>#</th>
+                        <th rowSpan={2} style={{ ...thCell, width: '7.0%' }}>LRN</th>
+                        <th rowSpan={2} style={{ ...thCell, width: '12.5%' }}>
+                          NAME<br />
+                          <span style={subThText}>(Last Name, First Name, Middle Name)</span>
+                        </th>
+                        <th rowSpan={2} style={{ ...thCell, width: '2.4%' }}>
+                          Sex<br />
+                          <span style={subThText}>(M/F)</span>
+                        </th>
+                        <th rowSpan={2} style={{ ...thCell, width: '5.2%' }}>
+                          BIRTH DATE<br />
+                          <span style={subThText}>(mm/dd/yyyy)</span>
+                        </th>
+                        <th rowSpan={2} style={{ ...thCell, width: '2.6%' }}>
+                          AGE as of<br />1st Friday<br />June
+                        </th>
+                        <th rowSpan={2} style={{ ...thCell, width: '4.8%' }}>MOTHER<br />TONGUE</th>
+                        <th rowSpan={2} style={{ ...thCell, width: '4.6%' }}>
+                          IP<br />
+                          <span style={subThText}>(Ethnic Group)</span>
+                        </th>
+                        <th rowSpan={2} style={{ ...thCell, width: '4.6%' }}>RELIGION</th>
+                        <th colSpan={4} style={thCell}>ADDRESS</th>
+                        <th colSpan={2} style={thCell}>PARENTS</th>
+                        <th colSpan={2} style={thCell}>
+                          GUARDIAN <span style={subThText}>(If not Parent)</span>
+                        </th>
+                        <th rowSpan={2} style={{ ...thCell, width: '6.0%' }}>
+                          Contact Number<br />of Parent or<br />Guardian
+                        </th>
+                        <th rowSpan={2} style={{ ...thCell, width: '5.4%' }}>
+                          REMARKS<br />
+                          <span style={subThText}>(Refer to legend)</span>
+                        </th>
+                      </tr>
+                      <tr>
+                        <th style={{ ...thCell, width: '6.5%' }}>House #/ Street/<br />Sitio/ Purok</th>
+                        <th style={{ ...thCell, width: '5.5%' }}>Barangay</th>
+                        <th style={{ ...thCell, width: '5.8%' }}>Municipality/<br />City</th>
+                        <th style={{ ...thCell, width: '5.2%' }}>Province</th>
+                        <th style={{ ...thCell, width: '6.3%' }}>Father&apos;s Name</th>
+                        <th style={{ ...thCell, width: '6.3%' }}>Mother&apos;s Maiden Name</th>
+                        <th style={{ ...thCell, width: '4.0%' }}>Name</th>
+                        <th style={{ ...thCell, width: '3.5%' }}>Relation-<br />ship</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {pageRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={19} style={{ ...tdCenter, padding: '16px', fontStyle: 'italic' }}>
+                            No learners enrolled in Section {reportData.section_name} yet.
+                          </td>
+                        </tr>
+                      ) : groupingMode === 'COMBINED' ? (
+                        pageRows.map((st, idx) => renderLearnerRow(st, startIdx + idx + 1))
+                      ) : (
+                        <>
+                          {pageMales.length > 0 && (
+                            <>
+                              <tr style={{ backgroundColor: '#f1f5f9', fontWeight: 800 }}>
+                                <td colSpan={19} style={{ ...tdLeft, color: '#0284c7', paddingLeft: 6 }}>
+                                  MALE ({maleCount})
+                                </td>
+                              </tr>
+                              {pageMales.map((st) => {
+                                const mIdx = maleLearners.findIndex((m) => m.id === st.id || m.lrn === st.lrn);
+                                return renderLearnerRow(st, mIdx >= 0 ? mIdx + 1 : 1);
+                              })}
+                            </>
+                          )}
+                          {pageFemales.length > 0 && (
+                            <>
+                              <tr style={{ backgroundColor: '#fdf2f8', fontWeight: 800 }}>
+                                <td colSpan={19} style={{ ...tdLeft, color: '#db2777', paddingLeft: 6 }}>
+                                  FEMALE ({femaleCount})
+                                </td>
+                              </tr>
+                              {pageFemales.map((st) => {
+                                const fIdx = femaleLearners.findIndex((f) => f.id === st.id || f.lrn === st.lrn);
+                                return renderLearnerRow(st, fIdx >= 0 ? fIdx + 1 : 1);
+                              })}
+                            </>
+                          )}
+                        </>
+                      )}
+
+                      {isLastPage && activeLearnerList.length > 0 && (
+                        <>
+                          <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                            <td colSpan={3} style={{ ...tdLeft, paddingLeft: 8 }}>TOTAL MALE</td>
+                            <td style={tdCenter}>{maleCount}</td>
+                            <td colSpan={15} style={tdLeft} />
+                          </tr>
+                          <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                            <td colSpan={3} style={{ ...tdLeft, paddingLeft: 8 }}>TOTAL FEMALE</td>
+                            <td style={tdCenter}>{femaleCount}</td>
+                            <td colSpan={15} style={tdLeft} />
+                          </tr>
+                          <tr style={{ backgroundColor: '#e2e8f0', fontWeight: 900 }}>
+                            <td colSpan={3} style={{ ...tdLeft, paddingLeft: 8 }}>COMBINED TOTAL</td>
+                            <td style={tdCenter}>{totalCount}</td>
+                            <td colSpan={15} style={tdLeft} />
+                          </tr>
+                        </>
+                      )}
+                    </tbody>
+                  </table>
+
+                  {isLastPage && (
+                    <>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '48% 22% 28%',
+                          gap: '1%',
+                          marginTop: 8,
+                          alignItems: 'start',
+                        }}
+                      >
+                        <table style={legendTable}>
+                          <thead>
+                            <tr>
+                              <th colSpan={6} style={{ ...legendTh, textAlign: 'center', fontWeight: 800 }}>
+                                List and Code of Indicators under REMARKS column
+                              </th>
+                            </tr>
+                            <tr>
+                              <th style={legendTh}>Indicator</th>
+                              <th style={legendTh}>Code</th>
+                              <th style={legendTh}>Required Information</th>
+                              <th style={legendTh}>Indicator</th>
+                              <th style={legendTh}>Code</th>
+                              <th style={legendTh}>Required Information</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td style={legendTd}>Transferred Out</td>
+                              <td style={legendTdCenter}>T/O</td>
+                              <td style={legendTd}>Public (P) / Private (PR) School &amp; Date</td>
+                              <td style={legendTd}>CCT Recipient</td>
+                              <td style={legendTdCenter}>CCT</td>
+                              <td style={legendTd}>CCT Control # &amp; Effectivity Date</td>
+                            </tr>
+                            <tr>
+                              <td style={legendTd}>Transferred In</td>
+                              <td style={legendTdCenter}>T/I</td>
+                              <td style={legendTd}>Public (P) / Private (PR) School &amp; Date</td>
+                              <td style={legendTd}>Balik-Aral</td>
+                              <td style={legendTdCenter}>B/A</td>
+                              <td style={legendTd}>Name of school last attended &amp; Year</td>
+                            </tr>
+                            <tr>
+                              <td style={legendTd}>Dropped</td>
+                              <td style={legendTdCenter}>DRP</td>
+                              <td style={legendTd}>Reason and Effectivity Date</td>
+                              <td style={legendTd}>Learner w/ Disability</td>
+                              <td style={legendTdCenter}>LWD</td>
+                              <td style={legendTd}>Specify condition</td>
+                            </tr>
+                            <tr>
+                              <td style={legendTd}>Late Enrollment</td>
+                              <td style={legendTdCenter}>LE</td>
+                              <td style={legendTd}>Reason (beyond 1st Friday of June)</td>
+                              <td style={legendTd}>Accelerated</td>
+                              <td style={legendTdCenter}>ACL</td>
+                              <td style={legendTd}>Specify Level &amp; Effectivity Date</td>
+                            </tr>
+                          </tbody>
+                        </table>
+
+                        <table style={legendTable}>
+                          <thead>
+                            <tr>
+                              <th style={legendTh}>REGISTERED</th>
+                              <th style={legendTh}>BoSY</th>
+                              <th style={legendTh}>EoSY</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td style={{ ...legendTd, fontWeight: 700 }}>MALE</td>
+                              <td style={legendTdCenter}>{maleCount}</td>
+                              <td style={legendTdCenter}></td>
+                            </tr>
+                            <tr>
+                              <td style={{ ...legendTd, fontWeight: 700 }}>FEMALE</td>
+                              <td style={legendTdCenter}>{femaleCount}</td>
+                              <td style={legendTdCenter}></td>
+                            </tr>
+                            <tr style={{ fontWeight: 900, backgroundColor: '#f1f5f9' }}>
+                              <td style={legendTd}>TOTAL</td>
+                              <td style={legendTdCenter}>{totalCount}</td>
+                              <td style={legendTdCenter}></td>
+                            </tr>
+                          </tbody>
+                        </table>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: '6.2pt' }}>
+                          <div>
+                            <div style={{ fontWeight: 700, marginBottom: 14 }}>Prepared by:</div>
+                            <div style={{ borderBottom: '1px solid #000', textAlign: 'center', fontWeight: 800, textTransform: 'uppercase', paddingBottom: 1, minHeight: 13 }}>
+                              {reportData.adviser_name}
+                            </div>
+                            <div style={{ textAlign: 'center', fontSize: '5.5pt', marginTop: 2 }}>
+                              (Signature of Adviser over Printed Name)
+                            </div>
+                          </div>
+
+                          <div>
+                            <div style={{ fontWeight: 700, marginBottom: 14 }}>Certified Correct:</div>
+                            <div style={{ borderBottom: '1px solid #000', textAlign: 'center', fontWeight: 800, textTransform: 'uppercase', paddingBottom: 1, minHeight: 13 }}>
+                              {schoolHead}
+                            </div>
+                            <div style={{ textAlign: 'center', fontSize: '5.5pt', marginTop: 2 }}>
+                              (Signature of School Head over Printed Name)
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <DepEdReportFooter
+                        sealUrl={globalSchool.school_logo}
+                        address={reportData.school_address || globalSchool.address}
+                        contactNumber={reportData.school_contact || globalSchool.contact_number}
+                        email={reportData.school_email || globalSchool.email}
                         reportData={reportData}
                       />
-                    )}
+                    </>
+                  )}
+                </div>
 
-                    <table style={mainTableStyle}>
-                      {renderTableHeader()}
-                      <tbody>
-                        {isListEmpty ? (
-                          <tr>
-                            <td colSpan={20} style={{ textAlign: 'center', padding: '36px', fontWeight: 'bold', fontSize: '7.5pt' }}>
-                              {reportData.notice || `Notice: No students enrolled in Section ${reportData.section_name} as of ${selectedDate}.`}
-                            </td>
-                          </tr>
-                        ) : groupingMode === 'COMBINED' ? (
-                          <>
-                            {page.learners.map((learner, idx) => {
-                              const absoluteIndex = page.startIndex + idx;
-                              const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
-                              return (
-                                <tr key={`combined-${learner.id}`} style={dataRowStyle}>
-                                  <td style={centerCell}>{absoluteIndex + 1}</td>
-                                  <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
-                                  <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
-                                  <td style={centerCell}>{learner.sex}</td>
-                                  <td style={centerCell}>{learner.birthdate}</td>
-                                  <td style={centerCell}>{learner.age}</td>
-                                  <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
-                                  <td style={centerCell}>{learner.mother_tongue}</td>
-                                  <td style={centerCell}>{learner.ethnic_group}</td>
-                                  <td style={centerCell}>{learner.religion}</td>
-                                  <td style={leftCell}>{learner.house_street}</td>
-                                  <td style={leftCell}>{learner.barangay}</td>
-                                  <td style={leftCell}>{learner.municipality_city}</td>
-                                  <td style={leftCell}>{learner.province}</td>
-                                  <td style={leftCell}>{learner.father_name}</td>
-                                  <td style={leftCell}>{learner.mother_maiden_name}</td>
-                                  <td style={leftCell}>{gName}</td>
-                                  <td style={centerCell}>{gRel}</td>
-                                  <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
-                                  <td style={centerCell}>{learner.remarks}</td>
-                                </tr>
-                              );
-                            })}
-                            {page.showFooter && (
-                              <tr style={{ backgroundColor: '#e2e8f0', fontWeight: 900, borderTop: '1.5px solid #000' }}>
-                                <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 900 }}>
-                                  TOTAL ENROLLED LEARNERS
-                                </td>
-                                <td style={{ ...centerCell, fontWeight: 900 }}>{totalCount}</td>
-                                <td colSpan={16} style={{ ...leftCell, paddingLeft: 12, fontSize: '5pt', color: '#475569' }}>
-                                  (Male: <strong>{maleCount}</strong> &bull; Female: <strong>{femaleCount}</strong>)
-                                </td>
-                              </tr>
-                            )}
-                          </>
-                        ) : (
-                          (() => {
-                            const pageMales = page.learners.filter((l) => String(l.sex || '').toUpperCase().startsWith('M'));
-                            const pageFemales = page.learners.filter((l) => !String(l.sex || '').toUpperCase().startsWith('M'));
-                            const showMaleTotal = pageMales.length > 0 && (page.showFooter || pageFemales.length > 0);
-                            const showFemaleTotal = pageFemales.length > 0 && page.showFooter;
-                            return (
-                          <>
-                            {pageMales.length > 0 && (
-                              <>
-                                <tr style={{ backgroundColor: '#f1f5f9', fontWeight: 800 }}>
-                                  <td colSpan={20} style={{ padding: '2px 8px', fontSize: fontSizes.header, textAlign: 'left', color: '#0284c7' }}>
-                                    MALE
-                                  </td>
-                                </tr>
-                                {pageMales.map((learner) => {
-                                  const maleIdx = maleLearners.findIndex((m) => m.id === learner.id);
-                                  const rawRel = learner.guardian_relationship || (learner as unknown as { guardian_rel?: string }).guardian_rel || '';
-                                  const { gName, gRel } = parseGuardian(learner.guardian_name || '', rawRel);
-                                  return (
-                                    <tr key={`male-${learner.id}`} style={dataRowStyle}>
-                                      <td style={centerCell}>{maleIdx >= 0 ? maleIdx + 1 : ''}</td>
-                                      <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
-                                      <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
-                                      <td style={centerCell}>{learner.sex}</td>
-                                      <td style={centerCell}>{learner.birthdate}</td>
-                                      <td style={centerCell}>{learner.age}</td>
-                                      <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
-                                      <td style={centerCell}>{learner.mother_tongue}</td>
-                                      <td style={centerCell}>{learner.ethnic_group}</td>
-                                      <td style={centerCell}>{learner.religion}</td>
-                                      <td style={leftCell}>{learner.house_street}</td>
-                                      <td style={leftCell}>{learner.barangay}</td>
-                                      <td style={leftCell}>{learner.municipality_city}</td>
-                                      <td style={leftCell}>{learner.province}</td>
-                                      <td style={leftCell}>{learner.father_name}</td>
-                                      <td style={leftCell}>{learner.mother_maiden_name}</td>
-                                      <td style={leftCell}>{gName}</td>
-                                      <td style={centerCell}>{gRel}</td>
-                                      <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
-                                      <td style={centerCell}>{learner.remarks}</td>
-                                    </tr>
-                                  );
-                                })}
-                                {showMaleTotal && (
-                                  <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
-                                    <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 800 }}>
-                                      TOTAL MALE
-                                    </td>
-                                    <td style={centerCell}>{maleCount}</td>
-                                    <td colSpan={16} style={centerCell}></td>
-                                  </tr>
-                                )}
-                              </>
-                            )}
-
-                            {pageFemales.length > 0 && (
-                              <>
-                                <tr style={{ backgroundColor: '#fdf2f8', fontWeight: 800 }}>
-                                  <td colSpan={20} style={{ padding: '2px 8px', fontSize: fontSizes.header, textAlign: 'left', color: '#db2777' }}>
-                                    FEMALE
-                                  </td>
-                                </tr>
-                                {pageFemales.map((learner) => {
-                                  const femaleIdx = femaleLearners.findIndex((f) => f.id === learner.id);
-                                  const rawRel = learner.guardian_relationship || (learner as unknown as { guardian_rel?: string }).guardian_rel || '';
-                                  const { gName, gRel } = parseGuardian(learner.guardian_name || '', rawRel);
-                                  return (
-                                    <tr key={`female-${learner.id}`} style={dataRowStyle}>
-                                      <td style={centerCell}>{femaleIdx >= 0 ? femaleIdx + 1 : ''}</td>
-                                      <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
-                                      <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
-                                      <td style={centerCell}>{learner.sex}</td>
-                                      <td style={centerCell}>{learner.birthdate}</td>
-                                      <td style={centerCell}>{learner.age}</td>
-                                      <td style={centerCell}>{learner.birth_place || learner.province || ''}</td>
-                                      <td style={centerCell}>{learner.mother_tongue}</td>
-                                      <td style={centerCell}>{learner.ethnic_group}</td>
-                                      <td style={centerCell}>{learner.religion}</td>
-                                      <td style={leftCell}>{learner.house_street}</td>
-                                      <td style={leftCell}>{learner.barangay}</td>
-                                      <td style={leftCell}>{learner.municipality_city}</td>
-                                      <td style={leftCell}>{learner.province}</td>
-                                      <td style={leftCell}>{learner.father_name}</td>
-                                      <td style={leftCell}>{learner.mother_maiden_name}</td>
-                                      <td style={leftCell}>{gName}</td>
-                                      <td style={centerCell}>{gRel}</td>
-                                      <td style={{ ...centerCell, fontFamily: 'monospace' }}>{learner.parent_contact}</td>
-                                      <td style={centerCell}>{learner.remarks}</td>
-                                    </tr>
-                                  );
-                                })}
-                                {showFemaleTotal && (
-                                  <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
-                                    <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 800 }}>
-                                      TOTAL FEMALE
-                                    </td>
-                                    <td style={centerCell}>{femaleCount}</td>
-                                    <td colSpan={16} style={centerCell}></td>
-                                  </tr>
-                                )}
-                              </>
-                            )}
-
-                            {page.showFooter && (
-                              <tr style={{ backgroundColor: '#e2e8f0', fontWeight: 900, borderTop: '1.5px solid #000' }}>
-                                <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 900 }}>
-                                  COMBINED TOTAL
-                                </td>
-                                <td style={{ ...centerCell, fontWeight: 900 }}>{totalCount}</td>
-                                <td colSpan={16} style={centerCell}></td>
-                              </tr>
-                            )}
-                          </>
-                            );
-                          })()
-                        )}
-                      </tbody>
-                    </table>
-
-                    {page.showFooter && renderSummaryFooter()}
-
-                    <div style={auditFooterContainerStyle}>
-                      <div>
-                        <span>Document Tracking ID: <strong>{auditMeta.trackingId}</strong></span>
-                      </div>
-                      <div>
-                        <span>Date and Time Printed: <strong>{auditMeta.printedAt}</strong></span>
-                        {page.totalPages && page.totalPages > 1 && (
-                          <span> &bull; Page {page.pageNumber} of {page.totalPages}</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                <div
+                  style={{
+                    marginTop: 6,
+                    paddingTop: 3,
+                    borderTop: '0.8px dashed #000000',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    fontSize: '5.6pt',
+                    color: '#000000',
+                  }}
+                >
+                  <span>
+                    School Form 1 (SF1) — Page {pageIdx + 1} of {totalSheetCount}
+                  </span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                    PRINTED: {auditMeta.printedAt} &nbsp;|&nbsp; TRACKING ID: {auditMeta.trackingId}
+                  </span>
+                </div>
               </div>
-            </div>
-          </div>
-        ) : null}
-      </div>
+            );
+          })}
+      </ReportViewerShell>
 
       <PageSetupModal
         isOpen={isPageSetupOpen}
-        onClose={() => {
-          setActivePageConfig(savedPageConfig);
-          setIsPageSetupOpen(false);
-        }}
-        currentConfig={activePageConfig}
-        onLiveChange={(liveCfg) => setActivePageConfig(liveCfg)}
-        onApply={(finalCfg: PageSetupConfig, setAsDefault: boolean) => {
-          savePageConfig(finalCfg, setAsDefault);
-          setActivePageConfig(finalCfg);
-          setIsPageSetupOpen(false);
-        }}
+        currentConfig={pageConfig}
+        onLiveChange={setPageConfig}
+        onApply={(cfg) => setPageConfig(cfg)}
+        onClose={() => setIsPageSetupOpen(false)}
         reportTitle="SF1 School Register"
       />
-
-      <style>{`
-        @media print {
-          @page {
-            size: ${pageWidthInches}in ${pageHeightInches}in;
-            margin: 0 !important;
-          }
-          
-          .no-print,
-          nav,
-          aside,
-          header,
-          footer,
-          button,
-          input,
-          select {
-            display: none !important;
-          }
-
-          html,
-          body,
-          #root,
-          #root > div,
-          main,
-          .report-tab-root,
-          .report-viewer-viewport {
-            margin: 0 !important;
-            padding: 0 !important;
-            width: 100% !important;
-            min-width: 100% !important;
-            max-width: 100% !important;
-            height: auto !important;
-            min-height: 0 !important;
-            overflow: visible !important;
-            display: block !important;
-            background: #ffffff !important;
-            background-color: #ffffff !important;
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-          }
-
-          * {
-            -webkit-transform: none !important;
-            transform: none !important;
-            zoom: 1 !important;
-          }
-
-          #sf1-print-document {
-            width: 100% !important;
-            max-width: 100% !important;
-            min-width: 100% !important;
-            margin: 0 auto !important;
-            padding: 0 !important;
-            display: block !important;
-          }
-
-          .sf1-page-sheet {
-            width: ${pageWidthInches}in !important;
-            max-width: ${pageWidthInches}in !important;
-            min-width: ${pageWidthInches}in !important;
-            min-height: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`} !important;
-            box-sizing: border-box !important;
-            margin: 0 auto !important;
-            padding: ${activePageConfig.margins.top}in ${activePageConfig.margins.right}in ${activePageConfig.margins.bottom}in ${activePageConfig.margins.left}in !important;
-            box-shadow: none !important;
-            border: none !important;
-            background-color: ${activePageConfig.pageColor || '#ffffff'} !important;
-            page-break-after: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : 'always'} !important;
-            break-after: ${activePageConfig.layoutMode === 'pageless' ? 'auto' : 'page'} !important;
-          }
-
-          .sf1-page-sheet:last-child {
-            page-break-after: avoid !important;
-            break-after: avoid !important;
-          }
-
-          table {
-            width: 100% !important;
-            max-width: 100% !important;
-            table-layout: fixed !important;
-            page-break-inside: auto;
-          }
-
-          tr {
-            page-break-inside: avoid !important;
-            break-inside: avoid !important;
-          }
-        }
-      `}</style>
     </div>
   );
 };
 
-export default SF1ReportTab;
-
-const controlStripStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '8px 24px',
-  flexWrap: 'wrap',
-  gap: 10,
-};
-
-const formatToggleBtn: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '4px 9px',
-  borderRadius: 5,
-  border: 'none',
-  fontSize: '0.72rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-};
-
-const toggleBtnStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '4px 10px',
-  borderRadius: 6,
-  cursor: 'pointer',
-  fontSize: '0.76rem',
-  fontWeight: 700,
-};
-
-const zoomBtnStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 6,
-  cursor: 'pointer',
-};
-
-const viewerScrollContainerStyle: React.CSSProperties = {
-  flex: 1,
-  overflowY: 'auto',
-  overflowX: 'auto',
-  padding: '16px 20px',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
+const sf1MainTable: React.CSSProperties = {
   width: '100%',
-  boxSizing: 'border-box',
-};
-
-const sheetWrapperStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  boxShadow: '0 4px 24px rgba(0,0,0,0.14)',
-  margin: '0 auto 24px auto',
-  boxSizing: 'border-box',
-  fontFamily: 'Arial, sans-serif',
-  color: '#000000',
-  transition: 'all 0.15s ease',
-};
-
-const mainTableStyle: React.CSSProperties = {
-  width: '100%',
+  borderCollapse: 'collapse',
   tableLayout: 'fixed',
-  borderCollapse: 'collapse',
-  fontSize: '5.2pt',
-  border: '1.5px solid #000000',
+  border: '1.2px solid #000000',
 };
 
-const headerCell: React.CSSProperties = {
+const thCell: React.CSSProperties = {
   border: '1px solid #000000',
-  padding: '2px 1px',
-  backgroundColor: '#ffffff',
-  fontWeight: 700,
-  textAlign: 'center',
-  verticalAlign: 'middle',
-  color: '#000000',
-};
-
-const subHeaderSpan: React.CSSProperties = {
-  fontSize: '4.4pt',
-  fontWeight: 400,
-  fontStyle: 'italic',
-  color: '#000000',
-};
-
-const dataRowStyle: React.CSSProperties = {
-  borderBottom: '1px solid #000000',
-  verticalAlign: 'middle',
-  height: '17px',
-};
-
-const centerCell: React.CSSProperties = {
-  textAlign: 'center',
-  border: '1px solid #000000',
-  padding: '1px 1px',
-  color: '#000000',
-  whiteSpace: 'normal',
-  wordBreak: 'break-word',
-  lineHeight: 1.1,
-};
-
-const leftCell: React.CSSProperties = {
-  textAlign: 'left',
-  border: '1px solid #000000',
-  padding: '1px 2px',
-  color: '#000000',
-  whiteSpace: 'normal',
-  wordBreak: 'break-word',
-  lineHeight: 1.1,
-};
-
-const indicatorsTableStyle: React.CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  fontSize: '4.8pt',
-  border: '1px solid #000000',
-  color: '#000000',
-};
-
-const indicatorHeaderCell: React.CSSProperties = {
-  border: '1px solid #000000',
-  padding: '1px 2px',
-  fontWeight: 700,
-  textAlign: 'center',
-  backgroundColor: '#ffffff',
-  color: '#000000',
-};
-
-const indicatorCellBold: React.CSSProperties = {
-  border: '1px solid #000000',
-  padding: '1px 2px',
-  fontWeight: 600,
-  fontSize: '4.7pt',
-  color: '#000000',
-};
-
-const indicatorCellCenter: React.CSSProperties = {
-  border: '1px solid #000000',
-  padding: '1px',
-  textAlign: 'center',
-  fontWeight: 700,
-  fontSize: '4.8pt',
-  fontFamily: 'Arial, sans-serif',
-  color: '#000000',
-};
-
-const indicatorCellText: React.CSSProperties = {
-  border: '1px solid #000000',
-  padding: '1px 2px',
-  fontSize: '4.6pt',
-  lineHeight: 1.05,
-  color: '#000000',
-};
-
-const summaryTableStyle: React.CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  border: '1px solid #000000',
-  fontSize: '4.9pt',
-  color: '#000000',
-};
-
-const signatureBlockStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  width: '100%',
-  boxSizing: 'border-box',
-  color: '#000000',
-};
-
-const signatureLineStyle: React.CSSProperties = {
-  borderBottom: '1px solid #000000',
-  minHeight: 14,
-  display: 'flex',
-  alignItems: 'flex-end',
-  justifyContent: 'center',
+  padding: '2px 1.5px',
+  fontSize: '5.6pt',
   fontWeight: 800,
+  textAlign: 'center',
+  verticalAlign: 'middle',
+  backgroundColor: '#f1f5f9',
+  lineHeight: 1.08,
+  wordBreak: 'break-word',
+};
+
+const subThText: React.CSSProperties = {
+  fontSize: '4.7pt',
+  fontWeight: 400,
+};
+
+const tdLeft: React.CSSProperties = {
+  border: '1px solid #000000',
+  padding: '1.5px 2.5px',
   fontSize: '5.8pt',
-  textTransform: 'uppercase',
-  paddingBottom: 1,
-  color: '#000000',
+  textAlign: 'left',
+  verticalAlign: 'middle',
+  lineHeight: 1.12,
+  wordBreak: 'break-word',
 };
 
-const datesRowStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  fontSize: '4.8pt',
-  marginTop: 4,
-  color: '#000000',
+const tdCenter: React.CSSProperties = {
+  border: '1px solid #000000',
+  padding: '1.5px 1.5px',
+  fontSize: '5.8pt',
+  textAlign: 'center',
+  verticalAlign: 'middle',
+  lineHeight: 1.12,
+  wordBreak: 'break-word',
 };
 
-const auditFooterContainerStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  fontSize: '5pt',
-  color: '#000000',
-  marginTop: 6,
-  paddingTop: 3,
-  borderTop: '0.8px dashed #000000',
+const legendTable: React.CSSProperties = {
   width: '100%',
-  boxSizing: 'border-box',
+  borderCollapse: 'collapse',
+  border: '1px solid #000000',
+  fontSize: '5.4pt',
 };
 
-const loadingStateStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  gap: 12,
-  marginTop: 80,
-  fontWeight: 600,
+const legendTh: React.CSSProperties = {
+  border: '1px solid #000000',
+  padding: '1.5px 2.5px',
+  backgroundColor: '#f1f5f9',
+  fontWeight: 700,
 };
 
-const errorStateStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  marginTop: 80,
-  fontWeight: 600,
-  padding: '12px 20px',
-  borderRadius: 8,
+const legendTd: React.CSSProperties = {
+  border: '1px solid #000000',
+  padding: '1.5px 2.5px',
+  lineHeight: 1.1,
 };
+
+const legendTdCenter: React.CSSProperties = {
+  border: '1px solid #000000',
+  padding: '1.5px 2.5px',
+  textAlign: 'center',
+  fontWeight: 700,
+};
+
+export default SF1ReportTab;

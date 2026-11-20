@@ -5,17 +5,19 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.selectors import get_teacher_student_ids, resolve_teacher_for_user
 from common.audit import AuditedModelViewSet, record_audit_log
 from common.exceptions import AppError
 from common.permissions import get_user_role, is_school_leader
 from .models import ClassAttendance, DailyAttendance
 from .selectors import (
+    PASS_FACULTY_FIELD,
     get_adviser_matrix,
-    get_assigned_classes_with_rosters,
+    get_assigned_classes_with_class_lists,
     get_attendance_logs,
     get_exit_passes_for_user,
-    get_section_student_roster,
+    get_faculty_student_ids,
+    get_section_class_list,
+    resolve_faculty_for_user,
 )
 from .serializers import ExitPassSerializer
 from .services import (
@@ -145,8 +147,8 @@ class ClassAttendanceView(APIView):
             return Response({"error": "Attendance record not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if not is_school_leader(request.user):
-            teacher = resolve_teacher_for_user(request.user)
-            if not teacher or existing.student_id not in get_teacher_student_ids(teacher):
+            faculty_member = resolve_faculty_for_user(request.user)
+            if not faculty_member or existing.student_id not in get_faculty_student_ids(faculty_member):
                 return Response({"error": "You can only remove attendance for your assigned students."}, status=status.HTTP_403_FORBIDDEN)
 
         student_id = existing.student_id
@@ -170,14 +172,14 @@ class ClassAttendanceView(APIView):
         return Response({"ok": True, "success": True, "message": "Attendance record removed."})
 
 
-class AssignedClassRosterView(APIView):
+class AssignedClassListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         view_all = str(request.query_params.get("mode", "")).lower() == "all"
         summary_only = str(request.query_params.get("summary", "")).lower() in ("1", "true", "yes")
         return Response(
-            get_assigned_classes_with_rosters(
+            get_assigned_classes_with_class_lists(
                 user=request.user,
                 view_all=view_all,
                 include_students=not summary_only,
@@ -192,7 +194,7 @@ class SectionStudentListView(APIView):
     def get(self, request):
         sec_id = request.query_params.get("section_id") or request.query_params.get("section")
         parsed_id = int(sec_id) if (sec_id and str(sec_id).isdigit()) else None
-        return Response(get_section_student_roster(user=request.user, section_id=parsed_id, request=request))
+        return Response(get_section_class_list(user=request.user, section_id=parsed_id, request=request))
 
 
 class AdviserMatrixView(APIView):
@@ -226,8 +228,9 @@ class ExitPassViewSet(AuditedModelViewSet):
             raise AppError("FORBIDDEN", "Parent accounts cannot modify or delete exit passes.", 403)
         if is_school_leader(user):
             return
-        own_teacher = resolve_teacher_for_user(user)
-        if not own_teacher or (instance.issued_by_id != own_teacher.id and instance.teacher_id != own_teacher.id):
+        own_faculty = resolve_faculty_for_user(user)
+        pass_faculty_id = getattr(instance, f"{PASS_FACULTY_FIELD}_id", None)
+        if not own_faculty or (instance.issued_by_id != own_faculty.id and pass_faculty_id != own_faculty.id):
             raise AppError("FORBIDDEN", "You can only edit or remove exit passes you issued.", 403)
         if instance.status == "USED":
             raise AppError("PASS_LOCKED", "Used exit passes cannot be modified by non-administrators.", 400)

@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
+import { exportElementToLocalPdf } from '../../utils/reportExporters';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { ControlSwitch } from '../ui/ControlSwitch';
@@ -92,27 +93,6 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const HTML2PDF_CDN_URL =
-  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-const HTML2PDF_SRI_HASH =
-  'sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==';
-
-const loadHtml2PdfSecurely = (): Promise<any> => {
-  const existing = (window as unknown as { html2pdf?: any }).html2pdf;
-  if (existing) return Promise.resolve(existing);
-
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = HTML2PDF_CDN_URL;
-    script.integrity = HTML2PDF_SRI_HASH;
-    script.crossOrigin = 'anonymous';
-    script.referrerPolicy = 'no-referrer';
-    script.onload = () => resolve((window as unknown as { html2pdf?: any }).html2pdf);
-    script.onerror = () => reject(new Error('Failed to load verified PDF library.'));
-    document.head.appendChild(script);
-  });
-};
-
 export const DTRTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
   const { mode, tokens, brand, ui } = useTheme();
@@ -169,7 +149,6 @@ export const DTRTab: React.FC = () => {
     [facultyList, selectedFacultyId]
   );
 
-  // Load lightweight cached faculty dropdown once for leadership roles
   useEffect(() => {
     if (isFaculty) return;
     const controller = new AbortController();
@@ -199,7 +178,6 @@ export const DTRTab: React.FC = () => {
     };
   }, [isFaculty]);
 
-  // Reset dirty flag whenever target faculty, month, or year changes
   useEffect(() => {
     setHoursDirty(false);
   }, [selectedFacultyId, selectedMonth, selectedYear]);
@@ -299,7 +277,7 @@ export const DTRTab: React.FC = () => {
         days_present: Number(raw.days_present || 0),
       };
     },
-    [selectedFacultyId, selectedMonth, selectedYear, currentUserRole]
+    [selectedFacultyId, selectedMonth, selectedYear, currentUserRole, isFaculty]
   );
 
   const fetchDTR = useCallback(
@@ -358,7 +336,7 @@ export const DTRTab: React.FC = () => {
   );
 
   useEffect(() => {
-    fetchDTR(false, false);
+    void fetchDTR(false, false);
     return () => {
       abortRef.current?.abort();
     };
@@ -367,7 +345,7 @@ export const DTRTab: React.FC = () => {
   useEffect(() => {
     const timer = setInterval(() => {
       if (!isInteracting.current && document.visibilityState === 'visible') {
-        fetchDTR(true, true);
+        void fetchDTR(true, true);
       }
     }, 20000);
     return () => clearInterval(timer);
@@ -398,7 +376,7 @@ export const DTRTab: React.FC = () => {
             message: 'Your Daily Time Record was submitted for Department Head approval.',
             type: 'success',
           });
-          fetchDTR(true, true);
+          void fetchDTR(true, true);
         } catch (err) {
           showAlert({
             title: 'Submission Failed',
@@ -437,7 +415,7 @@ export const DTRTab: React.FC = () => {
             message: `Official DTR for ${dtrData.faculty_name} is now unlocked for printing.`,
             type: 'success',
           });
-          fetchDTR(true, true);
+          void fetchDTR(true, true);
         } catch (err) {
           showAlert({
             title: 'Approval Failed',
@@ -480,7 +458,7 @@ export const DTRTab: React.FC = () => {
       });
       setSelectedAlertRow(null);
       setExcuseRemarks('');
-      fetchDTR(true, true);
+      void fetchDTR(true, true);
     } catch (err) {
       showAlert({
         title: 'Action Denied',
@@ -505,17 +483,15 @@ export const DTRTab: React.FC = () => {
 
     setExportingPdf(true);
     try {
-      const html2pdfInstance = await loadHtml2PdfSecurely();
       const safeName = (dtrData.faculty_name || 'Faculty').replace(/[^a-zA-Z0-9]/g, '_');
-      const opt = {
-        margin: [0.15, 0.15, 0.15, 0.15],
+      await exportElementToLocalPdf({
+        element: printAreaRef.current,
         filename: `CSC_Form_48_${safeName}_${dtrData.month}_${dtrData.year}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false, scrollX: 0, scrollY: 0 },
-        jsPDF: { unit: 'in', format: 'legal', orientation: 'portrait' },
-        pagebreak: { mode: ['css', 'legacy'], after: '.csc-print-page' },
-      };
-      await html2pdfInstance().from(printAreaRef.current).set(opt).save();
+        pageWidthInches: 8.5,
+        pageHeightInches: 14.0,
+        orientation: 'portrait',
+        marginsInches: [0.15, 0.15, 0.15, 0.15],
+      });
     } catch {
       window.print();
     } finally {
@@ -725,7 +701,6 @@ export const DTRTab: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 'clamp(12px, 2vw, 20px)' }}>
-      {/* 1. Top Control Bar */}
       <div
         style={{
           ...ui.card,
@@ -827,7 +802,7 @@ export const DTRTab: React.FC = () => {
             variant="secondary"
             size="md"
             type="button"
-            onClick={() => fetchDTR(true, true)}
+            onClick={() => void fetchDTR(true, true)}
             disabled={loading || refreshing}
           >
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
@@ -867,7 +842,7 @@ export const DTRTab: React.FC = () => {
             variant="secondary"
             size="md"
             type="button"
-            onClick={handleDownloadPdf}
+            onClick={() => void handleDownloadPdf()}
             disabled={exportingPdf || !dtrData || !dtrData.dept_head_approved}
             title={!dtrData?.dept_head_approved ? 'Requires Department Head approval first' : 'Download PDF'}
           >
@@ -895,7 +870,6 @@ export const DTRTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Approval Status Banner */}
       {dtrData && (
         <div
           style={{
@@ -955,7 +929,6 @@ export const DTRTab: React.FC = () => {
         </div>
       )}
 
-      {/* 3. Working Hours Schedule Inputs */}
       <div
         style={{
           ...ui.subtleBox,
@@ -1024,14 +997,7 @@ export const DTRTab: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Printable CSC Form 48 Sheet Preview */}
-      <div
-        style={{
-          ...ui.subtleBox,
-          overflowX: 'auto',
-          padding: 16,
-        }}
-      >
+      <div style={{ ...ui.subtleBox, overflowX: 'auto', padding: 16 }}>
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 320, gap: 10 }}>
             <Loader2 className="animate-spin" size={26} color={brand.primary} />
@@ -1060,7 +1026,6 @@ export const DTRTab: React.FC = () => {
         ) : null}
       </div>
 
-      {/* 5. Principal Off-Campus Alert Review Modal */}
       {selectedAlertRow && (
         <Modal
           isOpen={Boolean(selectedAlertRow)}
@@ -1110,7 +1075,7 @@ export const DTRTab: React.FC = () => {
                 variant="primary"
                 size="md"
                 type="button"
-                onClick={handleExcuseAlertByPrincipal}
+                onClick={() => void handleExcuseAlertByPrincipal()}
                 disabled={actionProcessing}
                 style={{ backgroundColor: successBtnBg, borderColor: successBtnBg }}
               >

@@ -12,6 +12,7 @@ from apps.accounts.models import TeacherProfile, UserProfile
 from apps.school.models import ClassPeriod, GradeLevel, Room, SchoolSettings, SchoolYear, Section, Subject
 from apps.students.models import Enrollment, Student
 from common.qr_signer import sign_student_qr
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 User = get_user_model()
 
@@ -634,3 +635,87 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         self.assertEqual(self.client.post("/api/v1/reports/system-status/", {"action": "RETRY_FAILED"}, format="json").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/health/db/").status_code, 200)
         self.assertEqual(self.client.post("/api/v1/cache/flush/").status_code, 200)
+
+def test_07_students_bulk_csv_class_list_import_and_unsigned_qr_defense(self):
+        csv_body = (
+            "lrn,first_name,middle_name,last_name,suffix,sex,birthdate,section_name,grade_level,parent_contact,barangay,municipality_city,province\n"
+            "127901260501,Miguel,Reyes,Navarro,,Male,2013-03-12,Diamond,Grade 7,09171234501,Macasandig,Cagayan de Oro City,Misamis Oriental\n"
+            "127901260502,Angela,Cruz,Ramos,,Female,2013-08-24,Sapphire,Grade 8,09171234502,Nazareth,Cagayan de Oro City,Misamis Oriental\n"
+            "BADLRN,Invalid,Row,Test,,Male,2013-01-01,Diamond,Grade 7,09171234503,Carmen,Cagayan de Oro City,Misamis Oriental\n"
+        ).encode("utf-8")
+
+        # Non-leadership faculty must be blocked from bulk CSV import (403)
+        self.client.force_authenticate(user=self.faculty_user)
+        denied = self.client.post(
+            "/api/v1/students/bulk-import/",
+            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
+            format="multipart",
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        # Unsigned raw LRN scan must be rejected with 400 when ALLOW_LEGACY_UNSIGNED_QR=False
+        unsigned_scan = self.client.post(
+            "/api/v1/attendance/scan/",
+            {"qr_text": self.student.lrn, "schedule_id": self.period.id},
+            format="json",
+        )
+        self.assertEqual(unsigned_scan.status_code, 400)
+
+        # School leadership imports valid rows, auto-creates Sapphire, and skips invalid LRN
+        self.client.force_authenticate(user=self.admin_user)
+        res1 = self.client.post(
+            "/api/v1/students/bulk-import/",
+            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
+            format="multipart",
+        )
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(res1.data["created_count"], 2)
+        self.assertEqual(res1.data["skipped_count"], 1)
+
+        # Re-uploading updates existing LRNs cleanly without duplicating students
+        res2 = self.client.post(
+            "/api/v1/students/bulk-import/",
+            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
+            format="multipart",
+        )
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.data["created_count"], 0)
+        self.assertEqual(res2.data["updated_count"], 2)
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        csv_body = (
+            "lrn,first_name,middle_name,last_name,suffix,sex,birthdate,section_name,grade_level,parent_contact,barangay,municipality_city,province\n"
+            "127901260501,Miguel,Reyes,Navarro,,Male,2013-03-12,Diamond,Grade 7,09171234501,Macasandig,Cagayan de Oro City,Misamis Oriental\n"
+            "127901260502,Angela,Cruz,Ramos,,Female,2013-08-24,Sapphire,Grade 8,09171234502,Nazareth,Cagayan de Oro City,Misamis Oriental\n"
+            "BADLRN,Invalid,Row,Test,,Male,2013-01-01,Diamond,Grade 7,09171234503,Carmen,Cagayan de Oro City,Misamis Oriental\n"
+        ).encode("utf-8")
+
+        # Non-leadership faculty must be blocked (403)
+        self.client.force_authenticate(user=self.faculty_user)
+        denied = self.client.post(
+            "/api/v1/students/bulk-import/",
+            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
+            format="multipart",
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        # School leadership imports valid rows, auto-creates Sapphire, and skips invalid LRN
+        self.client.force_authenticate(user=self.admin_user)
+        res1 = self.client.post(
+            "/api/v1/students/bulk-import/",
+            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
+            format="multipart",
+        )
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(res1.data["created_count"], 2)
+        self.assertEqual(res1.data["skipped_count"], 1)
+
+        # Re-uploading updates existing LRNs cleanly without duplicating students
+        res2 = self.client.post(
+            "/api/v1/students/bulk-import/",
+            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
+            format="multipart",
+        )
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.data["created_count"], 0)
+        self.assertEqual(res2.data["updated_count"], 2)
