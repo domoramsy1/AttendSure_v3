@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { User } from 'lucide-react';
+import { isSafeImageUrl } from '../../theme/tokens';
 
 interface ProfileAvatarProps {
   photoUrl?: string | null;
@@ -26,13 +27,7 @@ export const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
     setImageFailed(false);
   }, [photoUrl]);
 
-  const hasPhoto = Boolean(
-    photoUrl &&
-      typeof photoUrl === 'string' &&
-      photoUrl.trim() !== '' &&
-      photoUrl.trim().toLowerCase() !== 'null' &&
-      photoUrl.trim().toLowerCase() !== 'undefined'
-  );
+  const hasPhoto = isSafeImageUrl(photoUrl);
 
   return (
     <div

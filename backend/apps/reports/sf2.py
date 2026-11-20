@@ -1,15 +1,43 @@
+# D:\AttendSure_V3\backend\apps\reports\sf2.py
+
 import calendar
-from datetime import date, timedelta
-from common.exceptions import AppError
+from datetime import date, datetime, timedelta
+
 from apps.attendance.models import ClassAttendance, DailyAttendance
 from apps.school.models import SchoolHoliday, Section
 from apps.school.selectors import get_school_metadata
 from apps.students.models import Enrollment
+from common.exceptions import AppError
 
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
+MONTH_ABBR = {name[:3].lower(): idx + 1 for idx, name in enumerate(MONTH_NAMES)}
+
+
+def resolve_month(raw_month) -> tuple[int, str]:
+    clean = str(raw_month or "").strip()
+    if not clean:
+        return 10, "October"
+    if clean.isdigit():
+        num = int(clean)
+        if 1 <= num <= 12:
+            return num, MONTH_NAMES[num - 1]
+        raise AppError("INVALID_MONTH", "Month must be between 1 and 12.", 400)
+    cap = clean.capitalize()
+    if cap in MONTH_NAMES:
+        return MONTH_NAMES.index(cap) + 1, cap
+    abbr_num = MONTH_ABBR.get(clean[:3].lower())
+    if abbr_num:
+        return abbr_num, MONTH_NAMES[abbr_num - 1]
+    raise AppError("INVALID_MONTH", f"Invalid month '{raw_month}'.", 400)
+
+
+def _as_date(val) -> date | None:
+    if isinstance(val, datetime):
+        return val.date()
+    return val
 
 
 def make_metric(m=0, f=0) -> dict:
@@ -34,8 +62,9 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
         raise AppError("SECTION_NOT_FOUND", f"Section {section_id} not found.", 404)
 
     year = int(year)
-    clean_month = str(month_name).capitalize()
-    month_num = MONTH_NAMES.index(clean_month) + 1 if clean_month in MONTH_NAMES else 10
+    if not (1900 <= year <= 2100):
+        raise AppError("INVALID_YEAR", "Year must be between 1900 and 2100.", 400)
+    month_num, clean_month = resolve_month(month_name)
     _, num_days = calendar.monthrange(year, month_num)
     month_start, month_end = date(year, month_num, 1), date(year, month_num, num_days)
 
@@ -49,6 +78,7 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
         if dt.weekday() < 5 and dt not in holiday_dates:
             day_nums.append(d)
             school_days.append({"dateNumber": d, "dayOfWeek": abbr[dt.weekday()], "fullDate": str(dt)})
+    school_day_set = set(day_nums)
 
     enrollments = list(
         Enrollment.objects.filter(section=section, student__is_active=True)
@@ -61,21 +91,38 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
     for row in DailyAttendance.objects.filter(
         section=section, student_id__in=student_ids, attendance_date__range=(month_start, month_end)
     ).values("student_id", "attendance_date", "status"):
-        records_by_st.setdefault(row["student_id"], {})[row["attendance_date"].day] = row["status"].lower()
+        day_val = row["attendance_date"].day
+        if day_val in school_day_set:
+            records_by_st.setdefault(row["student_id"], {})[day_val] = row["status"].lower()
 
-    for row in ClassAttendance.objects.filter(
-        student_id__in=student_ids, attendance_date__range=(month_start, month_end)
-    ).values("student_id", "attendance_date", "status"):
-        records_by_st.setdefault(row["student_id"], {}).setdefault(row["attendance_date"].day, row["status"].lower())
+    for row in (
+        ClassAttendance.objects.filter(
+            class_period__section=section,
+            student_id__in=student_ids,
+            attendance_date__range=(month_start, month_end),
+        )
+        .order_by("scanned_at")
+        .values("student_id", "attendance_date", "status")
+    ):
+        day_val = row["attendance_date"].day
+        if day_val in school_day_set:
+            records_by_st.setdefault(row["student_id"], {}).setdefault(day_val, row["status"].lower())
 
-    june_1 = date(year, 6, 1)
+    sy = section.school_year
+    sy_start_year = year
+    if sy and sy.code and "-" in sy.code and sy.code.split("-")[0].isdigit():
+        sy_start_year = int(sy.code.split("-")[0])
+    elif sy and sy.start_date:
+        sy_start_year = sy.start_date.year
+    june_1 = date(sy_start_year, 6, 1)
     cutoff = (
-        section.school_year.baseline_cutoff_date
-        if (section.school_year and section.school_year.baseline_cutoff_date)
+        sy.baseline_cutoff_date
+        if (sy and sy.baseline_cutoff_date)
         else (june_1 + timedelta(days=(4 - june_1.weekday()) % 7))
     )
 
     males, females = [], []
+    reg_m = reg_f = 0
     consec_m = consec_f = 0
     june_m = june_f = late_m = late_f = 0
     drop_m = drop_f = tout_m = tout_f = tin_m = tin_f = 0
@@ -83,15 +130,24 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
     for enr in enrollments:
         st = enr.student
         is_m = str(st.sex or "").upper().startswith("M")
-        att = records_by_st.get(st.id, {})
+        enr_date = _as_date(enr.enrollment_date) or month_start
+        exit_dt = _as_date(enr.status_date)
+        st_code = str(enr.status or "").upper()
+
+        if enr_date > month_end:
+            continue
+        if st_code in ("DROPPED", "TRANSFERRED_OUT") and exit_dt and exit_dt < month_start:
+            continue
+
+        att = {d: v for d, v in records_by_st.get(st.id, {}).items() if d in school_day_set}
         rec = {
             "id": st.id,
             "lrn": st.lrn,
             "name": st.full_name,
             "sex": "M" if is_m else "F",
             "attendance": att,
-            "total_absent": sum(1 for v in att.values() if v in ("absent", "x", "a")),
-            "total_tardy": sum(1 for v in att.values() if v in ("late", "tardy", "t")),
+            "total_absent": sum(1 for d in day_nums if att.get(d, "") in ("absent", "x", "a")),
+            "total_tardy": sum(1 for d in day_nums if att.get(d, "") in ("late", "tardy", "t")),
             "remarks": enr.remarks,
         }
         if is_m:
@@ -101,7 +157,6 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
             females.append(rec)
             consec_f += int(has_five_consecutive_absences(att, day_nums))
 
-        enr_date = enr.enrollment_date or month_start
         if enr_date <= cutoff:
             if is_m:
                 june_m += 1
@@ -113,31 +168,44 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
             else:
                 late_f += 1
 
-        st_code = str(enr.status or "").upper()
-        if st_code == "DROPPED":
+        exited_this_month = False
+        if st_code == "DROPPED" and (not exit_dt or (month_start <= exit_dt <= month_end)):
+            exited_this_month = True
             if is_m:
                 drop_m += 1
             else:
                 drop_f += 1
-        elif st_code == "TRANSFERRED_OUT":
+        elif st_code == "TRANSFERRED_OUT" and (not exit_dt or (month_start <= exit_dt <= month_end)):
+            exited_this_month = True
             if is_m:
                 tout_m += 1
             else:
                 tout_f += 1
-        elif st_code == "TRANSFERRED_IN":
+        elif st_code == "TRANSFERRED_IN" and (month_start <= enr_date <= month_end):
             if is_m:
                 tin_m += 1
             else:
                 tin_f += 1
 
+        if not exited_this_month:
+            if is_m:
+                reg_m += 1
+            else:
+                reg_f += 1
+
     n_days = len(school_days) or 1
     present_vals = {"present", "late", "tardy", "cutting", "excused"}
-    ada_m = round(sum(1 for m in males for v in m["attendance"].values() if v in present_vals) / n_days, 1)
-    ada_f = round(sum(1 for f in females for v in f["attendance"].values() if v in present_vals) / n_days, 1)
+    ada_m = round(
+        sum(1 for m in males for d in day_nums if m["attendance"].get(d, "") in present_vals) / n_days,
+        1,
+    )
+    ada_f = round(
+        sum(1 for f in females for d in day_nums if f["attendance"].get(d, "") in present_vals) / n_days,
+        1,
+    )
     ada_tot = round(ada_m + ada_f, 1)
 
-    tot_m, tot_f = len(males), len(females)
-    tot_all = tot_m + tot_f
+    reg_all = reg_m + reg_f
     tot_june = june_m + june_f
 
     return {
@@ -149,25 +217,26 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
         "year": year,
         "adviser_name": section.adviser.full_name if section.adviser else "",
         "school_days": school_days,
-        "has_enrolled_students": tot_all > 0,
+        "has_enrolled_students": len(males) + len(females) > 0,
         "males": males,
         "females": females,
         "metrics": {
             "enrolment_june": make_metric(june_m, june_f),
             "late_enrolment": make_metric(late_m, late_f),
-            "registered_end": make_metric(tot_m, tot_f),
+            "registered_end": make_metric(reg_m, reg_f),
             "percentage_enrolment": {
-                "m": round((tot_m / june_m) * 100, 1) if june_m else 0.0,
-                "f": round((tot_f / june_f) * 100, 1) if june_f else 0.0,
-                "total": round((tot_all / tot_june) * 100, 1) if tot_june else 0.0,
+                "m": round((reg_m / june_m) * 100, 1) if june_m else 0.0,
+                "f": round((reg_f / june_f) * 100, 1) if june_f else 0.0,
+                "total": round((reg_all / tot_june) * 100, 1) if tot_june else 0.0,
             },
             "average_daily_attendance": {"m": ada_m, "f": ada_f, "total": ada_tot},
             "percentage_attendance": {
-                "m": round((ada_m / tot_m) * 100, 1) if tot_m else 0.0,
-                "f": round((ada_f / tot_f) * 100, 1) if tot_f else 0.0,
-                "total": round((ada_tot / tot_all) * 100, 1) if tot_all else 0.0,
+                "m": round((ada_m / reg_m) * 100, 1) if reg_m else 0.0,
+                "f": round((ada_f / reg_f) * 100, 1) if reg_f else 0.0,
+                "total": round((ada_tot / reg_all) * 100, 1) if reg_all else 0.0,
             },
             "consecutive_5_absent_count": make_metric(consec_m, consec_f),
+            "consecutive_5": make_metric(consec_m, consec_f),
             "drop_out": make_metric(drop_m, drop_f),
             "transferred_out": make_metric(tout_m, tout_f),
             "transferred_in": make_metric(tin_m, tin_f),

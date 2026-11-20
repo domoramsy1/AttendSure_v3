@@ -76,8 +76,10 @@ export function useApiResource<T>(
         if (anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
         setError(extractApiError(err, 'Unable to load records.'));
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [endpoint, stableParams]

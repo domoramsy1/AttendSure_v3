@@ -1,6 +1,9 @@
-// D:\AttendSure_V3\mobile\src\screens\ProfileSettingsScreen.tsx
+/**
+ * AttendSure Mobile - Faculty Profile & Digital ID Pass
+ * File: mobile/src/screens/ProfileSettingsScreen.tsx
+ */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,14 +13,26 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import QRCode from 'react-native-qrcode-svg';
 import { Image } from 'expo-image';
 import { useAuth } from '../context/AuthContext';
+import { useThemeMode } from '../context/ThemeContext';
 import { apiClient } from '../api/client';
+import { getServerBaseUrl } from '../services/configService';
+import {
+  isSafeUrl,
+  cleanText,
+  getFriendlyErrorMessage,
+  type ThemePalette,
+} from '../constants/theme';
+
+const PROFILE_CACHE_KEY = 'attendsure_cached_faculty_profile';
 
 interface LiveFacultyProfile {
   id: number;
@@ -39,45 +54,92 @@ interface ExtendedSessionUser {
   id?: number | string;
   username?: string;
   name?: string;
+  full_name?: string;
   first_name?: string;
   last_name?: string;
   employee_id?: string;
+  faculty_id?: string;
   role?: string;
   device_id?: string;
   bound_device_id?: string;
 }
 
+const isCanceledError = (err: unknown): boolean => {
+  const e = err as { code?: string; name?: string };
+  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
+};
+
 export const ProfileSettingsScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user, logout } = useAuth();
+  const { palette, fonts } = useThemeMode();
+  const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
 
   const [profile, setProfile] = useState<LiveFacultyProfile | null>(null);
+  const [serverBase, setServerBase] = useState<string>('');
+  const [photoError, setPhotoError] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [qrTimestamp, setQrTimestamp] = useState<number>(Date.now());
 
-  // Fixed endpoint: points to verified 'me/' route instead of non-existent 'faculty/me/'
-  const fetchProfile = useCallback(async () => {
+  const isMountedRef = useRef<boolean>(true);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const fetchProfile = useCallback(async (fromCacheFirst = false) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    if (fromCacheFirst) {
+      try {
+        const [cached, base] = await Promise.all([
+          AsyncStorage.getItem(PROFILE_CACHE_KEY),
+          getServerBaseUrl(),
+        ]);
+        if (isMountedRef.current && !controller.signal.aborted) {
+          if (base) setServerBase(base);
+          if (cached) setProfile(JSON.parse(cached));
+        }
+      } catch {}
+    }
+
     try {
-      const res = await apiClient.get<LiveFacultyProfile>('me/', { timeout: 8000 });
+      const res = await apiClient.get<LiveFacultyProfile>('me/', {
+        timeout: 8000,
+        signal: controller.signal,
+      });
+      if (!isMountedRef.current || controller.signal.aborted) return;
       if (res.data) {
         setProfile(res.data);
+        setErrorBanner(null);
+        AsyncStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(res.data)).catch(() => {});
       }
-    } catch {
-      // Safe fallback to existing session
+    } catch (err: unknown) {
+      if (!isMountedRef.current || isCanceledError(err)) return;
+      setErrorBanner(getFriendlyErrorMessage(err, 'Showing saved profile details.'));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    fetchProfile();
+    isMountedRef.current = true;
+    void fetchProfile(true);
+    return () => {
+      isMountedRef.current = false;
+      abortRef.current?.abort();
+    };
   }, [fetchProfile]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setQrTimestamp(Date.now());
+      if (isMountedRef.current) {
+        setQrTimestamp(Date.now());
+      }
     }, 60000);
     return () => clearInterval(timer);
   }, []);
@@ -85,73 +147,142 @@ export const ProfileSettingsScreen: React.FC = () => {
   const onRefresh = () => {
     setRefreshing(true);
     setQrTimestamp(Date.now());
-    fetchProfile();
+    void fetchProfile(false);
   };
 
   const handleLogout = () => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm('Sign out of AttendSure on this device?')) {
+        void logout();
+      }
+      return;
+    }
+
     Alert.alert('Sign Out', 'Sign out of AttendSure on this device?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: async () => await logout() },
+      { text: 'Sign Out', style: 'destructive', onPress: () => void logout() },
     ]);
   };
 
   const sessionUser = user as ExtendedSessionUser | null;
-  const displayName = profile?.full_name || sessionUser?.name || sessionUser?.username || 'Employee';
-  const displayId = profile?.employee_id || sessionUser?.employee_id || 'ID Pending';
-  const displayPosition = profile?.position || sessionUser?.role || 'Academic Staff';
-  const displayDept = profile?.department || 'Department Unassigned';
-  const boundDeviceId = profile?.bound_device_id || sessionUser?.device_id || sessionUser?.bound_device_id || null;
+  const displayName = cleanText(
+    profile?.full_name ||
+      sessionUser?.full_name ||
+      sessionUser?.name ||
+      `${sessionUser?.first_name || ''} ${sessionUser?.last_name || ''}`.trim() ||
+      sessionUser?.username ||
+      'Faculty Member',
+    120
+  );
+  const displayId = cleanText(
+    profile?.employee_id || sessionUser?.employee_id || sessionUser?.faculty_id || '—',
+    40
+  );
+  const displayPosition = cleanText(profile?.position || sessionUser?.role || 'Faculty', 80);
+  const displayDept = cleanText(profile?.department || '—', 80);
+  const boundDeviceId =
+    profile?.bound_device_id || sessionUser?.device_id || sessionUser?.bound_device_id || null;
 
-  const gatePassPayload = JSON.stringify({
-    app: 'ATTENDSURE_GATE_V3',
+  const rawPhoto = profile?.photo_url || profile?.photo || null;
+  const candidatePhoto =
+    typeof rawPhoto === 'string' && rawPhoto.trim()
+      ? rawPhoto.startsWith('http://') ||
+        rawPhoto.startsWith('https://') ||
+        rawPhoto.startsWith('data:')
+        ? rawPhoto.trim()
+        : serverBase
+        ? `${serverBase.replace(/\/+$/, '')}/${rawPhoto.replace(/^\/+/, '')}`
+        : ''
+      : '';
+  const safePhoto = isSafeUrl(candidatePhoto) ? candidatePhoto : null;
+
+  useEffect(() => {
+    setPhotoError(false);
+  }, [safePhoto]);
+
+  const facultyPassPayload = JSON.stringify({
+    app: 'ATTENDSURE_FACULTY_PASS',
     emp_id: displayId,
     name: displayName,
     ts: qrTimestamp,
-    dev_id: boundDeviceId ? boundDeviceId.slice(0, 8) : 'UNBOUND',
+    dev_id: boundDeviceId ? cleanText(boundDeviceId, 16).slice(0, 8) : 'UNLINKED',
   });
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.appBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={22} color="#0f172a" />
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={20} color={palette.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.appBarTitle}>Faculty Profile &amp; Pass</Text>
-        <View style={{ width: 40 }} />
+        <View style={{ width: 36 }} />
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#004b87']} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[palette.primary]}
+            tintColor={palette.primary}
+          />
+        }
         showsVerticalScrollIndicator={false}
       >
+        {errorBanner ? (
+          <View style={styles.noticeBanner}>
+            <Ionicons name="information-circle-outline" size={16} color={palette.warning} />
+            <Text style={styles.noticeBannerText}>{errorBanner}</Text>
+          </View>
+        ) : null}
+
         <View style={styles.profileCard}>
           <View style={styles.avatarContainer}>
-            {profile?.photo_url || profile?.photo ? (
-              <Image source={{ uri: profile.photo_url || profile.photo || '' }} style={styles.avatarImage} contentFit="cover" />
+            {safePhoto && !photoError ? (
+              <Image
+                source={{ uri: safePhoto }}
+                style={styles.avatarImage}
+                contentFit="cover"
+                onError={() => setPhotoError(true)}
+              />
             ) : (
-              <Ionicons name="person" size={40} color="#004b87" />
+              <Ionicons name="person" size={40} color={palette.primary} />
             )}
           </View>
 
           <Text style={styles.profileName}>{displayName}</Text>
           <Text style={styles.profileRole}>{displayPosition}</Text>
-          <Text style={styles.profileDept}>{displayDept}</Text>
+          {displayDept !== '—' ? <Text style={styles.profileDept}>{displayDept}</Text> : null}
 
           <View style={styles.badgeRow}>
             <View style={styles.idBadge}>
-              <Ionicons name="card-outline" size={13} color="#004b87" />
+              <Ionicons name="card-outline" size={13} color={palette.primary} />
               <Text style={styles.idBadgeText}>ID: {displayId}</Text>
             </View>
 
-            <View style={[styles.statusBadge, boundDeviceId ? styles.statusActive : styles.statusPending]}>
+            <View
+              style={[
+                styles.statusBadge,
+                boundDeviceId ? styles.statusActive : styles.statusPending,
+              ]}
+            >
               <Ionicons
                 name={boundDeviceId ? 'shield-checkmark' : 'shield-outline'}
                 size={13}
-                color={boundDeviceId ? '#059669' : '#d97706'}
+                color={boundDeviceId ? palette.success : palette.warning}
               />
-              <Text style={[styles.statusBadgeText, { color: boundDeviceId ? '#059669' : '#d97706' }]}>
-                {boundDeviceId ? 'Hardware Paired' : 'Unbound'}
+              <Text
+                style={[
+                  styles.statusBadgeText,
+                  { color: boundDeviceId ? palette.success : palette.warning },
+                ]}
+              >
+                {boundDeviceId ? 'Device Linked' : 'Not Linked'}
               </Text>
             </View>
           </View>
@@ -159,29 +290,41 @@ export const ProfileSettingsScreen: React.FC = () => {
 
         <View style={styles.qrCard}>
           <View style={styles.qrHeader}>
-            <Ionicons name="qr-code-outline" size={20} color="#004b87" />
-            <Text style={styles.qrCardTitle}>Official Gate Clearance Pass</Text>
+            <Ionicons name="qr-code-outline" size={20} color={palette.primary} />
+            <Text style={styles.qrCardTitle}>Digital Faculty ID Pass</Text>
           </View>
           <Text style={styles.qrSubtitle}>
-            Verify your attendance using on-device facial recognition and campus GPS check-in.
+            Verify daily faculty attendance using on-device face check and campus GPS inside this
+            app.
           </Text>
 
           <View style={styles.qrWrapper}>
-            {loading ? (
-              <ActivityIndicator size="large" color="#004b87" />
+            {loading && !profile ? (
+              <ActivityIndicator size="large" color={palette.primary} />
             ) : (
-              <QRCode value={gatePassPayload} size={180} color="#004b87" backgroundColor="#ffffff" />
+              <QRCode
+                value={facultyPassPayload}
+                size={180}
+                color="#003460"
+                backgroundColor="#ffffff"
+              />
             )}
           </View>
 
           <View style={styles.qrFooter}>
-            <Ionicons name="sync-outline" size={13} color="#64748b" />
-            <Text style={styles.qrFooterText}>Auto-refreshes every 60s to prevent screenshot reuse</Text>
+            <Ionicons name="sync-outline" size={13} color={palette.textMuted} />
+            <Text style={styles.qrFooterText}>
+              Refreshes every 60 seconds to prevent screenshot reuse
+            </Text>
           </View>
         </View>
 
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
-          <Ionicons name="log-out-outline" size={18} color="#dc2626" />
+        <TouchableOpacity
+          style={styles.logoutButton}
+          onPress={handleLogout}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="log-out-outline" size={18} color={palette.onPrimary} />
           <Text style={styles.logoutText}>Sign Out of Device</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -189,113 +332,141 @@ export const ProfileSettingsScreen: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc' },
-  appBar: {
-    height: 54,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f1f5f9',
-  },
-  appBarTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
-  scrollContent: { padding: 16, gap: 14, paddingBottom: 60 },
-  profileCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 18,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  avatarContainer: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: '#e6f0fa',
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-    borderWidth: 2,
-    borderColor: '#b8d6f0',
-  },
-  avatarImage: { width: '100%', height: '100%' },
-  profileName: { fontSize: 17, fontWeight: '800', color: '#0f172a', textAlign: 'center' },
-  profileRole: { fontSize: 12.5, fontWeight: '700', color: '#004b87', marginTop: 2 },
-  profileDept: { fontSize: 11.5, color: '#64748b', marginTop: 1 },
-  badgeRow: { flexDirection: 'row', gap: 6, marginTop: 12 },
-  idBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    backgroundColor: '#f0f9ff',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#bae6fd',
-  },
-  idBadgeText: { fontSize: 10.5, fontWeight: '700', color: '#004b87' },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  statusActive: { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' },
-  statusPending: { backgroundColor: '#fffbeb', borderColor: '#fde68a' },
-  statusBadgeText: { fontSize: 10.5, fontWeight: '700' },
-  qrCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 18,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  qrHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  qrCardTitle: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
-  qrSubtitle: { fontSize: 11, color: '#64748b', textAlign: 'center', marginBottom: 14, lineHeight: 16 },
-  qrWrapper: {
-    padding: 14,
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 200,
-  },
-  qrFooter: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 12 },
-  qrFooterText: { fontSize: 10.5, color: '#64748b' },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: '#fee2e2',
-    borderWidth: 1,
-    borderColor: '#fca5a5',
-    marginTop: 4,
-  },
-  logoutText: { fontSize: 13, fontWeight: '800', color: '#dc2626' },
-});
+const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMode>['fonts']) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: palette.background },
+    appBar: {
+      height: 54,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      backgroundColor: palette.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: palette.border,
+    },
+    backButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: palette.surfaceSubtle,
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    appBarTitle: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    scrollContent: { padding: 16, gap: 14, paddingBottom: 60 },
+    noticeBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      padding: 10,
+      borderRadius: 10,
+      backgroundColor: palette.warningLight,
+      borderWidth: 1,
+      borderColor: palette.warning,
+    },
+    noticeBannerText: { flex: 1, fontSize: fonts.xs, color: palette.textPrimary },
+    profileCard: {
+      backgroundColor: palette.surface,
+      borderRadius: 14,
+      padding: 18,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    avatarContainer: {
+      width: 76,
+      height: 76,
+      borderRadius: 38,
+      backgroundColor: palette.primarySoft,
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 10,
+      borderWidth: 2,
+      borderColor: palette.primary,
+    },
+    avatarImage: { width: '100%', height: '100%' },
+    profileName: {
+      fontSize: fonts.lg,
+      fontWeight: fonts.weight.extrabold,
+      color: palette.textPrimary,
+      textAlign: 'center',
+    },
+    profileRole: {
+      fontSize: fonts.sm,
+      fontWeight: fonts.weight.bold,
+      color: palette.primary,
+      marginTop: 2,
+    },
+    profileDept: { fontSize: fonts.xs, color: palette.textSecondary, marginTop: 1 },
+    badgeRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 12 },
+    idBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingVertical: 4,
+      paddingHorizontal: 8,
+      backgroundColor: palette.primarySoft,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    idBadgeText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.primary },
+    statusBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingVertical: 4,
+      paddingHorizontal: 8,
+      borderRadius: 6,
+      borderWidth: 1,
+    },
+    statusActive: { backgroundColor: palette.successLight, borderColor: palette.success },
+    statusPending: { backgroundColor: palette.warningLight, borderColor: palette.warning },
+    statusBadgeText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold },
+    qrCard: {
+      backgroundColor: palette.surface,
+      borderRadius: 14,
+      padding: 18,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    qrHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+    qrCardTitle: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    qrSubtitle: {
+      fontSize: fonts.xs,
+      color: palette.textSecondary,
+      textAlign: 'center',
+      marginBottom: 14,
+      lineHeight: 16,
+    },
+    qrWrapper: {
+      padding: 14,
+      backgroundColor: '#ffffff',
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: palette.borderStrong,
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 208,
+    },
+    qrFooter: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 12 },
+    qrFooterText: { fontSize: fonts.xs, color: palette.textSecondary, textAlign: 'center' },
+    logoutButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 13,
+      borderRadius: 12,
+      backgroundColor: palette.dangerBg,
+      marginTop: 4,
+    },
+    logoutText: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.onPrimary },
+  });
 
 export default ProfileSettingsScreen;

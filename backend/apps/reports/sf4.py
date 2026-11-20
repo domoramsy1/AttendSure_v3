@@ -1,15 +1,15 @@
+# D:\AttendSure_V3\backend\apps\reports\sf4.py
+
 import calendar
 from datetime import date, datetime
 from django.db.models import Q
+
 from apps.attendance.models import ClassAttendance, DailyAttendance
 from apps.school.models import GradeLevel, SchoolHoliday, SchoolYear, Section
 from apps.school.selectors import get_school_metadata
 from apps.students.models import Enrollment
-
-MONTH_MAP = {
-    "January": 1, "February": 2, "March": 3, "April": 4, "May": 5, "June": 6,
-    "July": 7, "August": 8, "September": 9, "October": 10, "November": 11, "December": 12,
-}
+from common.exceptions import AppError
+from .sf2 import resolve_month
 
 
 def make_triplet(m=0, f=0) -> dict:
@@ -71,9 +71,10 @@ SUMMABLE_KEYS = (
 
 
 def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school_year: str = "", request=None) -> dict:
-    clean_month = str(month_name).capitalize()
-    month_num = MONTH_MAP.get(clean_month, 10)
+    month_num, clean_month = resolve_month(month_name)
     year = int(year)
+    if not (1900 <= year <= 2100):
+        raise AppError("INVALID_YEAR", "Year must be between 1900 and 2100.", 400)
     _, num_days = calendar.monthrange(year, month_num)
     start_dt, end_dt = date(year, month_num, 1), date(year, month_num, num_days)
 
@@ -95,6 +96,8 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
             if sy_clean.isdigit()
             else SchoolYear.objects.filter(code__iexact=sy_clean).first()
         )
+    if target_sy is None:
+        target_sy = SchoolYear.objects.filter(is_active=True).first() or SchoolYear.objects.first()
 
     sections_qs = Section.objects.select_related("grade_level", "school_year", "adviser").filter(is_active=True)
     if target_sy:
@@ -116,6 +119,7 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
     if all_student_ids:
         present_pairs.update(
             DailyAttendance.objects.filter(
+                section__in=sections,
                 student_id__in=all_student_ids,
                 attendance_date__range=(start_dt, end_dt),
                 status__in=present_codes,
@@ -123,6 +127,7 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
         )
         present_pairs.update(
             ClassAttendance.objects.filter(
+                class_period__section__in=sections,
                 student_id__in=all_student_ids,
                 attendance_date__range=(start_dt, end_dt),
                 status__in=present_codes,
@@ -158,10 +163,11 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
                     else:
                         drop_prev_f += 1
                     continue
-                if is_m:
-                    drop_mo_m += 1
-                else:
-                    drop_mo_f += 1
+                if not exit_dt or exit_dt <= end_dt:
+                    if is_m:
+                        drop_mo_m += 1
+                    else:
+                        drop_mo_f += 1
             elif "TRANSFERRED" in status_val and "OUT" in status_val:
                 if exit_dt and exit_dt < start_dt:
                     if is_m:
@@ -169,10 +175,11 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
                     else:
                         tout_prev_f += 1
                     continue
-                if is_m:
-                    tout_mo_m += 1
-                else:
-                    tout_mo_f += 1
+                if not exit_dt or exit_dt <= end_dt:
+                    if is_m:
+                        tout_mo_m += 1
+                    else:
+                        tout_mo_f += 1
 
             if "TRANSFERRED" in status_val and "IN" in status_val:
                 if enr_dt and enr_dt < start_dt:
@@ -191,38 +198,39 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
                     reg_m += 1
                 else:
                     reg_f += 1
-
-            for s_day in school_days:
-                if (st.id, s_day) in present_pairs:
-                    if is_m:
-                        att_m += 1
-                    else:
-                        att_f += 1
+                for s_day in school_days:
+                    if (st.id, s_day) in present_pairs:
+                        if is_m:
+                            att_m += 1
+                        else:
+                            att_f += 1
 
         reg = make_triplet(reg_m, reg_f)
         ada = make_triplet(round(att_m / n_days, 1), round(att_f / n_days, 1))
         d_prev, d_mo = make_triplet(drop_prev_m, drop_prev_f), make_triplet(drop_mo_m, drop_mo_f)
         to_prev, to_mo = make_triplet(tout_prev_m, tout_prev_f), make_triplet(tout_mo_m, tout_mo_f)
-        ti_prev, ti_mo = make_triplet(tin_prev_m, tin_prev_f), make_triplet(tin_mo_mo if False else tin_mo_m, tin_mo_f)
+        ti_prev, ti_mo = make_triplet(tin_prev_m, tin_prev_f), make_triplet(tin_mo_m, tin_mo_f)
 
-        groups_map.setdefault(g_label, []).append({
-            "section_id": sec.id,
-            "section_name": sec.name,
-            "grade_level": g_label,
-            "adviser_name": adviser_label,
-            "registered_end": reg,
-            "daily_average": ada,
-            "attendance_percentage": compute_attendance_pct(ada, reg),
-            "dropped_out_prev": d_prev,
-            "dropped_out_month": d_mo,
-            "dropped_out_cumulative": add_triplets(d_prev, d_mo),
-            "transferred_out_prev": to_prev,
-            "transferred_out_month": to_mo,
-            "transferred_out_cumulative": add_triplets(to_prev, to_mo),
-            "transferred_in_prev": ti_prev,
-            "transferred_in_month": ti_mo,
-            "transferred_in_cumulative": add_triplets(ti_prev, ti_mo),
-        })
+        groups_map.setdefault(g_label, []).append(
+            {
+                "section_id": sec.id,
+                "section_name": sec.name,
+                "grade_level": g_label,
+                "adviser_name": adviser_label,
+                "registered_end": reg,
+                "daily_average": ada,
+                "attendance_percentage": compute_attendance_pct(ada, reg),
+                "dropped_out_prev": d_prev,
+                "dropped_out_month": d_mo,
+                "dropped_out_cumulative": add_triplets(d_prev, d_mo),
+                "transferred_out_prev": to_prev,
+                "transferred_out_month": to_mo,
+                "transferred_out_cumulative": add_triplets(to_prev, to_mo),
+                "transferred_in_prev": ti_prev,
+                "transferred_in_month": ti_mo,
+                "transferred_in_cumulative": add_triplets(ti_prev, ti_mo),
+            }
+        )
 
     grade_groups = []
     total_summary = empty_summary_row("grand-total", "TOTAL", "ALL")
@@ -235,11 +243,13 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
         subtotal["attendance_percentage"] = compute_attendance_pct(
             subtotal["daily_average"], subtotal["registered_end"]
         )
-        grade_groups.append({
-            "grade_level": g_label,
-            "sections": sec_rows,
-            "subtotal": subtotal,
-        })
+        grade_groups.append(
+            {
+                "grade_level": g_label,
+                "sections": sec_rows,
+                "subtotal": subtotal,
+            }
+        )
         for key in SUMMABLE_KEYS:
             total_summary[key] = add_triplets(total_summary[key], subtotal[key])
 

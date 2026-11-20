@@ -1,47 +1,33 @@
-// D:\AttendSure_V3\mobile\src\branding\AttendSureLogo.tsx
+/**
+ * AttendSure Mobile - Brand Logo Wrapper
+ * File: mobile/src/branding/AttendSureLogo.tsx
+ */
 
 import React from 'react';
-import { StyleSheet, View, ViewStyle } from 'react-native';
-import { Image } from 'expo-image';
+import type { StyleProp, ViewStyle } from 'react-native';
+import { AttendSureLogo as BrandAttendSureLogo } from './BrandLogos';
+import { useThemeMode } from '../context/ThemeContext';
 
-const LOGO_SOURCE = require('../../assets/splash.svg');
-
-interface AttendSureLogoProps {
+export interface AttendSureLogoProps {
   size?: number;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }
 
 export const AttendSureLogo: React.FC<AttendSureLogoProps> = ({ size = 48, style }) => {
+  const { palette } = useThemeMode();
+
   return (
-    <View
+    <BrandAttendSureLogo
+      size={size}
       style={[
-        styles.container,
         {
-          width: size,
-          height: size,
-          borderRadius: size / 2,
+          borderColor: palette.border,
+          borderWidth: palette.isDark ? 1 : 0,
         },
         style,
       ]}
-    >
-      <Image
-        source={LOGO_SOURCE}
-        style={{ width: size, height: size }}
-        contentFit="contain"
-        priority="high"
-        cachePolicy="memory-disk"
-      />
-    </View>
+    />
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    backgroundColor: '#ffffff',
-  },
-});
 
 export default AttendSureLogo;

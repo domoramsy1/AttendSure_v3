@@ -1,9 +1,6 @@
 /**
  * AttendSure - Universal Page Setup Modal
- * File: frontend/src/components/common/PageSetupModal.tsx
- *
- * Configures paper dimensions, margins, orientation, and layout format.
- * The official letterhead header is locked to Page 1 across all reports.
+ * File: web/src/components/common/PageSetupModal.tsx
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -26,6 +23,7 @@ import type {
   LayoutMode,
   MarginPresetKey,
 } from '../../types/pageSetup';
+import { useTheme } from '../../context/ThemeContext';
 
 interface PageSetupModalProps {
   isOpen: boolean;
@@ -51,22 +49,28 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
   onApply,
   reportTitle = 'Report',
 }) => {
+  const { tokens, brand } = useTheme();
   const [draft, setDraft] = useState<PageSetupConfig>({
     ...currentConfig,
-    headerRepeat: 'first_page_only', // Enforce 1st page header rule
+    headerRepeat: 'first_page_only',
   });
   const [setAsDefault, setSetAsDefault] = useState<boolean>(false);
   const initialConfigRef = useRef<PageSetupConfig>(currentConfig);
+  const wasOpenRef = useRef<boolean>(false);
 
+  // Only snapshot initialConfigRef and reset checkbox when modal opens (not on every live edit)
   useEffect(() => {
-    if (isOpen) {
-      setDraft({
+    if (isOpen && !wasOpenRef.current) {
+      const snapshot: PageSetupConfig = {
         ...currentConfig,
+        margins: { ...currentConfig.margins },
         headerRepeat: 'first_page_only',
-      });
-      initialConfigRef.current = currentConfig;
+      };
+      initialConfigRef.current = snapshot;
+      setDraft(snapshot);
       setSetAsDefault(false);
     }
+    wasOpenRef.current = isOpen;
   }, [isOpen, currentConfig]);
 
   const updateDraft = useCallback(
@@ -86,16 +90,13 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
     onClose();
   }, [onLiveChange, onClose]);
 
-  // Keyboard shortcut listener (Escape to cancel)
   useEffect(() => {
     if (!isOpen) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         handleCancel();
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, handleCancel]);
@@ -138,7 +139,10 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
   };
 
   const handleResetToInitial = () => {
-    updateDraft(initialConfigRef.current);
+    updateDraft({
+      ...initialConfigRef.current,
+      margins: { ...initialConfigRef.current.margins },
+    });
     setSetAsDefault(false);
   };
 
@@ -152,6 +156,157 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
   const liveWidth = isLandscape ? selectedPaper.height : selectedPaper.width;
   const liveHeight = isLandscape ? selectedPaper.width : selectedPaper.height;
 
+  const modalContainerStyle: React.CSSProperties = {
+    width: '100%',
+    maxWidth: 580,
+    backgroundColor: tokens.bgSurface,
+    border: `1px solid ${tokens.borderSubtle}`,
+    borderRadius: 12,
+    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  };
+
+  const modalHeaderStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '16px 20px',
+    borderBottom: `1px solid ${tokens.borderSubtle}`,
+    backgroundColor: tokens.bgSurfaceSubtle,
+  };
+
+  const iconBadgeStyle: React.CSSProperties = {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: brand.primarySoft,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
+
+  const closeButtonStyle: React.CSSProperties = {
+    border: 'none',
+    backgroundColor: 'transparent',
+    color: tokens.textMuted,
+    cursor: 'pointer',
+    padding: 4,
+    borderRadius: 6,
+    display: 'flex',
+  };
+
+  const sectionLabelStyle: React.CSSProperties = {
+    fontSize: '0.78rem',
+    fontWeight: 700,
+    color: tokens.textSecondary,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: '0.4px',
+  };
+
+  const dimensionBadgeStyle: React.CSSProperties = {
+    fontSize: '0.70rem',
+    fontWeight: 700,
+    fontFamily: 'ui-monospace, monospace',
+    backgroundColor: tokens.bgSurfaceSubtle,
+    color: brand.primary,
+    padding: '2px 8px',
+    borderRadius: 4,
+    border: `1px solid ${tokens.borderInput}`,
+  };
+
+  const selectDropdownStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '8px 12px',
+    borderRadius: 8,
+    border: `1px solid ${tokens.borderInput}`,
+    backgroundColor: tokens.bgInput,
+    fontSize: '0.82rem',
+    fontWeight: 600,
+    color: tokens.textPrimary,
+    outline: 'none',
+  };
+
+  const miniLabelStyle: React.CSSProperties = {
+    fontSize: '0.68rem',
+    fontWeight: 600,
+    color: tokens.textMuted,
+    marginBottom: 4,
+    display: 'block',
+  };
+
+  const numericInputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '6px 8px',
+    borderRadius: 6,
+    border: `1px solid ${tokens.borderInput}`,
+    backgroundColor: tokens.bgInput,
+    fontSize: '0.8rem',
+    fontWeight: 700,
+    color: tokens.textPrimary,
+    textAlign: 'center',
+    boxSizing: 'border-box',
+  };
+
+  const defaultCheckboxContainerStyle: React.CSSProperties = {
+    backgroundColor: tokens.bgSurfaceSubtle,
+    border: `1px solid ${tokens.borderSubtle}`,
+    borderRadius: 8,
+    padding: '12px 14px',
+  };
+
+  const modalFooterStyle: React.CSSProperties = {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '14px 20px',
+    borderTop: `1px solid ${tokens.borderSubtle}`,
+    backgroundColor: tokens.bgSurfaceSubtle,
+    flexWrap: 'wrap',
+    gap: 10,
+  };
+
+  const btnResetStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '7px 12px',
+    borderRadius: 6,
+    border: `1px solid ${tokens.borderInput}`,
+    backgroundColor: tokens.bgSurface,
+    color: tokens.textSecondary,
+    fontSize: '0.78rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+  };
+
+  const btnSecondaryStyle: React.CSSProperties = {
+    padding: '7px 16px',
+    borderRadius: 6,
+    border: `1px solid ${tokens.borderInput}`,
+    backgroundColor: tokens.bgSurface,
+    color: tokens.textPrimary,
+    fontSize: '0.8rem',
+    fontWeight: 700,
+    cursor: 'pointer',
+  };
+
+  const btnApplyStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '7px 18px',
+    borderRadius: 6,
+    border: 'none',
+    backgroundColor: brand.buttonBg,
+    color: '#ffffff',
+    fontSize: '0.8rem',
+    fontWeight: 700,
+    cursor: 'pointer',
+  };
+
   return (
     <div
       style={overlayStyle}
@@ -161,34 +316,26 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
       aria-labelledby="page-setup-modal-title"
     >
       <div style={modalContainerStyle} onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
         <div style={modalHeaderStyle}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={iconBadgeStyle}>
-              <SlidersHorizontal size={18} color="#0284c7" />
+              <SlidersHorizontal size={18} color={brand.primary} />
             </div>
             <div>
-              <h2 id="page-setup-modal-title" style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
+              <h2 id="page-setup-modal-title" style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: tokens.textPrimary }}>
                 Page Setup
               </h2>
-              <p style={{ margin: 0, fontSize: '0.74rem', color: '#64748b' }}>
+              <p style={{ margin: 0, fontSize: '0.74rem', color: tokens.textMuted }}>
                 Configure document layout for {reportTitle}
               </p>
             </div>
           </div>
-          <button
-            onClick={handleCancel}
-            style={closeButtonStyle}
-            aria-label="Close page setup modal"
-            type="button"
-          >
+          <button onClick={handleCancel} style={closeButtonStyle} aria-label="Close page setup modal" type="button">
             <X size={18} />
           </button>
         </div>
 
-        {/* Content Body */}
         <div style={modalBodyStyle}>
-          {/* 1. Layout Mode (Pages vs Pageless) */}
           <div style={sectionGroupStyle}>
             <label style={sectionLabelStyle}>Layout Format</label>
             <div style={buttonToggleGridStyle}>
@@ -197,15 +344,15 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                 onClick={() => handleLayoutModeChange('pages')}
                 style={{
                   ...toggleCardStyle,
-                  borderColor: draft.layoutMode === 'pages' ? '#0284c7' : '#cbd5e1',
-                  backgroundColor: draft.layoutMode === 'pages' ? '#f0f9ff' : '#ffffff',
+                  borderColor: draft.layoutMode === 'pages' ? brand.primary : tokens.borderInput,
+                  backgroundColor: draft.layoutMode === 'pages' ? brand.primarySoft : tokens.bgSurfaceSubtle,
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <FileText size={16} color={draft.layoutMode === 'pages' ? '#0284c7' : '#64748b'} />
-                  <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f172a' }}>Pages</span>
+                  <FileText size={16} color={draft.layoutMode === 'pages' ? brand.primary : tokens.textMuted} />
+                  <span style={{ fontWeight: 700, fontSize: '0.82rem', color: tokens.textPrimary }}>Pages</span>
                 </div>
-                <p style={{ margin: '4px 0 0 0', fontSize: '0.68rem', color: '#64748b' }}>
+                <p style={{ margin: '4px 0 0 0', fontSize: '0.68rem', color: tokens.textSecondary }}>
                   Divided sheets with Page 1 header, footers &amp; paper bounds.
                 </p>
               </button>
@@ -215,25 +362,24 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                 onClick={() => handleLayoutModeChange('pageless')}
                 style={{
                   ...toggleCardStyle,
-                  borderColor: draft.layoutMode === 'pageless' ? '#0284c7' : '#cbd5e1',
-                  backgroundColor: draft.layoutMode === 'pageless' ? '#f0f9ff' : '#ffffff',
+                  borderColor: draft.layoutMode === 'pageless' ? brand.primary : tokens.borderInput,
+                  backgroundColor: draft.layoutMode === 'pageless' ? brand.primarySoft : tokens.bgSurfaceSubtle,
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Maximize2 size={16} color={draft.layoutMode === 'pageless' ? '#0284c7' : '#64748b'} />
-                  <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f172a' }}>Pageless</span>
+                  <Maximize2 size={16} color={draft.layoutMode === 'pageless' ? brand.primary : tokens.textMuted} />
+                  <span style={{ fontWeight: 700, fontSize: '0.82rem', color: tokens.textPrimary }}>Pageless</span>
                 </div>
-                <p style={{ margin: '4px 0 0 0', fontSize: '0.68rem', color: '#64748b' }}>
+                <p style={{ margin: '4px 0 0 0', fontSize: '0.68rem', color: tokens.textSecondary }}>
                   Continuous fluid layout with header at the top.
                 </p>
               </button>
             </div>
           </div>
 
-          {/* 2. Orientation */}
           <div style={sectionGroupStyle}>
             <label style={sectionLabelStyle}>Orientation</label>
-            <div style={{ display: 'flex', gap: 12 }}>
+            <div style={buttonToggleGridStyle}>
               <button
                 type="button"
                 disabled={draft.layoutMode === 'pageless'}
@@ -241,15 +387,15 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                 style={{
                   ...optionCardStyle,
                   opacity: draft.layoutMode === 'pageless' ? 0.5 : 1,
-                  borderColor: draft.orientation === 'landscape' ? '#0284c7' : '#cbd5e1',
-                  backgroundColor: draft.orientation === 'landscape' ? '#f0f9ff' : '#ffffff',
+                  borderColor: draft.orientation === 'landscape' ? brand.primary : tokens.borderInput,
+                  backgroundColor: draft.orientation === 'landscape' ? brand.primarySoft : tokens.bgSurfaceSubtle,
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <RotateCw size={15} color={draft.orientation === 'landscape' ? '#0284c7' : '#64748b'} />
-                  <span style={{ fontWeight: 700, fontSize: '0.8rem', color: '#0f172a' }}>Landscape</span>
+                  <RotateCw size={15} color={draft.orientation === 'landscape' ? brand.primary : tokens.textMuted} />
+                  <span style={{ fontWeight: 700, fontSize: '0.8rem', color: tokens.textPrimary }}>Landscape</span>
                 </div>
-                <span style={{ fontSize: '0.68rem', color: '#64748b' }}>Official DepEd SF1 / SF2 / SF4</span>
+                <span style={{ fontSize: '0.68rem', color: tokens.textSecondary }}>Official DepEd SF1 / SF2 / SF4</span>
               </button>
 
               <button
@@ -259,22 +405,21 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                 style={{
                   ...optionCardStyle,
                   opacity: draft.layoutMode === 'pageless' ? 0.5 : 1,
-                  borderColor: draft.orientation === 'portrait' ? '#0284c7' : '#cbd5e1',
-                  backgroundColor: draft.orientation === 'portrait' ? '#f0f9ff' : '#ffffff',
+                  borderColor: draft.orientation === 'portrait' ? brand.primary : tokens.borderInput,
+                  backgroundColor: draft.orientation === 'portrait' ? brand.primarySoft : tokens.bgSurfaceSubtle,
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <FileText size={15} color={draft.orientation === 'portrait' ? '#0284c7' : '#64748b'} />
-                  <span style={{ fontWeight: 700, fontSize: '0.8rem', color: '#0f172a' }}>Portrait</span>
+                  <FileText size={15} color={draft.orientation === 'portrait' ? brand.primary : tokens.textMuted} />
+                  <span style={{ fontWeight: 700, fontSize: '0.8rem', color: tokens.textPrimary }}>Portrait</span>
                 </div>
-                <span style={{ fontSize: '0.68rem', color: '#64748b' }}>Standard upright format</span>
+                <span style={{ fontSize: '0.68rem', color: tokens.textSecondary }}>Standard upright format</span>
               </button>
             </div>
           </div>
 
-          {/* 3. Paper Size Selection with Dimension Badge */}
           <div style={sectionGroupStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, flexWrap: 'wrap', gap: 6 }}>
               <label style={{ ...sectionLabelStyle, marginBottom: 0 }}>Paper Size</label>
               {draft.layoutMode !== 'pageless' && (
                 <span style={dimensionBadgeStyle}>
@@ -300,10 +445,9 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
             </select>
           </div>
 
-          {/* 4. Page Background Color */}
           <div style={sectionGroupStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              <Palette size={15} color="#475569" />
+              <Palette size={15} color={tokens.textSecondary} />
               <label style={{ ...sectionLabelStyle, marginBottom: 0 }}>Page Background Color</label>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -318,7 +462,7 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                     gap: 6,
                     padding: '6px 12px',
                     borderRadius: 6,
-                    border: draft.pageColor === c.value ? '2px solid #0284c7' : '1px solid #cbd5e1',
+                    border: draft.pageColor === c.value ? `2px solid ${brand.primary}` : `1px solid ${tokens.borderInput}`,
                     backgroundColor: c.value,
                     cursor: 'pointer',
                     fontSize: '0.74rem',
@@ -341,19 +485,18 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
               ))}
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
-                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>Custom:</span>
+                <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>Custom:</span>
                 <input
                   type="color"
                   value={draft.pageColor}
                   onChange={(e) => handlePageColorChange(e.target.value)}
-                  style={colorPickerInputStyle}
+                  style={{ ...colorPickerInputStyle, borderColor: tokens.borderInput }}
                   title="Choose custom background color"
                 />
               </div>
             </div>
           </div>
 
-          {/* 5. Margins Configuration */}
           <div style={sectionGroupStyle}>
             <label style={sectionLabelStyle}>Margins</label>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -367,9 +510,9 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                     borderRadius: 6,
                     fontSize: '0.75rem',
                     fontWeight: 700,
-                    border: draft.marginPreset === presetKey ? '1px solid #0284c7' : '1px solid #cbd5e1',
-                    backgroundColor: draft.marginPreset === presetKey ? '#0284c7' : '#ffffff',
-                    color: draft.marginPreset === presetKey ? '#ffffff' : '#475569',
+                    border: draft.marginPreset === presetKey ? `1px solid ${brand.buttonBg}` : `1px solid ${tokens.borderInput}`,
+                    backgroundColor: draft.marginPreset === presetKey ? brand.buttonBg : tokens.bgSurfaceSubtle,
+                    color: draft.marginPreset === presetKey ? '#ffffff' : tokens.textPrimary,
                     cursor: 'pointer',
                   }}
                 >
@@ -379,80 +522,44 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
             </div>
 
             <div style={marginInputsGridStyle}>
-              <div>
-                <label style={miniLabelStyle}>Top (in)</label>
-                <input
-                  type="number"
-                  step="0.05"
-                  min="0"
-                  max="3"
-                  value={draft.margins.top}
-                  onChange={(e) => handleCustomMarginChange('top', parseFloat(e.target.value))}
-                  style={numericInputStyle}
-                />
-              </div>
-              <div>
-                <label style={miniLabelStyle}>Bottom (in)</label>
-                <input
-                  type="number"
-                  step="0.05"
-                  min="0"
-                  max="3"
-                  value={draft.margins.bottom}
-                  onChange={(e) => handleCustomMarginChange('bottom', parseFloat(e.target.value))}
-                  style={numericInputStyle}
-                />
-              </div>
-              <div>
-                <label style={miniLabelStyle}>Left (in)</label>
-                <input
-                  type="number"
-                  step="0.05"
-                  min="0"
-                  max="3"
-                  value={draft.margins.left}
-                  onChange={(e) => handleCustomMarginChange('left', parseFloat(e.target.value))}
-                  style={numericInputStyle}
-                />
-              </div>
-              <div>
-                <label style={miniLabelStyle}>Right (in)</label>
-                <input
-                  type="number"
-                  step="0.05"
-                  min="0"
-                  max="3"
-                  value={draft.margins.right}
-                  onChange={(e) => handleCustomMarginChange('right', parseFloat(e.target.value))}
-                  style={numericInputStyle}
-                />
-              </div>
+              {(['top', 'bottom', 'left', 'right'] as const).map((side) => (
+                <div key={side}>
+                  <label style={miniLabelStyle}>{side[0].toUpperCase() + side.slice(1)} (in)</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="3"
+                    value={draft.margins[side]}
+                    onChange={(e) => handleCustomMarginChange(side, parseFloat(e.target.value))}
+                    style={numericInputStyle}
+                  />
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* 6. Default Persistence Option */}
           <div style={defaultCheckboxContainerStyle}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={setAsDefault}
                 onChange={(e) => setSetAsDefault(e.target.checked)}
-                style={{ width: 16, height: 16, accentColor: '#0284c7', cursor: 'pointer' }}
+                style={{ width: 16, height: 16, accentColor: brand.buttonBg, cursor: 'pointer' }}
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <BookmarkCheck size={16} color="#0284c7" />
-                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0f172a' }}>
+                <BookmarkCheck size={16} color={brand.primary} />
+                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: tokens.textPrimary }}>
                   Set as default for all reports
                 </span>
               </div>
             </label>
-            <p style={{ margin: '4px 0 0 26px', fontSize: '0.7rem', color: '#64748b' }}>
-              Saves these dimensions across SF1, SF2, SF4, and future generated registers.
+            <p style={{ margin: '4px 0 0 26px', fontSize: '0.7rem', color: tokens.textMuted }}>
+              Saves these dimensions across SF1, SF2, SF4, and future generated reports.
             </p>
           </div>
         </div>
 
-        {/* Modal Actions */}
         <div style={modalFooterStyle}>
           <button
             type="button"
@@ -480,60 +587,19 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
 
 export default PageSetupModal;
 
-// Styles
 const overlayStyle: React.CSSProperties = {
   position: 'fixed',
   top: 0,
   left: 0,
   right: 0,
   bottom: 0,
-  backgroundColor: 'rgba(15, 23, 42, 0.42)',
+  backgroundColor: 'rgba(15, 23, 42, 0.55)',
   backdropFilter: 'blur(3px)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   zIndex: 9999,
   padding: 16,
-};
-
-const modalContainerStyle: React.CSSProperties = {
-  width: '100%',
-  maxWidth: 580,
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.28)',
-  display: 'flex',
-  flexDirection: 'column',
-  overflow: 'hidden',
-};
-
-const modalHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '16px 20px',
-  borderBottom: '1px solid #e2e8f0',
-  backgroundColor: '#f8fafc',
-};
-
-const iconBadgeStyle: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: 8,
-  backgroundColor: '#e0f2fe',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const closeButtonStyle: React.CSSProperties = {
-  border: 'none',
-  backgroundColor: 'transparent',
-  color: '#64748b',
-  cursor: 'pointer',
-  padding: 4,
-  borderRadius: 6,
-  display: 'flex',
 };
 
 const modalBodyStyle: React.CSSProperties = {
@@ -550,34 +616,15 @@ const sectionGroupStyle: React.CSSProperties = {
   flexDirection: 'column',
 };
 
-const sectionLabelStyle: React.CSSProperties = {
-  fontSize: '0.78rem',
-  fontWeight: 700,
-  color: '#334155',
-  marginBottom: 8,
-  textTransform: 'uppercase',
-  letterSpacing: '0.4px',
-};
-
-const dimensionBadgeStyle: React.CSSProperties = {
-  fontSize: '0.70rem',
-  fontWeight: 700,
-  fontFamily: 'ui-monospace, monospace',
-  backgroundColor: '#f1f5f9',
-  color: '#0284c7',
-  padding: '2px 8px',
-  borderRadius: 4,
-  border: '1px solid #cbd5e1',
-};
-
 const buttonToggleGridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
   gap: 12,
 };
 
 const toggleCardStyle: React.CSSProperties = {
-  border: '1.5px solid #cbd5e1',
+  borderWidth: 1.5,
+  borderStyle: 'solid',
   borderRadius: 8,
   padding: '10px 12px',
   textAlign: 'left',
@@ -586,8 +633,8 @@ const toggleCardStyle: React.CSSProperties = {
 };
 
 const optionCardStyle: React.CSSProperties = {
-  flex: 1,
-  border: '1.5px solid #cbd5e1',
+  borderWidth: 1.5,
+  borderStyle: 'solid',
   borderRadius: 8,
   padding: '10px 12px',
   textAlign: 'left',
@@ -596,18 +643,6 @@ const optionCardStyle: React.CSSProperties = {
   flexDirection: 'column',
   gap: 4,
   transition: 'all 0.15s ease',
-};
-
-const selectDropdownStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 12px',
-  borderRadius: 8,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  fontSize: '0.82rem',
-  fontWeight: 600,
-  color: '#0f172a',
-  outline: 'none',
 };
 
 const colorPickerInputStyle: React.CSSProperties = {
@@ -622,80 +657,6 @@ const colorPickerInputStyle: React.CSSProperties = {
 
 const marginInputsGridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
   gap: 10,
-};
-
-const miniLabelStyle: React.CSSProperties = {
-  fontSize: '0.68rem',
-  fontWeight: 600,
-  color: '#64748b',
-  marginBottom: 4,
-  display: 'block',
-};
-
-const numericInputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '6px 8px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#0f172a',
-  textAlign: 'center',
-};
-
-const defaultCheckboxContainerStyle: React.CSSProperties = {
-  backgroundColor: '#f8fafc',
-  border: '1px solid #e2e8f0',
-  borderRadius: 8,
-  padding: '12px 14px',
-};
-
-const modalFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  padding: '14px 20px',
-  borderTop: '1px solid #e2e8f0',
-  backgroundColor: '#f8fafc',
-};
-
-const btnResetStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '7px 12px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  color: '#64748b',
-  fontSize: '0.78rem',
-  fontWeight: 600,
-  cursor: 'pointer',
-};
-
-const btnSecondaryStyle: React.CSSProperties = {
-  padding: '7px 16px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  color: '#475569',
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const btnApplyStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '7px 18px',
-  borderRadius: 6,
-  border: 'none',
-  backgroundColor: '#0284c7',
-  color: '#ffffff',
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  cursor: 'pointer',
 };

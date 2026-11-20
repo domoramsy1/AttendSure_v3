@@ -6,41 +6,23 @@
 import React from 'react';
 import { View, Text, StyleSheet, Platform } from 'react-native';
 import { Image } from 'expo-image';
+import { isSafeUrl, cleanText } from '../../constants/theme';
 
-interface DepEdHeaderProps {
-  leftLogoUrl?: string | null;  
-  rightLogoUrl?: string | null; 
+export interface DepEdHeaderProps {
+  leftLogoUrl?: string | null;
+  rightLogoUrl?: string | null;
   region?: string;
   division?: string;
   formTitle: string;
   formSubtitle?: string;
 }
 
-interface DepEdFooterProps {
-  schoolLogoUrl?: string | null; 
+export interface DepEdFooterProps {
+  schoolLogoUrl?: string | null;
   address?: string;
   contactNumber?: string;
   email?: string;
 }
-
-const sanitizeImageUrl = (url?: string | null): string | null => {
-  if (!url) return null;
-  const clean = url.trim();
-  if (
-    clean.startsWith('http://') ||
-    clean.startsWith('https://') ||
-    clean.startsWith('data:image/') ||
-    clean.startsWith('file://')
-  ) {
-    return clean;
-  }
-  return null;
-};
-
-const cleanText = (val?: string | null): string => {
-  if (!val) return '';
-  return val.replace(/[\r\n\t]/g, ' ').trim();
-};
 
 export const DepEdReportHeader: React.FC<DepEdHeaderProps> = ({
   leftLogoUrl,
@@ -50,13 +32,13 @@ export const DepEdReportHeader: React.FC<DepEdHeaderProps> = ({
   formTitle,
   formSubtitle,
 }) => {
-  const safeKagawaranLogo = sanitizeImageUrl(leftLogoUrl);
-  const safeDepEdLogo = sanitizeImageUrl(rightLogoUrl);
+  const safeKagawaranLogo = isSafeUrl(leftLogoUrl) ? leftLogoUrl.trim() : null;
+  const safeDepEdLogo = isSafeUrl(rightLogoUrl) ? rightLogoUrl.trim() : null;
 
-  const cleanRegion = cleanText(region);
-  const cleanDivision = cleanText(division);
-  const cleanTitle = cleanText(formTitle);
-  const cleanSub = cleanText(formSubtitle);
+  const cleanRegion = cleanText(region, 150);
+  const cleanDivision = cleanText(division, 150);
+  const cleanTitle = cleanText(formTitle, 200);
+  const cleanSub = cleanText(formSubtitle, 200);
 
   return (
     <View style={styles.headerContainer}>
@@ -109,11 +91,11 @@ export const DepEdReportFooter: React.FC<DepEdFooterProps> = ({
   contactNumber,
   email,
 }) => {
-  const safeSchoolLogo = sanitizeImageUrl(schoolLogoUrl);
+  const safeSchoolLogo = isSafeUrl(schoolLogoUrl) ? schoolLogoUrl.trim() : null;
 
-  const displayAddress = cleanText(address) || '—';
-  const displayContact = cleanText(contactNumber) || '—';
-  const displayEmail = cleanText(email) || '—';
+  const displayAddress = cleanText(address, 240) || '—';
+  const displayContact = cleanText(contactNumber, 80) || '—';
+  const displayEmail = cleanText(email, 120) || '—';
 
   return (
     <View style={styles.footerContainer}>

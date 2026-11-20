@@ -24,5 +24,10 @@ router.register(r"holidays", SchoolHolidayViewSet, basename="holidays")
 urlpatterns = [
     path("public-branding/", PublicSchoolBrandingView.as_view(), name="public-school-branding"),
     path("settings/", SchoolSettingsView.as_view(), name="school-settings"),
+    path(
+        "holidays/",
+        SchoolHolidayViewSet.as_view({"get": "list", "post": "create", "patch": "partial_update_settings"}),
+        name="holidays-collection",
+    ),
     path("", include(router.urls)),
 ]

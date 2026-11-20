@@ -11,6 +11,7 @@
 
 import React, { useId } from 'react';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { useTheme } from '../../context/ThemeContext';
 
 /** Safe upper ceiling representing "All" records without exhausting server RAM */
 export const ALL_ROWS_SIZE = 10000;
@@ -110,6 +111,7 @@ export const Pagination: React.FC<PaginationProps> = ({
   style,
 }) => {
   const selectId = useId();
+  const { tokens } = useTheme();
 
   if (totalCount <= 0) return null;
 
@@ -127,17 +129,53 @@ export const Pagination: React.FC<PaginationProps> = ({
   const isPrevDisabled = disabled || isAllSelected || safeCurrentPage <= 1;
   const isNextDisabled = disabled || isAllSelected || safeCurrentPage >= safeTotalPages;
 
+  const containerStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '12px 18px',
+    backgroundColor: tokens.bgSurface,
+    borderTop: `1px solid ${tokens.borderSubtle}`,
+    boxSizing: 'border-box',
+    gap: 12,
+    flexWrap: 'wrap',
+  };
+
+  const btnStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '6px',
+    border: `1px solid ${tokens.borderInput}`,
+    borderRadius: 6,
+    backgroundColor: tokens.bgSurfaceSubtle,
+    color: tokens.textPrimary,
+    transition: 'all 0.15s ease',
+  };
+
+  const selectStyle: React.CSSProperties = {
+    padding: '4px 8px',
+    borderRadius: 6,
+    border: `1px solid ${tokens.borderInput}`,
+    fontSize: '0.78rem',
+    fontWeight: 600,
+    color: tokens.textPrimary,
+    backgroundColor: tokens.bgInput,
+    outline: 'none',
+  };
+
   return (
     <div className={className} style={{ ...containerStyle, ...style }} role="navigation" aria-label="Pagination Navigation">
-      <div style={{ fontSize: '0.80rem', color: '#475569' }}>
-        Showing <strong>{startRecord.toLocaleString()}</strong> to <strong>{endRecord.toLocaleString()}</strong> of{' '}
-        <strong>{totalCount.toLocaleString()}</strong> {itemLabel}
+      <div style={{ fontSize: '0.80rem', color: tokens.textSecondary }}>
+        Showing <strong style={{ color: tokens.textPrimary }}>{startRecord.toLocaleString()}</strong> to{' '}
+        <strong style={{ color: tokens.textPrimary }}>{endRecord.toLocaleString()}</strong> of{' '}
+        <strong style={{ color: tokens.textPrimary }}>{totalCount.toLocaleString()}</strong> {itemLabel}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         {onPageSizeChange && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 8 }}>
-            <label htmlFor={selectId} style={{ fontSize: '0.78rem', color: '#64748b' }}>
+            <label htmlFor={selectId} style={{ fontSize: '0.78rem', color: tokens.textMuted }}>
               Rows per page:
             </label>
             <select
@@ -204,7 +242,7 @@ export const Pagination: React.FC<PaginationProps> = ({
             fontSize: '0.80rem',
             fontWeight: 600,
             padding: '0 8px',
-            color: '#0f172a',
+            color: tokens.textPrimary,
             userSelect: 'none',
           }}
         >
@@ -248,42 +286,3 @@ export const Pagination: React.FC<PaginationProps> = ({
 };
 
 export default Pagination;
-
-// ============================================================================
-// STYLES
-// ============================================================================
-
-const containerStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '12px 18px',
-  backgroundColor: '#ffffff',
-  borderTop: '1px solid #e2e8f0',
-  boxSizing: 'border-box',
-  gap: 12,
-  flexWrap: 'wrap',
-};
-
-const btnStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '6px',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  backgroundColor: '#ffffff',
-  color: '#334155',
-  transition: 'all 0.15s ease',
-};
-
-const selectStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.78rem',
-  fontWeight: 600,
-  color: '#0f172a',
-  backgroundColor: '#ffffff',
-  outline: 'none',
-};

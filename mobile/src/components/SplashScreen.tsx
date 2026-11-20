@@ -1,5 +1,5 @@
 /**
- * AttendSure - Circular Radar & Spiral Loader Mobile Splash Screen
+ * AttendSure Mobile - Circular Radar & Spiral Loader Splash Screen
  * File: mobile/src/components/SplashScreen.tsx
  */
 
@@ -21,10 +21,15 @@ import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import * as NativeSplashScreen from 'expo-splash-screen';
 import { getServerBaseUrl, setServerBaseUrl } from '../services/configService';
-import { AttendSureLogo } from '../branding/AttendSureLogo';
+import { AttendSureLogo } from '../branding/BrandLogos';
 import { useThemeMode } from '../context/ThemeContext';
+import {
+  cleanText,
+  isSafeUrl,
+  getFriendlyErrorMessage,
+} from '../constants/theme';
 
-interface SplashScreenProps {
+export interface SplashScreenProps {
   loading?: boolean;
   minDurationMs?: number;
   onFinish?: () => void;
@@ -32,29 +37,47 @@ interface SplashScreenProps {
 
 const SPIRAL_DOTS = Array.from({ length: 8 }, (_, index) => index);
 
-// Cybersecurity: Block unsafe URL protocols in server address input
-const isValidServerUrl = (url: string): boolean => {
-  if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
+const showNotice = (title: string, message: string) => {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.alert(`${title}: ${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+};
+
+// Cybersecurity: Reject dangerous protocols and validate strict http/https URL
+const isValidHttpServerUrl = (rawUrl: string): boolean => {
+  const trimmed = cleanText(rawUrl, 300);
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
   if (
-    clean.startsWith('javascript:') ||
-    clean.startsWith('data:') ||
-    clean.startsWith('file:') ||
-    clean.startsWith('vbscript:')
+    lower.startsWith('javascript:') ||
+    lower.startsWith('data:') ||
+    lower.startsWith('file:') ||
+    lower.startsWith('vbscript:')
   ) {
     return false;
   }
-  return clean.startsWith('http://') || clean.startsWith('https://');
+  if (!isSafeUrl(trimmed)) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
 };
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   loading = false,
-  minDurationMs = 7000,
+  minDurationMs = 1200,
   onFinish,
 }) => {
   const { palette, isDark } = useThemeMode();
   const [canExit, setCanExit] = useState(false);
   const [hidden, setHidden] = useState(false);
+
+  const isMountedRef = useRef<boolean>(true);
+  const isHoldingSplashRef = useRef<boolean>(false);
 
   // Fade out animation
   const opacityAnim = useRef(new Animated.Value(1)).current;
@@ -70,7 +93,14 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   // Server Settings Modal State
   const [showToolsModal, setShowToolsModal] = useState<boolean>(false);
   const [customServerUrl, setCustomServerUrl] = useState<string>('');
-  const isHoldingSplashRef = useRef<boolean>(false);
+  const [savingUrl, setSavingUrl] = useState<boolean>(false);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Start continuous radar & spiral animations
   useEffect(() => {
@@ -126,14 +156,16 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     };
   }, [radarWave1, radarWave2, radarSweep, spiralClock]);
 
-  // 7-second timer
+  // Splash duration timer
   useEffect(() => {
     if (Platform.OS !== 'web') {
       NativeSplashScreen.hideAsync().catch(() => {});
     }
 
     const timer = setTimeout(() => {
-      setCanExit(true);
+      if (isMountedRef.current) {
+        setCanExit(true);
+      }
     }, minDurationMs);
 
     return () => clearTimeout(timer);
@@ -142,46 +174,79 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   // Exit transition once timer finishes
   useEffect(() => {
     if (!loading && canExit && !isHoldingSplashRef.current) {
-      Animated.timing(opacityAnim, {
+      const fadeAnim = Animated.timing(opacityAnim, {
         toValue: 0,
         duration: 350,
         useNativeDriver: true,
-      }).start(() => {
-        setHidden(true);
-        if (onFinish) onFinish();
       });
+      fadeAnim.start(({ finished }) => {
+        if (finished && isMountedRef.current) {
+          setHidden(true);
+          if (onFinish) onFinish();
+        }
+      });
+      return () => {
+        fadeAnim.stop();
+      };
     }
+    return undefined;
   }, [loading, canExit, onFinish, opacityAnim]);
 
   const openTools = async () => {
     isHoldingSplashRef.current = true;
-    const activeUrl = await getServerBaseUrl();
-    setCustomServerUrl(activeUrl);
-    setShowToolsModal(true);
+    try {
+      const activeUrl = await getServerBaseUrl();
+      if (isMountedRef.current) {
+        setCustomServerUrl(activeUrl);
+        setShowToolsModal(true);
+      }
+    } catch {
+      if (isMountedRef.current) {
+        setCustomServerUrl('');
+        setShowToolsModal(true);
+      }
+    }
+  };
+
+  const closeToolsAndContinue = () => {
+    setShowToolsModal(false);
+    isHoldingSplashRef.current = false;
+    if (onFinish) onFinish();
   };
 
   const saveServerAddress = async () => {
-    const cleanUrl = customServerUrl.trim();
-    if (!isValidServerUrl(cleanUrl)) {
-      Alert.alert(
+    if (savingUrl) return;
+    const sanitized = cleanText(customServerUrl, 300);
+    if (!isValidHttpServerUrl(sanitized)) {
+      showNotice(
         'Invalid Address',
-        'Please enter a valid web address starting with http:// or https://'
+        'Please enter a valid web address starting with http:// or https://.'
       );
       return;
     }
 
+    setSavingUrl(true);
     try {
-      await setServerBaseUrl(cleanUrl);
-      Alert.alert('Saved', 'School server address updated.');
-      setShowToolsModal(false);
-      isHoldingSplashRef.current = false;
-      if (onFinish) onFinish();
-    } catch (e: any) {
-      Alert.alert('Invalid Address', e.message || 'Please check the server address.');
+      await setServerBaseUrl(sanitized);
+      showNotice('Saved', 'School server address updated.');
+      if (isMountedRef.current) {
+        closeToolsAndContinue();
+      }
+    } catch (err: unknown) {
+      showNotice(
+        'Invalid Address',
+        getFriendlyErrorMessage(err, 'Please check the school server address and try again.')
+      );
+    } finally {
+      if (isMountedRef.current) {
+        setSavingUrl(false);
+      }
     }
   };
 
   if (hidden) return null;
+
+  const currentYear = new Date().getFullYear();
 
   const wave1Scale = radarWave1.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.85] });
   const wave1Opacity = radarWave1.interpolate({ inputRange: [0, 1], outputRange: [0.75, 0] });
@@ -192,7 +257,12 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   const sweepRotate = radarSweep.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
   return (
-    <Animated.View style={[styles.container, { backgroundColor: palette.background, opacity: opacityAnim }]}>
+    <Animated.View
+      style={[
+        styles.container,
+        { backgroundColor: palette.background, opacity: opacityAnim },
+      ]}
+    >
       <SafeAreaView style={styles.safeContainer} edges={['top', 'bottom']}>
         <StatusBar style={isDark ? 'light' : 'dark'} />
 
@@ -205,8 +275,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             accessibilityLabel="Server settings"
           >
             <View style={[styles.toolsIconHalo, { backgroundColor: palette.primarySoft }]}>
-              <View style={[styles.toolsIconCircle, { backgroundColor: palette.primary }]}>
-                <Ionicons name="settings-sharp" size={16} color="#ffffff" />
+              <View style={[styles.toolsIconCircle, { backgroundColor: palette.buttonBg }]}>
+                <Ionicons name="settings-sharp" size={16} color={palette.onPrimary} />
               </View>
             </View>
           </TouchableOpacity>
@@ -255,8 +325,16 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             />
 
             {/* Solid Circular Logo Emblem */}
-            <View style={[styles.emblemCircle, { borderColor: palette.primary }]}>
-              <AttendSureLogo size={56} />
+            <View
+              style={[
+                styles.emblemCircle,
+                {
+                  borderColor: palette.primary,
+                  shadowColor: palette.primary,
+                },
+              ]}
+            >
+              <AttendSureLogo size={56} style={{ borderWidth: 0 }} />
             </View>
           </View>
 
@@ -271,11 +349,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
               const angleDeg = `${i * 45}deg`;
               const phase = i / 8;
 
-              // Staggered phase shift around the 8 dots to create the spiral wave
               const inputRange = [0, phase, (phase + 0.5) % 1, 1].sort((a, b) => a - b);
               const uniqueInput = Array.from(new Set(inputRange));
               const outputScale = uniqueInput.map((val) => {
-                const dist = Math.abs(((val - phase + 1.5) % 1) - 0.5) * 2; // 0 at peak, 1 at trough
+                const dist = Math.abs(((val - phase + 1.5) % 1) - 0.5) * 2;
                 return 1 - dist * 0.68;
               });
               const outputOpacity = uniqueInput.map((val) => {
@@ -315,7 +392,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         {/* Bottom Footer */}
         <View style={styles.footerSection}>
           <Text style={[styles.signatureText, { color: palette.textMuted }]}>
-            &copy; 2026 AttendSure &bull; <Text style={{ fontWeight: '800', color: palette.textPrimary }}>TechBlazer</Text>
+            &copy; {currentYear} AttendSure &bull;{' '}
+            <Text style={{ fontWeight: '800', color: palette.textPrimary }}>TechBlazer</Text>
           </Text>
         </View>
 
@@ -324,17 +402,20 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           visible={showToolsModal}
           transparent
           animationType="fade"
-          onRequestClose={() => {
-            setShowToolsModal(false);
-            isHoldingSplashRef.current = false;
-            if (onFinish) onFinish();
-          }}
+          onRequestClose={closeToolsAndContinue}
         >
           <View style={styles.modalBackdrop}>
-            <View style={[styles.modalCard, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+            <View
+              style={[
+                styles.modalCard,
+                { backgroundColor: palette.surface, borderColor: palette.border },
+              ]}
+            >
               <View style={styles.modalHeaderRow}>
                 <Ionicons name="server-outline" size={20} color={palette.primary} />
-                <Text style={[styles.modalTitle, { color: palette.textPrimary }]}>Server Settings</Text>
+                <Text style={[styles.modalTitle, { color: palette.textPrimary }]}>
+                  Server Settings
+                </Text>
               </View>
               <Text style={[styles.modalSubtitle, { color: palette.textSecondary }]}>
                 Enter your school server web address
@@ -351,28 +432,37 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
                 ]}
                 value={customServerUrl}
                 onChangeText={setCustomServerUrl}
-                placeholder="http://192.168.1.100:8000"
+                placeholder="https://school.example.edu"
                 placeholderTextColor={palette.textMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
+                keyboardType="url"
+                maxLength={300}
+                editable={!savingUrl}
               />
 
               <View style={styles.modalActions}>
                 <TouchableOpacity
-                  style={styles.modalCancelBtn}
-                  onPress={() => {
-                    setShowToolsModal(false);
-                    isHoldingSplashRef.current = false;
-                    if (onFinish) onFinish();
-                  }}
+                  style={[
+                    styles.modalCancelBtn,
+                    { borderColor: palette.borderStrong, backgroundColor: palette.surfaceSubtle },
+                  ]}
+                  onPress={closeToolsAndContinue}
+                  disabled={savingUrl}
                 >
-                  <Text style={[styles.modalCancelText, { color: palette.textMuted }]}>Cancel</Text>
+                  <Text style={[styles.modalCancelText, { color: palette.textPrimary }]}>
+                    Cancel
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalSaveBtn, { backgroundColor: palette.primary }]}
+                  style={[
+                    styles.modalSaveBtn,
+                    { backgroundColor: palette.buttonBg, opacity: savingUrl ? 0.6 : 1 },
+                  ]}
                   onPress={saveServerAddress}
+                  disabled={savingUrl}
                 >
-                  <Text style={styles.modalSaveText}>Save</Text>
+                  <Text style={[styles.modalSaveText, { color: palette.onPrimary }]}>Save</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -386,7 +476,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    inset: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     zIndex: 99999,
   },
   safeContainer: {
@@ -452,7 +545,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    shadowColor: '#004b87',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.14,
     shadowRadius: 10,
@@ -477,7 +569,10 @@ const styles = StyleSheet.create({
   },
   spiralArm: {
     position: 'absolute',
-    inset: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     alignItems: 'center',
   },
   spiralDot: {
@@ -542,6 +637,8 @@ const styles = StyleSheet.create({
   modalCancelBtn: {
     paddingVertical: 8,
     paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
   },
   modalCancelText: {
     fontSize: 13,
@@ -555,7 +652,6 @@ const styles = StyleSheet.create({
   modalSaveText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#ffffff',
   },
 });
 

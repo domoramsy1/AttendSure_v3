@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * ATTENDSURE - CENTRAL DESIGN TOKENS, REUSABLE STYLES & SECURITY
+ * ATTENDSURE - CENTRAL DESIGN TOKENS, REUSABLE STYLES & INPUT SAFETY
  * File: web/src/theme/tokens.ts
  * ============================================================================
  */
@@ -41,6 +41,7 @@ export const RADIUS = {
 
 export interface BrandColors {
   primary: string;
+  primarySoft: string;
   buttonBg: string;
   buttonHover: string;
   secondary: string;
@@ -52,6 +53,7 @@ export interface BrandColors {
 export const BRAND_COLORS: Record<ThemeMode, BrandColors> = {
   light: {
     primary: '#004b87',
+    primarySoft: '#e0f2fe',
     buttonBg: '#004b87',
     buttonHover: '#003a6b',
     secondary: '#0284c7',
@@ -61,6 +63,7 @@ export const BRAND_COLORS: Record<ThemeMode, BrandColors> = {
   },
   dark: {
     primary: '#38bdf8',
+    primarySoft: 'rgba(56, 189, 248, 0.16)',
     buttonBg: '#0284c7',
     buttonHover: '#0369a1',
     secondary: '#38bdf8',
@@ -70,6 +73,7 @@ export const BRAND_COLORS: Record<ThemeMode, BrandColors> = {
   },
   'high-contrast': {
     primary: '#002b4d',
+    primarySoft: '#dbeafe',
     buttonBg: '#002b4d',
     buttonHover: '#001d36',
     secondary: '#004b87',
@@ -85,12 +89,20 @@ export interface ThemeTokens {
   bgSurface: string;
   bgSurfaceSubtle: string;
   bgSurfaceHover: string;
+  bgInput: string;
   textPrimary: string;
   textSecondary: string;
   textMuted: string;
   borderSubtle: string;
+  borderInput: string;
   borderStrong: string;
   primaryLight: string;
+  success: string;
+  warning: string;
+  danger: string;
+  successBg: string;
+  warningBg: string;
+  dangerBg: string;
   successLight: string;
   warningLight: string;
   dangerLight: string;
@@ -105,12 +117,20 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     bgSurface: '#ffffff',
     bgSurfaceSubtle: '#f4f7fa',
     bgSurfaceHover: '#edf2f7',
+    bgInput: '#ffffff',
     textPrimary: '#0f172a',
     textSecondary: '#475569',
     textMuted: '#64748b',
     borderSubtle: '#e2e8f0',
+    borderInput: '#cbd5e1',
     borderStrong: '#cbd5e1',
     primaryLight: 'rgba(0, 75, 135, 0.08)',
+    success: '#059669',
+    warning: '#d97706',
+    danger: '#dc2626',
+    successBg: '#ecfdf5',
+    warningBg: '#fffbeb',
+    dangerBg: '#fef2f2',
     successLight: 'rgba(5, 150, 105, 0.11)',
     warningLight: 'rgba(217, 119, 6, 0.12)',
     dangerLight: 'rgba(220, 38, 38, 0.10)',
@@ -123,12 +143,20 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     bgSurface: '#111c30',
     bgSurfaceSubtle: '#17243d',
     bgSurfaceHover: '#1e2f4d',
+    bgInput: '#0f172a',
     textPrimary: '#f8fafc',
     textSecondary: '#cbd5e1',
     textMuted: '#94a3b8',
     borderSubtle: '#1e2f48',
+    borderInput: '#334155',
     borderStrong: '#2e4466',
     primaryLight: 'rgba(56, 189, 248, 0.14)',
+    success: '#10b981',
+    warning: '#f59e0b',
+    danger: '#f87171',
+    successBg: 'rgba(16, 185, 129, 0.16)',
+    warningBg: 'rgba(245, 158, 11, 0.16)',
+    dangerBg: 'rgba(248, 113, 113, 0.16)',
     successLight: 'rgba(16, 185, 129, 0.16)',
     warningLight: 'rgba(245, 158, 11, 0.16)',
     dangerLight: 'rgba(248, 113, 113, 0.16)',
@@ -141,12 +169,20 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     bgSurface: '#ffffff',
     bgSurfaceSubtle: '#f1f5f9',
     bgSurfaceHover: '#e2e8f0',
+    bgInput: '#ffffff',
     textPrimary: '#000000',
     textSecondary: '#0f172a',
     textMuted: '#334155',
     borderSubtle: '#94a3b8',
+    borderInput: '#334155',
     borderStrong: '#334155',
     primaryLight: '#dbeafe',
+    success: '#047857',
+    warning: '#b45309',
+    danger: '#b91c1c',
+    successBg: '#d1fae5',
+    warningBg: '#fef3c7',
+    dangerBg: '#fee2e2',
     successLight: '#d1fae5',
     warningLight: '#fef3c7',
     dangerLight: '#fee2e2',
@@ -266,23 +302,35 @@ export const createStyles = (tokens: ThemeTokens, brand: BrandColors) => ({
   }),
 });
 
+const SAFE_RASTER_DATA_URI = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i;
+
 export const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
+  const trimmed = url.trim();
+  const clean = trimmed.toLowerCase();
   if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
-  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) return false;
-  return (
-    clean.startsWith('http://') ||
-    clean.startsWith('https://') ||
-    clean.startsWith('/') ||
-    clean.startsWith('data:image/') ||
-    clean.startsWith('blob:')
-  );
+  if (
+    clean.startsWith('javascript:') ||
+    clean.startsWith('vbscript:') ||
+    clean.startsWith('file:') ||
+    clean.startsWith('data:image/svg')
+  ) {
+    return false;
+  }
+  if (clean.startsWith('data:')) {
+    return SAFE_RASTER_DATA_URI.test(trimmed);
+  }
+  if (clean.startsWith('/')) {
+    return !clean.startsWith('//');
+  }
+  return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('blob:');
 };
 
 export const sanitizeText = (text: string, maxLength = 150): string => {
-  return String(text || '').replace(/[<>]/g, '').trim().slice(0, maxLength);
+  return String(text || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, maxLength);
 };
 
 export const theme = {

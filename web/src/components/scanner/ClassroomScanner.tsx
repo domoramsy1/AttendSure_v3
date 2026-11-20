@@ -1,10 +1,10 @@
 /**
- * AttendSure - Classroom QR Attendance Scanner (USB Gun, Camera & Offline Sync)
+ * AttendSure - Classroom QR Attendance Scanner (USB QR Scanner, Camera & Offline Sync)
  * File: web/src/components/scanner/ClassroomScanner.tsx
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import apiClient from '../../api/client';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useAlert } from '../../context/AlertContext';
@@ -39,6 +39,7 @@ export interface ScannedStudent {
 
 interface ClassPeriodOption {
   id: number;
+  schedule_id?: number | null;
   name: string;
   grade_level: string;
   subject_code: string;
@@ -70,7 +71,8 @@ const loadOfflineQueue = (): OfflineScanEntry[] => {
 
 const playFeedbackChime = (type: 'SUCCESS' | 'WARNING' | 'ERROR') => {
   try {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AudioCtx =
+      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
     const osc = ctx.createOscillator();
@@ -81,6 +83,9 @@ const playFeedbackChime = (type: 'SUCCESS' | 'WARNING' | 'ERROR') => {
     gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.22);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    osc.onended = () => {
+      void ctx.close().catch(() => {});
+    };
     osc.start();
     osc.stop(ctx.currentTime + 0.22);
   } catch {
@@ -88,9 +93,18 @@ const playFeedbackChime = (type: 'SUCCESS' | 'WARNING' | 'ERROR') => {
   }
 };
 
+const MAX_QR_INPUT_LENGTH = 256;
+const sanitizeQrInput = (raw: string): string =>
+  String(raw || '').replace(/[\u0000-\u001F\u007F<>]/g, '').slice(0, MAX_QR_INPUT_LENGTH);
+
 export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isModal = false }) => {
   const { tokens, brand, ui } = useTheme();
   const { showAlert } = useAlert();
+
+  const warmPeriods = useMemo(() => {
+    const cached = peekApiCache<ClassPeriodOption[]>(API_ROUTES.attendance.classes, { summary: 1 });
+    return Array.isArray(cached) ? cached.filter((p) => p.id > 0) : [];
+  }, []);
 
   const [scannerMode, setScannerMode] = useState<'USB_GUN' | 'CAMERA'>('USB_GUN');
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -98,38 +112,67 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
   const [syncingOffline, setSyncingOffline] = useState(false);
   const [inputCode, setInputCode] = useState('');
 
-  const [periods, setPeriods] = useState<ClassPeriodOption[]>([]);
-  const [selectedPeriodId, setSelectedPeriodId] = useState<number | null>(null);
+  const [periods, setPeriods] = useState<ClassPeriodOption[]>(() => warmPeriods);
+  const [selectedPeriodId, setSelectedPeriodId] = useState<number | null>(() =>
+    warmPeriods.length > 0 ? warmPeriods[0].id : null
+  );
   const [activeStudent, setActiveStudent] = useState<ScannedStudent | null>(null);
   const [sessionList, setSessionList] = useState<ScannedStudent[]>([]);
   const [offlineQueue, setOfflineQueue] = useState<OfflineScanEntry[]>(loadOfflineQueue);
   const [cameraMessage, setCameraMessage] = useState<string | null>(null);
 
+  const mountedRef = useRef(true);
+  const loadingRef = useRef(false);
+  const processScanRef = useRef<(rawCode: string) => Promise<void>>(async () => {});
   const keyBuffer = useRef('');
   const lastKeyTime = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const frameRef = useRef<number | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cameraCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scanAbortRef = useRef<AbortController | null>(null);
+
+  loadingRef.current = loading;
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      scanAbortRef.current?.abort();
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+      if (cameraCooldownTimerRef.current) clearTimeout(cameraCooldownTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
     apiClient
-      .get(API_ROUTES.attendance.classes, { params: { summary: 1 } })
+      .get(API_ROUTES.attendance.classes, { params: { summary: 1 }, signal: controller.signal })
       .then((res) => {
-        const list: ClassPeriodOption[] = Array.isArray(res.data) ? res.data : [];
-        setPeriods(list);
-        if (list.length > 0) setSelectedPeriodId((prev) => prev ?? list[0].id);
+        if (controller.signal.aborted) return;
+        const rawList: ClassPeriodOption[] = Array.isArray(res.data) ? res.data : [];
+        const validList = rawList.filter((p) => p.id > 0);
+        setPeriods(validList);
+        if (validList.length > 0) setSelectedPeriodId((prev) => prev ?? validList[0].id);
       })
       .catch(() => {});
+    return () => controller.abort();
   }, []);
-  
+
   const syncOfflineScans = useCallback(async () => {
     const queued = loadOfflineQueue();
     if (queued.length === 0) return;
     setSyncingOffline(true);
     try {
       const res = await apiClient.post(API_ROUTES.attendance.offlineSync, { scans: queued });
-      localStorage.removeItem(OFFLINE_QUEUE_KEY);
+      if (!mountedRef.current) return;
+      try {
+        localStorage.removeItem(OFFLINE_QUEUE_KEY);
+      } catch {
+        // Ignore storage error
+      }
       setOfflineQueue([]);
       showAlert({
         title: 'Offline Scans Synced',
@@ -137,23 +180,34 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
         type: 'success',
       });
     } catch (err) {
+      if (!mountedRef.current) return;
       showAlert({ title: 'Sync Notice', message: extractApiError(err, 'Still offline.'), type: 'warning' });
     } finally {
-      setSyncingOffline(false);
+      if (mountedRef.current) setSyncingOffline(false);
     }
   }, [showAlert]);
 
   const handleProcessScan = useCallback(
     async (rawCode: string) => {
-      const clean = rawCode.trim().replace(/[\r\n]/g, '');
-      if (!clean) return;
+      const clean = sanitizeQrInput(rawCode).trim();
+      if (!clean || loadingRef.current) return;
 
+      scanAbortRef.current?.abort();
+      const controller = new AbortController();
+      scanAbortRef.current = controller;
+
+      loadingRef.current = true;
       setLoading(true);
       try {
-        const res = await apiClient.post(API_ROUTES.attendance.scan, {
-          qr_text: clean,
-          period_id: selectedPeriodId || undefined,
-        });
+        const res = await apiClient.post(
+          API_ROUTES.attendance.scan,
+          {
+            qr_text: clean,
+            period_id: selectedPeriodId && selectedPeriodId > 0 ? selectedPeriodId : undefined,
+          },
+          { signal: controller.signal }
+        );
+        if (controller.signal.aborted || !mountedRef.current) return;
 
         const d = res.data || {};
         const item: ScannedStudent = {
@@ -174,13 +228,30 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
           setSessionList((prev) => [item, ...prev.filter((p) => p.lrn !== item.lrn)]);
         }
       } catch (err: unknown) {
-        const netErr = err as { response?: unknown };
+        const netErr = err as { name?: string; code?: string; response?: unknown };
+        if (
+          controller.signal.aborted ||
+          !mountedRef.current ||
+          netErr?.name === 'CanceledError' ||
+          netErr?.name === 'AbortError' ||
+          netErr?.code === 'ERR_CANCELED'
+        ) {
+          return;
+        }
         if (!netErr?.response) {
           const nextQueue: OfflineScanEntry[] = [
             ...loadOfflineQueue(),
-            { qr_token: clean, period_id: selectedPeriodId, scanned_at: new Date().toISOString() },
+            {
+              qr_token: clean,
+              period_id: selectedPeriodId && selectedPeriodId > 0 ? selectedPeriodId : null,
+              scanned_at: new Date().toISOString(),
+            },
           ];
-          localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(nextQueue));
+          try {
+            localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(nextQueue));
+          } catch {
+            // Ignore storage quota error
+          }
           setOfflineQueue(nextQueue);
           if (soundEnabled) playFeedbackChime('WARNING');
           showAlert({
@@ -193,13 +264,21 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
           showAlert({ title: 'Scan Rejected', message: extractApiError(err), type: 'warning' });
         }
       } finally {
-        setLoading(false);
-        setInputCode('');
-        setTimeout(() => inputRef.current?.focus(), 40);
+        loadingRef.current = false;
+        if (mountedRef.current && !controller.signal.aborted) {
+          setLoading(false);
+          setInputCode('');
+          if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+          focusTimerRef.current = setTimeout(() => {
+            inputRef.current?.focus();
+          }, 40);
+        }
       }
     },
     [selectedPeriodId, soundEnabled, showAlert]
   );
+
+  processScanRef.current = handleProcessScan;
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -210,24 +289,28 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
       lastKeyTime.current = now;
       if (e.key === 'Enter' && keyBuffer.current.length >= 4) {
         e.preventDefault();
-        handleProcessScan(keyBuffer.current);
+        void processScanRef.current(keyBuffer.current);
         keyBuffer.current = '';
-      } else if (e.key.length === 1) {
-        keyBuffer.current += e.key;
+      } else if (e.key.length === 1 && keyBuffer.current.length < MAX_QR_INPUT_LENGTH) {
+        const ch = e.key.replace(/[\u0000-\u001F\u007F<>]/g, '');
+        if (ch) keyBuffer.current += ch;
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleProcessScan]);
+  }, []);
 
+  // Stable camera lifecycle: depends ONLY on scannerMode so scans never restart the webcam
   useEffect(() => {
     if (scannerMode !== 'CAMERA') {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      if (cameraCooldownTimerRef.current) clearTimeout(cameraCooldownTimerRef.current);
       return;
     }
 
+    setCameraMessage(null);
     let active = true;
     navigator.mediaDevices
       ?.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } } })
@@ -242,15 +325,24 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
           videoRef.current.play().catch(() => {});
         }
         if ('BarcodeDetector' in window) {
-          const Detector = (window as unknown as { BarcodeDetector: new (opts: { formats: string[] }) => { detect: (el: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>> } }).BarcodeDetector;
+          const Detector = (
+            window as unknown as {
+              BarcodeDetector: new (opts: { formats: string[] }) => {
+                detect: (el: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
+              };
+            }
+          ).BarcodeDetector;
           const detector = new Detector({ formats: ['qr_code', 'code_128'] });
           const tick = async () => {
             if (!active) return;
-            if (videoRef.current && videoRef.current.readyState >= 2 && !loading) {
+            if (videoRef.current && videoRef.current.readyState >= 2 && !loadingRef.current) {
               const codes = await detector.detect(videoRef.current).catch(() => []);
               if (codes[0]?.rawValue) {
-                await handleProcessScan(codes[0].rawValue);
-                await new Promise((r) => setTimeout(r, 1300));
+                await processScanRef.current(codes[0].rawValue);
+                await new Promise<void>((resolve) => {
+                  if (cameraCooldownTimerRef.current) clearTimeout(cameraCooldownTimerRef.current);
+                  cameraCooldownTimerRef.current = setTimeout(resolve, 1300);
+                });
               }
             }
             if (active) frameRef.current = requestAnimationFrame(tick);
@@ -259,7 +351,9 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
         }
       })
       .catch(() => {
-        setCameraMessage('Camera permission denied. Allow camera access in your browser bar or use USB Scanner mode.');
+        if (active) {
+          setCameraMessage('Camera permission denied. Allow camera access in your browser bar or use USB Scanner mode.');
+        }
       });
 
     return () => {
@@ -267,13 +361,39 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      if (cameraCooldownTimerRef.current) clearTimeout(cameraCooldownTimerRef.current);
     };
-  }, [scannerMode, loading, handleProcessScan]);
+  }, [scannerMode]);
 
   return (
-    <div style={isModal ? { position: 'fixed', inset: 0, zIndex: 9999, backgroundColor: 'rgba(15,23,42,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 } : { width: '100%' }}>
+    <div
+      style={
+        isModal
+          ? {
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              backgroundColor: 'rgba(15,23,42,0.65)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16,
+            }
+          : { width: '100%' }
+      }
+    >
       <div style={{ ...ui.card, padding: 0, overflow: 'hidden', width: '100%', maxWidth: isModal ? 900 : '100%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, padding: '12px 18px', borderBottom: `1px solid ${tokens.borderSubtle}` }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 12,
+            padding: '12px 18px',
+            borderBottom: `1px solid ${tokens.borderSubtle}`,
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <ControlSwitch
               options={[
@@ -286,6 +406,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
 
             {periods.length > 0 && (
               <select
+                aria-label="Select class period"
                 value={selectedPeriodId || ''}
                 onChange={(e) => setSelectedPeriodId(e.target.value ? Number(e.target.value) : null)}
                 style={{ ...ui.input, width: 'auto', minWidth: 220, padding: '6px 10px' }}
@@ -312,28 +433,53 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
             </button>
 
             {onClose && (
-              <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: tokens.textMuted }}>
+              <button
+                type="button"
+                aria-label="Close scanner"
+                onClick={onClose}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: tokens.textMuted }}
+              >
                 <X size={18} />
               </button>
             )}
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, padding: 18, backgroundColor: tokens.bgCanvas }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+            gap: 16,
+            padding: 18,
+            backgroundColor: tokens.bgCanvas,
+          }}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {scannerMode === 'USB_GUN' ? (
               <div onClick={() => inputRef.current?.focus()} style={{ ...ui.card, textAlign: 'center', padding: 24, cursor: 'text' }}>
-                <div style={{ width: 54, height: 54, borderRadius: '50%', backgroundColor: tokens.primaryLight, color: brand.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px' }}>
+                <div
+                  style={{
+                    width: 54,
+                    height: 54,
+                    borderRadius: '50%',
+                    backgroundColor: tokens.primaryLight,
+                    color: brand.primary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    margin: '0 auto 10px',
+                  }}
+                >
                   <Scan size={26} />
                 </div>
                 <div style={{ fontSize: '1rem', fontWeight: 800, color: tokens.textPrimary }}>USB QR Scanner Ready</div>
                 <p style={{ fontSize: '0.76rem', color: tokens.textSecondary, margin: '6px auto 14px', maxWidth: 400 }}>
-                  Scan a signed student QR ID card or type the 12-digit LRN below.
+                  Scan an official signed student QR ID card below.
                 </p>
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
-                    handleProcessScan(inputCode);
+                    void handleProcessScan(inputCode);
                   }}
                   style={{ display: 'flex', gap: 8 }}
                 >
@@ -341,9 +487,10 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                     ref={inputRef}
                     type="text"
                     autoFocus
+                    maxLength={MAX_QR_INPUT_LENGTH}
                     value={inputCode}
-                    onChange={(e) => setInputCode(e.target.value)}
-                    placeholder="Scan QR card or enter LRN..."
+                    onChange={(e) => setInputCode(sanitizeQrInput(e.target.value))}
+                    placeholder="Scan signed QR card..."
                     style={{ ...ui.input, fontFamily: 'monospace' }}
                   />
                   <button type="submit" disabled={loading || !inputCode.trim()} style={ui.btnPrimary}>
@@ -356,9 +503,29 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                 {cameraMessage ? (
                   <div style={{ ...ui.subtleBox, color: brand.warning }}>{cameraMessage}</div>
                 ) : (
-                  <div style={{ position: 'relative', height: 260, backgroundColor: '#0f172a', borderRadius: 10, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div
+                    style={{
+                      position: 'relative',
+                      height: 260,
+                      backgroundColor: '#0f172a',
+                      borderRadius: 10,
+                      overflow: 'hidden',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
                     <video ref={videoRef} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    <div style={{ position: 'absolute', width: 165, height: 165, border: `2px solid ${brand.primary}`, borderRadius: 12, pointerEvents: 'none' }} />
+                    <div
+                      style={{
+                        position: 'absolute',
+                        width: 165,
+                        height: 165,
+                        border: `2px solid ${brand.primary}`,
+                        borderRadius: 12,
+                        pointerEvents: 'none',
+                      }}
+                    />
                   </div>
                 )}
               </div>
@@ -376,7 +543,9 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
                   <div>
-                    <div style={{ fontSize: '1.02rem', fontWeight: 900, color: tokens.textPrimary }}>{activeStudent.student_name}</div>
+                    <div style={{ fontSize: '1.02rem', fontWeight: 900, color: tokens.textPrimary }}>
+                      {activeStudent.student_name}
+                    </div>
                     <div style={{ fontSize: '0.78rem', color: brand.primary, fontWeight: 700, marginTop: 2 }}>
                       LRN: {activeStudent.lrn} &bull; {activeStudent.section}
                     </div>
@@ -384,12 +553,31 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                       <Clock size={12} /> {activeStudent.scanned_at}
                     </div>
                   </div>
-                  <span style={ui.badge(activeStudent.is_duplicate ? tokens.warningLight : tokens.successLight, activeStudent.is_duplicate ? brand.warning : brand.success)}>
+                  <span
+                    style={ui.badge(
+                      activeStudent.is_duplicate ? tokens.warningLight : tokens.successLight,
+                      activeStudent.is_duplicate ? brand.warning : brand.success
+                    )}
+                  >
                     {activeStudent.is_duplicate ? 'DUPLICATE' : activeStudent.status}
                   </span>
                 </div>
                 {activeStudent.attendance_note && (
-                  <div style={{ marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopStyle: 'dashed', borderTopColor: tokens.borderSubtle, fontSize: '0.74rem', fontWeight: 700, color: activeStudent.attendance_note.includes('CUTTING') ? brand.danger : brand.success, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div
+                    style={{
+                      marginTop: 10,
+                      paddingTop: 8,
+                      borderTopWidth: 1,
+                      borderTopStyle: 'dashed',
+                      borderTopColor: tokens.borderSubtle,
+                      fontSize: '0.74rem',
+                      fontWeight: 700,
+                      color: activeStudent.attendance_note.includes('CUTTING') ? brand.danger : brand.success,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
                     <ShieldCheck size={14} /> {activeStudent.attendance_note}
                   </div>
                 )}
@@ -406,16 +594,30 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                 }}
               >
                 <QrCode size={30} color={tokens.textMuted} style={{ margin: '0 auto 6px', display: 'block' }} />
-                <div style={{ fontSize: '0.80rem', fontWeight: 700, color: tokens.textSecondary }}>Waiting for First QR Scan</div>
+                <div style={{ fontSize: '0.80rem', fontWeight: 700, color: tokens.textSecondary }}>
+                  Waiting for First QR Scan
+                </div>
               </div>
             )}
           </div>
 
           <div style={{ ...ui.card, padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '12px 16px', borderBottom: `1px solid ${tokens.borderSubtle}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div
+              style={{
+                padding: '12px 16px',
+                borderBottom: `1px solid ${tokens.borderSubtle}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
               <strong style={{ fontSize: '0.82rem', color: tokens.textPrimary }}>SESSION SCANS ({sessionList.length})</strong>
               {sessionList.length > 0 && (
-                <button type="button" onClick={() => setSessionList([])} style={{ background: 'none', border: 'none', color: brand.danger, fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer' }}>
+                <button
+                  type="button"
+                  onClick={() => setSessionList([])}
+                  style={{ background: 'none', border: 'none', color: brand.danger, fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer' }}
+                >
                   Clear
                 </button>
               )}

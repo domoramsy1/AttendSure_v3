@@ -3,9 +3,10 @@
  * File: web/src/context/SchoolContext.tsx
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import apiClient from '../api/client';
 import { API_ROUTES } from '../api/routes';
+import { isSafeImageUrl } from '../theme/tokens';
 
 export interface SchoolData {
   school_id: string;
@@ -55,10 +56,12 @@ const EMPTY_SCHOOL: SchoolData = {
 
 const sanitizeCachedSchool = (raw: Partial<SchoolData>): SchoolData => {
   const merged = { ...EMPTY_SCHOOL, ...raw };
-  // Purge legacy mock placeholder ID if present in browser storage
   if (merged.school_id === '55555' || merged.school_id === '000000') {
     merged.school_id = '';
   }
+  merged.school_logo = isSafeImageUrl(merged.school_logo) ? merged.school_logo : null;
+  merged.left_logo = isSafeImageUrl(merged.left_logo) ? merged.left_logo : null;
+  merged.right_logo = isSafeImageUrl(merged.right_logo) ? merged.right_logo : null;
   return merged;
 };
 
@@ -112,34 +115,57 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, []);
 
-  const fetchSchoolData = useCallback(async () => {
-    const endpoint = hasActiveToken()
-      ? API_ROUTES.school.settings
-      : '/v1/school/public-branding/';
-    try {
-      const res = await apiClient.get<SchoolData>(endpoint, { timeout: 6000 });
-      if (res.data) applySchoolUpdate(res.data);
-    } catch {
-      // Keep clean cached state if offline
-    } finally {
-      setLoading(false);
-    }
-  }, [applySchoolUpdate]);
+  const abortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    fetchSchoolData();
+  const fetchSchoolData = useCallback(
+    async (bypassCache = false) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const endpoint = hasActiveToken() ? API_ROUTES.school.settings : API_ROUTES.school.publicBranding;
+      try {
+        const res = await apiClient.get<SchoolData>(endpoint, {
+          timeout: 6000,
+          params: bypassCache ? { nocache: 1 } : undefined,
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted && res.data) applySchoolUpdate(res.data);
+      } catch {
+        // Keep clean cached state if offline or canceled
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    },
+    [applySchoolUpdate]
+  );
+
+  const refreshSchool = useCallback(async () => {
+    await fetchSchoolData(true);
   }, [fetchSchoolData]);
 
+  useEffect(() => {
+    void fetchSchoolData(false);
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, [fetchSchoolData]);
+
+  const contextValue = useMemo<SchoolContextValue>(
+    () => ({
+      school,
+      loading,
+      refreshSchool,
+      updateSchool: applySchoolUpdate,
+      updateSchoolInstantly: applySchoolUpdate,
+    }),
+    [school, loading, refreshSchool, applySchoolUpdate]
+  );
+
   return (
-    <SchoolContext.Provider
-      value={{
-        school,
-        loading,
-        refreshSchool: fetchSchoolData,
-        updateSchool: applySchoolUpdate,
-        updateSchoolInstantly: applySchoolUpdate,
-      }}
-    >
+    <SchoolContext.Provider value={contextValue}>
       {children}
     </SchoolContext.Provider>
   );

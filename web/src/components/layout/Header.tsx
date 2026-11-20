@@ -3,17 +3,19 @@
  * File: web/src/components/layout/Header.tsx
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import apiClient from '../../api/client';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import apiClient, { clearApiClientCache } from '../../api/client';
 import { API_ROUTES } from '../../api/routes';
 import { useSchool } from '../../context/SchoolContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useCompliance, LOCALE_OPTIONS, type SupportedLocale } from '../../context/ComplianceContext';
 import { isSafeImageUrl, type ThemeMode } from '../../theme/tokens';
 import { ControlSwitch } from '../ui/ControlSwitch';
 import StudentIdPassModal from '../modals/StudentIdPassModal';
 import {
   Bell,
   ChevronDown,
+  Globe,
   LogOut,
   User,
   CheckCircle2,
@@ -72,6 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const { school } = useSchool();
   const { mode, setThemeMode, tokens, brand, fonts, ui } = useTheme();
+  const { complianceMode, toggleComplianceMode, isGlobalMode, locale, setLocale } = useCompliance();
 
   const [systemOnline, setSystemOnline] = useState<boolean>(isSystemOnline);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -79,14 +82,54 @@ export const Header: React.FC<HeaderProps> = ({
   const [unreadAlerts, setUnreadAlerts] = useState<AlertNotice[]>([]);
   const [isDigitalPassOpen, setIsDigitalPassOpen] = useState(false);
 
+  const pollAbortRef = useRef<AbortController | null>(null);
+  const notifRef = useRef<HTMLDivElement | null>(null);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     setSystemOnline(isSystemOnline);
   }, [isSystemOnline]);
 
+  useEffect(() => {
+    if (!notifOpen && !dropdownOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (notifOpen && notifRef.current && !notifRef.current.contains(target)) {
+        setNotifOpen(false);
+      }
+      if (dropdownOpen && profileMenuRef.current && !profileMenuRef.current.contains(target)) {
+        setDropdownOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setNotifOpen(false);
+        setDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [notifOpen, dropdownOpen]);
+
   const pollAlerts = useCallback(async () => {
     if (!session?.token || document.visibilityState !== 'visible') return;
+    pollAbortRef.current?.abort();
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
+
     try {
-      const res = await apiClient.get(API_ROUTES.messaging.notifications, { params: { page_size: 10 } });
+      const res = await apiClient.get(API_ROUTES.messaging.notifications, {
+        params: { page_size: 10 },
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
       const raw = Array.isArray(res.data) ? res.data : res.data?.results || [];
       const unread = raw
         .filter((item: { is_read?: boolean }) => !item.is_read)
@@ -103,9 +146,14 @@ export const Header: React.FC<HeaderProps> = ({
   }, [session?.token]);
 
   useEffect(() => {
-    pollAlerts();
-    const timer = setInterval(pollAlerts, 30000);
-    return () => clearInterval(timer);
+    void pollAlerts();
+    const timer = setInterval(() => {
+      void pollAlerts();
+    }, 30000);
+    return () => {
+      clearInterval(timer);
+      pollAbortRef.current?.abort();
+    };
   }, [pollAlerts]);
 
   const markAllAlertsRead = async () => {
@@ -114,11 +162,27 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   const handleLogout = () => {
+    setDropdownOpen(false);
+    setNotifOpen(false);
     if (onLogout) {
       onLogout();
       return;
     }
-    localStorage.clear();
+    const authKeys = [
+      'attendsure_access',
+      'attendsure_refresh',
+      'attendsure_token',
+      'auth_token',
+      'token',
+      'attendsure_username',
+      'attendsure_faculty_name',
+      'attendsure_role',
+      'attendsure_user_id',
+      'attendsure_user_photo',
+      'attendsure_can_teach',
+    ];
+    authKeys.forEach((k) => localStorage.removeItem(k));
+    clearApiClientCache();
     window.dispatchEvent(new CustomEvent('attendsure:auth-expired'));
   };
 
@@ -163,6 +227,44 @@ export const Header: React.FC<HeaderProps> = ({
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <button
           type="button"
+          onClick={toggleComplianceMode}
+          title="Switch between Global Ed-Fi Standard and DepEd Philippines Official Forms"
+          style={{
+            ...ui.badge(isGlobalMode ? tokens.primaryLight : tokens.successLight, isGlobalMode ? brand.primary : brand.success),
+            borderWidth: 1,
+            borderStyle: 'solid',
+            borderColor: isGlobalMode ? brand.primary : brand.success,
+            padding: '5px 9px',
+            cursor: 'pointer',
+          }}
+        >
+          <Globe size={12} /> {complianceMode === 'GLOBAL' ? 'Global Ed-Fi' : 'DepEd PH'}
+        </button>
+
+        <select
+          aria-label="Language"
+          value={locale}
+          onChange={(e) => setLocale(e.target.value as SupportedLocale)}
+          style={{
+            padding: '4px 6px',
+            borderRadius: 7,
+            border: `1px solid ${tokens.borderStrong}`,
+            backgroundColor: tokens.bgSurfaceSubtle,
+            color: tokens.textPrimary,
+            fontSize: '0.70rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          {LOCALE_OPTIONS.map((opt) => (
+            <option key={opt.code} value={opt.code}>
+              {opt.shortLabel}
+            </option>
+          ))}
+        </select>
+
+        <button
+          type="button"
           onClick={() => setIsDigitalPassOpen(true)}
           style={{
             ...ui.badge(tokens.primaryLight, brand.primary),
@@ -188,11 +290,16 @@ export const Header: React.FC<HeaderProps> = ({
           ariaLabel="Theme Mode"
         />
 
-        <div style={{ position: 'relative' }}>
+        <div ref={notifRef} style={{ position: 'relative' }}>
           <button
             type="button"
-            onClick={() => setNotifOpen(!notifOpen)}
+            onClick={() => {
+              setNotifOpen((prev) => !prev);
+              setDropdownOpen(false);
+            }}
             aria-label="Notifications"
+            aria-haspopup="true"
+            aria-expanded={notifOpen}
             style={{ ...ui.btnSecondary, padding: 6, position: 'relative' }}
           >
             <Bell size={14} />
@@ -202,7 +309,7 @@ export const Header: React.FC<HeaderProps> = ({
                   position: 'absolute',
                   top: -4,
                   right: -4,
-                  backgroundColor: brand.danger,
+                  backgroundColor: mode === 'dark' ? '#dc2626' : brand.danger,
                   color: '#fff',
                   fontSize: '0.58rem',
                   fontWeight: 800,
@@ -243,6 +350,8 @@ export const Header: React.FC<HeaderProps> = ({
                     </div>
                     <button
                       type="button"
+                      aria-label="Dismiss alert"
+                      title="Dismiss"
                       onClick={() => setUnreadAlerts((prev) => prev.filter((item) => item.id !== n.id))}
                       style={{ background: 'none', border: 'none', color: tokens.textMuted, cursor: 'pointer' }}
                     >
@@ -255,10 +364,15 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
-        <div style={{ position: 'relative' }}>
+        <div ref={profileMenuRef} style={{ position: 'relative' }}>
           <button
             type="button"
-            onClick={() => setDropdownOpen(!dropdownOpen)}
+            onClick={() => {
+              setDropdownOpen((prev) => !prev);
+              setNotifOpen(false);
+            }}
+            aria-haspopup="true"
+            aria-expanded={dropdownOpen}
             style={{ display: 'flex', alignItems: 'center', gap: 7, background: 'none', border: 'none', cursor: 'pointer' }}
           >
             <div
@@ -325,7 +439,9 @@ export const Header: React.FC<HeaderProps> = ({
           }}
           selectedClass={{ id: 0, section_name: `${displayRole} • ${activeSchoolName}` } as never}
           onClose={() => setIsDigitalPassOpen(false)}
-          onCopyLrn={(id) => navigator.clipboard?.writeText(id)}
+          onCopyLrn={(id) => {
+            void navigator.clipboard?.writeText(id).catch(() => {});
+          }}
         />
       )}
     </header>

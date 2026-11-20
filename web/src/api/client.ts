@@ -13,7 +13,7 @@ import axios, {
 import { API_ROUTES } from './routes';
 
 const FRESH_TTL_MS = 25_000;
-const STALE_TTL_MS = 300_000;
+const STALE_TTL_MS = 120_000;
 const MAX_CACHE_ENTRIES = 150;
 
 interface CacheEntry {
@@ -28,14 +28,15 @@ const responseCache = new Map<string, CacheEntry>();
 const inflightGetMap = new Map<string, Promise<AxiosResponse>>();
 const cacheListeners = new Map<string, Set<CacheListener>>();
 
-// Safety map ensuring any residual unversioned path resolves to its canonical /v1/ endpoint
+// Maps any legacy unversioned path to its canonical /api/v1/ endpoint
 const LEGACY_TO_V1_PREFIXES: ReadonlyArray<[RegExp, string]> = [
   [/^me\/?$/i, 'v1/accounts/me/'],
   [/^users(\/|$)/i, 'v1/accounts/users$1'],
-  [/^facultys(\/|$)/i, 'v1/accounts/teachers$1'],
-  [/^faculty\/dropdown\/?$/i, 'v1/accounts/teachers/dropdown/'],
-  [/^faculty\/(\d+)\/reset-device\/?$/i, 'v1/accounts/teachers/$1/reset-device/'],
-  [/^faculty(\/|$)/i, 'v1/accounts/teachers$1'],
+  [/^faculties(\/|$)/i, 'v1/accounts/faculty$1'],
+  [/^facultys(\/|$)/i, 'v1/accounts/faculty$1'],
+  [/^faculty\/dropdown\/?$/i, 'v1/accounts/faculty/dropdown/'],
+  [/^faculty\/(\d+)\/reset-device\/?$/i, 'v1/accounts/faculty/$1/reset-device/'],
+  [/^faculty(\/|$)/i, 'v1/accounts/faculty$1'],
   [/^activity-logs(\/|$)/i, 'v1/accounts/audit-logs$1'],
   [/^settings\/school\/?$/i, 'v1/school/settings/'],
   [/^academic-years(\/|$)/i, 'v1/school/school-years$1'],
@@ -50,8 +51,9 @@ const LEGACY_TO_V1_PREFIXES: ReadonlyArray<[RegExp, string]> = [
   [/^classroom\/(student_list|class_list)\/?$/i, 'v1/attendance/classes/'],
   [/^geofence\/audit\/?$/i, 'v1/campus/audit/'],
   [/^geofence(\/|$)/i, 'v1/campus/boundary$1'],
-  [/^enterprise\/emergency-rollcall\/?$/i, 'v1/campus/roll-call/'],
+  [/^enterprise\/emergency-roll-?call\/?$/i, 'v1/campus/roll-call/'],
   [/^enterprise\/sdg-impact\/?$/i, 'v1/reports/sdg-impact/'],
+  [/^enterprise\/edfi-export\/?$/i, 'v1/reports/edfi-export/'],
   [/^enterprise\/sardo-early-warning\/?$/i, 'v1/reports/dropout-risk/'],
   [/^dashboard\/overview\/?$/i, 'v1/reports/dashboard/'],
   [/^system\/status\/?$/i, 'v1/reports/system-status/'],
@@ -61,6 +63,7 @@ const LEGACY_TO_V1_PREFIXES: ReadonlyArray<[RegExp, string]> = [
   [/^chat\/messages\/?$/i, 'v1/messaging/messages/'],
   [/^core\/maintenance\/db-check\/?$/i, 'v1/health/db/'],
   [/^core\/maintenance\/flush-cache\/?$/i, 'v1/cache/flush/'],
+  [/^core\/maintenance\/unlock-accounts\/?$/i, 'v1/accounts/unlock-accounts/'],
 ];
 
 const notifyCacheListeners = (key: string, data: unknown): void => {
@@ -86,11 +89,13 @@ export const clearApiClientCache = (): void => {
   inflightGetMap.clear();
 };
 
+/**
+ * Evicts cached GET entries completely so immediate post-mutation refetches
+ * always read fresh database state instead of stale SWR snapshots.
+ */
 export const invalidateApiCache = (): void => {
-  const now = Date.now();
-  responseCache.forEach((entry) => {
-    entry.freshUntil = now - 1;
-  });
+  responseCache.clear();
+  inflightGetMap.clear();
 };
 
 const isLocalOrLanHost = (hostname: string): boolean =>
@@ -110,7 +115,11 @@ export const resolveBaseUrl = (): string => {
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location;
     if (port === '80' || port === '443' || port === '5173' || !port) {
-      if (hostname.includes('attendsure.com.ph') || hostname.includes('trycloudflare.com')) {
+      if (
+        hostname.includes('attendsure.ph') ||
+        hostname.includes('attendsure.com.ph') ||
+        hostname.includes('trycloudflare.com')
+      ) {
         return `${protocol}//${hostname}`;
       }
     }
@@ -216,6 +225,7 @@ const clearStoredAuth = (): void => {
     'attendsure_can_teach',
   ];
   keys.forEach((k) => localStorage.removeItem(k));
+  lastWarmupUser = '';
   clearApiClientCache();
 };
 
@@ -259,17 +269,29 @@ apiClient.interceptors.request.use(
 
 let refreshPromise: Promise<string | null> | null = null;
 
-apiClient.interceptors.response.use(
-  (response) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as (InternalAxiosRequestConfig & { _retried?: boolean }) | undefined;
-    const reqUrl = originalRequest?.url || '';
-    const isAuthRoute = reqUrl.includes('/login/') || reqUrl.includes('/token/');
+type RetriableConfig = InternalAxiosRequestConfig & {
+  _jwtRetried?: boolean;
+  _tokenRetried?: boolean;
+};
 
-    if (error.response?.status === 401 && originalRequest && !originalRequest._retried && !isAuthRoute) {
+apiClient.interceptors.response.use(
+  (response) => {
+    const method = (response.config.method || 'get').toLowerCase();
+    if (method !== 'get') {
+      // Clear cache AFTER mutation commits so follow-up GETs never read pre-mutation snapshots
+      invalidateApiCache();
+    }
+    return response;
+  },
+  async (error: AxiosError) => {
+    const originalRequest = error.config as RetriableConfig | undefined;
+    const reqUrl = originalRequest?.url || '';
+    const isAuthRoute = reqUrl.includes('/login/') || reqUrl.includes('/token/') || reqUrl.includes('/public-branding/');
+
+    if (error.response?.status === 401 && originalRequest && !isAuthRoute) {
       const refreshToken = localStorage.getItem('attendsure_refresh')?.trim();
-      if (refreshToken) {
-        originalRequest._retried = true;
+      if (refreshToken && !originalRequest._jwtRetried) {
+        originalRequest._jwtRetried = true;
         if (!refreshPromise) {
           refreshPromise = axios
             .post(`${resolveBaseUrl()}/api/v1/accounts/token/refresh/`, { refresh: refreshToken }, { timeout: 6000 })
@@ -297,8 +319,12 @@ apiClient.interceptors.response.use(
       }
 
       const fallbackToken = localStorage.getItem('attendsure_token')?.trim();
-      if (fallbackToken && String(originalRequest.headers?.Authorization || '').startsWith('Bearer ')) {
-        originalRequest._retried = true;
+      if (
+        fallbackToken &&
+        !originalRequest._tokenRetried &&
+        String(originalRequest.headers?.Authorization || '').startsWith('Bearer ')
+      ) {
+        originalRequest._tokenRetried = true;
         localStorage.removeItem('attendsure_access');
         originalRequest.headers.Authorization = `Token ${fallbackToken}`;
         return apiClient(originalRequest);
@@ -409,7 +435,6 @@ export const prefetchApiGet = (url: string, params?: Record<string, unknown>): v
 
 let lastWarmupUser = '';
 
-/** Gently preloads only 3 lightweight (<1KB) lookup endpoints once per user login. */
 export const warmupRoleEndpoints = (role: string, canTeach: boolean): void => {
   const userScope = localStorage.getItem('attendsure_username') || '';
   if (!userScope || lastWarmupUser === userScope) return;

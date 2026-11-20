@@ -1,19 +1,20 @@
 /**
- * AttendSure - Zero-Mock Foreground Telemetry Service
+ * AttendSure - Live Campus GPS Check-In Service
  * File: mobile/src/services/telemetryService.ts
  */
 
 import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 import * as Battery from 'expo-battery';
-import * as Application from 'expo-application';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
+import { getFriendlyErrorMessage } from '../constants/theme';
+import { getOrCreateDeviceUuid, getHardwareDeviceUuid } from './deviceService';
 import { enqueueOfflineHeartbeat, QueuedTelemetryPayload } from './offlineQueue';
 
-const DEVICE_UUID_STORAGE_KEY = 'attendsure_hardware_device_uuid';
 let lastSentTimestamp = 0;
 const ONE_MINUTE_MS = 60000;
+
+export { getOrCreateDeviceUuid, getHardwareDeviceUuid };
 
 export interface HeartbeatResponse {
   status?: string;
@@ -34,36 +35,19 @@ export interface CoordinatesPayload {
   timestamp?: string;
 }
 
-export const getHardwareDeviceUuid = async (): Promise<string | null> => {
-  try {
-    const existing = await AsyncStorage.getItem(DEVICE_UUID_STORAGE_KEY);
-    if (existing && existing.trim().length > 0) {
-      return existing.trim();
-    }
-
-    let realHardwareId: string | null = null;
-    if (Platform.OS === 'android') {
-      realHardwareId = Application.getAndroidId();
-    } else if (Platform.OS === 'ios') {
-      realHardwareId = await Application.getIosIdForVendorAsync();
-    }
-
-    if (realHardwareId && realHardwareId.trim().length > 0) {
-      const cleanId = `DEV-${Platform.OS.toUpperCase()}-${realHardwareId.trim().toUpperCase()}`;
-      await AsyncStorage.setItem(DEVICE_UUID_STORAGE_KEY, cleanId);
-      return cleanId;
-    }
-  } catch {}
-  return null;
-};
-
-export const getOrCreateDeviceUuid = getHardwareDeviceUuid;
-
 export const getRealDeviceModel = (): string | null => {
   if (Platform.OS === 'android') {
-    const constants = Platform.constants as Record<string, any>;
-    const brand = constants?.Brand || constants?.brand || '';
-    const model = constants?.Model || constants?.model || '';
+    const constants = Platform.constants as unknown as Record<string, unknown>;
+    const brand = typeof constants?.Brand === 'string'
+      ? constants.Brand
+      : typeof constants?.brand === 'string'
+      ? constants.brand
+      : '';
+    const model = typeof constants?.Model === 'string'
+      ? constants.Model
+      : typeof constants?.model === 'string'
+      ? constants.model
+      : '';
     const full = `${brand} ${model}`.trim();
     return full.length > 0 ? full : null;
   }
@@ -76,7 +60,7 @@ export const getRealDeviceModel = (): string | null => {
 export const getRealBatteryPercentage = async (): Promise<number | null> => {
   try {
     const level = await Battery.getBatteryLevelAsync();
-    if (typeof level === 'number' && level >= 0 && !isNaN(level)) {
+    if (typeof level === 'number' && level >= 0 && !Number.isNaN(level)) {
       return Math.round(level * 100);
     }
   } catch {}
@@ -86,18 +70,24 @@ export const getRealBatteryPercentage = async (): Promise<number | null> => {
 export const evaluateRealSignal = (
   accuracyMeters: number | null | undefined
 ): { label: string | null; percentage: number | null } => {
-  if (accuracyMeters === null || accuracyMeters === undefined || accuracyMeters < 0 || isNaN(accuracyMeters)) {
+  if (
+    accuracyMeters === null ||
+    accuracyMeters === undefined ||
+    accuracyMeters < 0 ||
+    Number.isNaN(accuracyMeters)
+  ) {
     return { label: null, percentage: null };
   }
   if (accuracyMeters <= 15) {
     return { label: 'Strong', percentage: 95 };
-  } else if (accuracyMeters <= 30) {
-    return { label: 'Good', percentage: 75 };
-  } else if (accuracyMeters <= 60) {
-    return { label: 'Fair', percentage: 50 };
-  } else {
-    return { label: 'Weak', percentage: 25 };
   }
+  if (accuracyMeters <= 30) {
+    return { label: 'Good', percentage: 75 };
+  }
+  if (accuracyMeters <= 60) {
+    return { label: 'Fair', percentage: 50 };
+  }
+  return { label: 'Weak', percentage: 25 };
 };
 
 export const format12HourTime = (date: Date = new Date()): string => {
@@ -134,7 +124,7 @@ export const sendLiveHeartbeat = async (
   if (lat === undefined || lng === undefined) {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      throw new Error('Location permission is required.');
+      throw new Error('Location permission is required to verify campus presence.');
     }
     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
     lat = loc.coords.latitude;
@@ -143,14 +133,24 @@ export const sendLiveHeartbeat = async (
     isMock = Boolean(loc.mocked);
   }
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-    throw new Error('Invalid satellite coordinates.');
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng) ||
+    lat < -90 ||
+    lat > 90 ||
+    lng < -180 ||
+    lng > 180
+  ) {
+    throw new Error('Unable to read valid campus location coordinates.');
   }
 
-  const [hardwareUuid, batteryLevel] = await Promise.all([
+  const [uuidRes, batteryRes] = await Promise.allSettled([
     getHardwareDeviceUuid(),
     getRealBatteryPercentage(),
   ]);
+
+  const hardwareUuid = uuidRes.status === 'fulfilled' ? uuidRes.value : '';
+  const batteryLevel = batteryRes.status === 'fulfilled' ? batteryRes.value : null;
 
   const deviceModel = getRealDeviceModel();
   const signal = evaluateRealSignal(acc);
@@ -170,7 +170,7 @@ export const sendLiveHeartbeat = async (
 
   try {
     const res = await apiClient.post(
-      'geofence/checkin/',
+      'geofence/check-in/',
       {
         client_device_id: hardwareUuid,
         device_id: hardwareUuid,
@@ -193,12 +193,19 @@ export const sendLiveHeartbeat = async (
       ...res.data,
       isQueuedOffline: false,
     };
-  } catch (err: any) {
-    const httpStatus = err?.response?.status;
-    const msg = err?.response?.data?.error || err?.message;
+  } catch (err: unknown) {
+    const httpStatus = (err as { response?: { status?: number } })?.response?.status;
+
+    if (httpStatus === 401) {
+      throw new Error(
+        getFriendlyErrorMessage(err, 'Your session expired. Please sign in again.')
+      );
+    }
 
     if (httpStatus === 403) {
-      throw new Error(msg || 'Device lock mismatch or mock location detected.');
+      throw new Error(
+        getFriendlyErrorMessage(err, 'Device lock mismatch or fake location detected.')
+      );
     }
 
     await enqueueOfflineHeartbeat(payload);

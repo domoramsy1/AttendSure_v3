@@ -4,13 +4,15 @@
  */
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
-import { isSafeImageUrl, sanitizeText } from '../../theme/tokens';
+import { useAlert } from '../../context/AlertContext';
+import { isSafeImageUrl } from '../../theme/tokens';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
+import { QrCodeSvg } from '../common/QrCodeSvg';
 import { exportToCsv } from '../common/Pagination';
 import { ControlSwitch } from '../ui/ControlSwitch';
 import { Modal } from '../ui/Modal';
@@ -31,6 +33,7 @@ import {
   ShieldCheck,
   BookOpen,
   UserCheck,
+  Trash2,
 } from 'lucide-react';
 
 export interface StudentItem {
@@ -40,9 +43,17 @@ export interface StudentItem {
   gender: string;
   photo_url?: string | null;
   attendance_status: string;
+  attendance_record_id?: number | null;
   parent_contact?: string;
   qr_token?: string;
+  qr_payload?: string;
 }
+
+const sanitizeInput = (raw: string, maxLength = 60): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, maxLength);
 
 export interface AssignedClass {
   schedule_id: number;
@@ -124,6 +135,7 @@ const formatStatusLabel = (status: string): string => {
 export const MyAssignedClassesTab: React.FC = () => {
   const { tokens, brand, fonts, ui } = useTheme();
   const { school } = useSchool();
+  const { showAlert, showConfirm } = useAlert();
 
   const [classes, setClasses] = useState<AssignedClass[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -136,16 +148,92 @@ export const MyAssignedClassesTab: React.FC = () => {
   const [viewScope, setViewScope] = useState<ViewScope>('MY_CLASSES');
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const [badgeStudent, setBadgeStudent] = useState<StudentItem | null>(null);
+  const [savingStudentId, setSavingStudentId] = useState<number | null>(null);
 
   const userRole = useMemo(
     () => String(localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(),
     []
   );
-  const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(userRole);
+  const isAdmin = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL'].includes(userRole);
+  const canEditAttendance = userRole !== 'PARENT';
 
   const abortRef = useRef<AbortController | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInteracting = useRef<boolean>(false);
   isInteracting.current = Boolean(badgeStudent);
+
+  const normalizeClassList = useCallback((rawPayload: unknown): AssignedClass[] => {
+    const rawData: Record<string, unknown>[] = Array.isArray(rawPayload)
+      ? rawPayload
+      : Array.isArray((rawPayload as { results?: Record<string, unknown>[] })?.results)
+        ? ((rawPayload as { results: Record<string, unknown>[] }).results)
+        : [];
+
+    return rawData.map((item, idx) => {
+      const rawStudents = Array.isArray(item.students) ? item.students : [];
+      const students: StudentItem[] = rawStudents.map((st: Record<string, unknown>) => {
+        const rawPhoto = (st.photo_url || st.photo) as string | null | undefined;
+        const fullName =
+          String(st.name || st.full_name || '').trim() ||
+          `${String(st.first_name || '')} ${String(st.last_name || '')}`.trim() ||
+          'Student';
+
+        return {
+          id: Number(st.id) || 0,
+          lrn: String(st.lrn || '—').trim(),
+          name: fullName,
+          gender: String(st.sex || st.gender || '—').trim(),
+          photo_url: isSafeImageUrl(rawPhoto) ? rawPhoto : null,
+          attendance_status: String(st.attendance_status || 'UNSCANNED').toUpperCase(),
+          attendance_record_id: st.attendance_record_id ? Number(st.attendance_record_id) : null,
+          parent_contact: String(st.parent_contact || '').trim(),
+          qr_token: String(st.qr_token || '').trim(),
+          qr_payload: String(st.qr_payload || '').trim() || undefined,
+        };
+      });
+
+      const sectionName = String(item.section_name || item.name || 'Section').trim();
+      const subjectTitle = String(item.subject_title || item.subject_name || 'Homeroom').trim();
+      const startTime = item.start_time ? String(item.start_time).slice(0, 5) : '';
+      const endTime = item.end_time ? String(item.end_time).slice(0, 5) : '';
+      const timeDisplay =
+        String(item.time_display || '').trim() ||
+        (startTime && endTime ? `${startTime} - ${endTime}` : 'Homeroom');
+      const roomVal = String(item.room_number || item.room || '').trim();
+
+      return {
+        schedule_id: Number(item.schedule_id || item.id || idx + 1),
+        section_id: Number(item.section_id || idx + 1),
+        section_name: sectionName,
+        grade_level: extractGradeLevelText(item.grade_level),
+        display_name: String(item.display_name || `${sectionName} • ${subjectTitle}`),
+        subject_code: String(item.subject_code || 'CLASS'),
+        subject_title: subjectTitle,
+        start_time: startTime,
+        end_time: endTime,
+        time_display: timeDisplay,
+        room_number: roomVal || '—',
+        total_students: students.length || Number(item.total_students) || 0,
+        students,
+        is_adviser: Boolean(item.is_adviser),
+      };
+    });
+  }, []);
+
+  const applyNormalizedClasses = useCallback((normalized: AssignedClass[]) => {
+    setClasses(normalized);
+    setSelectedClass((prev) => {
+      if (normalized.length === 0) return null;
+      if (!prev) return normalized[0];
+      return (
+        normalized.find(
+          (c) => c.schedule_id === prev.schedule_id && c.section_id === prev.section_id
+        ) ||
+        normalized.find((c) => c.section_id === prev.section_id) ||
+        normalized[0]
+      );
+    });
+  }, []);
 
   const fetchClasses = useCallback(
     async (silent = false, bypassCache = false) => {
@@ -153,111 +241,72 @@ export const MyAssignedClassesTab: React.FC = () => {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      try {
-        if (!silent) setLoading(true);
-        else setRefreshing(true);
-        setError(null);
+      const baseParams: Record<string, string | number> = {};
+      if (viewScope === 'ALL_CLASSES') baseParams.mode = 'all';
 
-        const params: Record<string, string | number> = {};
-        if (viewScope === 'ALL_CLASSES') params.mode = 'all';
+      const cached = !bypassCache
+        ? peekApiCache(API_ROUTES.attendance.classes, Object.keys(baseParams).length ? baseParams : undefined)
+        : undefined;
+      if (cached !== undefined) {
+        applyNormalizedClasses(normalizeClassList(cached));
+        setLoading(false);
+        if (silent) setRefreshing(true);
+      } else if (!silent) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
+      }
+      setError(null);
+
+      try {
+        const params: Record<string, string | number> = { ...baseParams };
         if (bypassCache) params.nocache = 1;
 
         const res = await apiClient.get(API_ROUTES.attendance.classes, {
           params,
           signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
 
-        const rawData: Record<string, unknown>[] = Array.isArray(res.data)
-          ? res.data
-          : Array.isArray(res.data?.results)
-          ? res.data.results
-          : [];
-
-        const normalized: AssignedClass[] = rawData.map((item, idx) => {
-          const rawStudents = Array.isArray(item.students) ? item.students : [];
-          const students: StudentItem[] = rawStudents.map((st: Record<string, unknown>) => {
-            const rawPhoto = (st.photo_url || st.photo) as string | null | undefined;
-            const fullName =
-              String(st.name || st.full_name || '').trim() ||
-              `${String(st.first_name || '')} ${String(st.last_name || '')}`.trim() ||
-              'Student';
-
-            return {
-              id: Number(st.id) || 0,
-              lrn: String(st.lrn || '—').trim(),
-              name: fullName,
-              gender: String(st.sex || st.gender || '—').trim(),
-              photo_url: isSafeImageUrl(rawPhoto) ? rawPhoto : null,
-              attendance_status: String(st.attendance_status || 'UNSCANNED').toUpperCase(),
-              parent_contact: String(st.parent_contact || '').trim(),
-              qr_token: String(st.qr_token || '').trim(),
-            };
-          });
-
-          const sectionName = String(item.section_name || item.name || 'Section').trim();
-          const subjectTitle = String(item.subject_title || item.subject_name || 'Homeroom').trim();
-          const startTime = item.start_time ? String(item.start_time).slice(0, 5) : '';
-          const endTime = item.end_time ? String(item.end_time).slice(0, 5) : '';
-          const timeDisplay =
-            String(item.time_display || '').trim() ||
-            (startTime && endTime ? `${startTime} - ${endTime}` : 'Homeroom');
-          const roomVal = String(item.room_number || item.room || '').trim();
-
-          return {
-            schedule_id: Number(item.schedule_id || item.id || idx + 1),
-            section_id: Number(item.section_id || idx + 1),
-            section_name: sectionName,
-            grade_level: extractGradeLevelText(item.grade_level),
-            display_name: String(item.display_name || `${sectionName} • ${subjectTitle}`),
-            subject_code: String(item.subject_code || 'CLASS'),
-            subject_title: subjectTitle,
-            start_time: startTime,
-            end_time: endTime,
-            time_display: timeDisplay,
-            room_number: roomVal || '—',
-            total_students: students.length || Number(item.total_students) || 0,
-            students,
-            is_adviser: Boolean(item.is_adviser),
-          };
-        });
-
-        setClasses(normalized);
-        setSelectedClass((prev) => {
-          if (normalized.length === 0) return null;
-          if (!prev) return normalized[0];
-          return (
-            normalized.find(
-              (c) => c.schedule_id === prev.schedule_id && c.section_id === prev.section_id
-            ) ||
-            normalized.find((c) => c.section_id === prev.section_id) ||
-            normalized[0]
-          );
-        });
+        applyNormalizedClasses(normalizeClassList(res.data));
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
-        if (anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
         if (!silent) {
           setError(extractApiError(err, 'Could not load your assigned classes.'));
         }
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
-    [viewScope]
+    [viewScope, normalizeClassList, applyNormalizedClasses]
   );
 
   useEffect(() => {
-    fetchClasses(false, false);
+    void fetchClasses(false, false);
     return () => {
       abortRef.current?.abort();
     };
   }, [fetchClasses]);
 
   useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     const liveInterval = setInterval(() => {
       if (!isInteracting.current && document.visibilityState === 'visible') {
-        fetchClasses(true, true);
+        void fetchClasses(true, true);
       }
     }, 15000);
     return () => clearInterval(liveInterval);
@@ -268,11 +317,15 @@ export const MyAssignedClassesTab: React.FC = () => {
     const ok = await copyTextSafely(val);
     if (ok) {
       setCopiedValue(val);
-      setTimeout(() => setCopiedValue((prev) => (prev === val ? null : prev)), 2000);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        setCopiedValue((prev) => (prev === val ? null : prev));
+        copyTimerRef.current = null;
+      }, 2000);
     }
   };
 
-  const cleanSearch = useMemo(() => sanitizeText(searchQuery, 60).toLowerCase(), [searchQuery]);
+  const cleanSearch = useMemo(() => sanitizeInput(searchQuery, 60).toLowerCase(), [searchQuery]);
 
   const filteredStudents = useMemo(() => {
     if (!selectedClass) return [];
@@ -329,6 +382,62 @@ export const MyAssignedClassesTab: React.FC = () => {
         formatStatusLabel(st.attendance_status),
       ])
     );
+  };
+
+  const handleManualAttendanceChange = async (st: StudentItem, nextStatus: string) => {
+    if (!selectedClass || savingStudentId === st.id) return;
+    setSavingStudentId(st.id);
+    try {
+      const periodId = selectedClass.subject_code === 'ADV' ? undefined : selectedClass.schedule_id;
+      if (st.attendance_record_id) {
+        await apiClient.put(API_ROUTES.attendance.records, {
+          id: st.attendance_record_id,
+          status: nextStatus,
+        });
+      } else {
+        await apiClient.post(API_ROUTES.attendance.records, {
+          student_id: st.id,
+          schedule_id: periodId,
+          status: nextStatus,
+        });
+      }
+      await fetchClasses(true, true);
+    } catch (err: unknown) {
+      showAlert({
+        title: 'Attendance Update Failed',
+        message: extractApiError(err, 'Could not save attendance status.'),
+        type: 'error',
+      });
+    } finally {
+      setSavingStudentId(null);
+    }
+  };
+
+  const handleClearAttendance = (st: StudentItem) => {
+    if (!st.attendance_record_id) return;
+    showConfirm({
+      title: 'Clear Attendance Record',
+      message: `Remove today's attendance entry for ${st.name}?`,
+      confirmLabel: 'Remove',
+      isDestructive: true,
+      onConfirm: async () => {
+        setSavingStudentId(st.id);
+        try {
+          await apiClient.delete(API_ROUTES.attendance.records, {
+            params: { id: st.attendance_record_id },
+          });
+          await fetchClasses(true, true);
+        } catch (err: unknown) {
+          showAlert({
+            title: 'Remove Failed',
+            message: extractApiError(err, 'Could not remove attendance record.'),
+            type: 'error',
+          });
+        } finally {
+          setSavingStudentId(null);
+        }
+      },
+    });
   };
 
   const renderStatusPill = (rawStatus: string) => {
@@ -697,7 +806,55 @@ export const MyAssignedClassesTab: React.FC = () => {
                       </div>
                     </td>
 
-                    <td style={ui.td}>{renderStatusPill(st.attendance_status)}</td>
+                    <td style={ui.td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        {renderStatusPill(st.attendance_status)}
+                        {canEditAttendance && (
+                          <select
+                            aria-label={`Set attendance status for ${st.name}`}
+                            disabled={savingStudentId === st.id}
+                            value={st.attendance_status === 'UNSCANNED' ? '' : st.attendance_status}
+                            onChange={(e) => {
+                              if (e.target.value) void handleManualAttendanceChange(st, e.target.value);
+                            }}
+                            style={{
+                              ...ui.input,
+                              width: 'auto',
+                              padding: '3px 6px',
+                              fontSize: '0.70rem',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <option value="">Mark...</option>
+                            <option value="PRESENT">Present</option>
+                            <option value="LATE">Late</option>
+                            <option value="ABSENT">Absent</option>
+                            <option value="EXCUSED">Excused</option>
+                            <option value="CUTTING">Cutting</option>
+                          </select>
+                        )}
+                        {canEditAttendance && st.attendance_record_id && (
+                          <button
+                            type="button"
+                            disabled={savingStudentId === st.id}
+                            onClick={() => handleClearAttendance(st)}
+                            title="Clear today's attendance record"
+                            aria-label={`Clear attendance record for ${st.name}`}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: brand.danger,
+                              padding: 2,
+                              display: 'inline-flex',
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
 
                     <td style={{ ...ui.td, textAlign: 'right' }}>
                       <button
@@ -738,7 +895,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                 boxShadow: tokens.cardShadow,
               }}
             >
-              <div style={{ backgroundColor: brand.primary, color: '#ffffff', padding: '12px 14px' }}>
+              <div style={{ backgroundColor: brand.buttonBg, color: '#ffffff', padding: '12px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: fonts.size.xs, fontWeight: 800 }}>
                   <ShieldCheck size={14} />
                   <span>OFFICIAL STUDENT QR ID</span>
@@ -784,15 +941,15 @@ export const MyAssignedClassesTab: React.FC = () => {
                     borderRadius: 10,
                     width: 124,
                     height: 124,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
                   }}
                 >
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(
-                      badgeStudent.lrn
-                    )}`}
-                    alt={`QR code for ${badgeStudent.name}`}
-                    referrerPolicy="no-referrer"
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  <QrCodeSvg
+                    value={badgeStudent.qr_payload || badgeStudent.lrn}
+                    size={112}
+                    label={`QR code for ${badgeStudent.name}`}
                   />
                 </div>
               </div>

@@ -1,15 +1,18 @@
-// D:\AttendSure_V3\mobile\src\navigation\AppNavigator.tsx
+/**
+ * AttendSure Mobile - Root Stack Navigator
+ * File: mobile/src/navigation/AppNavigator.tsx
+ */
 
 import React from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { useAuth } from '../context/AuthContext';
+import { useThemeMode } from '../context/ThemeContext';
 import LoginScreen from '../screens/LoginScreen';
 import MainTabNavigator from './MainTabNavigator';
 import ProfileSettingsScreen from '../screens/ProfileSettingsScreen';
 import ReportsScreen from '../screens/ReportsScreen';
-import { COLORS } from '../constants/theme';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -21,20 +24,25 @@ export type RootStackParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export const AppNavigator: React.FC = () => {
-  const auth = useAuth() as any;
-  const user = auth?.user;
-  const isCheckingSession = Boolean(auth?.isLoading ?? auth?.loading);
+  const { user, isLoading, loading } = useAuth();
+  const { palette } = useThemeMode();
+  const isCheckingSession = Boolean(isLoading ?? loading);
 
   if (isCheckingSession) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
+      <View style={[styles.loadingContainer, { backgroundColor: palette.background }]}>
+        <ActivityIndicator size="large" color={palette.primary} />
       </View>
     );
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: palette.background },
+      }}
+    >
       {!user ? (
         <Stack.Screen name="Login" component={LoginScreen} />
       ) : (
@@ -65,7 +73,6 @@ export const AppNavigator: React.FC = () => {
 const styles = StyleSheet.create({
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#f8fafc',
     alignItems: 'center',
     justifyContent: 'center',
   },

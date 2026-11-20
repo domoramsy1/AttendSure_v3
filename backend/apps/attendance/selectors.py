@@ -19,9 +19,11 @@ def format_roster_items(
     period_logs=None,
     daily_logs=None,
     period_id=None,
+    period_record_ids=None,
 ) -> list[dict]:
     period_logs = period_logs or {}
     daily_logs = daily_logs or {}
+    period_record_ids = period_record_ids or {}
     return [
         {
             "id": st.id,
@@ -35,6 +37,11 @@ def format_roster_items(
                 (period_logs.get((period_id, st.id)) if period_id else period_logs.get(st.id))
                 or daily_logs.get(st.id)
                 or "UNSCANNED"
+            ),
+            "attendance_record_id": (
+                period_record_ids.get((period_id, st.id))
+                if period_id
+                else period_record_ids.get(st.id)
             ),
             "parent_contact": st.parent_contact,
             "qr_token": st.qr_token,
@@ -134,13 +141,15 @@ def get_assigned_classes_with_rosters(
         students_by_sec.setdefault(enr.section_id, []).append(enr.student)
         all_student_ids.append(enr.student_id)
 
-    period_logs = {
-        (row["class_period_id"], row["student_id"]): row["status"]
-        for row in ClassAttendance.objects.filter(
-            attendance_date=today,
-            student_id__in=all_student_ids,
-        ).values("class_period_id", "student_id", "status")
-    }
+    period_logs = {}
+    period_record_ids = {}
+    for row in ClassAttendance.objects.filter(
+        attendance_date=today,
+        student_id__in=all_student_ids,
+    ).values("id", "class_period_id", "student_id", "status"):
+        key = (row["class_period_id"], row["student_id"])
+        period_logs[key] = row["status"]
+        period_record_ids[key] = row["id"]
     daily_logs = dict(
         DailyAttendance.objects.filter(
             attendance_date=today,
@@ -158,6 +167,7 @@ def get_assigned_classes_with_rosters(
             period_logs=period_logs,
             daily_logs=daily_logs,
             period_id=p.id,
+            period_record_ids=period_record_ids,
         )
         start_s = str(p.start_time)[:5] if p.start_time else ""
         end_s = str(p.end_time)[:5] if p.end_time else ""
@@ -469,30 +479,6 @@ def get_exit_passes_for_user(*, user, status_filter: str = "ALL", search: str = 
             | Q(student__last_name__icontains=search)
             | Q(teacher__first_name__icontains=search)
             | Q(teacher__last_name__icontains=search)
-            | Q(reason__icontains=search)
-        )
-    if role == "PARENT":
-        return qs.filter(student__parent_user=user)
-    if not is_school_leader(user):
-        teacher = resolve_teacher_for_user(user)
-        if not teacher:
-            return qs.none()
-        qs = qs.filter(
-            Q(teacher=teacher)
-            | Q(issued_by=teacher)
-            | Q(student_id__in=get_teacher_student_ids(teacher))
-        )
-    return qs
-    role = get_user_role(user)
-    qs = ExitPass.objects.select_related("student", "teacher", "issued_by").order_by("-created_at")
-
-    if status_filter and status_filter.upper() != "ALL":
-        qs = qs.filter(status=status_filter.upper())
-    if search:
-        qs = qs.filter(
-            Q(pass_number__icontains=search)
-            | Q(student__first_name__icontains=search)
-            | Q(student__last_name__icontains=search)
             | Q(reason__icontains=search)
         )
     if role == "PARENT":

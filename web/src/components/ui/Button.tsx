@@ -19,7 +19,7 @@ export const Button: React.FC<ButtonProps> = ({
   style,
   ...props
 }) => {
-  const { tokens, brand, radius } = useTheme();
+  const { mode, tokens, brand, radius } = useTheme();
 
   const getVariantStyles = (): React.CSSProperties => {
     switch (variant) {
@@ -42,11 +42,11 @@ export const Button: React.FC<ButtonProps> = ({
         };
       case 'danger':
         return {
-          backgroundColor: brand.danger,
+          backgroundColor: mode === 'dark' ? '#dc2626' : brand.danger,
           color: '#ffffff',
           borderWidth: 1,
           borderStyle: 'solid',
-          borderColor: brand.danger,
+          borderColor: mode === 'dark' ? '#ef4444' : brand.danger,
         };
       case 'dark':
         return {

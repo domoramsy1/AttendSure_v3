@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useTheme } from '../../context/ThemeContext';
-import { BRAND_ASSETS } from '../branding/BrandAssets';
+import { AttendSureBrandBadge } from '../branding/BrandAssets';
 
 interface SplashScreenProps {
   loading: boolean;
@@ -20,11 +20,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   minDurationMs = 7000,
   onFinish,
 }) => {
-  const { tokens, brand, fonts } = useTheme();
+  const { mode, tokens, brand, fonts } = useTheme();
   const [canExit, setCanExit] = useState(false);
   const [fading, setFading] = useState(false);
   const [hidden, setHidden] = useState(false);
-  const [useInlineFallback, setUseInlineFallback] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -160,44 +159,18 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           />
 
           {/* Solid Circular Logo Badge */}
-          <div
+          <AttendSureBrandBadge
+            size={92}
+            shape="circle"
+            mode={mode}
             style={{
               position: 'relative',
-              width: 92,
-              height: 92,
-              borderRadius: '50%',
-              backgroundColor: '#ffffff',
-              border: `2px solid ${brand.primary}`,
-              boxShadow: tokens.cardShadow,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 15,
-              boxSizing: 'border-box',
               zIndex: 2,
+              borderWidth: 2,
+              borderColor: brand.primary,
+              boxShadow: tokens.cardShadow,
             }}
-          >
-            {!useInlineFallback ? (
-              <img
-                src={BRAND_ASSETS.attendsureLogo}
-                alt="AttendSure Logo"
-                onError={() => setUseInlineFallback(true)}
-                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-              />
-            ) : (
-              <svg viewBox="0 0 64 64" width="56" height="56" fill="none" aria-label="AttendSure Emblem">
-                <path d="M32 8L12 52H22.5L32 30.5L41.5 52H52L32 8Z" fill="#004b87" />
-                <rect x="14" y="42" width="36" height="10" rx="3" fill="#004b87" />
-                <path
-                  d="M26.5 36.5L30.5 40.5L38.5 31.5"
-                  stroke="#0284c7"
-                  strokeWidth="3.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            )}
-          </div>
+          />
         </div>
 
         {/* Direct, Simple English Title */}

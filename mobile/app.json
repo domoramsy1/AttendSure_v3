@@ -1,14 +1,20 @@
 {
   "expo": {
     "name": "AttendSure",
-    "slug": "attendsure",
-    "version": "3.0.0",
+    "slug": "attendsure-mobile",
+    "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "icon": "./assets/icon.png",
     "ios": {
-      "supportsTablet": false,
-      "bundleIdentifier": "com.attendsure.mobile"
+      "supportsTablet": true,
+      "bundleIdentifier": "com.attendsure.mobile",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "AttendSure uses your location to verify presence inside campus boundaries for verified attendance records.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "AttendSure uses background location during school hours to maintain verified campus presence.",
+        "NSCameraUsageDescription": "AttendSure uses the camera for on-device faculty facial check-ins and profile photos.",
+        "UIBackgroundModes": ["location", "remote-notification"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -19,10 +25,26 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "CAMERA"
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "CAMERA",
+        "VIBRATE"
       ]
     },
+    "web": {
+      "favicon": "./assets/icon.png",
+      "bundler": "metro"
+    },
     "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "AttendSure verifies presence inside campus boundaries during active duty hours.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
       [
         "expo-splash-screen",
         {

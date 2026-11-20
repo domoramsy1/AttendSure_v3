@@ -1,4 +1,5 @@
-// D:\AttendSure_V3\mobile\index.ts
+// AttendSure Mobile - Application Entry Point
+// File: mobile/index.ts
 
 import { NativeModules } from 'react-native';
 

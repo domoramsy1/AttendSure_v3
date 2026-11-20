@@ -2,7 +2,7 @@
 // File: mobile/src/types/index.ts
 
 // ==============================================================================
-// 1. ROLES & DEVICE IDENTIFICATION (CYBERSECURITY CONTROLS)
+// 1. ROLES & DEVICE IDENTIFICATION
 // ==============================================================================
 
 export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'PARENT';
@@ -18,7 +18,7 @@ export interface DeviceIdentity {
 }
 
 // ==============================================================================
-// 2. entry_point GATE LOGS & CAMPUS PROFILE
+// 2. ATTENDANCE LOGS & CAMPUS PROFILE
 // ==============================================================================
 
 export interface AttendanceLog {
@@ -28,7 +28,7 @@ export interface AttendanceLog {
   identifier?: string;
   name?: string;
   direction: 'IN' | 'OUT';
-  scan_method: 'qr_id' | 'QR';
+  scan_method: 'QR' | 'MANUAL' | 'MOBILE_GPS';
   station_name?: string;
   station_code?: string;
   scan_time: string;
@@ -145,7 +145,7 @@ export interface AuthResponse {
 }
 
 // ==============================================================================
-// 5. GEOFENCING & TELEMETRY (HARDWARE SECURITY)
+// 5. CAMPUS GEOFENCING & LOCATION HEARTBEAT
 // ==============================================================================
 
 export interface GeofenceConfig {

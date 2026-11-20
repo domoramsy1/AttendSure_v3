@@ -1,4 +1,4 @@
-// File: D:\AttendSure_V3\web\vite.config.ts
+// File: web/vite.config.ts
 
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -21,7 +21,6 @@ export default defineConfig({
     strictPort: true,
     // Protect against host-header injection and unauthorized tunnels
     allowedHosts: [
-      'macasandig.attendsure.com.ph',
       '.attendsure.com.ph',
       '.trycloudflare.com',
       'localhost',
@@ -37,16 +36,15 @@ export default defineConfig({
         secure: false,
         timeout: 10000,
         configure: (proxy) => {
-          proxy.on('error', (err, _req, res) => {
-            // shield: verify res is an HTTP response before writing headers
+          proxy.on('error', (_err, _req, res) => {
+            // Verify res is an HTTP response before writing headers
             if (res && 'writeHead' in res && typeof res.writeHead === 'function') {
               const httpRes = res as ServerResponse;
               if (!httpRes.headersSent) {
                 httpRes.writeHead(502, { 'Content-Type': 'application/json' });
                 httpRes.end(
                   JSON.stringify({
-                    error: 'Backend offline or restarting',
-                    detail: err.message,
+                    error: 'The school server is temporarily unavailable. Please try again shortly.',
                   })
                 );
               }

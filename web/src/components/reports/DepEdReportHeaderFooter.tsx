@@ -10,6 +10,7 @@
 
 import React from 'react';
 import { useSchool } from '../../context/SchoolContext';
+import { isSafeImageUrl } from '../../theme/tokens';
 
 export interface DepEdReportHeaderProps {
   formTitle: string;
@@ -32,21 +33,6 @@ export interface DepEdReportHeaderProps {
     school_logo?: string | null;
   } | null;
 }
-
-// Cybersecurity: Validate that image sources use safe protocols to prevent XSS / script injection
-const isSafeImageUrl = (url?: string | null): boolean => {
-  if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
-  if (!clean || clean === 'null' || clean === 'undefined' || clean === 'none') return false;
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:')) return false;
-  return (
-    clean.startsWith('http://') ||
-    clean.startsWith('https://') ||
-    clean.startsWith('/') ||
-    clean.startsWith('data:image/') ||
-    clean.startsWith('blob:')
-  );
-};
 
 export const DepEdReportHeader: React.FC<DepEdReportHeaderProps> = ({
   formTitle,

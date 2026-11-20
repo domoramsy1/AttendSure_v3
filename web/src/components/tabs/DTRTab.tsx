@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -13,7 +13,6 @@ import { ProfileAvatar } from '../common/ProfileAvatar';
 import { useAlert } from '../../context/AlertContext';
 import { useSchool } from '../../context/SchoolContext';
 import { useTheme } from '../../context/ThemeContext';
-import { sanitizeText } from '../../theme/tokens';
 import {
   Printer,
   Download,
@@ -30,7 +29,7 @@ import {
   Send,
 } from 'lucide-react';
 
-interface TeacherDropdownItem {
+interface FacultyDropdownItem {
   id: number;
   employee_id: string;
   first_name: string;
@@ -40,6 +39,12 @@ interface TeacherDropdownItem {
   position?: string;
   photo_url?: string | null;
 }
+
+const sanitizeInput = (raw: string, maxLength = 150): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, maxLength);
 
 interface DailyDTRRow {
   day: number;
@@ -110,8 +115,9 @@ const loadHtml2PdfSecurely = (): Promise<any> => {
 
 export const DTRTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
-  const { tokens, brand, ui } = useTheme();
+  const { mode, tokens, brand, ui } = useTheme();
   const { school } = useSchool();
+  const successBtnBg = mode === 'dark' ? '#059669' : brand.success;
 
   const currentUserRole = useMemo(
     () => (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(),
@@ -125,8 +131,16 @@ export const DTRTab: React.FC = () => {
     return [cur - 1, cur, cur + 1];
   }, [nowDate]);
 
-  const [teacherList, setTeacherList] = useState<TeacherDropdownItem[]>([]);
-  const [selectedTeacherId, setSelectedTeacherId] = useState<string>('');
+  const [facultyList, setFacultyList] = useState<FacultyDropdownItem[]>(() => {
+    if (isFaculty) return [];
+    const cached = peekApiCache<FacultyDropdownItem[]>(API_ROUTES.accounts.facultyDropdown);
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [selectedFacultyId, setSelectedFacultyId] = useState<string>(() => {
+    if (isFaculty) return '';
+    const cached = peekApiCache<FacultyDropdownItem[]>(API_ROUTES.accounts.facultyDropdown);
+    return Array.isArray(cached) && cached.length > 0 ? String(cached[0].id) : '';
+  });
   const [selectedMonth, setSelectedMonth] = useState<number>(nowDate.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(nowDate.getFullYear());
 
@@ -150,172 +164,197 @@ export const DTRTab: React.FC = () => {
   const isInteracting = useRef<boolean>(false);
   isInteracting.current = Boolean(selectedAlertRow) || actionProcessing || hoursDirty;
 
-  const activeTeacher = useMemo(
-    () => teacherList.find((t) => String(t.id) === selectedTeacherId),
-    [teacherList, selectedTeacherId]
+  const activeFaculty = useMemo(
+    () => facultyList.find((f) => String(f.id) === selectedFacultyId),
+    [facultyList, selectedFacultyId]
   );
 
-  // Load lightweight cached teacher dropdown once for leadership roles
+  // Load lightweight cached faculty dropdown once for leadership roles
   useEffect(() => {
     if (isFaculty) return;
-    let active = true;
+    const controller = new AbortController();
 
     apiClient
-      .get<TeacherDropdownItem[]>(API_ROUTES.accounts.teachersDropdown)
+      .get<FacultyDropdownItem[]>(API_ROUTES.accounts.facultyDropdown, {
+        signal: controller.signal,
+      })
       .then((res) => {
-        if (!active) return;
+        if (controller.signal.aborted) return;
         const list = Array.isArray(res.data) ? res.data : [];
-        setTeacherList(list);
+        setFacultyList(list);
         if (list.length > 0) {
-          setSelectedTeacherId((prev) => prev || String(list[0].id));
+          setSelectedFacultyId((prev) => prev || String(list[0].id));
         }
       })
-      .catch((err) => {
-        if (active) setError(extractApiError(err, 'Could not load teachers list.'));
+      .catch((err: unknown) => {
+        const anyErr = err as { name?: string; code?: string };
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
+        setError(extractApiError(err, 'Could not load faculty list.'));
       });
 
     return () => {
-      active = false;
+      controller.abort();
     };
   }, [isFaculty]);
 
-  // Reset dirty flag whenever target teacher, month, or year changes
+  // Reset dirty flag whenever target faculty, month, or year changes
   useEffect(() => {
     setHoursDirty(false);
-  }, [selectedTeacherId, selectedMonth, selectedYear]);
+  }, [selectedFacultyId, selectedMonth, selectedYear]);
+
+  const normalizeDtrPayload = useCallback(
+    (raw: any): DTRReportData => {
+      const rawRows: any[] = Array.isArray(raw.rows)
+        ? raw.rows
+        : Array.isArray(raw.daily_logs)
+          ? raw.daily_logs
+          : [];
+
+      const rowsByDay = new Map<number, any>();
+      rawRows.forEach((r) => {
+        if (r && typeof r.day === 'number') rowsByDay.set(r.day, r);
+      });
+
+      const rows31: DailyDTRRow[] = [];
+      for (let dayNum = 1; dayNum <= 31; dayNum++) {
+        const found = rowsByDay.get(dayNum);
+        if (found) {
+          rows31.push({
+            day: dayNum,
+            date_str: String(found.date_str || found.date || ''),
+            day_of_week: String(found.day_of_week || found.weekday || ''),
+            is_weekend: Boolean(found.is_weekend || found.status === 'WEEKEND'),
+            am_arrival: String(found.am_arrival || ''),
+            am_departure: String(found.am_departure || ''),
+            pm_arrival: String(found.pm_arrival || ''),
+            pm_departure: String(found.pm_departure || ''),
+            undertime_hours: found.undertime_hours ?? '',
+            undertime_minutes: found.undertime_minutes ?? '',
+            is_loafing: Boolean(found.is_loafing),
+            loafing_excused: Boolean(found.loafing_excused),
+            loafing_remarks: String(found.loafing_remarks || ''),
+          });
+        } else {
+          rows31.push({
+            day: dayNum,
+            date_str: '',
+            day_of_week: '',
+            is_weekend: false,
+            am_arrival: '',
+            am_departure: '',
+            pm_arrival: '',
+            pm_departure: '',
+            undertime_hours: '',
+            undertime_minutes: '',
+            is_loafing: false,
+            loafing_excused: false,
+            loafing_remarks: '',
+          });
+        }
+      }
+
+      const resolvedMonthNum = Number(raw.month_number || selectedMonth);
+      const resolvedMonthName =
+        typeof raw.month === 'string' && isNaN(Number(raw.month))
+          ? raw.month
+          : MONTH_NAMES[resolvedMonthNum - 1] || 'Month';
+
+      const regHrs = String(raw.regular_days_hours ?? raw.regular_hours ?? '');
+      const satHrs = String(raw.saturdays_hours ?? raw.saturday_hours ?? '');
+
+      if (!isInteracting.current) {
+        setRegularHours(regHrs);
+        setSaturdayHours(satHrs);
+      }
+
+      if (!isFaculty && raw.faculty_id && !selectedFacultyId) {
+        setSelectedFacultyId(String(raw.faculty_id));
+      }
+
+      return {
+        faculty_id: Number(raw.faculty_id || 0),
+        faculty_name: String(raw.faculty_name || ''),
+        employee_id: String(raw.employee_id || ''),
+        department: String(raw.department || ''),
+        month: resolvedMonthName,
+        month_number: resolvedMonthNum,
+        year: Number(raw.year || selectedYear),
+        regular_days_hours: regHrs,
+        saturdays_hours: satHrs,
+        school_head: String(raw.school_head || raw.school?.school_head || ''),
+        school_head_title: String(raw.school_head_title || raw.school?.principal_title || ''),
+        dtr_submitted: Boolean(raw.dtr_submitted ?? raw.is_submitted),
+        dept_head_approved: Boolean(raw.dept_head_approved ?? raw.is_dept_head_approved),
+        can_approve_dept: Boolean(
+          raw.can_approve_dept ?? ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(currentUserRole)
+        ),
+        can_clear_loafing: Boolean(
+          raw.can_clear_loafing ?? ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(currentUserRole)
+        ),
+        rows: rows31,
+        total_undertime_hours: Number(raw.total_undertime_hours || 0),
+        total_undertime_minutes: Number(raw.total_undertime_minutes || 0),
+        days_present: Number(raw.days_present || 0),
+      };
+    },
+    [selectedFacultyId, selectedMonth, selectedYear, currentUserRole]
+  );
 
   const fetchDTR = useCallback(
     async (silent = false, bypassCache = false) => {
-      if (!isFaculty && !selectedTeacherId && teacherList.length > 0) return;
+      if (!isFaculty && !selectedFacultyId && facultyList.length > 0) return;
 
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
       const endpoint =
-        !isFaculty && selectedTeacherId
-          ? `${API_ROUTES.reports.dtr}${selectedTeacherId}/`
+        !isFaculty && selectedFacultyId
+          ? `${API_ROUTES.reports.dtr}${selectedFacultyId}/`
           : API_ROUTES.reports.dtr;
 
-      if (!silent) setLoading(true);
-      else setRefreshing(true);
+      const baseParams = { month: selectedMonth, year: selectedYear };
+      const cached = !bypassCache ? peekApiCache<any>(endpoint, baseParams) : undefined;
+      if (cached) {
+        setDtrData(normalizeDtrPayload(cached));
+        setLoading(false);
+        if (silent) setRefreshing(true);
+      } else if (!silent) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
+      }
       setError(null);
 
       try {
         const res = await apiClient.get<any>(endpoint, {
           params: {
-            month: selectedMonth,
-            year: selectedYear,
+            ...baseParams,
             ...(bypassCache ? { nocache: 1 } : {}),
           },
           signal: controller.signal,
         });
 
-        const raw = res.data || {};
-        const rawRows: any[] = Array.isArray(raw.rows)
-          ? raw.rows
-          : Array.isArray(raw.daily_logs)
-          ? raw.daily_logs
-          : [];
-
-        const rowsByDay = new Map<number, any>();
-        rawRows.forEach((r) => {
-          if (r && typeof r.day === 'number') rowsByDay.set(r.day, r);
-        });
-
-        const rows31: DailyDTRRow[] = [];
-        for (let dayNum = 1; dayNum <= 31; dayNum++) {
-          const found = rowsByDay.get(dayNum);
-          if (found) {
-            rows31.push({
-              day: dayNum,
-              date_str: String(found.date_str || found.date || ''),
-              day_of_week: String(found.day_of_week || found.weekday || ''),
-              is_weekend: Boolean(found.is_weekend || found.status === 'WEEKEND'),
-              am_arrival: String(found.am_arrival || ''),
-              am_departure: String(found.am_departure || ''),
-              pm_arrival: String(found.pm_arrival || ''),
-              pm_departure: String(found.pm_departure || ''),
-              undertime_hours: found.undertime_hours ?? '',
-              undertime_minutes: found.undertime_minutes ?? '',
-              is_loafing: Boolean(found.is_loafing),
-              loafing_excused: Boolean(found.loafing_excused),
-              loafing_remarks: String(found.loafing_remarks || ''),
-            });
-          } else {
-            rows31.push({
-              day: dayNum,
-              date_str: '',
-              day_of_week: '',
-              is_weekend: false,
-              am_arrival: '',
-              am_departure: '',
-              pm_arrival: '',
-              pm_departure: '',
-              undertime_hours: '',
-              undertime_minutes: '',
-              is_loafing: false,
-              loafing_excused: false,
-              loafing_remarks: '',
-            });
-          }
-        }
-
-        const resolvedMonthNum = Number(raw.month_number || selectedMonth);
-        const resolvedMonthName =
-          typeof raw.month === 'string' && isNaN(Number(raw.month))
-            ? raw.month
-            : MONTH_NAMES[resolvedMonthNum - 1] || 'Month';
-
-        const regHrs = String(raw.regular_days_hours ?? raw.regular_hours ?? '');
-        const satHrs = String(raw.saturdays_hours ?? raw.saturday_hours ?? '');
-
-        if (!isInteracting.current) {
-          setRegularHours(regHrs);
-          setSaturdayHours(satHrs);
-        }
-
-        if (raw.faculty_id && !selectedTeacherId) {
-          setSelectedTeacherId(String(raw.faculty_id));
-        }
-
-        setDtrData({
-          faculty_id: Number(raw.faculty_id || raw.teacher_id || 0),
-          faculty_name: String(raw.faculty_name || ''),
-          employee_id: String(raw.employee_id || ''),
-          department: String(raw.department || ''),
-          month: resolvedMonthName,
-          month_number: resolvedMonthNum,
-          year: Number(raw.year || selectedYear),
-          regular_days_hours: regHrs,
-          saturdays_hours: satHrs,
-          school_head: String(raw.school_head || raw.school?.school_head || ''),
-          school_head_title: String(raw.school_head_title || raw.school?.principal_title || ''),
-          dtr_submitted: Boolean(raw.dtr_submitted ?? raw.is_submitted),
-          dept_head_approved: Boolean(raw.dept_head_approved ?? raw.is_dept_head_approved),
-          can_approve_dept: Boolean(
-            raw.can_approve_dept ?? ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(currentUserRole)
-          ),
-          can_clear_loafing: Boolean(
-            raw.can_clear_loafing ?? ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(currentUserRole)
-          ),
-          rows: rows31,
-          total_undertime_hours: Number(raw.total_undertime_hours || 0),
-          total_undertime_minutes: Number(raw.total_undertime_minutes || 0),
-          days_present: Number(raw.days_present || 0),
-        });
+        if (controller.signal.aborted) return;
+        setDtrData(normalizeDtrPayload(res.data || {}));
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
-        if (anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
         if (!silent) {
           setError(extractApiError(err, 'Could not load Daily Time Record.'));
         }
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
-    [isFaculty, selectedTeacherId, selectedMonth, selectedYear, teacherList.length, currentUserRole]
+    [isFaculty, selectedFacultyId, selectedMonth, selectedYear, facultyList.length, normalizeDtrPayload]
   );
 
   useEffect(() => {
@@ -350,8 +389,8 @@ export const DTRTab: React.FC = () => {
             faculty_id: dtrData.faculty_id,
             month: dtrData.month_number,
             year: dtrData.year,
-            regular_days_hours: sanitizeText(regularHours, 100),
-            saturdays_hours: sanitizeText(saturdayHours, 100),
+            regular_days_hours: sanitizeInput(regularHours, 100),
+            saturdays_hours: sanitizeInput(saturdayHours, 100),
           });
           setHoursDirty(false);
           showAlert({
@@ -389,8 +428,8 @@ export const DTRTab: React.FC = () => {
             faculty_id: dtrData.faculty_id,
             month: dtrData.month_number,
             year: dtrData.year,
-            regular_days_hours: sanitizeText(regularHours, 100),
-            saturdays_hours: sanitizeText(saturdayHours, 100),
+            regular_days_hours: sanitizeInput(regularHours, 100),
+            saturdays_hours: sanitizeInput(saturdayHours, 100),
           });
           setHoursDirty(false);
           showAlert({
@@ -414,7 +453,7 @@ export const DTRTab: React.FC = () => {
 
   const handleExcuseAlertByPrincipal = async () => {
     if (!dtrData || !selectedAlertRow) return;
-    const cleanReason = sanitizeText(excuseRemarks, 240);
+    const cleanReason = sanitizeInput(excuseRemarks, 240);
     if (!cleanReason) {
       showAlert({
         title: 'Reason Required',
@@ -467,7 +506,7 @@ export const DTRTab: React.FC = () => {
     setExportingPdf(true);
     try {
       const html2pdfInstance = await loadHtml2PdfSecurely();
-      const safeName = (dtrData.faculty_name || 'Teacher').replace(/[^a-zA-Z0-9]/g, '_');
+      const safeName = (dtrData.faculty_name || 'Faculty').replace(/[^a-zA-Z0-9]/g, '_');
       const opt = {
         margin: [0.15, 0.15, 0.15, 0.15],
         filename: `CSC_Form_48_${safeName}_${dtrData.month}_${dtrData.year}.pdf`,
@@ -636,7 +675,7 @@ export const DTRTab: React.FC = () => {
         <div style={{ marginTop: 16, textAlign: 'center' }}>
           <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto' }} />
           <div style={{ fontSize: '5.6pt', fontStyle: 'italic', marginTop: 1 }}>
-            (Signature of Teacher / Employee)
+            (Signature of Faculty / Employee)
           </div>
         </div>
 
@@ -675,7 +714,7 @@ export const DTRTab: React.FC = () => {
           Attention is invited to paragraph 3, Civil Service Rule XV, Executive Order No. 5, series of 1909, which reads as follows:
         </p>
         <blockquote style={{ margin: '0 0 0 8px', borderLeft: '1.5px solid #000', paddingLeft: 6, fontStyle: 'italic' }}>
-          &ldquo;Each chief of a Bureau or Office shall require a daily record of attendance of all the officers and employees under him entitled to leave of absence or vacation (including teachers) to be kept on the proper form and also a systematic office record showing for each day all absences from duty from any cause whatever. At the beginning of each month he shall report to the Commissioner on the proper form of all absences from any cause whatever, including the exact amount of undertime of each person for each day. Falsification of time records will render the offending officer or employee liable to summary removal from the service and criminal prosecution.&rdquo;
+          &ldquo;Each chief of a Bureau or Office shall require a daily record of attendance of all the officers and employees under him entitled to leave of absence or vacation (including faculty) to be kept on the proper form and also a systematic office record showing for each day all absences from duty from any cause whatever. At the beginning of each month he shall report to the Commissioner on the proper form of all absences from any cause whatever, including the exact amount of undertime of each person for each day. Falsification of time records will render the offending officer or employee liable to summary removal from the service and criminal prosecution.&rdquo;
         </blockquote>
         <p style={{ margin: '4px 0 0 0', fontSize: '5.7pt' }}>
           <strong>(NOTE:</strong> A record made from memory at sometime subsequent to the occurrence of an event is not reliable. Non-observance of office hours deprives the employee of leave privileges although he may have rendered overtime service. Where service is rendered outside of the Office for the whole morning or afternoon, notation to that effect should be made clearly.)
@@ -701,8 +740,8 @@ export const DTRTab: React.FC = () => {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <ProfileAvatar
-              photoUrl={activeTeacher?.photo_url}
-              name={activeTeacher?.full_name || dtrData?.faculty_name || 'Teacher'}
+              photoUrl={activeFaculty?.photo_url}
+              name={activeFaculty?.full_name || dtrData?.faculty_name || 'Faculty'}
               size={36}
               iconSize={18}
             />
@@ -729,14 +768,14 @@ export const DTRTab: React.FC = () => {
               </div>
             ) : (
               <select
-                aria-label="Select teacher"
-                value={selectedTeacherId}
-                onChange={(e) => setSelectedTeacherId(e.target.value)}
+                aria-label="Select faculty member"
+                value={selectedFacultyId}
+                onChange={(e) => setSelectedFacultyId(e.target.value)}
                 style={{ ...ui.input, width: 'auto', minWidth: 220, fontWeight: 700 }}
               >
-                {teacherList.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.full_name} ({t.employee_id})
+                {facultyList.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.full_name} ({f.employee_id})
                   </option>
                 ))}
               </select>
@@ -817,7 +856,7 @@ export const DTRTab: React.FC = () => {
               type="button"
               onClick={handleApproveByDeptHead}
               disabled={actionProcessing}
-              style={{ backgroundColor: brand.success }}
+              style={{ backgroundColor: successBtnBg, borderColor: successBtnBg }}
             >
               {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
               <span>Approve DTR</span>
@@ -1073,7 +1112,7 @@ export const DTRTab: React.FC = () => {
                 type="button"
                 onClick={handleExcuseAlertByPrincipal}
                 disabled={actionProcessing}
-                style={{ backgroundColor: brand.success }}
+                style={{ backgroundColor: successBtnBg, borderColor: successBtnBg }}
               >
                 {actionProcessing ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
                 <span>Excuse Alert</span>

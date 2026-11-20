@@ -1,9 +1,11 @@
+# D:\AttendSure_V3\backend\apps\school\selectors.py
+
 from django.core.cache import cache
 from django.db.models import Count, Q
 
+from apps.accounts.selectors import get_teacher_section_ids, resolve_teacher_for_user
 from common.media import build_media_url, save_base64_logo_to_disk
 from common.permissions import is_school_leader
-from apps.accounts.selectors import get_teacher_section_ids, resolve_teacher_for_user
 from .models import ClassPeriod, SchoolSettings, Section
 
 SCHOOL_META_CACHE_KEY = "school:metadata:raw"
@@ -90,14 +92,19 @@ def get_school_metadata(request=None, school: SchoolSettings | None = None) -> d
     }
 
 
-def get_sections_for_user(user):
+def get_sections_for_user(user, *, include_inactive: bool = False):
+    qs = Section.objects.all()
+    if not (include_inactive and is_school_leader(user)):
+        qs = qs.filter(is_active=True)
     qs = (
-        Section.objects.filter(is_active=True)
-        .select_related("grade_level", "school_year", "adviser", "room")
+        qs.select_related("grade_level", "school_year", "adviser", "room")
         .annotate(
             enrolled_count=Count(
                 "enrollments",
-                filter=Q(enrollments__status="ENROLLED", enrollments__student__is_active=True),
+                filter=Q(
+                    enrollments__status__in=["ENROLLED", "TRANSFERRED_IN"],
+                    enrollments__student__is_active=True,
+                ),
                 distinct=True,
             )
         )

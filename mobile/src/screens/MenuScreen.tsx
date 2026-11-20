@@ -3,57 +3,173 @@
  * File: mobile/src/screens/MenuScreen.tsx
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  RefreshControl,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
 import { isSafeUrl, type ThemeMode } from '../constants/theme';
 import { apiClient } from '../api/client';
+import { getServerBaseUrl } from '../services/configService';
 import { TabType } from '../navigation/MainTabNavigator';
+
+const STATS_CACHE_KEY = 'attendsure_cached_menu_stats';
+
+interface MenuStats {
+  rate: number | null;
+  scans: number;
+  students: number;
+  alerts: number;
+  classes: number;
+}
 
 interface MenuScreenProps {
   onSelectScreen: (screen: TabType) => void;
 }
 
+const isCanceledError = (err: unknown): boolean => {
+  const e = err as { code?: string; name?: string };
+  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
+};
+
 export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
   const insets = useSafeAreaInsets();
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const { mode, setThemeMode, palette, ui, fonts } = useThemeMode();
 
   const [tab, setTab] = useState<'INFO' | 'TOOLS' | 'ACCOUNT'>('INFO');
   const [photoError, setPhotoError] = useState(false);
-  const [stats, setStats] = useState({ rate: 100, scans: 0, students: 0, alerts: 0, classes: 1 });
+  const [serverBase, setServerBase] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [stats, setStats] = useState<MenuStats>({
+    rate: null,
+    scans: 0,
+    students: 0,
+    alerts: 0,
+    classes: 0,
+  });
 
-  const loadStats = useCallback(async () => {
+  const isMountedRef = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const loadStats = useCallback(async (fromCacheFirst = false) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    if (fromCacheFirst) {
+      try {
+        const [cachedStats, base] = await Promise.all([
+          AsyncStorage.getItem(STATS_CACHE_KEY),
+          getServerBaseUrl(),
+        ]);
+        if (isMountedRef.current && !controller.signal.aborted) {
+          if (base) setServerBase(base);
+          if (cachedStats) {
+            const parsed = JSON.parse(cachedStats);
+            if (parsed && typeof parsed === 'object') {
+              setStats({
+                rate: typeof parsed.rate === 'number' ? parsed.rate : null,
+                scans: Number(parsed.scans ?? 0),
+                students: Number(parsed.students ?? 0),
+                alerts: Number(parsed.alerts ?? 0),
+                classes: Number(parsed.classes ?? 0),
+              });
+            }
+          }
+        }
+      } catch {}
+    }
+
     try {
       const [ov, cls] = await Promise.allSettled([
-        apiClient.get('dashboard/overview/'),
-        apiClient.get('classroom/class_list/'),
+        apiClient.get('dashboard/overview/', { signal: controller.signal }),
+        apiClient
+          .get('classroom/assigned/', { signal: controller.signal })
+          .catch((err: unknown) => {
+            if (isCanceledError(err) || controller.signal.aborted) throw err;
+            return apiClient.get('classroom/class_list/', { signal: controller.signal });
+          }),
       ]);
-      const d = ov.status === 'fulfilled' ? ov.value.data : {};
-      const c = cls.status === 'fulfilled' && Array.isArray(cls.value.data) ? cls.value.data.length : 1;
-      setStats({
-        rate: Number(d?.attendance_rate ?? 100),
-        scans: Number(d?.classroom_scans_today ?? d?.gate_scans_today ?? 0),
-        students: Number(d?.total_students ?? 0),
-        alerts: Number(d?.push_alerts_today ?? 0),
-        classes: c || 1,
+
+      if (!isMountedRef.current || controller.signal.aborted) return;
+
+      const d = ov.status === 'fulfilled' && ov.value?.data ? ov.value.data : null;
+      const clsRaw = cls.status === 'fulfilled' ? cls.value?.data : null;
+      const clsList = Array.isArray(clsRaw)
+        ? clsRaw
+        : Array.isArray(clsRaw?.results)
+        ? clsRaw.results
+        : null;
+
+      setStats((prev) => {
+        const rawRate = d?.attendance_rate;
+        const parsedRate =
+          rawRate !== undefined && rawRate !== null && Number.isFinite(Number(rawRate))
+            ? Number(rawRate)
+            : prev.rate;
+
+        const next: MenuStats = {
+          rate: parsedRate,
+          scans: d ? Number(d.classroom_scans_today ?? d.scans_today ?? 0) : prev.scans,
+          students: d ? Number(d.total_students ?? 0) : prev.students,
+          alerts: d ? Number(d.push_alerts_today ?? 0) : prev.alerts,
+          classes: clsList !== null ? clsList.length : prev.classes,
+        };
+        AsyncStorage.setItem(STATS_CACHE_KEY, JSON.stringify(next)).catch(() => {});
+        return next;
       });
-    } catch {}
+    } catch {
+      // Keep cached values when offline
+    } finally {
+      if (isMountedRef.current) setRefreshing(false);
+    }
   }, []);
 
   useEffect(() => {
-    loadStats();
+    isMountedRef.current = true;
+    void loadStats(true);
+    return () => {
+      isMountedRef.current = false;
+      abortRef.current?.abort();
+    };
   }, [loadStats]);
 
-  const role = String(user?.role || user?.system_role || 'FACULTY').toUpperCase();
-  const name = user?.full_name || `${user?.first_name || ''} ${user?.last_name || ''}`.trim() || user?.username || 'Faculty';
-  const empId = user?.employee_id || user?.faculty_id || user?.username || 'ID-001';
-  const dept = user?.department || 'Junior High School';
-  const email = user?.email || `${user?.username || 'faculty'}@attendsure.edu.ph`;
-  const photo = typeof user?.photo === 'string' && isSafeUrl(user.photo) && !photoError ? user.photo : null;
+  const role = String(user?.role || user?.system_role || '—').toUpperCase();
+  const name =
+    user?.full_name ||
+    `${user?.first_name || ''} ${user?.last_name || ''}`.trim() ||
+    user?.username ||
+    '—';
+  const empId = user?.employee_id || user?.faculty_id || user?.username || '—';
+  const dept = user?.department || '—';
+  const email = user?.email || '—';
+
+  const rawPhoto = user?.photo || user?.avatar || null;
+  const candidatePhoto =
+    typeof rawPhoto === 'string' && rawPhoto.trim()
+      ? rawPhoto.startsWith('http://') ||
+        rawPhoto.startsWith('https://') ||
+        rawPhoto.startsWith('data:')
+        ? rawPhoto.trim()
+        : serverBase
+        ? `${serverBase.replace(/\/+$/, '')}/${rawPhoto.replace(/^\/+/, '')}`
+        : ''
+      : '';
+  const resolvedPhoto = isSafeUrl(candidatePhoto) ? candidatePhoto : null;
+
+  useEffect(() => {
+    setPhotoError(false);
+  }, [resolvedPhoto]);
 
   const themes: { key: ThemeMode; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
     { key: 'light', label: 'Light', icon: 'sunny-outline' },
@@ -61,42 +177,176 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
     { key: 'high-contrast', label: 'Daylight', icon: 'contrast-outline' },
   ];
 
-  const tools: { key: TabType; title: string; sub: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-    { key: 'scanner', title: 'Face & Location Check-In', sub: 'Verify your school attendance', icon: 'scan-outline' },
-    { key: 'dtr', title: 'Daily Time Record (Form 48)', sub: 'View and submit monthly hours', icon: 'time-outline' },
-    { key: 'reports', title: 'School Forms (SF1, SF2, SF4)', sub: 'View official attendance forms', icon: 'document-text-outline' },
-    { key: 'calendar', title: 'School Calendar', sub: 'Holidays and class suspensions', icon: 'calendar-outline' },
-    { key: 'settings', title: 'Settings', sub: 'Password, profile and server address', icon: 'settings-outline' },
+  const tools: {
+    key: TabType;
+    title: string;
+    sub: string;
+    icon: keyof typeof Ionicons.glyphMap;
+  }[] = [
+    {
+      key: 'scanner',
+      title: 'Face & Location Check-In',
+      sub: 'Verify your school attendance',
+      icon: 'scan-outline',
+    },
+    {
+      key: 'dtr',
+      title: 'Daily Time Record (Form 48)',
+      sub: 'View and submit monthly hours',
+      icon: 'time-outline',
+    },
+    {
+      key: 'reports',
+      title: 'School Forms (SF1, SF2, SF4)',
+      sub: 'View official attendance forms',
+      icon: 'document-text-outline',
+    },
+    {
+      key: 'calendar',
+      title: 'School Calendar',
+      sub: 'Holidays and class suspensions',
+      icon: 'calendar-outline',
+    },
+    {
+      key: 'settings',
+      title: 'Settings',
+      sub: 'Password, profile and server address',
+      icon: 'settings-outline',
+    },
   ];
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await Promise.allSettled([loadStats(false), refreshUser()]);
+    if (isMountedRef.current) setRefreshing(false);
+  };
+
   return (
-    <ScrollView style={ui.screen} contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={ui.screen}
+      contentContainerStyle={{ paddingBottom: 120 }}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void onRefresh()}
+          colors={[palette.primary]}
+          tintColor={palette.primary}
+        />
+      }
+    >
       {/* Top Profile Banner */}
-      <View style={{ backgroundColor: palette.headerBg, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 18, paddingBottom: 20, borderBottomLeftRadius: 26, borderBottomRightRadius: 26 }}>
+      <View
+        style={{
+          backgroundColor: palette.headerBg,
+          paddingTop: Math.max(insets.top, 14),
+          paddingHorizontal: 18,
+          paddingBottom: 20,
+          borderBottomLeftRadius: 26,
+          borderBottomRightRadius: 26,
+        }}
+      >
         <View style={ui.rowBetween}>
-          <Text style={{ fontSize: fonts.xl, fontWeight: fonts.weight.extrabold, color: '#ffffff' }}>My Profile</Text>
-          <TouchableOpacity onPress={() => onSelectScreen('settings')} style={{ padding: 8, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)' }}>
-            <Ionicons name="settings-outline" size={18} color="#ffffff" />
+          <Text
+            style={{
+              fontSize: fonts.xl,
+              fontWeight: fonts.weight.extrabold,
+              color: palette.onPrimary,
+            }}
+          >
+            My Profile
+          </Text>
+          <TouchableOpacity
+            onPress={() => onSelectScreen('settings')}
+            style={{
+              padding: 8,
+              borderRadius: 18,
+              backgroundColor: palette.headerSurface,
+            }}
+            accessibilityLabel="Open settings"
+          >
+            <Ionicons name="settings-outline" size={18} color={palette.onPrimary} />
           </TouchableOpacity>
         </View>
 
         <View style={{ alignItems: 'center', marginTop: 10 }}>
-          <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginBottom: 8 }}>
-            {photo ? <Image source={{ uri: photo }} style={{ width: '100%', height: '100%' }} onError={() => setPhotoError(true)} /> : <Ionicons name="person" size={36} color={palette.primary} />}
+          <View
+            style={{
+              width: 72,
+              height: 72,
+              borderRadius: 36,
+              backgroundColor: palette.surface,
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+              marginBottom: 8,
+            }}
+          >
+            {resolvedPhoto && !photoError ? (
+              <Image
+                source={{ uri: resolvedPhoto }}
+                style={{ width: '100%', height: '100%' }}
+                contentFit="cover"
+                onError={() => setPhotoError(true)}
+              />
+            ) : (
+              <Ionicons name="person" size={36} color={palette.primary} />
+            )}
           </View>
-          <Text style={{ fontSize: 18, fontWeight: fonts.weight.extrabold, color: '#ffffff' }}>{name}</Text>
-          <Text style={{ fontSize: fonts.xs, color: '#dbe4ff', marginTop: 2 }}>{dept} • ID {empId}</Text>
+          <Text
+            style={{
+              fontSize: 18,
+              fontWeight: fonts.weight.extrabold,
+              color: palette.onPrimary,
+            }}
+          >
+            {name}
+          </Text>
+          <Text
+            style={{
+              fontSize: fonts.xs,
+              color: palette.onPrimary,
+              opacity: 0.85,
+              marginTop: 2,
+            }}
+          >
+            {dept !== '—' ? `${dept} • ` : ''}ID {empId}
+          </Text>
         </View>
 
-        <View style={{ flexDirection: 'row', backgroundColor: palette.headerSurface, borderRadius: 14, paddingVertical: 10, marginTop: 14 }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            backgroundColor: palette.headerSurface,
+            borderRadius: 14,
+            paddingVertical: 10,
+            marginTop: 14,
+          }}
+        >
           {[
-            { val: stats.scans, lbl: 'Scans Today' },
-            { val: `${stats.rate}%`, lbl: 'Attendance' },
-            { val: stats.classes, lbl: 'Classes' },
+            { val: String(stats.scans), lbl: 'Scans Today' },
+            { val: stats.rate !== null ? `${stats.rate}%` : '—', lbl: 'Attendance' },
+            { val: String(stats.classes), lbl: 'Classes' },
           ].map((s, idx) => (
             <View key={idx} style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ fontSize: 16, fontWeight: fonts.weight.black, color: '#ffffff' }}>{s.val}</Text>
-              <Text style={{ fontSize: fonts.xxs, color: '#dbe4ff' }}>{s.lbl}</Text>
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontWeight: fonts.weight.black,
+                  color: palette.onPrimary,
+                }}
+              >
+                {s.val}
+              </Text>
+              <Text
+                style={{
+                  fontSize: fonts.xxs,
+                  color: palette.onPrimary,
+                  opacity: 0.85,
+                }}
+              >
+                {s.lbl}
+              </Text>
             </View>
           ))}
         </View>
@@ -113,17 +363,36 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
                 <TouchableOpacity
                   key={t.key}
                   onPress={() => setThemeMode(t.key)}
-                  style={[ui.buttonSecondary, { flex: 1, backgroundColor: active ? palette.primary : palette.surfaceSubtle, borderColor: active ? palette.primary : palette.border }]}
+                  style={[
+                    ui.buttonSecondary,
+                    {
+                      flex: 1,
+                      backgroundColor: active ? palette.buttonBg : palette.surfaceSubtle,
+                      borderColor: active ? palette.buttonBg : palette.border,
+                    },
+                  ]}
                 >
-                  <Ionicons name={t.icon} size={15} color={active ? '#ffffff' : palette.textSecondary} />
-                  <Text style={{ fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: active ? '#ffffff' : palette.textSecondary }}>{t.label}</Text>
+                  <Ionicons
+                    name={t.icon}
+                    size={15}
+                    color={active ? palette.onPrimary : palette.textSecondary}
+                  />
+                  <Text
+                    style={{
+                      fontSize: fonts.xs,
+                      fontWeight: fonts.weight.extrabold,
+                      color: active ? palette.onPrimary : palette.textSecondary,
+                    }}
+                  >
+                    {t.label}
+                  </Text>
                 </TouchableOpacity>
               );
             })}
           </View>
         </View>
 
-        {/* Simple Tabs */}
+        {/* Section Tabs */}
         <View style={[ui.box, { flexDirection: 'row', padding: 4 }]}>
           {(['INFO', 'TOOLS', 'ACCOUNT'] as const).map((k) => {
             const active = tab === k;
@@ -131,9 +400,23 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
               <TouchableOpacity
                 key={k}
                 onPress={() => setTab(k)}
-                style={{ flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, backgroundColor: active ? palette.surface : 'transparent' }}
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  alignItems: 'center',
+                  borderRadius: 8,
+                  backgroundColor: active ? palette.surface : 'transparent',
+                }}
               >
-                <Text style={{ fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: active ? palette.primary : palette.textMuted }}>{k}</Text>
+                <Text
+                  style={{
+                    fontSize: fonts.xs,
+                    fontWeight: fonts.weight.extrabold,
+                    color: active ? palette.primary : palette.textMuted,
+                  }}
+                >
+                  {k}
+                </Text>
               </TouchableOpacity>
             );
           })}
@@ -151,9 +434,30 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
               { k: 'TOTAL STUDENTS', v: String(stats.students) },
               { k: 'PARENT ALERTS TODAY', v: String(stats.alerts) },
             ].map((r, i) => (
-              <View key={i} style={[ui.rowBetween, { paddingVertical: 8, borderBottomWidth: i === 6 ? 0 : 1, borderBottomColor: palette.border }]}>
+              <View
+                key={i}
+                style={[
+                  ui.rowBetween,
+                  {
+                    paddingVertical: 8,
+                    borderBottomWidth: i === 6 ? 0 : 1,
+                    borderBottomColor: palette.border,
+                  },
+                ]}
+              >
                 <Text style={ui.label}>{r.k}</Text>
-                <Text style={{ fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.textPrimary }}>{r.v}</Text>
+                <Text
+                  style={{
+                    fontSize: fonts.sm,
+                    fontWeight: fonts.weight.extrabold,
+                    color: palette.textPrimary,
+                    maxWidth: '62%',
+                    textAlign: 'right',
+                  }}
+                  numberOfLines={1}
+                >
+                  {r.v}
+                </Text>
               </View>
             ))}
           </View>
@@ -162,13 +466,34 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
         {tab === 'TOOLS' && (
           <View style={{ gap: 8 }}>
             {tools.map((t) => (
-              <TouchableOpacity key={t.key} style={[ui.card, ui.rowBetween, { marginBottom: 0 }]} onPress={() => onSelectScreen(t.key)}>
-                <View style={ui.rowCenter}>
-                  <View style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center' }}>
+              <TouchableOpacity
+                key={t.key}
+                style={[ui.card, ui.rowBetween, { marginBottom: 0 }]}
+                onPress={() => onSelectScreen(t.key)}
+              >
+                <View style={[ui.rowCenter, { flex: 1 }]}>
+                  <View
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 10,
+                      backgroundColor: palette.primarySoft,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
                     <Ionicons name={t.icon} size={18} color={palette.primary} />
                   </View>
-                  <View>
-                    <Text style={{ fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary }}>{t.title}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={{
+                        fontSize: fonts.md,
+                        fontWeight: fonts.weight.extrabold,
+                        color: palette.textPrimary,
+                      }}
+                    >
+                      {t.title}
+                    </Text>
                     <Text style={ui.subtext}>{t.sub}</Text>
                   </View>
                 </View>
@@ -181,13 +506,19 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
         {tab === 'ACCOUNT' && (
           <View style={ui.card}>
             <Text style={ui.heading}>Account Options</Text>
-            <TouchableOpacity style={[ui.buttonSecondary, { marginBottom: 10 }]} onPress={() => onSelectScreen('settings')}>
+            <TouchableOpacity
+              style={[ui.buttonSecondary, { marginBottom: 10 }]}
+              onPress={() => onSelectScreen('settings')}
+            >
               <Ionicons name="key-outline" size={16} color={palette.textPrimary} />
               <Text style={ui.buttonSecondaryText}>Change Password or Server</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[ui.buttonPrimary, { backgroundColor: palette.danger }]} onPress={logout}>
-              <Ionicons name="log-out-outline" size={16} color="#ffffff" />
-              <Text style={ui.buttonPrimaryText}>Sign Out</Text>
+            <TouchableOpacity
+              style={[ui.buttonPrimary, { backgroundColor: palette.dangerBg }]}
+              onPress={() => void logout()}
+            >
+              <Ionicons name="log-out-outline" size={16} color={palette.onPrimary} />
+              <Text style={[ui.buttonPrimaryText, { color: palette.onPrimary }]}>Sign Out</Text>
             </TouchableOpacity>
           </View>
         )}

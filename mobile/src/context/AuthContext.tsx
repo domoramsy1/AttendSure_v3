@@ -7,7 +7,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
-import { apiClient, AUTH_TOKEN_KEY } from '../api/client';
+import { apiClient, AUTH_TOKEN_KEY, onAuthExpired } from '../api/client';
 
 const USER_CACHE_KEY = 'attendsure_user_profile';
 
@@ -61,8 +61,25 @@ const saveTokenSafely = async (token: string): Promise<void> => {
   }
 };
 
+const readTokenSafely = async (): Promise<string | null> => {
+  if (Platform.OS !== 'web') {
+    try {
+      const secureToken = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+      if (secureToken) return secureToken;
+    } catch {}
+  }
+  return AsyncStorage.getItem(AUTH_TOKEN_KEY);
+};
+
 const clearTokenSafely = async (): Promise<void> => {
-  await AsyncStorage.multiRemove([AUTH_TOKEN_KEY, USER_CACHE_KEY]);
+  await AsyncStorage.multiRemove([
+    AUTH_TOKEN_KEY,
+    USER_CACHE_KEY,
+    'user_token',
+    'attendsure_token',
+    'attendsure_user',
+    'attendsure_role',
+  ]);
   if (Platform.OS !== 'web') {
     try {
       await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
@@ -75,31 +92,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const isRefreshingRef = useRef<boolean>(false);
+  const isMountedRef = useRef<boolean>(true);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const refreshUser = useCallback(async () => {
     if (isRefreshingRef.current) return;
     isRefreshingRef.current = true;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
-      const storedToken = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+      const storedToken = await readTokenSafely();
       if (!storedToken) {
-        setUser(null);
-        setToken(null);
+        if (isMountedRef.current) {
+          setUser(null);
+          setToken(null);
+        }
         return;
       }
 
-      const res = await apiClient.get('/api/me/');
-      if (res.data && res.data.id) {
+      const res = await apiClient.get('/api/me/', { signal: controller.signal });
+      if (isMountedRef.current && res.data && res.data.id) {
         setUser(res.data);
         setToken(storedToken);
         await AsyncStorage.setItem(USER_CACHE_KEY, JSON.stringify(res.data));
       }
-    } catch (err: any) {
-      const status = err?.response?.status;
+    } catch (err: unknown) {
+      const anyErr = err as { response?: { status?: number }; code?: string };
+      if (anyErr?.code === 'ERR_CANCELED') return;
+      const status = anyErr?.response?.status;
       if (status === 401 || status === 403) {
         await clearTokenSafely();
-        setUser(null);
-        setToken(null);
+        if (isMountedRef.current) {
+          setUser(null);
+          setToken(null);
+        }
       }
     } finally {
       isRefreshingRef.current = false;
@@ -109,10 +145,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const restoreSession = async () => {
       try {
-        const storedToken = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+        const storedToken = await readTokenSafely();
         const cachedUserStr = await AsyncStorage.getItem(USER_CACHE_KEY);
 
-        if (storedToken && cachedUserStr) {
+        if (isMountedRef.current && storedToken && cachedUserStr) {
           setToken(storedToken);
           setUser(JSON.parse(cachedUserStr));
         }
@@ -122,14 +158,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } catch {
         await clearTokenSafely();
-        setUser(null);
-        setToken(null);
+        if (isMountedRef.current) {
+          setUser(null);
+          setToken(null);
+        }
       } finally {
-        setLoading(false);
+        if (isMountedRef.current) {
+          setLoading(false);
+        }
       }
     };
 
-    restoreSession();
+    void restoreSession();
+
+    const unsubscribeAuthExpired = onAuthExpired(() => {
+      clearTokenSafely().finally(() => {
+        if (isMountedRef.current) {
+          setToken(null);
+          setUser(null);
+        }
+      });
+    });
+
+    return () => {
+      unsubscribeAuthExpired();
+    };
   }, [refreshUser]);
 
   const login = async (username: string, password: string): Promise<void> => {

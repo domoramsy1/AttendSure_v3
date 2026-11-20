@@ -1,4 +1,7 @@
-// D:\AttendSure_V3\mobile\src\screens\DashboardScreen.tsx
+/**
+ * AttendSure Mobile - Faculty Home Dashboard
+ * File: mobile/src/screens/DashboardScreen.tsx
+ */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
@@ -21,15 +24,19 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useAuth } from '../context/AuthContext';
+import { useThemeMode } from '../context/ThemeContext';
+import { AttendSureLogo } from '../branding/BrandLogos';
 import { apiClient } from '../api/client';
 import { getServerBaseUrl } from '../services/configService';
 import { getUnsyncedCount, syncOfflineQueue } from '../services/offlineQueue';
 import { sendLiveHeartbeat, format12HourTime } from '../services/telemetryService';
 import { startPassivePresenceTracking } from '../services/backgroundLocation';
-import { COLORS } from '../constants/theme';
+import {
+  isSafeUrl,
+  getFriendlyErrorMessage,
+  type ThemePalette,
+} from '../constants/theme';
 import { TabType } from '../navigation/MainTabNavigator';
-
-const fallbackLogo = require('../../assets/AttendSureLogo.svg');
 
 function calculateDistanceMeters(
   lat1: number,
@@ -56,6 +63,11 @@ function formatDistance(meters: number): string {
   }
   return `${Math.round(meters)} m`;
 }
+
+const isCanceledError = (err: unknown): boolean => {
+  const e = err as { code?: string; name?: string };
+  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
+};
 
 interface StudentItem {
   id: number;
@@ -154,28 +166,17 @@ const getLocalTodayStr = (): string => {
   return `${y}-${m}-${d}`;
 };
 
-const getMindfulGreeting = (): { greeting: string; thought: string } => {
+const getGreeting = (): string => {
   const hour = new Date().getHours();
-  if (hour < 12) {
-    return {
-      greeting: 'Good morning',
-      thought: 'Presence is the highest form of dedication to your learners.',
-    };
-  }
-  if (hour < 17) {
-    return {
-      greeting: 'Good afternoon',
-      thought: 'Excellence in service through daily consistency and care.',
-    };
-  }
-  return {
-    greeting: 'Good evening',
-    thought: 'Reflecting on a day of purpose, integrity, and mentorship.',
-  };
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
 };
 
 export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const { user, refreshUser } = useAuth();
+  const { palette, fonts, isDark } = useThemeMode();
+  const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
 
   const [sections, setSections] = useState<SectionItem[]>([]);
   const [schoolProfile, setSchoolProfile] = useState<SchoolProfileData | null>(null);
@@ -184,7 +185,6 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const [todayOverride, setTodayOverride] = useState<CalendarOverrideItem | null>(null);
   const [weekendRestEnabled, setWeekendRestEnabled] = useState<boolean>(false);
 
-  const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
@@ -197,13 +197,12 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const [liveCoords, setLiveCoords] = useState<LiveGpsCoords | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  const [showAdvisoryModal, setShowAdvisoryModal] = useState<boolean>(false);
-  const [advisoryAcknowledged, setAdvisoryAcknowledged] = useState<boolean>(false);
-  const lastAdvisoryTimestamp = useRef<number>(0);
+  const [showCampusAlertModal, setShowCampusAlertModal] = useState<boolean>(false);
+  const [campusAlertAcknowledged, setCampusAlertAcknowledged] = useState<boolean>(false);
+  const lastCampusAlertTimestamp = useRef<number>(0);
 
-  const isMounted = useRef(true);
+  const isMounted = useRef<boolean>(true);
   const abortControllerRef = useRef<AbortController | null>(null);
-
   const anchorCoordsRef = useRef<LiveGpsCoords | null>(null);
   const lastHeartbeatSent = useRef<number>(0);
 
@@ -226,7 +225,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     schoolProfile?.school_name ||
     currentUser?.school_name ||
     geofenceConfig?.name ||
-    '';
+    'AttendSure';
 
   const schoolSubHeader = [
     schoolProfile?.school_id ? `School ID: ${schoolProfile.school_id}` : '',
@@ -235,16 +234,19 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     .filter(Boolean)
     .join(' • ');
 
-  const mindfulQuote = useMemo(() => getMindfulGreeting(), []);
+  const greetingText = useMemo(() => getGreeting(), []);
 
-  const resolvePhotoUrl = useCallback((path: string | null | undefined, base: string) => {
-    if (!path) return null;
-    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) {
-      return path;
-    }
-    const cleanBase = base.replace(/\/+$/, '');
-    const cleanPath = path.startsWith('/') ? path : `/${path}`;
-    return `${cleanBase}${cleanPath}`;
+  const resolveSafePhotoUrl = useCallback((path: string | null | undefined, base: string): string | null => {
+    if (!path || typeof path !== 'string') return null;
+    const trimmed = path.trim();
+    if (!trimmed) return null;
+    const candidate =
+      trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')
+        ? trimmed
+        : base
+        ? `${base.replace(/\/+$/, '')}${trimmed.startsWith('/') ? trimmed : `/${trimmed}`}`
+        : '';
+    return isSafeUrl(candidate) ? candidate : null;
   }, []);
 
   const rawUserPhoto =
@@ -253,12 +255,21 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     currentUser?.avatar_url ||
     currentUser?.avatar ||
     null;
-  const resolvedUserPhoto = resolvePhotoUrl(rawUserPhoto, serverBase);
+  const resolvedUserPhoto = resolveSafePhotoUrl(rawUserPhoto, serverBase);
+
+  const rawLogoPath = schoolProfile?.school_logo || schoolProfile?.left_logo || null;
+  const resolvedLogoUri = resolveSafePhotoUrl(rawLogoPath, serverBase);
 
   useEffect(() => {
-    startPassivePresenceTracking().catch((err) =>
-      console.log('[BackgroundGPS] Startup notice:', err?.message || err)
-    );
+    setAvatarFailed(false);
+  }, [resolvedUserPhoto]);
+
+  useEffect(() => {
+    setLogoFailed(false);
+  }, [resolvedLogoUri]);
+
+  useEffect(() => {
+    startPassivePresenceTracking().catch(() => {});
   }, [currentUser?.username, currentUser?.id]);
 
   const applyStationaryFilter = useCallback((raw: LiveGpsCoords): LiveGpsCoords => {
@@ -301,13 +312,13 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           setIsOnline(true);
           setGpsError(null);
         }
-      } catch (err: any) {
-        if (isSubscribed) {
-          const msg = err?.message || '';
-          if (msg.includes('locked') || msg.includes('mismatch') || msg.includes('403')) {
-            setGpsError(msg);
-            setIsOnline(false);
-          }
+      } catch (err: unknown) {
+        if (!isSubscribed) return;
+        const msg = getFriendlyErrorMessage(err, 'Could not verify your campus location right now.');
+        const lower = msg.toLowerCase();
+        if (lower.includes('lock') || lower.includes('mismatch') || lower.includes('permission') || lower.includes('mock')) {
+          setGpsError(msg);
+          setIsOnline(false);
         }
       }
     };
@@ -315,24 +326,27 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     const startLiveGpsTracking = async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
+        if (!isSubscribed) return;
         if (status !== 'granted') {
-          if (isSubscribed) setGpsError('Location permission needed for attendance.');
+          setGpsError('Location access is needed for attendance check-in.');
           return;
         }
 
         const isGpsActive = await Location.hasServicesEnabledAsync();
+        if (!isSubscribed) return;
         if (!isGpsActive) {
-          if (isSubscribed) setGpsError('Phone GPS is turned off.');
+          setGpsError('Phone GPS is turned off.');
           return;
         }
 
-        if (isSubscribed) setGpsError(null);
+        setGpsError(null);
 
         const initial = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.High,
         });
+        if (!isSubscribed) return;
 
-        if (isSubscribed && initial) {
+        if (initial) {
           const rawCoords: LiveGpsCoords = {
             latitude: initial.coords.latitude,
             longitude: initial.coords.longitude,
@@ -345,10 +359,11 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           setLiveCoords(stabilized);
 
           lastHeartbeatSent.current = Date.now();
-          transmitHeartbeat(stabilized);
+          void transmitHeartbeat(stabilized);
         }
 
-        watcherSubscription = await Location.watchPositionAsync(
+        if (!isSubscribed) return;
+        const sub = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
             timeInterval: 5000,
@@ -372,55 +387,70 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
             const now = Date.now();
             if (now - lastHeartbeatSent.current >= 60000) {
               lastHeartbeatSent.current = now;
-              transmitHeartbeat(stabilized);
+              void transmitHeartbeat(stabilized);
             }
           }
         );
 
+        // Clean up immediately if unmounted while awaiting watchPositionAsync
+        if (!isSubscribed) {
+          sub.remove();
+          return;
+        }
+        watcherSubscription = sub;
+
         heartbeatIntervalTimer = setInterval(async () => {
           if (!isSubscribed) return;
           const now = Date.now();
-          if (now - lastHeartbeatSent.current >= 60000) {
-            try {
-              const freshLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-              const rawCoords: LiveGpsCoords = {
-                latitude: freshLoc.coords.latitude,
-                longitude: freshLoc.coords.longitude,
-                accuracy: freshLoc.coords.accuracy,
-                mocked: Boolean(freshLoc.mocked),
+          if (now - lastHeartbeatSent.current < 60000) return;
+
+          try {
+            const freshLoc = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.High,
+            });
+            if (!isSubscribed) return;
+            const rawCoords: LiveGpsCoords = {
+              latitude: freshLoc.coords.latitude,
+              longitude: freshLoc.coords.longitude,
+              accuracy: freshLoc.coords.accuracy,
+              mocked: Boolean(freshLoc.mocked),
+              timestamp: format12HourTime(new Date()),
+            };
+            const stabilized = applyStationaryFilter(rawCoords);
+            setLiveCoords(stabilized);
+            lastHeartbeatSent.current = now;
+            void transmitHeartbeat(stabilized);
+          } catch {
+            if (!isSubscribed) return;
+            if (anchorCoordsRef.current) {
+              lastHeartbeatSent.current = now;
+              const updated = {
+                ...anchorCoordsRef.current,
                 timestamp: format12HourTime(new Date()),
               };
-              const stabilized = applyStationaryFilter(rawCoords);
-              setLiveCoords(stabilized);
-              lastHeartbeatSent.current = now;
-              transmitHeartbeat(stabilized);
-            } catch {
-              if (anchorCoordsRef.current) {
-                lastHeartbeatSent.current = now;
-                const updated = { ...anchorCoordsRef.current, timestamp: format12HourTime(new Date()) };
-                setLiveCoords(updated);
-                transmitHeartbeat(updated);
-              }
+              setLiveCoords(updated);
+              void transmitHeartbeat(updated);
             }
           }
         }, 30000);
-
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (isSubscribed) {
-          setGpsError(err?.message || 'Searching for GPS satellite signal...');
+          setGpsError(getFriendlyErrorMessage(err, 'Searching for GPS signal...'));
         }
       }
     };
 
-    startLiveGpsTracking();
+    void startLiveGpsTracking();
 
     return () => {
       isSubscribed = false;
       if (watcherSubscription) {
         watcherSubscription.remove();
+        watcherSubscription = null;
       }
       if (heartbeatIntervalTimer) {
         clearInterval(heartbeatIntervalTimer);
+        heartbeatIntervalTimer = null;
       }
     };
   }, [currentUser?.username, currentUser?.id, applyStationaryFilter]);
@@ -453,31 +483,12 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const todayDtrRow: DtrDayRow | null =
     dtrData?.rows?.find((r) => r.date_str === todayStr) || null;
 
-  const hasTappedInToday = Boolean(todayDtrRow?.am_arrival || todayDtrRow?.pm_arrival);
-  const hasTappedOutToday = Boolean(
+  const hasCheckedInToday = Boolean(todayDtrRow?.am_arrival || todayDtrRow?.pm_arrival);
+  const hasCheckedOutToday = Boolean(
     (todayDtrRow?.pm_departure && todayDtrRow.pm_departure !== '') ||
       (todayDtrRow?.am_departure && !todayDtrRow?.pm_arrival)
   );
-
-  const isOfficiallyOnDuty = hasTappedInToday && !hasTappedOutToday;
-
-  const dutyStatusLabel = hasTappedInToday
-    ? hasTappedOutToday
-      ? 'DONE FOR TODAY'
-      : 'ACTIVE ON DUTY'
-    : 'NO CHECK-IN';
-
-  const dutyStatusColor = hasTappedInToday
-    ? hasTappedOutToday
-      ? '#d97706'
-      : '#059669'
-    : '#64748b';
-
-  const dutyStatusBg = hasTappedInToday
-    ? hasTappedOutToday
-      ? '#fef3c7'
-      : '#ecfdf5'
-    : '#f1f5f9';
+  const isOfficiallyOnDuty = hasCheckedInToday && !hasCheckedOutToday;
 
   useEffect(() => {
     if (isInsideCampusPerimeter === false && isOfficiallyOnDuty && campusCenter.radius !== null) {
@@ -489,25 +500,34 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
       }
 
       const now = Date.now();
-      if (!advisoryAcknowledged || now - lastAdvisoryTimestamp.current > 300000) {
-        setShowAdvisoryModal(true);
-        lastAdvisoryTimestamp.current = now;
-        Vibration.vibrate([0, 150, 100, 150]);
+      if (!campusAlertAcknowledged || now - lastCampusAlertTimestamp.current > 300000) {
+        setShowCampusAlertModal(true);
+        lastCampusAlertTimestamp.current = now;
+        if (Platform.OS !== 'web') {
+          Vibration.vibrate([0, 150, 100, 150]);
+        }
       }
     } else if (isInsideCampusPerimeter === true) {
-      setShowAdvisoryModal(false);
-      setAdvisoryAcknowledged(false);
+      setShowCampusAlertModal(false);
+      setCampusAlertAcknowledged(false);
     }
-  }, [isInsideCampusPerimeter, isOfficiallyOnDuty, liveDistanceMeters, liveCoords, campusCenter.radius, advisoryAcknowledged]);
+  }, [
+    isInsideCampusPerimeter,
+    isOfficiallyOnDuty,
+    liveDistanceMeters,
+    liveCoords,
+    campusCenter.radius,
+    campusAlertAcknowledged,
+  ]);
 
-  const handleDismissAdvisory = () => {
-    setShowAdvisoryModal(false);
-    setAdvisoryAcknowledged(true);
+  const handleDismissCampusAlert = () => {
+    setShowCampusAlertModal(false);
+    setCampusAlertAcknowledged(true);
   };
 
   const loadCachedData = useCallback(async () => {
     try {
-      const [cachedSchool, cachedSections, cachedDtr, cachedGeo, activeBase] = await Promise.all([
+      const results = await Promise.allSettled([
         AsyncStorage.getItem('attendsure_cached_school'),
         AsyncStorage.getItem('attendsure_cached_sections'),
         AsyncStorage.getItem('attendsure_cached_dtr'),
@@ -515,16 +535,29 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         getServerBaseUrl(),
       ]);
 
-      if (cachedSchool) setSchoolProfile(JSON.parse(cachedSchool));
-      if (cachedSections) setSections(JSON.parse(cachedSections));
-      if (cachedDtr) setDtrData(JSON.parse(cachedDtr));
-      if (cachedGeo) setGeofenceConfig(JSON.parse(cachedGeo));
-      if (activeBase) setServerBase(activeBase);
+      if (!isMounted.current) return;
+
+      const [schoolRes, sectionsRes, dtrRes, geoRes, baseRes] = results;
+      if (schoolRes.status === 'fulfilled' && schoolRes.value) {
+        setSchoolProfile(JSON.parse(schoolRes.value));
+      }
+      if (sectionsRes.status === 'fulfilled' && sectionsRes.value) {
+        setSections(JSON.parse(sectionsRes.value));
+      }
+      if (dtrRes.status === 'fulfilled' && dtrRes.value) {
+        setDtrData(JSON.parse(dtrRes.value));
+      }
+      if (geoRes.status === 'fulfilled' && geoRes.value) {
+        setGeofenceConfig(JSON.parse(geoRes.value));
+      }
+      if (baseRes.status === 'fulfilled' && baseRes.value) {
+        setServerBase(baseRes.value);
+      }
     } catch {}
   }, []);
 
-  const normalizeClasses = (rawList: any[]): SectionItem[] => {
-    return rawList.map((item: any, idx: number) => ({
+  const normalizeClasses = (rawList: any[]): SectionItem[] =>
+    rawList.map((item: any, idx: number) => ({
       schedule_id: item.schedule_id || item.id || idx + 1,
       section_id: item.section_id || item.section?.id || item.id || 0,
       section_name: item.section_name || item.section?.name || item.name || '',
@@ -533,14 +566,15 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
       room: item.room || item.room_number || item.room?.name || '',
       start_time: typeof item.start_time === 'string' ? item.start_time : '',
       end_time: typeof item.end_time === 'string' ? item.end_time : '',
-      total_students: Array.isArray(item.students) ? item.students.length : Number(item.total_students) || 0,
+      total_students: Array.isArray(item.students)
+        ? item.students.length
+        : Number(item.total_students) || 0,
       students: Array.isArray(item.students) ? item.students : [],
     }));
-  };
 
   const flushOfflineRecords = useCallback(async () => {
     try {
-      setIsSyncingQueue(true);
+      if (isMounted.current) setIsSyncingQueue(true);
       const res = await syncOfflineQueue();
       const updatedCount = await getUnsyncedCount();
       if (isMounted.current) {
@@ -549,42 +583,46 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           setIsOnline(true);
         }
       }
-    } catch (err) {
-      console.log('[SyncQueue] Error:', err);
+    } catch {
+      // Keep unsynced count intact until next retry
     } finally {
       if (isMounted.current) setIsSyncingQueue(false);
     }
   }, []);
 
   const loadAllDynamicData = useCallback(async () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+    abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
     const todayDate = getLocalTodayStr();
     const now = new Date();
 
-    const [
-      classListRes,
-      schoolRes,
-      dtrRes,
-      geofenceRes,
-      calendarRes,
-    ] = await Promise.allSettled([
-      apiClient.get('classroom/class_list/', { signal: controller.signal, timeout: 5000 })
-        .catch(() => apiClient.get('classroom/student_list/', { signal: controller.signal, timeout: 5000 }))
-        .catch(() => apiClient.get('sections/', { signal: controller.signal, timeout: 5000 })),
-      apiClient.get('settings/school/', { signal: controller.signal, timeout: 5000 }),
-      apiClient.get(`reports/dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`, { signal: controller.signal, timeout: 5000 }),
-      apiClient.get('geofence/', { signal: controller.signal, timeout: 5000 }),
-      apiClient.get('calendar/exceptions/', { signal: controller.signal, timeout: 5000 }),
-    ]);
+    const [classListRes, schoolRes, dtrRes, geofenceRes, calendarRes] =
+      await Promise.allSettled([
+        apiClient
+          .get('classroom/assigned/', { signal: controller.signal, timeout: 5000 })
+          .catch((err: unknown) => {
+            if (isCanceledError(err) || controller.signal.aborted) {
+              throw err;
+            }
+            return apiClient.get('sections/', { signal: controller.signal, timeout: 5000 });
+          }),
+        apiClient.get('settings/school/', { signal: controller.signal, timeout: 5000 }),
+        apiClient.get(
+          `reports/dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`,
+          { signal: controller.signal, timeout: 5000 }
+        ),
+        apiClient.get('geofence/', { signal: controller.signal, timeout: 5000 }),
+        apiClient.get('calendar/exceptions/', { signal: controller.signal, timeout: 5000 }),
+      ]);
 
-    if (!isMounted.current) return;
+    if (!isMounted.current || controller.signal.aborted) return;
+
+    let anySuccess = false;
 
     if (classListRes.status === 'fulfilled' && classListRes.value?.data) {
+      anySuccess = true;
       const rawPayload = classListRes.value.data;
       const rawList = Array.isArray(rawPayload)
         ? rawPayload
@@ -593,25 +631,39 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         : [];
       const normalized = normalizeClasses(rawList);
       setSections(normalized);
-      AsyncStorage.setItem('attendsure_cached_sections', JSON.stringify(normalized)).catch(() => {});
+      AsyncStorage.setItem('attendsure_cached_sections', JSON.stringify(normalized)).catch(
+        () => {}
+      );
     }
 
     if (schoolRes.status === 'fulfilled' && schoolRes.value?.data) {
+      anySuccess = true;
       setSchoolProfile(schoolRes.value.data);
-      AsyncStorage.setItem('attendsure_cached_school', JSON.stringify(schoolRes.value.data)).catch(() => {});
+      AsyncStorage.setItem(
+        'attendsure_cached_school',
+        JSON.stringify(schoolRes.value.data)
+      ).catch(() => {});
     }
 
     if (dtrRes.status === 'fulfilled' && dtrRes.value?.data) {
+      anySuccess = true;
       setDtrData(dtrRes.value.data);
-      AsyncStorage.setItem('attendsure_cached_dtr', JSON.stringify(dtrRes.value.data)).catch(() => {});
+      AsyncStorage.setItem('attendsure_cached_dtr', JSON.stringify(dtrRes.value.data)).catch(
+        () => {}
+      );
     }
 
     if (geofenceRes.status === 'fulfilled' && geofenceRes.value?.data) {
+      anySuccess = true;
       setGeofenceConfig(geofenceRes.value.data);
-      AsyncStorage.setItem('attendsure_cached_geofence', JSON.stringify(geofenceRes.value.data)).catch(() => {});
+      AsyncStorage.setItem(
+        'attendsure_cached_geofence',
+        JSON.stringify(geofenceRes.value.data)
+      ).catch(() => {});
     }
 
     if (calendarRes.status === 'fulfilled' && calendarRes.value?.data) {
+      anySuccess = true;
       const calPayload = calendarRes.value.data;
       const list: CalendarOverrideItem[] = Array.isArray(calPayload)
         ? calPayload
@@ -625,81 +677,94 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
       setTodayOverride(matched);
     }
 
+    setIsOnline(anySuccess);
+
     const count = await getUnsyncedCount();
+    if (!isMounted.current || controller.signal.aborted) return;
+
     setOfflineCount(count);
     if (count > 0) {
-      flushOfflineRecords();
+      void flushOfflineRecords();
     }
 
     setLastSyncTime(format12HourTime(new Date()));
-    setLoading(false);
   }, [flushOfflineRecords]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadAllDynamicData(), flushOfflineRecords(), refreshUser()]);
+    await Promise.allSettled([loadAllDynamicData(), flushOfflineRecords(), refreshUser()]);
     if (isMounted.current) setRefreshing(false);
   }, [loadAllDynamicData, flushOfflineRecords, refreshUser]);
 
   useEffect(() => {
     isMounted.current = true;
-    loadCachedData().then(() => {
-      loadAllDynamicData();
+    void loadCachedData().then(() => {
+      if (isMounted.current) {
+        void loadAllDynamicData();
+      }
     });
-    refreshUser();
+    void refreshUser();
 
     return () => {
       isMounted.current = false;
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
+      abortControllerRef.current?.abort();
     };
   }, [loadCachedData, loadAllDynamicData, refreshUser]);
 
   const safeSections = Array.isArray(sections) ? sections : [];
-  const totalClasses = safeSections.length;
 
   let totalStudentsEnrolled = 0;
   let totalPresent = 0;
   let totalLate = 0;
   let totalAbsent = 0;
   let totalNeedsReview = 0;
-  let totalUnscanned = 0;
 
-  let totalMaleEnrolled = 0;
-  let totalFemaleEnrolled = 0;
-  let totalMalePresent = 0;
-  let totalFemalePresent = 0;
+  // Deduplicate students across periods so daily totals are never double-counted
+  const uniqueStudentsMap = new Map<string, StudentItem>();
+  const statusPriority: Record<string, number> = {
+    PRESENT: 5,
+    LATE: 4,
+    TARDY: 4,
+    CUTTING: 3,
+    UNVERIFIED: 2,
+    ABSENT: 1,
+    UNSCANNED: 0,
+  };
 
   safeSections.forEach((sec) => {
     const students = Array.isArray(sec?.students) ? sec.students : [];
-    totalStudentsEnrolled += students.length;
-
     students.forEach((st) => {
-      const status = String(st?.attendance_status || 'UNSCANNED').toUpperCase();
-      const gender = String(st?.gender || '').trim().toUpperCase();
-      const isMale = gender.startsWith('M');
-      const isFemale = gender.startsWith('F');
-
-      if (isMale) totalMaleEnrolled += 1;
-      if (isFemale) totalFemaleEnrolled += 1;
-
-      if (status === 'PRESENT') {
-        totalPresent += 1;
-        if (isMale) totalMalePresent += 1;
-        if (isFemale) totalFemalePresent += 1;
-      } else if (status === 'LATE' || status === 'TARDY') {
-        totalLate += 1;
-        if (isMale) totalMalePresent += 1;
-        if (isFemale) totalFemalePresent += 1;
-      } else if (status === 'ABSENT') {
-        totalAbsent += 1;
-      } else if (status === 'CUTTING' || status === 'UNVERIFIED') {
-        totalNeedsReview += 1;
+      const key = String(st?.id ?? st?.lrn ?? st?.full_name ?? '');
+      if (!key) return;
+      const existing = uniqueStudentsMap.get(key);
+      if (!existing) {
+        uniqueStudentsMap.set(key, st);
       } else {
-        totalUnscanned += 1;
+        const prevScore =
+          statusPriority[String(existing.attendance_status || 'UNSCANNED').toUpperCase()] ?? 0;
+        const nextScore =
+          statusPriority[String(st.attendance_status || 'UNSCANNED').toUpperCase()] ?? 0;
+        if (nextScore > prevScore) {
+          uniqueStudentsMap.set(key, st);
+        }
       }
     });
+  });
+
+  const uniqueStudents = Array.from(uniqueStudentsMap.values());
+  totalStudentsEnrolled = uniqueStudents.length;
+
+  uniqueStudents.forEach((st) => {
+    const status = String(st?.attendance_status || 'UNSCANNED').toUpperCase();
+    if (status === 'PRESENT') {
+      totalPresent += 1;
+    } else if (status === 'LATE' || status === 'TARDY') {
+      totalLate += 1;
+    } else if (status === 'ABSENT') {
+      totalAbsent += 1;
+    } else if (status === 'CUTTING' || status === 'UNVERIFIED') {
+      totalNeedsReview += 1;
+    }
   });
 
   const totalAttended = totalPresent + totalLate;
@@ -710,25 +775,21 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
 
   const isWeekendToday = [0, 6].includes(new Date().getDay());
 
-  const rawLogoPath = schoolProfile?.school_logo || schoolProfile?.left_logo;
-  const resolvedLogoUri = resolvePhotoUrl(rawLogoPath, serverBase);
-  const logoSource = (resolvedLogoUri && !logoFailed) ? { uri: resolvedLogoUri } : fallbackLogo;
-
   return (
     <SafeAreaView style={styles.safeContainer} edges={['top', 'left', 'right']}>
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
 
-      {/* Campus Boundary Advisory Modal */}
+      {/* Campus Boundary Notice Modal */}
       <Modal
-        visible={showAdvisoryModal}
-        transparent={true}
+        visible={showCampusAlertModal}
+        transparent
         animationType="fade"
-        onRequestClose={handleDismissAdvisory}
+        onRequestClose={handleDismissCampusAlert}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalIconWrap}>
-              <Ionicons name="location-outline" size={32} color="#004b87" />
+              <Ionicons name="location-outline" size={32} color={palette.primary} />
             </View>
 
             <Text style={styles.modalTitle}>Outside School Area</Text>
@@ -753,15 +814,16 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
             </View>
 
             <Text style={styles.modalExplanation}>
-              If you are on official school business, notify your department head. Otherwise, please return to campus grounds to verify your attendance.
+              If you are on official school business, let your department head know. Otherwise,
+              please return to campus grounds to verify your attendance.
             </Text>
 
             <TouchableOpacity
               style={styles.modalConfirmBtn}
-              onPress={handleDismissAdvisory}
+              onPress={handleDismissCampusAlert}
               activeOpacity={0.85}
             >
-              <Ionicons name="checkmark-outline" size={16} color="#ffffff" />
+              <Ionicons name="checkmark-outline" size={16} color={palette.onPrimary} />
               <Text style={styles.modalConfirmBtnText}>I Understand</Text>
             </TouchableOpacity>
           </View>
@@ -771,20 +833,29 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
       {/* Top Header */}
       <View style={styles.topHeader}>
         <View style={styles.brandGroup}>
-          <Image
-            source={logoSource}
-            style={styles.schoolLogo}
-            contentFit="contain"
-            onError={() => setLogoFailed(true)}
-          />
+          {resolvedLogoUri && !logoFailed ? (
+            <Image
+              source={{ uri: resolvedLogoUri }}
+              style={styles.schoolLogo}
+              contentFit="contain"
+              onError={() => setLogoFailed(true)}
+            />
+          ) : (
+            <AttendSureLogo size={34} />
+          )}
           <View style={styles.brandTextGroup}>
             <Text style={styles.schoolTitle} numberOfLines={1}>
-              {schoolName || 'AttendSure'}
+              {schoolName}
             </Text>
             {schoolSubHeader ? (
               <View style={styles.subBrandRow}>
-                <View style={[styles.activeDot, { backgroundColor: isOnline ? '#16a34a' : '#94a3b8' }]} />
-                <Text style={styles.protocolText} numberOfLines={1}>
+                <View
+                  style={[
+                    styles.activeDot,
+                    { backgroundColor: isOnline ? palette.success : palette.textMuted },
+                  ]}
+                />
+                <Text style={styles.schoolSubText} numberOfLines={1}>
                   {schoolSubHeader}
                 </Text>
               </View>
@@ -794,11 +865,11 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
 
         <TouchableOpacity
           style={styles.refreshButton}
-          onPress={onRefresh}
+          onPress={() => void onRefresh()}
           activeOpacity={0.7}
           accessibilityLabel="Refresh records"
         >
-          <Ionicons name="sync-outline" size={16} color="#004b87" />
+          <Ionicons name="sync-outline" size={16} color={palette.primary} />
         </TouchableOpacity>
       </View>
 
@@ -807,28 +878,36 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void onRefresh()}
+            colors={[palette.primary]}
+            tintColor={palette.primary}
+          />
         }
       >
-        {/* Fake GPS Security Alert */}
+        {/* Mock Location Notice */}
         {liveCoords?.mocked && (
-          <View style={styles.securityAlertCard}>
-            <Ionicons name="alert-circle-outline" size={18} color="#dc2626" />
+          <View style={styles.locationNoticeCard}>
+            <Ionicons name="alert-circle-outline" size={18} color={palette.danger} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.securityAlertTitle}>Fake GPS Detected</Text>
-              <Text style={styles.securityAlertBody}>
-                Mock location apps are running. Please turn off fake GPS in phone settings to keep official school logs valid.
+              <Text style={styles.locationNoticeTitle}>Fake GPS Detected</Text>
+              <Text style={styles.locationNoticeBody}>
+                A mock location app is active. Please turn off fake GPS in your phone settings so
+                your attendance logs stay valid.
               </Text>
             </View>
           </View>
         )}
 
-        {/* 1. Pastel Welcome Banner Card */}
+        {/* 1. Welcome Banner Card */}
         <View style={styles.welcomeCard}>
           <View style={styles.welcomeHeader}>
-            <View>
-              <Text style={styles.welcomeSub}>{mindfulQuote.greeting},</Text>
-              <Text style={styles.welcomeTitle} numberOfLines={1}>{displayName}</Text>
+            <View style={{ flex: 1, marginRight: 10 }}>
+              <Text style={styles.welcomeSub}>{greetingText},</Text>
+              <Text style={styles.welcomeTitle} numberOfLines={1}>
+                {displayName || 'Faculty Member'}
+              </Text>
             </View>
             <View style={styles.avatarBox}>
               {resolvedUserPhoto && !avatarFailed ? (
@@ -839,24 +918,30 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
                   onError={() => setAvatarFailed(true)}
                 />
               ) : (
-                <Ionicons name="person" size={22} color={COLORS.primary} />
+                <Ionicons name="person" size={22} color={palette.primary} />
               )}
             </View>
           </View>
 
-          {/* Status / Level Progress Bar */}
           <View style={styles.progressContainer}>
             <View style={styles.progressTopRow}>
-              <Text style={styles.progressBadgeText}>{employeeId ? `ID: ${employeeId}` : 'Faculty'}</Text>
+              <Text style={styles.progressBadgeText}>
+                {employeeId ? `ID: ${employeeId}` : 'Faculty'}
+              </Text>
               <Text style={styles.progressPercent}>{overallRate}% Attendance Today</Text>
             </View>
             <View style={styles.progressBarTrack}>
-              <View style={[styles.progressBarFill, { width: `${Math.min(100, Math.max(5, overallRate))}%` }]} />
+              <View
+                style={[
+                  styles.progressBarFill,
+                  { width: `${Math.min(100, Math.max(5, overallRate))}%` },
+                ]}
+              />
             </View>
           </View>
         </View>
 
-        {/* 2. Primary Status / Classroom Summary Card */}
+        {/* 2. Primary Classroom Summary Card */}
         <TouchableOpacity
           style={styles.primaryStatusCard}
           onPress={() => onNavigate?.('class_list')}
@@ -864,76 +949,78 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         >
           <View style={styles.statusTopRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.statusCardEyebrow}>TODAY'S CLASS SUMMARY</Text>
+              <Text style={styles.statusCardEyebrow}>TODAY&apos;S CLASS SUMMARY</Text>
               <Text style={styles.statusCardTitle}>
-                {totalPresent} of {totalStudentsEnrolled} Learners Present
+                {totalPresent} of {totalStudentsEnrolled} Students Present
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#ffffff" />
+            <Ionicons name="chevron-forward" size={18} color={palette.onPrimary} />
           </View>
           <View style={styles.statusFooterRow}>
             <View style={styles.statusPill}>
               <Text style={styles.statusPillText}>Needs Review: {totalNeedsReview}</Text>
             </View>
-            <View style={[styles.statusPill, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
-              <Text style={styles.statusPillText}>GPS Verified: {isInsideCampusPerimeter ? 'On Campus' : 'Away'}</Text>
+            <View style={[styles.statusPill, { backgroundColor: palette.headerSurface }]}>
+              <Text style={styles.statusPillText}>
+                Campus GPS: {isInsideCampusPerimeter ? 'On Campus' : 'Away'}
+              </Text>
             </View>
           </View>
         </TouchableOpacity>
 
-        {/* 3. Quick Links Pastel Grid */}
+        {/* 3. Quick Actions Grid */}
         <Text style={styles.sectionHeader}>Quick Actions</Text>
         <View style={styles.gridContainer}>
           <TouchableOpacity
-            style={[styles.gridCard, { backgroundColor: '#fff7ed' }]}
+            style={styles.gridCard}
             onPress={() => onNavigate?.('scanner')}
             activeOpacity={0.8}
           >
-            <View style={[styles.gridIconBox, { backgroundColor: '#ffedd5' }]}>
-              <Ionicons name="scan-outline" size={20} color="#c2410c" />
+            <View style={[styles.gridIconBox, { backgroundColor: palette.warningLight }]}>
+              <Ionicons name="scan-outline" size={20} color={palette.warning} />
             </View>
-            <Text style={[styles.gridCardTitle, { color: '#9a3412' }]}>Face Check</Text>
-            <Text style={styles.gridCardSub}>GPS &amp; Biometric</Text>
+            <Text style={styles.gridCardTitle}>Face Check-In</Text>
+            <Text style={styles.gridCardSub}>Face &amp; Campus GPS</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.gridCard, { backgroundColor: '#eff6ff' }]}
+            style={styles.gridCard}
             onPress={() => onNavigate?.('gate_pass')}
             activeOpacity={0.8}
           >
-            <View style={[styles.gridIconBox, { backgroundColor: '#dbeafe' }]}>
-              <Ionicons name="ticket-outline" size={20} color="#1d4ed8" />
+            <View style={[styles.gridIconBox, { backgroundColor: palette.infoLight }]}>
+              <Ionicons name="ticket-outline" size={20} color={palette.info} />
             </View>
-            <Text style={[styles.gridCardTitle, { color: '#1e40af' }]}>Exit Pass</Text>
-            <Text style={styles.gridCardSub}>Gate Clearances</Text>
+            <Text style={styles.gridCardTitle}>Exit Passes</Text>
+            <Text style={styles.gridCardSub}>Student &amp; Travel Permits</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.gridCard, { backgroundColor: '#f5f3ff' }]}
+            style={styles.gridCard}
             onPress={() => onNavigate?.('class_list')}
             activeOpacity={0.8}
           >
-            <View style={[styles.gridIconBox, { backgroundColor: '#ede9fe' }]}>
-              <Ionicons name="people-outline" size={20} color="#6d28d9" />
+            <View style={[styles.gridIconBox, { backgroundColor: palette.primarySoft }]}>
+              <Ionicons name="people-outline" size={20} color={palette.primary} />
             </View>
-            <Text style={[styles.gridCardTitle, { color: '#5b21b6' }]}>Class List</Text>
-            <Text style={styles.gridCardSub}>Enrolled Learners</Text>
+            <Text style={styles.gridCardTitle}>Class List</Text>
+            <Text style={styles.gridCardSub}>Enrolled Students</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.gridCard, { backgroundColor: '#ecfdf5' }]}
-            onPress={() => onNavigate?.('settings')}
+            style={styles.gridCard}
+            onPress={() => onNavigate?.('chat')}
             activeOpacity={0.8}
           >
-            <View style={[styles.gridIconBox, { backgroundColor: '#d1fae5' }]}>
-              <Ionicons name="notifications-outline" size={20} color="#047857" />
+            <View style={[styles.gridIconBox, { backgroundColor: palette.successLight }]}>
+              <Ionicons name="notifications-outline" size={20} color={palette.success} />
             </View>
-            <Text style={[styles.gridCardTitle, { color: '#065f46' }]}>Push Alerts</Text>
-            <Text style={styles.gridCardSub}>Parent Broadcasts</Text>
+            <Text style={styles.gridCardTitle}>Parent Alerts</Text>
+            <Text style={styles.gridCardSub}>Push Updates &amp; Chat</Text>
           </TouchableOpacity>
         </View>
 
-        {/* 4. More Tools Expansion Card */}
+        {/* 4. More Tools Card */}
         <TouchableOpacity
           style={styles.moreToolsCard}
           onPress={() => onNavigate?.('menu')}
@@ -941,45 +1028,47 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         >
           <View style={styles.moreToolsLeft}>
             <View style={styles.moreToolsIconBox}>
-              <Ionicons name="grid-outline" size={20} color={COLORS.primary} />
+              <Ionicons name="grid-outline" size={20} color={palette.primary} />
             </View>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.moreToolsTitle}>More School Tools</Text>
-              <Text style={styles.moreToolsSub}>DTR, Calendar, SARDO Risk Reports &amp; Settings</Text>
+              <Text style={styles.moreToolsSub}>
+                Daily Time Record, Calendar, School Reports &amp; Settings
+              </Text>
             </View>
           </View>
-          <Ionicons name="chevron-forward" size={18} color="#64748b" />
+          <Ionicons name="chevron-forward" size={18} color={palette.textMuted} />
         </TouchableOpacity>
 
         {/* School Campus Location Card */}
-        <View style={styles.presenceShieldCard}>
-          <View style={styles.presenceCardHeader}>
-            <View style={styles.presenceHeaderLeft}>
+        <View style={styles.campusLocationCard}>
+          <View style={styles.campusCardHeader}>
+            <View style={styles.campusHeaderLeft}>
               <View
                 style={[
                   styles.pulseDot,
                   {
                     backgroundColor:
                       isInsideCampusPerimeter === true
-                        ? '#16a34a'
+                        ? palette.success
                         : isInsideCampusPerimeter === false
-                        ? '#d97706'
-                        : '#94a3b8',
+                        ? palette.warning
+                        : palette.textMuted,
                   },
                 ]}
               />
-              <Text style={styles.presenceHeaderLabel}>SCHOOL CAMPUS LOCATION</Text>
+              <Text style={styles.campusHeaderLabel}>SCHOOL CAMPUS LOCATION</Text>
             </View>
 
             {liveCoords?.timestamp ? (
               <View style={styles.timestampBadge}>
-                <Ionicons name="time-outline" size={11} color="#64748b" />
+                <Ionicons name="time-outline" size={11} color={palette.textMuted} />
                 <Text style={styles.timestampBadgeText}>{liveCoords.timestamp}</Text>
               </View>
             ) : null}
           </View>
 
-          <View style={styles.presenceMainContent}>
+          <View style={styles.campusMainContent}>
             {liveDistanceMeters !== null ? (
               <>
                 <View style={styles.distanceValueRow}>
@@ -994,20 +1083,24 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
                     style={[
                       styles.perimeterBadge,
                       {
-                        backgroundColor: isInsideCampusPerimeter ? '#ecfdf5' : '#fffbeb',
-                        borderColor: isInsideCampusPerimeter ? '#a7f3d0' : '#fde68a',
+                        backgroundColor: isInsideCampusPerimeter
+                          ? palette.successLight
+                          : palette.warningLight,
+                        borderColor: isInsideCampusPerimeter ? palette.success : palette.warning,
                       },
                     ]}
                   >
                     <Ionicons
-                      name={isInsideCampusPerimeter ? 'checkmark-circle' : 'navigate-circle-outline'}
+                      name={
+                        isInsideCampusPerimeter ? 'checkmark-circle' : 'navigate-circle-outline'
+                      }
                       size={13}
-                      color={isInsideCampusPerimeter ? '#059669' : '#d97706'}
+                      color={isInsideCampusPerimeter ? palette.success : palette.warning}
                     />
                     <Text
                       style={[
                         styles.perimeterBadgeText,
-                        { color: isInsideCampusPerimeter ? '#047857' : '#b45309' },
+                        { color: isInsideCampusPerimeter ? palette.success : palette.warning },
                       ]}
                     >
                       {isInsideCampusPerimeter ? 'INSIDE SCHOOL GROUNDS' : 'OUTSIDE SCHOOL GROUNDS'}
@@ -1015,26 +1108,28 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
                   </View>
 
                   <Text style={styles.perimeterRadiusMeta}>
-                    {campusCenter.radius !== null ? `Allowed area: ${campusCenter.radius}m` : 'Boundary unconfigured'}
+                    {campusCenter.radius !== null
+                      ? `Allowed area: ${campusCenter.radius}m`
+                      : 'Boundary not set'}
                   </Text>
                 </View>
               </>
             ) : (
               <View style={styles.acquiringFixBox}>
-                <ActivityIndicator size="small" color="#004b87" />
+                <ActivityIndicator size="small" color={palette.primary} />
                 <Text style={styles.acquiringFixText}>
-                  {gpsError || 'Finding satellite location...'}
+                  {gpsError || 'Finding GPS location...'}
                 </Text>
               </View>
             )}
           </View>
         </View>
 
-        {/* Offline Buffer Banner */}
+        {/* Offline Queue Banner */}
         {offlineCount > 0 && (
           <TouchableOpacity
             style={styles.offlineBufferBanner}
-            onPress={flushOfflineRecords}
+            onPress={() => void flushOfflineRecords()}
             disabled={isSyncingQueue}
             activeOpacity={0.8}
           >
@@ -1042,7 +1137,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
               <Ionicons
                 name={isSyncingQueue ? 'sync-outline' : 'cloud-upload-outline'}
                 size={18}
-                color="#b45309"
+                color={palette.warning}
               />
               <View style={{ flex: 1 }}>
                 <Text style={styles.offlineBufferTitle}>
@@ -1058,7 +1153,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
               </View>
             </View>
             {isSyncingQueue ? (
-              <ActivityIndicator size="small" color="#b45309" />
+              <ActivityIndicator size="small" color={palette.warning} />
             ) : (
               <View style={styles.syncNowBtn}>
                 <Text style={styles.syncNowBtnText}>Upload Now</Text>
@@ -1070,7 +1165,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         {/* Calendar Holiday Banner */}
         {todayOverride ? (
           <View style={styles.calendarBanner}>
-            <Ionicons name="calendar-outline" size={16} color="#004b87" />
+            <Ionicons name="calendar-outline" size={16} color={palette.primary} />
             <View style={{ flex: 1 }}>
               <Text style={styles.calendarBannerTitle}>
                 {todayOverride.type}: {todayOverride.date}
@@ -1079,32 +1174,35 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
             </View>
           </View>
         ) : isWeekendToday && weekendRestEnabled ? (
-          <View style={[styles.calendarBanner, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
-            <Ionicons name="partly-sunny-outline" size={16} color="#16a34a" />
+          <View
+            style={[
+              styles.calendarBanner,
+              { backgroundColor: palette.successLight, borderColor: palette.success },
+            ]}
+          >
+            <Ionicons name="partly-sunny-outline" size={16} color={palette.success} />
             <View style={{ flex: 1 }}>
-              <Text style={[styles.calendarBannerTitle, { color: '#15803d' }]}>
+              <Text style={[styles.calendarBannerTitle, { color: palette.success }]}>
                 Weekend Rest Day
               </Text>
-              <Text style={[styles.calendarBannerReason, { color: '#166534' }]}>
-                Duty logging is optional during scheduled rest days.
+              <Text style={[styles.calendarBannerReason, { color: palette.textPrimary }]}>
+                Attendance logging is optional on scheduled rest days.
               </Text>
             </View>
           </View>
         ) : null}
 
-        {/* DTR Card */}
+        {/* DTR Summary Card */}
         {dtrData && (
           <>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionHeaderTitle}>
                 Daily Time Record ({dtrData.month} {dtrData.year})
               </Text>
-              <Text style={styles.sectionHeaderSub}>
-                {dtrData.days_present} Days Logged
-              </Text>
+              <Text style={styles.sectionHeaderSub}>{dtrData.days_present} Days Logged</Text>
             </View>
 
-            <View style={styles.dtrIntegrityCard}>
+            <View style={styles.dtrSummaryCard}>
               <View style={styles.dtrGrid}>
                 <View style={styles.dtrSlot}>
                   <Text style={styles.dtrSlotLabel}>AM IN</Text>
@@ -1133,10 +1231,10 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
                     styles.dtrApprovalBadge,
                     {
                       color: dtrData.dept_head_approved
-                        ? '#16a34a'
+                        ? palette.success
                         : dtrData.dtr_submitted
-                        ? '#004b87'
-                        : '#64748b',
+                        ? palette.primary
+                        : palette.textMuted,
                     },
                   ]}
                 >
@@ -1161,34 +1259,36 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
 
         <View style={styles.kpiTileGrid}>
           <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: '#ecfdf5' }]}>
-              <Ionicons name="checkmark-circle-outline" size={15} color="#059669" />
+            <View style={[styles.kpiIconWrap, { backgroundColor: palette.successLight }]}>
+              <Ionicons name="checkmark-circle-outline" size={15} color={palette.success} />
             </View>
-            <Text style={[styles.kpiValueText, { color: '#059669' }]}>{totalPresent}</Text>
+            <Text style={[styles.kpiValueText, { color: palette.success }]}>{totalPresent}</Text>
             <Text style={styles.kpiLabelText}>Present</Text>
           </View>
 
           <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: '#fef3c7' }]}>
-              <Ionicons name="time-outline" size={15} color="#d97706" />
+            <View style={[styles.kpiIconWrap, { backgroundColor: palette.warningLight }]}>
+              <Ionicons name="time-outline" size={15} color={palette.warning} />
             </View>
-            <Text style={[styles.kpiValueText, { color: '#d97706' }]}>{totalLate}</Text>
+            <Text style={[styles.kpiValueText, { color: palette.warning }]}>{totalLate}</Text>
             <Text style={styles.kpiLabelText}>Late</Text>
           </View>
 
           <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: '#fee2e2' }]}>
-              <Ionicons name="close-circle-outline" size={15} color="#dc2626" />
+            <View style={[styles.kpiIconWrap, { backgroundColor: palette.dangerLight }]}>
+              <Ionicons name="close-circle-outline" size={15} color={palette.danger} />
             </View>
-            <Text style={[styles.kpiValueText, { color: '#dc2626' }]}>{totalAbsent}</Text>
+            <Text style={[styles.kpiValueText, { color: palette.danger }]}>{totalAbsent}</Text>
             <Text style={styles.kpiLabelText}>Absent</Text>
           </View>
 
           <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: '#f1f5f9' }]}>
-              <Ionicons name="eye-outline" size={15} color="#475569" />
+            <View style={[styles.kpiIconWrap, { backgroundColor: palette.surfaceSubtle }]}>
+              <Ionicons name="eye-outline" size={15} color={palette.textSecondary} />
             </View>
-            <Text style={[styles.kpiValueText, { color: '#334155' }]}>{totalNeedsReview}</Text>
+            <Text style={[styles.kpiValueText, { color: palette.textPrimary }]}>
+              {totalNeedsReview}
+            </Text>
             <Text style={styles.kpiLabelText}>Review</Text>
           </View>
         </View>
@@ -1197,321 +1297,349 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   );
 };
 
-const styles = StyleSheet.create({
-  safeContainer: { flex: 1, backgroundColor: '#f8fafc' },
-  topHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  brandGroup: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  schoolLogo: { width: 34, height: 34, borderRadius: 8 },
-  brandTextGroup: { marginLeft: 10, flex: 1 },
-  schoolTitle: { fontSize: 13, fontWeight: '800', color: '#003460' },
-  subBrandRow: { flexDirection: 'row', alignItems: 'center', marginTop: 1, gap: 5 },
-  activeDot: { width: 6, height: 6, borderRadius: 3 },
-  protocolText: { fontSize: 10, fontWeight: '700', color: '#004b87' },
-  refreshButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  scrollArea: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 110 },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    width: '100%',
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-  },
-  modalIconWrap: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#e0f2fe',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: '#003460', textAlign: 'center' },
-  modalSubtitle: { fontSize: 12, color: '#475569', textAlign: 'center', marginTop: 4, lineHeight: 17 },
-  modalMetricsBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    width: '100%',
-    paddingVertical: 10,
-    marginVertical: 12,
-  },
-  modalMetricCol: { alignItems: 'center', flex: 1 },
-  modalMetricDivider: { width: 1, height: 24, backgroundColor: '#cbd5e1' },
-  modalMetricLabel: { fontSize: 8.5, fontWeight: '800', color: '#64748b' },
-  modalMetricVal: { fontSize: 15, fontWeight: '800', color: '#003460', marginTop: 1 },
-  modalExplanation: { fontSize: 11, color: '#64748b', textAlign: 'center', lineHeight: 16, marginBottom: 16 },
-  modalConfirmBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: '#004b87',
-    width: '100%',
-    paddingVertical: 11,
-    borderRadius: 8,
-  },
-  modalConfirmBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
-  securityAlertCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#fef2f2',
-    borderWidth: 1,
-    borderColor: '#fca5a5',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 12,
-    gap: 8,
-  },
-  securityAlertTitle: { fontSize: 11.5, fontWeight: '800', color: '#991b1b' },
-  securityAlertBody: { fontSize: 10.5, color: '#b91c1c', marginTop: 2, lineHeight: 14 },
-  welcomeCard: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 20,
-    padding: 18,
-    marginBottom: 14,
-    ...Platform.select({
-      ios: {
-        shadowColor: COLORS.primaryDark,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.2,
-        shadowRadius: 10,
-      },
-      android: { elevation: 6 },
-    }),
-  },
-  welcomeHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  welcomeSub: { fontSize: 13, color: '#e0f2fe', fontWeight: '600' },
-  welcomeTitle: { fontSize: 20, fontWeight: '800', color: '#ffffff', marginTop: 2 },
-  avatarBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  avatarImg: { width: '100%', height: '100%' },
-  progressContainer: { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, padding: 12 },
-  progressTopRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  progressBadgeText: { fontSize: 11, fontWeight: '700', color: '#ffffff' },
-  progressPercent: { fontSize: 11, fontWeight: '800', color: '#fef08a' },
-  progressBarTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 3, overflow: 'hidden' },
-  progressBarFill: { height: '100%', backgroundColor: '#fef08a', borderRadius: 3 },
-  primaryStatusCard: {
-    backgroundColor: '#0ea5e9',
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 16,
-    ...Platform.select({
-      ios: { shadowColor: '#0ea5e9', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8 },
-      android: { elevation: 4 },
-    }),
-  },
-  statusTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
-  statusCardEyebrow: { fontSize: 10, fontWeight: '800', color: '#e0f2fe', letterSpacing: 0.5 },
-  statusCardTitle: { fontSize: 16, fontWeight: '800', color: '#ffffff', marginTop: 2 },
-  statusFooterRow: { flexDirection: 'row', gap: 8 },
-  statusPill: { backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
-  statusPillText: { fontSize: 11, fontWeight: '700', color: '#ffffff' },
-  sectionHeader: { fontSize: 15, fontWeight: '800', color: '#0f172a', marginBottom: 10, marginLeft: 2 },
-  gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
-  gridCard: { width: '48%', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#e2e8f0', gap: 6 },
-  gridIconBox: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-  gridCardTitle: { fontSize: 14, fontWeight: '800' },
-  gridCardSub: { fontSize: 11, color: '#64748b', fontWeight: '600' },
-  moreToolsCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 14,
-  },
-  moreToolsLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-  moreToolsIconBox: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
-  moreToolsTitle: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
-  moreToolsSub: { fontSize: 11, color: '#64748b', marginTop: 2 },
-  presenceShieldCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1.5,
-    borderColor: '#e0f2fe',
-    marginBottom: 12,
-  },
-  presenceCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  presenceHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pulseDot: { width: 8, height: 8, borderRadius: 4 },
-  presenceHeaderLabel: { fontSize: 10, fontWeight: '800', color: '#0369a1', letterSpacing: 0.4 },
-  timestampBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#f1f5f9',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  timestampBadgeText: { fontSize: 9.5, color: '#475569', fontWeight: '600' },
-  presenceMainContent: { marginVertical: 4 },
-  distanceValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
-  distanceMetricBig: { fontSize: 26, fontWeight: '900', color: '#003460', letterSpacing: -0.5 },
-  distanceMetricSub: { fontSize: 11.5, fontWeight: '600', color: '#64748b' },
-  perimeterBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 6,
-  },
-  perimeterBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 3.5,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  perimeterBadgeText: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.2 },
-  perimeterRadiusMeta: { fontSize: 10.5, color: '#64748b', fontWeight: '600' },
-  acquiringFixBox: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
-  acquiringFixText: { fontSize: 11.5, color: '#64748b', fontWeight: '600' },
-  offlineBufferBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#fffbeb',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#fde68a',
-  },
-  offlineBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, marginRight: 8 },
-  offlineBufferTitle: { fontSize: 11.5, fontWeight: '800', color: '#92400e' },
-  offlineBufferSubtitle: { fontSize: 10, color: '#b45309', marginTop: 1 },
-  syncNowBtn: {
-    backgroundColor: '#d97706',
-    paddingVertical: 5,
-    paddingHorizontal: 9,
-    borderRadius: 6,
-  },
-  syncNowBtnText: { color: '#ffffff', fontSize: 10.5, fontWeight: '800' },
-  calendarBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#eff6ff',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    gap: 8,
-  },
-  calendarBannerTitle: { fontSize: 11.5, fontWeight: '800', color: '#004b87' },
-  calendarBannerReason: { fontSize: 10.5, color: '#1e3a8a', marginTop: 1 },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    marginBottom: 6,
-  },
-  sectionHeaderTitle: { fontSize: 12.5, fontWeight: '800', color: '#334155' },
-  sectionHeaderSub: { fontSize: 10, fontWeight: '600', color: '#64748b' },
-  dtrIntegrityCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  dtrGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-  },
-  dtrSlot: { alignItems: 'center', flex: 1 },
-  dtrSlotLabel: { fontSize: 8.5, fontWeight: '800', color: '#64748b' },
-  dtrSlotTime: { fontSize: 12, fontWeight: '800', color: '#0f172a', marginTop: 2 },
-  dtrCardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    paddingHorizontal: 2,
-  },
-  dtrFooterMeta: { fontSize: 10.5, color: '#475569', fontWeight: '600' },
-  dtrApprovalBadge: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.2 },
-  kpiTileGrid: { flexDirection: 'row', gap: 6, marginBottom: 4 },
-  kpiTile: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    padding: 8,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    alignItems: 'center',
-  },
-  kpiIconWrap: {
-    width: 26,
-    height: 26,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  kpiValueText: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
-  kpiLabelText: { fontSize: 8.5, fontWeight: '700', color: '#64748b', marginTop: 1, textAlign: 'center' },
-});
+const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMode>['fonts']) =>
+  StyleSheet.create({
+    safeContainer: { flex: 1, backgroundColor: palette.background },
+    topHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      backgroundColor: palette.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: palette.border,
+    },
+    brandGroup: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+    schoolLogo: { width: 34, height: 34, borderRadius: 8 },
+    brandTextGroup: { marginLeft: 10, flex: 1 },
+    schoolTitle: { fontSize: fonts.base, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    subBrandRow: { flexDirection: 'row', alignItems: 'center', marginTop: 1, gap: 5 },
+    activeDot: { width: 6, height: 6, borderRadius: 3 },
+    schoolSubText: { fontSize: fonts.xxs, fontWeight: fonts.weight.bold, color: palette.textSecondary },
+    refreshButton: {
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      backgroundColor: palette.surfaceSubtle,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    scrollArea: { flex: 1 },
+    scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 110 },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(15, 23, 42, 0.75)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 20,
+    },
+    modalCard: {
+      width: '100%',
+      backgroundColor: palette.surface,
+      borderRadius: 16,
+      padding: 20,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: palette.borderStrong,
+    },
+    modalIconWrap: {
+      width: 54,
+      height: 54,
+      borderRadius: 27,
+      backgroundColor: palette.primarySoft,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: 12,
+    },
+    modalTitle: {
+      fontSize: fonts.lg,
+      fontWeight: fonts.weight.extrabold,
+      color: palette.textPrimary,
+      textAlign: 'center',
+    },
+    modalSubtitle: {
+      fontSize: fonts.sm,
+      color: palette.textSecondary,
+      textAlign: 'center',
+      marginTop: 4,
+      lineHeight: 18,
+    },
+    modalMetricsBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-around',
+      backgroundColor: palette.surfaceSubtle,
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: 10,
+      width: '100%',
+      paddingVertical: 10,
+      marginVertical: 12,
+    },
+    modalMetricCol: { alignItems: 'center', flex: 1 },
+    modalMetricDivider: { width: 1, height: 24, backgroundColor: palette.borderStrong },
+    modalMetricLabel: { fontSize: 9, fontWeight: fonts.weight.extrabold, color: palette.textMuted },
+    modalMetricVal: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary, marginTop: 2 },
+    modalExplanation: {
+      fontSize: fonts.xs,
+      color: palette.textSecondary,
+      textAlign: 'center',
+      lineHeight: 16,
+      marginBottom: 16,
+    },
+    modalConfirmBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      backgroundColor: palette.buttonBg,
+      width: '100%',
+      paddingVertical: 12,
+      borderRadius: 10,
+    },
+    modalConfirmBtnText: { color: palette.onPrimary, fontSize: fonts.sm, fontWeight: fonts.weight.bold },
+    locationNoticeCard: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      backgroundColor: palette.dangerLight,
+      borderWidth: 1,
+      borderColor: palette.danger,
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 12,
+      gap: 8,
+    },
+    locationNoticeTitle: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.danger },
+    locationNoticeBody: { fontSize: fonts.xs, color: palette.textPrimary, marginTop: 2, lineHeight: 16 },
+    welcomeCard: {
+      backgroundColor: palette.headerBg,
+      borderRadius: 20,
+      padding: 18,
+      marginBottom: 14,
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000000',
+          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: 0.18,
+          shadowRadius: 10,
+        },
+        android: { elevation: 5 },
+      }),
+    },
+    welcomeHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 14,
+    },
+    welcomeSub: { fontSize: fonts.sm, color: palette.onPrimary, opacity: 0.85, fontWeight: fonts.weight.semibold },
+    welcomeTitle: { fontSize: 20, fontWeight: fonts.weight.extrabold, color: palette.onPrimary, marginTop: 2 },
+    avatarBox: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: palette.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      overflow: 'hidden',
+    },
+    avatarImg: { width: '100%', height: '100%' },
+    progressContainer: { backgroundColor: palette.headerSurface, borderRadius: 12, padding: 12 },
+    progressTopRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+    progressBadgeText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.onPrimary },
+    progressPercent: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: '#fef08a' },
+    progressBarTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 3, overflow: 'hidden' },
+    progressBarFill: { height: '100%', backgroundColor: '#fef08a', borderRadius: 3 },
+    primaryStatusCard: {
+      backgroundColor: palette.buttonBg,
+      borderRadius: 18,
+      padding: 16,
+      marginBottom: 16,
+      ...Platform.select({
+        ios: { shadowColor: '#000000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8 },
+        android: { elevation: 4 },
+      }),
+    },
+    statusTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+    statusCardEyebrow: { fontSize: fonts.xxs, fontWeight: fonts.weight.extrabold, color: palette.onPrimary, opacity: 0.82, letterSpacing: 0.5 },
+    statusCardTitle: { fontSize: fonts.lg, fontWeight: fonts.weight.extrabold, color: palette.onPrimary, marginTop: 2 },
+    statusFooterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    statusPill: { backgroundColor: 'rgba(0,0,0,0.18)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+    statusPillText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.onPrimary },
+    sectionHeader: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary, marginBottom: 10, marginLeft: 2 },
+    gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+    gridCard: {
+      width: '48%',
+      borderRadius: 16,
+      padding: 14,
+      backgroundColor: palette.surface,
+      borderWidth: 1,
+      borderColor: palette.border,
+      gap: 4,
+    },
+    gridIconBox: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+    gridCardTitle: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    gridCardSub: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
+    moreToolsCard: {
+      backgroundColor: palette.surface,
+      borderRadius: 16,
+      padding: 14,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      borderWidth: 1,
+      borderColor: palette.border,
+      marginBottom: 14,
+    },
+    moreToolsLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+    moreToolsIconBox: { width: 40, height: 40, borderRadius: 12, backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center' },
+    moreToolsTitle: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    moreToolsSub: { fontSize: fonts.xs, color: palette.textSecondary, marginTop: 2 },
+    campusLocationCard: {
+      backgroundColor: palette.surface,
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 1,
+      borderColor: palette.border,
+      marginBottom: 12,
+    },
+    campusCardHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8,
+    },
+    campusHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    pulseDot: { width: 8, height: 8, borderRadius: 4 },
+    campusHeaderLabel: { fontSize: fonts.xxs, fontWeight: fonts.weight.extrabold, color: palette.primary, letterSpacing: 0.4 },
+    timestampBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: palette.surfaceSubtle,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 6,
+    },
+    timestampBadgeText: { fontSize: fonts.xxs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
+    campusMainContent: { marginVertical: 4 },
+    distanceValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+    distanceMetricBig: { fontSize: 26, fontWeight: fonts.weight.black, color: palette.textPrimary, letterSpacing: -0.5 },
+    distanceMetricSub: { fontSize: fonts.xs, fontWeight: fonts.weight.semibold, color: palette.textSecondary },
+    perimeterBadgeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginTop: 6,
+    },
+    perimeterBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingVertical: 4,
+      paddingHorizontal: 8,
+      borderRadius: 6,
+      borderWidth: 1,
+    },
+    perimeterBadgeText: { fontSize: fonts.xxs, fontWeight: fonts.weight.extrabold, letterSpacing: 0.2 },
+    perimeterRadiusMeta: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
+    acquiringFixBox: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+    acquiringFixText: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold, flex: 1 },
+    offlineBufferBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: palette.warningLight,
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: palette.warning,
+    },
+    offlineBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, marginRight: 8 },
+    offlineBufferTitle: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    offlineBufferSubtitle: { fontSize: fonts.xs, color: palette.textSecondary, marginTop: 1 },
+    syncNowBtn: {
+      backgroundColor: palette.buttonBg,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+    },
+    syncNowBtnText: { color: palette.onPrimary, fontSize: fonts.xs, fontWeight: fonts.weight.extrabold },
+    calendarBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: palette.primarySoft,
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: palette.border,
+      gap: 8,
+    },
+    calendarBannerTitle: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.primary },
+    calendarBannerReason: { fontSize: fonts.xs, color: palette.textPrimary, marginTop: 1 },
+    sectionHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 12,
+      marginBottom: 6,
+    },
+    sectionHeaderTitle: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    sectionHeaderSub: { fontSize: fonts.xxs, fontWeight: fonts.weight.semibold, color: palette.textMuted },
+    dtrSummaryCard: {
+      backgroundColor: palette.surface,
+      borderRadius: 14,
+      padding: 12,
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    dtrGrid: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      backgroundColor: palette.surfaceSubtle,
+      borderRadius: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 8,
+    },
+    dtrSlot: { alignItems: 'center', flex: 1 },
+    dtrSlotLabel: { fontSize: 9, fontWeight: fonts.weight.extrabold, color: palette.textMuted },
+    dtrSlotTime: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.textPrimary, marginTop: 2 },
+    dtrCardFooter: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 8,
+      paddingHorizontal: 2,
+    },
+    dtrFooterMeta: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
+    dtrApprovalBadge: { fontSize: fonts.xxs, fontWeight: fonts.weight.extrabold, letterSpacing: 0.2 },
+    kpiTileGrid: { flexDirection: 'row', gap: 6, marginBottom: 4 },
+    kpiTile: {
+      flex: 1,
+      backgroundColor: palette.surface,
+      borderRadius: 12,
+      padding: 10,
+      borderWidth: 1,
+      borderColor: palette.border,
+      alignItems: 'center',
+    },
+    kpiIconWrap: {
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 4,
+    },
+    kpiValueText: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    kpiLabelText: { fontSize: 9.5, fontWeight: fonts.weight.bold, color: palette.textSecondary, marginTop: 1, textAlign: 'center' },
+  });
 
 export default DashboardScreen;

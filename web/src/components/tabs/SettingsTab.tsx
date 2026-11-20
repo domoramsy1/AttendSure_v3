@@ -4,10 +4,14 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
+import { API_ROUTES, extractApiError } from '../../api/routes';
+import { isSafeImageUrl } from '../../theme/tokens';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
 import { useTheme } from '../../context/ThemeContext';
+import { exportToCsv } from '../common/Pagination';
+import { ProfileAvatar } from '../common/ProfileAvatar';
 import { Button } from '../ui/Button';
 import {
   Building2,
@@ -17,7 +21,6 @@ import {
   Upload,
   Trash2,
   ShieldCheck,
-  User,
   MapPin,
   Phone,
   Mail,
@@ -28,7 +31,6 @@ import {
   Wrench,
   Radio,
   Send,
-  RotateCcw,
   CheckCircle2,
   RefreshCw,
   KeyRound,
@@ -78,6 +80,12 @@ interface ActivityRecord {
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
+const sanitizeInput = (raw: string, maxLength = 200): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, maxLength);
+
 const compressImageToDataUrl = (file: File, maxDim = 360, quality = 0.78): Promise<string> => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -87,8 +95,13 @@ const compressImageToDataUrl = (file: File, maxDim = 360, quality = 0.78): Promi
         resolve('');
         return;
       }
+      const rawDataUrl = typeof e.target?.result === 'string' ? e.target.result : '';
+      if (!isSafeImageUrl(rawDataUrl)) {
+        resolve('');
+        return;
+      }
       const img = new window.Image();
-      img.src = e.target?.result as string;
+      img.src = rawDataUrl;
       img.onload = () => {
         let { width, height } = img;
         if (width > height) {
@@ -107,11 +120,12 @@ const compressImageToDataUrl = (file: File, maxDim = 360, quality = 0.78): Promi
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          resolve(e.target?.result as string);
+          resolve(rawDataUrl);
           return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        const compressed = canvas.toDataURL('image/jpeg', quality);
+        resolve(isSafeImageUrl(compressed) ? compressed : '');
       };
       img.onerror = () => resolve('');
     };
@@ -122,19 +136,24 @@ const compressImageToDataUrl = (file: File, maxDim = 360, quality = 0.78): Promi
 export const SettingsTab: React.FC = () => {
   const { updateSchoolInstantly, refreshSchool } = useSchool();
   const { showAlert, showConfirm } = useAlert();
-  const { tokens, brand } = useTheme();
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const { mode, tokens, brand, ui } = useTheme();
+  const successBtnBg = mode === 'dark' ? '#059669' : brand.success;
 
-  // Sub-Navigation Tabs: 'MAINTENANCE' | 'SETTINGS' | 'LOGS' | 'ALL'
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const initAbortRef = useRef<AbortController | null>(null);
+  const diagAbortRef = useRef<AbortController | null>(null);
+  const logsAbortRef = useRef<AbortController | null>(null);
+  const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [activeSubTab, setActiveSubTab] = useState<'MAINTENANCE' | 'SETTINGS' | 'LOGS' | 'ALL'>('MAINTENANCE');
 
+  const cachedSchool = peekApiCache<any>(API_ROUTES.school.settings);
   const [facultyList, setFacultyList] = useState<FacultyOption[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(!cachedSchool);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // User Activity & Audit Logs State
   const [activityLogs, setActivityLogs] = useState<ActivityRecord[]>([]);
   const [logsLoading, setLogsLoading] = useState<boolean>(false);
   const [logSearch, setLogSearch] = useState<string>('');
@@ -142,10 +161,9 @@ export const SettingsTab: React.FC = () => {
   const [logDateFilter, setLogDateFilter] = useState<string>('');
   const [isSuperAdmin, setIsSuperAdmin] = useState<boolean>(false);
 
-  // Maintenance health status
   const [health, setHealth] = useState<MaintenanceHealthStatus>({
     database: 'ONLINE',
-    dbLatencyMs: 2,
+    dbLatencyMs: 0,
     scannersOnline: 0,
     scannersTotal: 0,
     pushPending: 0,
@@ -160,7 +178,7 @@ export const SettingsTab: React.FC = () => {
     region: '',
     division: '',
     district: '',
-    academic_year: '2026-2027',
+    academic_year: '',
     address: '',
     contact_number: '',
     email: '',
@@ -177,8 +195,8 @@ export const SettingsTab: React.FC = () => {
     school_logo: null as string | null,
     left_logo: null as string | null,
     right_logo: null as string | null,
-    latitude: 8.4858,
-    longitude: 124.6567,
+    latitude: '',
+    longitude: '',
     geofence_radius_meters: 150,
   });
 
@@ -188,112 +206,171 @@ export const SettingsTab: React.FC = () => {
     right_logo: false,
   });
 
-  const fetchDiagnostics = async () => {
-    try {
-      const [dbRes, scanRes, pushRes] = await Promise.all([
-        apiClient.get('/v1/health/db/').catch(() => ({ data: { database: 'OFFLINE', latency_ms: 999 } })),
-        apiClient.get('/v1/reports/system-status/').catch(() => ({ data: { online_count: 0, total_scanners: 0 } })),
-        apiClient.get('/v1/reports/system-status/').catch(() => ({ data: { sent_today: 0, pending_queue: 0, failed_today: 0 } })),
-      ]);
+  useEffect(() => {
+    return () => {
+      initAbortRef.current?.abort();
+      diagAbortRef.current?.abort();
+      logsAbortRef.current?.abort();
+      if (saveSuccessTimerRef.current) {
+        clearTimeout(saveSuccessTimerRef.current);
+        saveSuccessTimerRef.current = null;
+      }
+    };
+  }, []);
 
-      setHealth({
-        database: dbRes.data?.database === 'CONNECTED' || dbRes.data?.status === 'HEALTHY' ? 'ONLINE' : 'OFFLINE',
-        dbLatencyMs: Number(dbRes.data?.latency_ms) || 2,
-        scannersOnline: Number(scanRes.data?.online_count) || 0,
-        scannersTotal: Number(scanRes.data?.total_scanners) || 0,
-        pushSentToday: Number(pushRes.data?.sent_today) || 0,
-        pushPending: Number(pushRes.data?.pending_queue) || 0,
-        pushFailed: Number(pushRes.data?.failed_today) || 0,
-        lastChecked: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      });
-    } catch {}
-  };
+  const applySchoolPayload = useCallback((s: any) => {
+    if (!s || typeof s !== 'object') return;
+    setFormData({
+      school_id: s.school_id || '',
+      school_name: s.school_name || '',
+      region: s.region || '',
+      division: s.division || '',
+      district: s.district || '',
+      academic_year: s.academic_year || s.school_year || '',
+      address: s.address || s.street_address || '',
+      contact_number: s.contact_number || s.telephone || '',
+      email: s.email || '',
+      website: s.website || '',
+      principal_faculty: s.principal_faculty ?? '',
+      principal_name: s.principal_name || '',
+      principal_title: s.principal_title || '',
+      principal_photo_url: isSafeImageUrl(s.principal_photo_url) ? s.principal_photo_url : null,
+      principal_employee_id: s.principal_employee_id || '',
+      principal_department: s.principal_department || '',
+      principal_contact_number: s.principal_contact_number || '',
+      principal_email: s.principal_email || '',
+      superintendent_name: s.superintendent_name || '',
+      school_logo: isSafeImageUrl(s.school_logo) ? s.school_logo : null,
+      left_logo: isSafeImageUrl(s.left_logo) ? s.left_logo : null,
+      right_logo: isSafeImageUrl(s.right_logo) ? s.right_logo : null,
+      latitude: s.latitude !== undefined && s.latitude !== null && s.latitude !== '' ? String(s.latitude) : '',
+      longitude: s.longitude !== undefined && s.longitude !== null && s.longitude !== '' ? String(s.longitude) : '',
+      geofence_radius_meters: s.geofence_radius_meters ? Number(s.geofence_radius_meters) : 150,
+    });
+  }, []);
 
-  // Safe and clean activity logs fetcher (prevents 500 error /? trailing syntax)
+  const fetchDiagnostics = useCallback(async () => {
+    diagAbortRef.current?.abort();
+    const controller = new AbortController();
+    diagAbortRef.current = controller;
+
+    const [dbRes, sysRes] = await Promise.allSettled([
+      apiClient.get(API_ROUTES.health.db, { params: { nocache: 1 }, signal: controller.signal }),
+      apiClient.get(API_ROUTES.reports.systemStatus, { params: { nocache: 1 }, signal: controller.signal }),
+    ]);
+
+    if (controller.signal.aborted) return;
+
+    const dbData = dbRes.status === 'fulfilled' ? dbRes.value.data : null;
+    const sysData = sysRes.status === 'fulfilled' ? sysRes.value.data : null;
+
+    setHealth({
+      database: dbData?.database === 'CONNECTED' || dbData?.status === 'CONNECTED' ? 'ONLINE' : 'OFFLINE',
+      dbLatencyMs: Number(dbData?.latency_ms) || 0,
+      scannersOnline: Number(sysData?.online_count) || 0,
+      scannersTotal: Number(sysData?.total_scanners) || 0,
+      pushSentToday: Number(sysData?.sent_today ?? sysData?.push_delivered_today) || 0,
+      pushPending: Number(sysData?.pending_queue) || 0,
+      pushFailed: Number(sysData?.failed_today) || 0,
+      lastChecked: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    });
+  }, []);
+
   const fetchUserActivities = useCallback(async () => {
+    logsAbortRef.current?.abort();
+    const controller = new AbortController();
+    logsAbortRef.current = controller;
+
     setLogsLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (logSearch.trim()) params.append('search', logSearch.trim());
-      if (logActionFilter !== 'ALL') params.append('action', logActionFilter);
-      if (logDateFilter) params.append('date', logDateFilter);
+      const params: Record<string, string | number> = { nocache: 1 };
+      const cleanSearch = sanitizeInput(logSearch, 80);
+      if (cleanSearch) params.search = cleanSearch;
+      if (logActionFilter !== 'ALL') params.action = logActionFilter;
+      if (logDateFilter) params.date = logDateFilter;
 
-      const qs = params.toString();
-      const endpoint = qs ? `/v1/accounts/audit-logs/?${qs}` : '/v1/accounts/audit-logs/';
+      const res = await apiClient.get(API_ROUTES.accounts.auditLogs, {
+        params,
+        timeout: 8000,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
 
-      const res = await apiClient.get(endpoint, { timeout: 8000 });
       if (res.data) {
         const rawList = res.data.records || res.data.results || (Array.isArray(res.data) ? res.data : []);
         setActivityLogs(rawList);
         setIsSuperAdmin(Boolean(res.data.is_admin));
       }
-    } catch (err) {
-      console.log('[ActivityLogs] Fetch error handled gracefully:', err);
+    } catch (err: unknown) {
+      const anyErr = err as { name?: string; code?: string };
+      if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+        return;
+      }
       setActivityLogs([]);
+      showAlert({
+        title: 'Activity Log Notice',
+        message: extractApiError(err, 'Could not load activity logs.'),
+        type: 'warning',
+      });
     } finally {
-      setLogsLoading(false);
+      if (!controller.signal.aborted) {
+        setLogsLoading(false);
+      }
     }
-  }, [logSearch, logActionFilter, logDateFilter]);
+  }, [logSearch, logActionFilter, logDateFilter, showAlert]);
 
   useEffect(() => {
-    let isMounted = true;
+    const controller = new AbortController();
+    initAbortRef.current = controller;
+
+    const warmSchool = peekApiCache<any>(API_ROUTES.school.settings);
+    if (warmSchool) {
+      applySchoolPayload(warmSchool);
+      setLoading(false);
+    }
+
     const loadInitialData = async () => {
-      setLoading(true);
+      if (!warmSchool) setLoading(true);
       try {
-        const [schoolRes, facultyRes] = await Promise.all([
-          apiClient.get('/v1/school/settings/', { timeout: 5000 }),
-          apiClient.get('/v1/accounts/teachers/dropdown/?include_all=true', { timeout: 5000 }).catch(() => apiClient.get('/v1/accounts/teachers/')),
+        const [schoolRes, facultyRes] = await Promise.allSettled([
+          apiClient.get(API_ROUTES.school.settings, { timeout: 6000, signal: controller.signal }),
+          apiClient
+            .get(API_ROUTES.accounts.facultyDropdown, {
+              params: { include_all: 'true' },
+              timeout: 6000,
+              signal: controller.signal,
+            })
+            .catch(() => apiClient.get(API_ROUTES.accounts.faculty, { timeout: 6000, signal: controller.signal })),
         ]);
 
-        if (!isMounted) return;
-        const s = schoolRes.data;
-        setFormData({
-          school_id: s.school_id || '',
-          school_name: s.school_name || '',
-          region: s.region || '',
-          division: s.division || '',
-          district: s.district || '',
-          academic_year: s.academic_year || s.school_year || '2026-2027',
-          address: s.address || s.street_address || '',
-          contact_number: s.contact_number || s.telephone || '',
-          email: s.email || '',
-          website: s.website || '',
-          principal_faculty: s.principal_faculty || '',
-          principal_name: s.principal_name || '',
-          principal_title: s.principal_title || 'Secondary School Principal IV',
-          principal_photo_url: s.principal_photo_url || null,
-          principal_employee_id: s.principal_employee_id || '',
-          principal_department: s.principal_department || '',
-          principal_contact_number: s.principal_contact_number || '',
-          principal_email: s.principal_email || '',
-          superintendent_name: s.superintendent_name || '',
-          school_logo: s.school_logo || null,
-          left_logo: s.left_logo || null,
-          right_logo: s.right_logo || null,
-          latitude: s.latitude !== undefined && s.latitude !== null ? Number(s.latitude) : 8.4858,
-          longitude: s.longitude !== undefined && s.longitude !== null ? Number(s.longitude) : 124.6567,
-          geofence_radius_meters: s.geofence_radius_meters ? Number(s.geofence_radius_meters) : 150,
-        });
+        if (controller.signal.aborted) return;
 
-        const fList = Array.isArray(facultyRes.data) ? facultyRes.data : facultyRes.data?.results || [];
-        setFacultyList(fList);
-      } catch (err) {
-        console.error('Failed to load school settings:', err);
+        if (schoolRes.status === 'fulfilled' && schoolRes.value.data) {
+          applySchoolPayload(schoolRes.value.data);
+        }
+
+        if (facultyRes.status === 'fulfilled' && facultyRes.value.data) {
+          const fList = Array.isArray(facultyRes.value.data)
+            ? facultyRes.value.data
+            : facultyRes.value.data?.results || [];
+          setFacultyList(fList);
+        }
       } finally {
-        if (isMounted) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
 
-    loadInitialData();
-    fetchDiagnostics();
+    void loadInitialData();
+    void fetchDiagnostics();
+
     return () => {
-      isMounted = false;
+      controller.abort();
     };
-  }, []);
+  }, [applySchoolPayload, fetchDiagnostics]);
 
   useEffect(() => {
     if (activeSubTab === 'LOGS' || activeSubTab === 'ALL') {
-      fetchUserActivities();
+      void fetchUserActivities();
     }
   }, [activeSubTab, fetchUserActivities]);
 
@@ -321,8 +398,8 @@ export const SettingsTab: React.FC = () => {
         ...prev,
         principal_faculty: fid,
         principal_name: chosen.full_name || `${chosen.first_name} ${chosen.last_name}`.trim(),
-        principal_title: chosen.position || 'Secondary School Principal IV',
-        principal_photo_url: chosen.photo_url || null,
+        principal_title: chosen.position || 'School Principal',
+        principal_photo_url: isSafeImageUrl(chosen.photo_url) ? chosen.photo_url ?? null : null,
         principal_employee_id: chosen.employee_id || '',
         principal_department: chosen.department || 'Administration',
         principal_contact_number: chosen.contact_number || '',
@@ -335,7 +412,8 @@ export const SettingsTab: React.FC = () => {
     (f) => String(f.id) === String(formData.principal_faculty)
   );
 
-  const activePrincipalPhoto = selectedFacultyObj?.photo_url || formData.principal_photo_url || null;
+  const rawPrincipalPhoto = selectedFacultyObj?.photo_url || formData.principal_photo_url || null;
+  const activePrincipalPhoto = isSafeImageUrl(rawPrincipalPhoto) ? rawPrincipalPhoto : null;
   const activePrincipalEmpId = selectedFacultyObj?.employee_id || formData.principal_employee_id || '';
   const activePrincipalDept = selectedFacultyObj?.department || formData.principal_department || 'Administration';
   const activePrincipalContact = selectedFacultyObj?.contact_number || formData.principal_contact_number || '';
@@ -367,15 +445,20 @@ export const SettingsTab: React.FC = () => {
     }
 
     const compressed = await compressImageToDataUrl(file, 360, 0.78);
-    if (compressed) {
+    if (compressed && isSafeImageUrl(compressed)) {
       setFormData((prev) => ({ ...prev, [field]: compressed }));
       setFreshLogos((prev) => ({ ...prev, [field]: true }));
     }
   };
 
-  const runMaintenanceAction = (actionKey: string, title: string, description: string, apiCall: () => Promise<any>) => {
+  const runMaintenanceAction = (
+    actionKey: string,
+    title: string,
+    description: string,
+    apiCall: () => Promise<any>
+  ) => {
     showConfirm({
-      title: title,
+      title,
       message: `${description} Do you want to proceed?`,
       confirmLabel: 'Run Fix Now',
       isDestructive: false,
@@ -388,11 +471,11 @@ export const SettingsTab: React.FC = () => {
             message: res?.data?.message || `${title} completed with zero errors.`,
             type: 'success',
           });
-          fetchDiagnostics();
-        } catch (err: any) {
+          void fetchDiagnostics();
+        } catch (err: unknown) {
           showAlert({
             title: 'Action Notice',
-            message: err?.response?.data?.error || err?.response?.data?.message || 'Action executed. Check results.',
+            message: extractApiError(err, 'Action could not be completed. Please try again.'),
             type: 'warning',
           });
         } finally {
@@ -410,23 +493,20 @@ export const SettingsTab: React.FC = () => {
 
     const headers = ['Timestamp', 'User Account', 'Action', 'Module', 'Details', 'IP Address', 'Status'];
     const rows = activityLogs.map((r) => [
-      `"${r.timestamp}"`,
-      `"${r.user}"`,
-      `"${r.action}"`,
-      `"${r.module}"`,
-      `"${r.details.replace(/"/g, '""')}"`,
-      `"${r.ip_address}"`,
-      `"${r.status}"`,
+      r.timestamp,
+      r.user,
+      r.action,
+      r.module,
+      r.details,
+      r.ip_address,
+      r.status,
     ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `AttendSure_User_Activities_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    exportToCsv(
+      `AttendSure_User_Activities_${new Date().toISOString().split('T')[0]}.csv`,
+      headers,
+      rows
+    );
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -434,24 +514,26 @@ export const SettingsTab: React.FC = () => {
     setSaving(true);
     setSaveSuccess(false);
 
-    const lat = Number(formData.latitude);
-    const lng = Number(formData.longitude);
+    const hasLat = String(formData.latitude).trim() !== '';
+    const hasLng = String(formData.longitude).trim() !== '';
+    const lat = hasLat ? Number(formData.latitude) : null;
+    const lng = hasLng ? Number(formData.longitude) : null;
     const radius = Number(formData.geofence_radius_meters);
 
-    if (isNaN(lat) || lat < -90 || lat > 90) {
+    if (lat !== null && (isNaN(lat) || lat < -90 || lat > 90)) {
       showAlert({ title: 'Invalid Latitude', message: 'Latitude must be between -90 and 90 degrees.', type: 'error' });
       setSaving(false);
       return;
     }
 
-    if (isNaN(lng) || lng < -180 || lng > 180) {
+    if (lng !== null && (isNaN(lng) || lng < -180 || lng > 180)) {
       showAlert({ title: 'Invalid Longitude', message: 'Longitude must be between -180 and 180 degrees.', type: 'error' });
       setSaving(false);
       return;
     }
 
-    if (isNaN(radius) || radius < 20 || radius > 2000) {
-      showAlert({ title: 'Invalid Geofence Radius', message: 'Radius must be between 20 and 2000 meters.', type: 'error' });
+    if (isNaN(radius) || radius < 20 || radius > 5000) {
+      showAlert({ title: 'Invalid Boundary Radius', message: 'Radius must be between 20 and 5000 meters.', type: 'error' });
       setSaving(false);
       return;
     }
@@ -462,57 +544,58 @@ export const SettingsTab: React.FC = () => {
         : null;
 
     const payload: Record<string, unknown> = {
-      school_id: formData.school_id.trim(),
-      school_name: formData.school_name.trim(),
-      region: formData.region.trim(),
-      division: formData.division.trim(),
-      district: formData.district.trim(),
-      academic_year: formData.academic_year.trim(),
-      address: formData.address.trim(),
-      contact_number: formData.contact_number.trim(),
-      email: formData.email.trim(),
-      website: formData.website.trim(),
+      school_id: sanitizeInput(formData.school_id, 40),
+      school_name: sanitizeInput(formData.school_name, 160),
+      region: sanitizeInput(formData.region, 80),
+      division: sanitizeInput(formData.division, 120),
+      district: sanitizeInput(formData.district, 120),
+      academic_year: sanitizeInput(formData.academic_year, 20),
+      address: sanitizeInput(formData.address, 250),
+      contact_number: sanitizeInput(formData.contact_number, 40),
+      email: sanitizeInput(formData.email, 150),
+      website: sanitizeInput(formData.website, 200),
       principal_faculty: validFacultyId,
-      principal_name: formData.principal_name.trim(),
-      principal_title: formData.principal_title.trim(),
-      superintendent_name: formData.superintendent_name.trim(),
+      principal_name: sanitizeInput(formData.principal_name, 150),
+      principal_title: sanitizeInput(formData.principal_title, 120),
+      superintendent_name: sanitizeInput(formData.superintendent_name, 150),
       latitude: lat,
       longitude: lng,
       geofence_radius_meters: radius,
     };
 
-    if (freshLogos.school_logo) {
-      payload.school_logo = formData.school_logo;
-    }
-    if (freshLogos.left_logo) {
-      payload.left_logo = formData.left_logo;
-    }
-    if (freshLogos.right_logo) {
-      payload.right_logo = formData.right_logo;
-    }
-
-    updateSchoolInstantly(formData);
-    setSaveSuccess(true);
-    showAlert({
-      title: 'Settings Saved',
-      message: 'School profile updated successfully.',
-      type: 'success',
-      autoCloseDuration: 2500,
-    });
-    setTimeout(() => setSaveSuccess(false), 3000);
+    if (freshLogos.school_logo) payload.school_logo = formData.school_logo;
+    if (freshLogos.left_logo) payload.left_logo = formData.left_logo;
+    if (freshLogos.right_logo) payload.right_logo = formData.right_logo;
 
     try {
-      const res = await apiClient.put('/v1/school/settings/', payload, { timeout: 15000 });
-      if (res.data?.principal_photo_url) {
+      const res = await apiClient.put(API_ROUTES.school.settings, payload, { timeout: 15000 });
+      updateSchoolInstantly(res.data || payload);
+      if (isSafeImageUrl(res.data?.principal_photo_url)) {
         setFormData((prev) => ({
           ...prev,
           principal_photo_url: res.data.principal_photo_url,
         }));
       }
       setFreshLogos({ school_logo: false, left_logo: false, right_logo: false });
-      refreshSchool().catch(() => {});
+      setSaveSuccess(true);
+      showAlert({
+        title: 'Settings Saved',
+        message: 'School profile and campus boundary saved to the database.',
+        type: 'success',
+        autoCloseDuration: 2500,
+      });
+      if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
+      saveSuccessTimerRef.current = setTimeout(() => {
+        setSaveSuccess(false);
+        saveSuccessTimerRef.current = null;
+      }, 3000);
+      await refreshSchool();
     } catch (err: unknown) {
-      console.warn('Background sync warning:', err);
+      showAlert({
+        title: 'Save Failed',
+        message: extractApiError(err, 'Could not save school settings. Please check your permissions and inputs.'),
+        type: 'error',
+      });
     } finally {
       setSaving(false);
     }
@@ -551,15 +634,10 @@ export const SettingsTab: React.FC = () => {
   };
 
   const inputStyle: React.CSSProperties = {
-    width: '100%',
-    padding: '8px 12px',
+    ...ui.input,
     borderRadius: 8,
-    border: `1px solid ${tokens.borderStrong}`,
     backgroundColor: tokens.bgSurfaceSubtle,
     fontSize: '0.82rem',
-    color: tokens.textPrimary,
-    outline: 'none',
-    boxSizing: 'border-box',
   };
 
   const previewBoxStyle: React.CSSProperties = {
@@ -606,7 +684,7 @@ export const SettingsTab: React.FC = () => {
               School Settings &amp; Maintenance Center
             </h1>
             <p style={{ fontSize: '0.78rem', color: tokens.textSecondary, marginTop: 4 }}>
-              Manage school profiles, DepEd official report seals, self-service maintenance diagnostics, and activity logs.
+              Manage school profiles, official report seals, self-service maintenance diagnostics, and activity logs.
             </p>
           </div>
 
@@ -621,93 +699,37 @@ export const SettingsTab: React.FC = () => {
               flexWrap: 'wrap',
             }}
           >
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('MAINTENANCE')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 14px',
-                borderRadius: 8,
-                border: 'none',
-                backgroundColor: activeSubTab === 'MAINTENANCE' ? tokens.bgSurface : 'transparent',
-                color: activeSubTab === 'MAINTENANCE' ? brand.primary : tokens.textSecondary,
-                fontWeight: 700,
-                fontSize: '0.78rem',
-                cursor: 'pointer',
-                boxShadow: activeSubTab === 'MAINTENANCE' ? tokens.cardShadow : 'none',
-              }}
-            >
-              <Wrench size={14} />
-              <span>One-Click System Fixes</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('SETTINGS')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 14px',
-                borderRadius: 8,
-                border: 'none',
-                backgroundColor: activeSubTab === 'SETTINGS' ? tokens.bgSurface : 'transparent',
-                color: activeSubTab === 'SETTINGS' ? brand.primary : tokens.textSecondary,
-                fontWeight: 700,
-                fontSize: '0.78rem',
-                cursor: 'pointer',
-                boxShadow: activeSubTab === 'SETTINGS' ? tokens.cardShadow : 'none',
-              }}
-            >
-              <Building2 size={14} />
-              <span>School Profile &amp; Settings</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('LOGS')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 14px',
-                borderRadius: 8,
-                border: 'none',
-                backgroundColor: activeSubTab === 'LOGS' ? tokens.bgSurface : 'transparent',
-                color: activeSubTab === 'LOGS' ? brand.primary : tokens.textSecondary,
-                fontWeight: 700,
-                fontSize: '0.78rem',
-                cursor: 'pointer',
-                boxShadow: activeSubTab === 'LOGS' ? tokens.cardShadow : 'none',
-              }}
-            >
-              <History size={14} />
-              <span>User Activity Logs</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('ALL')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 14px',
-                borderRadius: 8,
-                border: 'none',
-                backgroundColor: activeSubTab === 'ALL' ? tokens.bgSurface : 'transparent',
-                color: activeSubTab === 'ALL' ? brand.primary : tokens.textSecondary,
-                fontWeight: 700,
-                fontSize: '0.78rem',
-                cursor: 'pointer',
-                boxShadow: activeSubTab === 'ALL' ? tokens.cardShadow : 'none',
-              }}
-            >
-              <Layers size={14} />
-              <span>Show All</span>
-            </button>
+            {(
+              [
+                { key: 'MAINTENANCE', label: 'One-Click System Fixes', icon: <Wrench size={14} /> },
+                { key: 'SETTINGS', label: 'School Profile & Settings', icon: <Building2 size={14} /> },
+                { key: 'LOGS', label: 'User Activity Logs', icon: <History size={14} /> },
+                { key: 'ALL', label: 'Show All', icon: <Layers size={14} /> },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveSubTab(tab.key)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 14px',
+                  borderRadius: 8,
+                  border: 'none',
+                  backgroundColor: activeSubTab === tab.key ? tokens.bgSurface : 'transparent',
+                  color: activeSubTab === tab.key ? brand.primary : tokens.textSecondary,
+                  fontWeight: 700,
+                  fontSize: '0.78rem',
+                  cursor: 'pointer',
+                  boxShadow: activeSubTab === tab.key ? tokens.cardShadow : 'none',
+                }}
+              >
+                {tab.icon}
+                <span>{tab.label}</span>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -732,7 +754,7 @@ export const SettingsTab: React.FC = () => {
                     </strong>
                   </div>
                   <span style={{ fontSize: '0.72rem', color: tokens.textSecondary, marginTop: 3, display: 'block' }}>
-                    Response latency: {health.dbLatencyMs}ms &bull; Last inspected at {health.lastChecked || 'Just now'}
+                    Response time: {health.dbLatencyMs}ms &bull; Last checked at {health.lastChecked || 'Just now'}
                   </span>
                 </div>
 
@@ -740,10 +762,9 @@ export const SettingsTab: React.FC = () => {
                   variant="secondary"
                   size="sm"
                   type="button"
-                  onClick={fetchDiagnostics}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                  onClick={() => void fetchDiagnostics()}
+                  icon={<RefreshCw size={13} />}
                 >
-                  <RefreshCw size={13} />
                   Check Status Now
                 </Button>
               </div>
@@ -766,7 +787,7 @@ export const SettingsTab: React.FC = () => {
                 </div>
 
                 <div style={telemetryStatBox(tokens)}>
-                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>USB QR & CAMPUS GPS</span>
+                  <span style={{ fontSize: '0.66rem', color: tokens.textMuted, fontWeight: 700 }}>USB QR &amp; CAMPUS GPS</span>
                   <div style={{ fontSize: '1.05rem', fontWeight: 800, color: health.scannersOnline > 0 ? brand.primary : brand.warning }}>
                     {health.scannersOnline} of {health.scannersTotal} Online
                   </div>
@@ -791,7 +812,7 @@ export const SettingsTab: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 14 }}>
               <div style={maintenanceActionCard(tokens)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: 'rgba(2, 132, 199, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: tokens.infoLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Send size={18} color={brand.secondary} />
                   </div>
                   <div>
@@ -810,15 +831,15 @@ export const SettingsTab: React.FC = () => {
                   onClick={() =>
                     runMaintenanceAction(
                       'SYNC_PUSH',
-                      'Retry All Failed push Texts',
-                      'This will re-queue all failed messages and instruct the GSM push_engine to send them immediately.',
-                      () => apiClient.post('/v1/reports/system-status/', { action: 'RETRY_FAILED' })
+                      'Sync Pending Push Alerts',
+                      'Retries delivery of pending mobile push alerts to connected parent and faculty devices.',
+                      () => apiClient.post(API_ROUTES.reports.systemStatus, { action: 'RETRY_FAILED' })
                     )
                   }
-                  style={actionBtnStyle(brand.secondary)}
+                  style={actionBtnStyle(brand.buttonBg)}
                 >
-                  {actionLoading === 'SYNC_PUSH' ? <Loader2 className="animate-spin" size={14} /> : <RotateCcw size={14} />}
-                  <span>{actionLoading === 'SYNC_PUSH' ? 'Sending Texts...' : 'Sync Push Alerts Now'}</span>
+                  {actionLoading === 'SYNC_PUSH' ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+                  <span>{actionLoading === 'SYNC_PUSH' ? 'Syncing...' : 'Sync Push Alerts Now'}</span>
                 </button>
               </div>
 
@@ -831,11 +852,11 @@ export const SettingsTab: React.FC = () => {
                     <h3 style={{ margin: 0, fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
                       Clean System Memory
                     </h3>
-                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Clears stuck cache and speeds up the screen</span>
+                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Clears saved cache and speeds up screens</span>
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
-                  If class lists appear outdated or the portal feels slow, click to clear temporary server memory and refresh data immediately without restarting the computer.
+                  If class lists appear outdated or the portal feels slow, click to clear temporary server memory and refresh data immediately without restarting.
                 </p>
                 <button
                   type="button"
@@ -845,10 +866,10 @@ export const SettingsTab: React.FC = () => {
                       'FLUSH_CACHE',
                       'Clean System Memory & Cache',
                       'This safely empties temporary cache files so fresh records load from the database.',
-                      () => apiClient.post('/v1/cache/flush/')
+                      () => apiClient.post(API_ROUTES.health.flushCache)
                     )
                   }
-                  style={actionBtnStyle(brand.primary)}
+                  style={actionBtnStyle(brand.buttonBg)}
                 >
                   {actionLoading === 'FLUSH_CACHE' ? <Loader2 className="animate-spin" size={14} /> : <HardDrive size={14} />}
                   <span>{actionLoading === 'FLUSH_CACHE' ? 'Cleaning...' : 'Clean Memory & Refresh'}</span>
@@ -857,18 +878,18 @@ export const SettingsTab: React.FC = () => {
 
               <div style={maintenanceActionCard(tokens)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: 'rgba(16, 185, 129, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: tokens.successLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Radio size={18} color={brand.success} />
                   </div>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
-                      Check USB QR & Campus GPS
+                      Check USB QR &amp; Campus GPS
                     </h3>
-                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Tests connection to qr_id &amp; QR terminals</span>
+                    <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Checks classroom QR scanning and mobile check-in status</span>
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
-                  Verifies that classroom USB QR code scanning and faculty mobile facial recognition & campus GPS check-ins are online and connected to PostgreSQL.
+                  Verifies that classroom USB QR code scanning and faculty mobile facial recognition &amp; campus GPS check-ins are online and syncing cleanly.
                 </p>
                 <button
                   type="button"
@@ -876,21 +897,21 @@ export const SettingsTab: React.FC = () => {
                   onClick={() =>
                     runMaintenanceAction(
                       'VERIFY_STATION',
-                      'Test Gate Scanner Terminals',
-                      'This sends a ping test to all enrolled campus gate scanners.',
-                      () => apiClient.get('/v1/reports/system-status/')
+                      'Check Attendance Services',
+                      'Checks connectivity for classroom USB QR attendance and faculty mobile GPS check-in services.',
+                      () => apiClient.get(API_ROUTES.reports.systemStatus, { params: { nocache: 1 } })
                     )
                   }
-                  style={actionBtnStyle(brand.success)}
+                  style={actionBtnStyle(successBtnBg)}
                 >
                   {actionLoading === 'VERIFY_STATION' ? <Loader2 className="animate-spin" size={14} /> : <Radio size={14} />}
-                  <span>{actionLoading === 'VERIFY_STATION' ? 'Checking Scanners...' : 'Verify Software Stations'}</span>
+                  <span>{actionLoading === 'VERIFY_STATION' ? 'Checking...' : 'Check Attendance Services'}</span>
                 </button>
               </div>
 
               <div style={maintenanceActionCard(tokens)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: 'rgba(2, 132, 199, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: tokens.infoLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <KeyRound size={18} color={brand.secondary} />
                   </div>
                   <div>
@@ -901,7 +922,7 @@ export const SettingsTab: React.FC = () => {
                   </div>
                 </div>
                 <p style={{ margin: '8px 0 14px 0', fontSize: '0.74rem', color: tokens.textSecondary, lineHeight: 1.4 }}>
-                  If a faculty or registrar is locked out after entering the wrong password 5 times, click here to clear failed attempts so they can sign in immediately.
+                  If a faculty member or administrator is locked out after entering the wrong password 5 times, click here to clear failed attempts so they can sign in right away.
                 </p>
                 <button
                   type="button"
@@ -910,11 +931,11 @@ export const SettingsTab: React.FC = () => {
                     runMaintenanceAction(
                       'UNLOCK_ACCOUNTS',
                       'Unlock Faculty Accounts',
-                      'This resets failed login attempts for locked accounts across the school.',
-                      () => apiClient.post('/v1/cache/flush/')
+                      'This resets failed login attempts and clears temporary lockouts for locked accounts across the school.',
+                      () => apiClient.post(API_ROUTES.accounts.unlockAccounts)
                     )
                   }
-                  style={actionBtnStyle(brand.secondary)}
+                  style={actionBtnStyle(brand.buttonBg)}
                 >
                   {actionLoading === 'UNLOCK_ACCOUNTS' ? <Loader2 className="animate-spin" size={14} /> : <KeyRound size={14} />}
                   <span>{actionLoading === 'UNLOCK_ACCOUNTS' ? 'Unlocking...' : 'Unlock Faculty Accounts'}</span>
@@ -924,7 +945,7 @@ export const SettingsTab: React.FC = () => {
           </div>
         )}
 
-        {/* SECTION 2: USER ACTIVITY & AUDIT LOGS (SETTINGS TAB) */}
+        {/* SECTION 2: USER ACTIVITY & AUDIT LOGS */}
         {(activeSubTab === 'LOGS' || activeSubTab === 'ALL') && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={cardStyle}>
@@ -935,11 +956,13 @@ export const SettingsTab: React.FC = () => {
                     <span>{isSuperAdmin ? 'System-Wide User Activity & Audit Logs' : 'My Activity Logs'}</span>
                   </h2>
                   <p style={{ fontSize: '0.72rem', color: tokens.textSecondary, margin: '2px 0 0 0' }}>
-                    {isSuperAdmin ? 'Audit logins, pass issuances, profile changes, and security operations.' : 'Permanent audit trail of your account operations and logins.'}
+                    {isSuperAdmin
+                      ? 'Audit logins, exit pass issuances, profile changes, and account actions.'
+                      : 'Permanent audit trail of your account operations and logins.'}
                   </p>
                 </div>
 
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button
                     type="button"
                     onClick={exportActivityCSV}
@@ -948,14 +971,15 @@ export const SettingsTab: React.FC = () => {
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 4,
-                      padding: '5px 12px',
-                      backgroundColor: brand.success,
+                      padding: '6px 12px',
+                      backgroundColor: successBtnBg,
                       color: '#ffffff',
                       border: 'none',
                       borderRadius: 6,
                       fontSize: '0.72rem',
                       fontWeight: 700,
-                      cursor: 'pointer',
+                      cursor: activityLogs.length === 0 ? 'not-allowed' : 'pointer',
+                      opacity: activityLogs.length === 0 ? 0.55 : 1,
                     }}
                   >
                     <FileSpreadsheet size={13} />
@@ -964,14 +988,15 @@ export const SettingsTab: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={fetchUserActivities}
+                    onClick={() => void fetchUserActivities()}
                     disabled={logsLoading}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 4,
-                      padding: '5px 12px',
+                      padding: '6px 12px',
                       backgroundColor: tokens.bgSurfaceSubtle,
+                      color: tokens.textPrimary,
                       border: `1px solid ${tokens.borderStrong}`,
                       borderRadius: 6,
                       fontSize: '0.72rem',
@@ -990,44 +1015,46 @@ export const SettingsTab: React.FC = () => {
                 <div style={{ flex: 1, minWidth: 200 }}>
                   <input
                     type="text"
+                    maxLength={80}
                     placeholder="Search username, action, module, or details..."
                     value={logSearch}
                     onChange={(e) => setLogSearch(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && fetchUserActivities()}
+                    onKeyDown={(e) => e.key === 'Enter' && void fetchUserActivities()}
                     style={inputStyle}
                   />
                 </div>
 
                 <select
+                  aria-label="Filter activity by action"
                   value={logActionFilter}
                   onChange={(e) => setLogActionFilter(e.target.value)}
-                  style={{ ...inputStyle, width: 140 }}
+                  style={{ ...inputStyle, width: 160 }}
                 >
                   <option value="ALL">All Actions</option>
                   <option value="LOGIN">Sign In / Login</option>
                   <option value="LOGOUT">Sign Out / Logout</option>
-                  <option value="SCAN">QR / qr_id Scan</option>
-                  <option value="GATE_PASS">Gate Pass</option>
-                  <option value="SECURITY">Security / Reset</option>
+                  <option value="SCAN">Classroom QR Scan</option>
+                  <option value="GATE_PASS">Exit Pass</option>
                   <option value="PROFILE">Profile Change</option>
                 </select>
 
                 <input
                   type="date"
+                  aria-label="Filter activity by date"
                   value={logDateFilter}
                   onChange={(e) => setLogDateFilter(e.target.value)}
-                  style={{ ...inputStyle, width: 130 }}
+                  style={{ ...inputStyle, width: 140 }}
                 />
 
                 <button
                   type="button"
-                  onClick={fetchUserActivities}
+                  onClick={() => void fetchUserActivities()}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 5,
                     padding: '8px 16px',
-                    backgroundColor: brand.primary,
+                    backgroundColor: brand.buttonBg,
                     color: '#ffffff',
                     borderRadius: 6,
                     border: 'none',
@@ -1080,7 +1107,7 @@ export const SettingsTab: React.FC = () => {
                                 borderRadius: 4,
                                 fontSize: '0.64rem',
                                 fontWeight: 800,
-                                backgroundColor: log.status === 'SUCCESS' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                                backgroundColor: log.status === 'SUCCESS' ? tokens.successLight : tokens.dangerLight,
                                 color: log.status === 'SUCCESS' ? brand.success : brand.danger,
                               }}
                             >
@@ -1115,9 +1142,9 @@ export const SettingsTab: React.FC = () => {
                   style={{
                     fontSize: '0.66rem',
                     fontWeight: 800,
-                    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                    backgroundColor: tokens.successLight,
                     color: brand.success,
-                    border: '1px solid rgba(16, 185, 129, 0.28)',
+                    border: `1px solid ${brand.success}`,
                     padding: '2px 8px',
                     borderRadius: 12,
                     marginLeft: 'auto',
@@ -1153,28 +1180,30 @@ export const SettingsTab: React.FC = () => {
                     <input
                       type="text"
                       required
+                      maxLength={150}
                       value={formData.principal_name}
                       onChange={(e) => setFormData({ ...formData, principal_name: e.target.value })}
-                      placeholder="e.g. Maria A. Santos, PhD"
+                      placeholder="Enter official school head name"
                       style={inputStyle}
                     />
                   </div>
 
                   <div>
-                    <label style={labelStyle}>Official DepEd Position / Title *</label>
+                    <label style={labelStyle}>Official Position / Title *</label>
                     <input
                       type="text"
                       required
+                      maxLength={120}
                       value={formData.principal_title}
                       onChange={(e) => setFormData({ ...formData, principal_title: e.target.value })}
-                      placeholder="e.g. Secondary School Principal IV"
+                      placeholder="Enter official position or title"
                       style={inputStyle}
                     />
                   </div>
                 </div>
 
                 <div style={previewBoxStyle}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '0.74rem', fontWeight: 800, color: tokens.textPrimary }}>
                       Current School Head Credentials
                     </span>
@@ -1196,34 +1225,12 @@ export const SettingsTab: React.FC = () => {
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <div
-                      style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: '50%',
-                        backgroundColor: brand.primary,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        overflow: 'hidden',
-                        flexShrink: 0,
-                        border: `2px solid ${tokens.borderSubtle}`,
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
-                      }}
-                    >
-                      {activePrincipalPhoto ? (
-                        <img
-                          src={activePrincipalPhoto}
-                          alt="Principal"
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none';
-                          }}
-                        />
-                      ) : (
-                        <User size={28} color="#ffffff" />
-                      )}
-                    </div>
+                    <ProfileAvatar
+                      photoUrl={activePrincipalPhoto}
+                      name={formData.principal_name || 'School Head'}
+                      size={56}
+                      iconSize={26}
+                    />
 
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 800, color: tokens.textPrimary, fontSize: '0.94rem' }}>
@@ -1282,27 +1289,29 @@ export const SettingsTab: React.FC = () => {
                 <h2 style={cardTitleStyle}>School Identification &amp; Hierarchy</h2>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 12 }}>
                 <div>
-                  <label style={labelStyle}>DepEd School ID *</label>
+                  <label style={labelStyle}>School ID *</label>
                   <input
                     type="text"
                     required
+                    maxLength={40}
                     value={formData.school_id}
                     onChange={(e) => setFormData({ ...formData, school_id: e.target.value })}
-                    placeholder="e.g. 304033"
+                    placeholder="Enter school ID"
                     style={inputStyle}
                   />
                 </div>
 
-                <div style={{ gridColumn: 'span 2' }}>
+                <div>
                   <label style={labelStyle}>Official School Name *</label>
                   <input
                     type="text"
                     required
+                    maxLength={160}
                     value={formData.school_name}
                     onChange={(e) => setFormData({ ...formData, school_name: e.target.value })}
-                    placeholder="e.g. Macasandig National High School"
+                    placeholder="Enter official school name"
                     style={inputStyle}
                   />
                 </div>
@@ -1311,9 +1320,10 @@ export const SettingsTab: React.FC = () => {
                   <label style={labelStyle}>Region</label>
                   <input
                     type="text"
+                    maxLength={80}
                     value={formData.region}
                     onChange={(e) => setFormData({ ...formData, region: e.target.value })}
-                    placeholder="e.g. Region X"
+                    placeholder="Enter region"
                     style={inputStyle}
                   />
                 </div>
@@ -1322,9 +1332,10 @@ export const SettingsTab: React.FC = () => {
                   <label style={labelStyle}>Division</label>
                   <input
                     type="text"
+                    maxLength={120}
                     value={formData.division}
                     onChange={(e) => setFormData({ ...formData, division: e.target.value })}
-                    placeholder="e.g. Cagayan de Oro City"
+                    placeholder="Enter division"
                     style={inputStyle}
                   />
                 </div>
@@ -1333,9 +1344,10 @@ export const SettingsTab: React.FC = () => {
                   <label style={labelStyle}>District</label>
                   <input
                     type="text"
+                    maxLength={120}
                     value={formData.district}
                     onChange={(e) => setFormData({ ...formData, district: e.target.value })}
-                    placeholder="e.g. District II"
+                    placeholder="Enter district"
                     style={inputStyle}
                   />
                 </div>
@@ -1345,26 +1357,28 @@ export const SettingsTab: React.FC = () => {
                   <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
                     <input
                       type="text"
+                      maxLength={20}
                       value={formData.academic_year}
                       onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })}
-                      placeholder="e.g. 2026-2027"
-                      style={inputStyle}
+                      placeholder="YYYY-YYYY"
+                      style={{ ...inputStyle, paddingRight: 30 }}
                     />
-                    <Calendar size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10 }} />
+                    <Calendar size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10, pointerEvents: 'none' }} />
                   </div>
                 </div>
 
-                <div style={{ gridColumn: 'span 2' }}>
+                <div style={{ gridColumn: '1 / -1' }}>
                   <label style={labelStyle}>Schools Division Superintendent (SDS)</label>
                   <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
                     <input
                       type="text"
+                      maxLength={150}
                       value={formData.superintendent_name}
                       onChange={(e) => setFormData({ ...formData, superintendent_name: e.target.value })}
-                      placeholder="e.g. Division Superintendent Name"
-                      style={inputStyle}
+                      placeholder="Enter division superintendent name"
+                      style={{ ...inputStyle, paddingRight: 30 }}
                     />
-                    <Award size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10 }} />
+                    <Award size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10, pointerEvents: 'none' }} />
                   </div>
                 </div>
               </div>
@@ -1377,19 +1391,20 @@ export const SettingsTab: React.FC = () => {
                 <h2 style={cardTitleStyle}>Official Contact &amp; Document Footer Details</h2>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 14 }}>
-                <div style={{ gridColumn: 'span 2' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 14 }}>
+                <div style={{ gridColumn: '1 / -1' }}>
                   <label style={labelStyle}>Complete Campus Address *</label>
                   <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
                     <input
                       type="text"
                       required
+                      maxLength={250}
                       value={formData.address}
                       onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                      placeholder="e.g. Macasandig, Cagayan de Oro City"
-                      style={inputStyle}
+                      placeholder="Enter complete campus address"
+                      style={{ ...inputStyle, paddingRight: 30 }}
                     />
-                    <MapPin size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10 }} />
+                    <MapPin size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10, pointerEvents: 'none' }} />
                   </div>
                 </div>
 
@@ -1399,41 +1414,44 @@ export const SettingsTab: React.FC = () => {
                     <input
                       type="text"
                       required
+                      maxLength={40}
                       value={formData.contact_number}
                       onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
-                      placeholder="e.g. 0917-123-4567"
-                      style={inputStyle}
+                      placeholder="Enter official contact number"
+                      style={{ ...inputStyle, paddingRight: 30 }}
                     />
-                    <Phone size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10 }} />
+                    <Phone size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10, pointerEvents: 'none' }} />
                   </div>
                 </div>
 
                 <div>
-                  <label style={labelStyle}>Official DepEd Email Address *</label>
+                  <label style={labelStyle}>Official School Email Address *</label>
                   <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
                     <input
                       type="email"
                       required
+                      maxLength={150}
                       value={formData.email}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                      placeholder="e.g. school@deped.gov.ph"
-                      style={inputStyle}
+                      placeholder="Enter official school email"
+                      style={{ ...inputStyle, paddingRight: 30 }}
                     />
-                    <Mail size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10 }} />
+                    <Mail size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10, pointerEvents: 'none' }} />
                   </div>
                 </div>
 
-                <div style={{ gridColumn: 'span 2' }}>
+                <div style={{ gridColumn: '1 / -1' }}>
                   <label style={labelStyle}>Official Website / Division Portal</label>
                   <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
                     <input
                       type="text"
+                      maxLength={200}
                       value={formData.website}
                       onChange={(e) => setFormData({ ...formData, website: e.target.value })}
-                      placeholder="e.g. https://school.deped.gov.ph"
-                      style={inputStyle}
+                      placeholder="https://..."
+                      style={{ ...inputStyle, paddingRight: 30 }}
                     />
-                    <Globe size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10 }} />
+                    <Globe size={14} color={tokens.textMuted} style={{ position: 'absolute', right: 10, pointerEvents: 'none' }} />
                   </div>
                 </div>
               </div>
@@ -1443,7 +1461,7 @@ export const SettingsTab: React.FC = () => {
             <div style={cardStyle}>
               <div style={cardHeaderStyle}>
                 <Compass size={18} color={brand.primary} />
-                <h2 style={cardTitleStyle}>Campus GPS Geofence &amp; Boundary Coordinates</h2>
+                <h2 style={cardTitleStyle}>Campus GPS Boundary Coordinates</h2>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>
@@ -1453,8 +1471,8 @@ export const SettingsTab: React.FC = () => {
                     type="number"
                     step="any"
                     value={formData.latitude}
-                    onChange={(e) => setFormData({ ...formData, latitude: parseFloat(e.target.value) || 0 })}
-                    placeholder="8.4858"
+                    onChange={(e) => setFormData({ ...formData, latitude: e.target.value })}
+                    placeholder="Enter latitude"
                     style={inputStyle}
                   />
                 </div>
@@ -1465,8 +1483,8 @@ export const SettingsTab: React.FC = () => {
                     type="number"
                     step="any"
                     value={formData.longitude}
-                    onChange={(e) => setFormData({ ...formData, longitude: parseFloat(e.target.value) || 0 })}
-                    placeholder="124.6567"
+                    onChange={(e) => setFormData({ ...formData, longitude: e.target.value })}
+                    placeholder="Enter longitude"
                     style={inputStyle}
                   />
                 </div>
@@ -1490,251 +1508,105 @@ export const SettingsTab: React.FC = () => {
             <div style={cardStyle}>
               <div style={cardHeaderStyle}>
                 <ShieldCheck size={18} color={brand.primary} />
-                <h2 style={cardTitleStyle}>School Emblem &amp; DepEd Report Letterhead Seals</h2>
+                <h2 style={cardTitleStyle}>School Emblem &amp; Official Report Letterhead Seals</h2>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 16 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
-                    1. Main School Profile Emblem
-                  </span>
-                  <div
-                    style={{
-                      width: '100%',
-                      height: 90,
-                      backgroundColor: tokens.bgSurfaceSubtle,
-                      border: `1px dashed ${tokens.borderStrong}`,
-                      borderRadius: 8,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 6,
-                      boxSizing: 'border-box',
-                    }}
-                  >
-                    {formData.school_logo ? (
-                      <img
-                        src={formData.school_logo}
-                        alt="Main Emblem"
-                        style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
-                      />
-                    ) : (
-                      <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>No emblem uploaded</span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <label
-                      style={{
-                        padding: '5px 10px',
-                        backgroundColor: tokens.bgSurfaceSubtle,
-                        border: `1px solid ${tokens.borderStrong}`,
-                        borderRadius: 6,
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        color: brand.primary,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5,
-                      }}
-                    >
-                      <Upload size={12} /> Upload Photo
-                      <input
-                        type="file"
-                        accept="image/png, image/jpeg, image/webp"
-                        onChange={(e) => handleLogoUpload('school_logo', e)}
-                        style={{ display: 'none' }}
-                      />
-                    </label>
-                    {formData.school_logo && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFormData((p) => ({ ...p, school_logo: null }));
-                          setFreshLogos((p) => ({ ...p, school_logo: true }));
-                        }}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 16 }}>
+                {(
+                  [
+                    { field: 'school_logo', label: '1. Main School Profile Emblem', alt: 'Main Emblem', uploadText: 'Upload Photo', emptyText: 'No emblem uploaded' },
+                    { field: 'left_logo', label: '2. Left Seal (DepEd Official Seal)', alt: 'Left Seal', uploadText: 'Upload Seal', emptyText: 'No seal uploaded' },
+                    { field: 'right_logo', label: '3. Right Seal (Division / School Seal)', alt: 'Right Seal', uploadText: 'Upload Seal', emptyText: 'No seal uploaded' },
+                  ] as const
+                ).map((item) => {
+                  const val = formData[item.field];
+                  const safeUrl = isSafeImageUrl(val) ? val : null;
+                  return (
+                    <div key={item.field} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
+                        {item.label}
+                      </span>
+                      <div
                         style={{
-                          padding: '5px 10px',
-                          backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                          border: '1px solid rgba(239, 68, 68, 0.28)',
-                          borderRadius: 6,
-                          fontSize: '0.72rem',
-                          fontWeight: 700,
-                          color: brand.danger,
-                          cursor: 'pointer',
-                          display: 'inline-flex',
+                          width: '100%',
+                          height: 90,
+                          backgroundColor: tokens.bgSurfaceSubtle,
+                          border: `1px dashed ${tokens.borderStrong}`,
+                          borderRadius: 8,
+                          display: 'flex',
                           alignItems: 'center',
-                          gap: 5,
+                          justifyContent: 'center',
+                          padding: 6,
+                          boxSizing: 'border-box',
                         }}
                       >
-                        <Trash2 size={12} /> Remove
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
-                    2. Left Seal (DepEd Official Seal)
-                  </span>
-                  <div
-                    style={{
-                      width: '100%',
-                      height: 90,
-                      backgroundColor: tokens.bgSurfaceSubtle,
-                      border: `1px dashed ${tokens.borderStrong}`,
-                      borderRadius: 8,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 6,
-                      boxSizing: 'border-box',
-                    }}
-                  >
-                    {formData.left_logo ? (
-                      <img
-                        src={formData.left_logo}
-                        alt="Left Seal"
-                        style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
-                      />
-                    ) : (
-                      <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>No seal uploaded</span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <label
-                      style={{
-                        padding: '5px 10px',
-                        backgroundColor: tokens.bgSurfaceSubtle,
-                        border: `1px solid ${tokens.borderStrong}`,
-                        borderRadius: 6,
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        color: brand.primary,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5,
-                      }}
-                    >
-                      <Upload size={12} /> Upload Seal
-                      <input
-                        type="file"
-                        accept="image/png, image/jpeg, image/webp"
-                        onChange={(e) => handleLogoUpload('left_logo', e)}
-                        style={{ display: 'none' }}
-                      />
-                    </label>
-                    {formData.left_logo && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFormData((p) => ({ ...p, left_logo: null }));
-                          setFreshLogos((p) => ({ ...p, left_logo: true }));
-                        }}
-                        style={{
-                          padding: '5px 10px',
-                          backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                          border: '1px solid rgba(239, 68, 68, 0.28)',
-                          borderRadius: 6,
-                          fontSize: '0.72rem',
-                          fontWeight: 700,
-                          color: brand.danger,
-                          cursor: 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                        }}
-                      >
-                        <Trash2 size={12} /> Remove
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textPrimary }}>
-                    3. Right Seal (Division / School Seal)
-                  </span>
-                  <div
-                    style={{
-                      width: '100%',
-                      height: 90,
-                      backgroundColor: tokens.bgSurfaceSubtle,
-                      border: `1px dashed ${tokens.borderStrong}`,
-                      borderRadius: 8,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 6,
-                      boxSizing: 'border-box',
-                    }}
-                  >
-                    {formData.right_logo ? (
-                      <img
-                        src={formData.right_logo}
-                        alt="Right Seal"
-                        style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
-                      />
-                    ) : (
-                      <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>No seal uploaded</span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <label
-                      style={{
-                        padding: '5px 10px',
-                        backgroundColor: tokens.bgSurfaceSubtle,
-                        border: `1px solid ${tokens.borderStrong}`,
-                        borderRadius: 6,
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        color: brand.primary,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5,
-                      }}
-                    >
-                      <Upload size={12} /> Upload Seal
-                      <input
-                        type="file"
-                        accept="image/png, image/jpeg, image/webp"
-                        onChange={(e) => handleLogoUpload('right_logo', e)}
-                        style={{ display: 'none' }}
-                      />
-                    </label>
-                    {formData.right_logo && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFormData((p) => ({ ...p, right_logo: null }));
-                          setFreshLogos((p) => ({ ...p, right_logo: true }));
-                        }}
-                        style={{
-                          padding: '5px 10px',
-                          backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                          border: '1px solid rgba(239, 68, 68, 0.28)',
-                          borderRadius: 6,
-                          fontSize: '0.72rem',
-                          fontWeight: 700,
-                          color: brand.danger,
-                          cursor: 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                        }}
-                      >
-                        <Trash2 size={12} /> Remove
-                      </button>
-                    )}
-                  </div>
-                </div>
+                        {safeUrl ? (
+                          <img
+                            src={safeUrl}
+                            alt={item.alt}
+                            style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
+                          />
+                        ) : (
+                          <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>{item.emptyText}</span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                        <label
+                          style={{
+                            padding: '5px 10px',
+                            backgroundColor: tokens.bgSurfaceSubtle,
+                            border: `1px solid ${tokens.borderStrong}`,
+                            borderRadius: 6,
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            color: brand.primary,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                          }}
+                        >
+                          <Upload size={12} /> {item.uploadText}
+                          <input
+                            type="file"
+                            accept="image/png, image/jpeg, image/webp"
+                            onChange={(e) => void handleLogoUpload(item.field, e)}
+                            style={{ display: 'none' }}
+                          />
+                        </label>
+                        {safeUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData((p) => ({ ...p, [item.field]: null }));
+                              setFreshLogos((p) => ({ ...p, [item.field]: true }));
+                            }}
+                            style={{
+                              padding: '5px 10px',
+                              backgroundColor: tokens.dangerLight,
+                              border: `1px solid ${brand.danger}`,
+                              borderRadius: 6,
+                              fontSize: '0.72rem',
+                              fontWeight: 700,
+                              color: brand.danger,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                            }}
+                          >
+                            <Trash2 size={12} /> Remove
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
             {/* Save Button Bar */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
               {saveSuccess && (
                 <span style={{ color: brand.success, fontSize: '0.80rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <CheckCircle2 size={15} /> Configuration saved successfully.
@@ -1745,9 +1617,8 @@ export const SettingsTab: React.FC = () => {
                 size="md"
                 type="submit"
                 disabled={saving}
-                style={{ backgroundColor: brand.primary, borderColor: brand.primary, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                icon={saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}
               >
-                {saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}
                 Save School Configuration
               </Button>
             </div>
@@ -1758,7 +1629,7 @@ export const SettingsTab: React.FC = () => {
   );
 };
 
-const telemetryStatBox = (tokens: any): React.CSSProperties => ({
+const telemetryStatBox = (tokens: { bgSurfaceSubtle: string }): React.CSSProperties => ({
   backgroundColor: tokens.bgSurfaceSubtle,
   borderRadius: 8,
   padding: '10px 12px',
@@ -1767,7 +1638,7 @@ const telemetryStatBox = (tokens: any): React.CSSProperties => ({
   gap: 2,
 });
 
-const maintenanceActionCard = (tokens: any): React.CSSProperties => ({
+const maintenanceActionCard = (tokens: { bgSurface: string; borderSubtle: string; cardShadow: string }): React.CSSProperties => ({
   backgroundColor: tokens.bgSurface,
   borderRadius: 12,
   border: `1px solid ${tokens.borderSubtle}`,

@@ -1,9 +1,13 @@
+# D:\AttendSure_V3\backend\apps\reports\urls.py
+
 from django.urls import path
 from .views import (
     DashboardOverviewView,
     DropoutRiskView,
+    EdFiExportView,
     MonthlyDtrView,
     ReportAuditLogView,
+    ReportExportView,
     SdgImpactView,
     Sf1PrintView,
     Sf1ReportView,
@@ -22,6 +26,8 @@ urlpatterns = [
     path("sf4/", Sf4ReportView.as_view(), name="sf4"),
     path("dtr/", MonthlyDtrView.as_view(), name="dtr"),
     path("dtr/<int:pk>/", MonthlyDtrView.as_view(), name="dtr-detail"),
+    path("export/", ReportExportView.as_view(), name="report-export"),
+    path("edfi-export/", EdFiExportView.as_view(), name="edfi-export"),
     path("audit-logs/", ReportAuditLogView.as_view(), name="report-audit-logs"),
     path("dropout-risk/", DropoutRiskView.as_view(), name="dropout-risk"),
     path("sdg-impact/", SdgImpactView.as_view(), name="sdg-impact"),

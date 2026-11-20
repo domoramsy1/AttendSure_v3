@@ -1,17 +1,24 @@
 /**
- * AttendSure - Faculty & Staff Directory (Theme Adaptive)
+ * AttendSure - Faculty Directory & Mobile Device Binding Manager
  * File: web/src/components/tabs/FacultyTab.tsx
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
+import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
+import { useSchool } from '../../context/SchoolContext';
+import { useAlert } from '../../context/AlertContext';
+import { isSafeImageUrl, sanitizeText } from '../../theme/tokens';
+import { AttendSureBrandBadge } from '../branding/BrandAssets';
+import { QrCodeSvg } from '../common/QrCodeSvg';
+import { StatsCard } from '../common/StatsCard';
 import { Pagination, ALL_ROWS_SIZE, exportToCsv } from '../common/Pagination';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
-import { useAlert } from '../../context/AlertContext';
 import {
   User,
+  Users,
   Plus,
   QrCode,
   Pencil,
@@ -22,6 +29,13 @@ import {
   Loader2,
   Download,
   Search,
+  RefreshCw,
+  Smartphone,
+  ShieldCheck,
+  Building2,
+  RotateCcw,
+  AlertCircle,
+  BookOpen,
 } from 'lucide-react';
 
 export interface Faculty {
@@ -36,7 +50,10 @@ export interface Faculty {
   department: string;
   contact_number?: string;
   email?: string;
-  qr_token?: string;
+  can_teach?: boolean;
+  bound_device_id?: string | null;
+  device_model?: string | null;
+  device_bound_at?: string | null;
   photo?: string | null;
   photo_url?: string | null;
   is_active: boolean;
@@ -49,7 +66,28 @@ interface PaginatedResponse<T> {
   results: T[];
 }
 
-const FACULTY_POSITIONS = [
+type StatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE' | 'BOUND' | 'UNBOUND';
+
+interface FacultyFormState {
+  employee_id: string;
+  first_name: string;
+  middle_name: string;
+  last_name: string;
+  suffix: string;
+  position: string;
+  department: string;
+  contact_number: string;
+  email: string;
+  can_teach: boolean;
+  is_active: boolean;
+  photo: string | null;
+}
+
+const FACULTY_ENDPOINT = API_ROUTES.accounts.faculty;
+const FACULTY_DROPDOWN_ENDPOINT = API_ROUTES.accounts.facultyDropdown;
+const CACHE_STORAGE_KEY = 'attendsure_faculty_directory_cache';
+
+const DEFAULT_POSITION_GROUPS = [
   {
     category: 'Classroom Faculty',
     ranks: [
@@ -75,7 +113,7 @@ const FACULTY_POSITIONS = [
     ],
   },
   {
-    category: 'School Administration & Leadership',
+    category: 'School Leadership',
     ranks: [
       'Assistant School Principal I',
       'Assistant School Principal II',
@@ -87,7 +125,7 @@ const FACULTY_POSITIONS = [
     ],
   },
   {
-    category: 'Non-Teaching & Academic Support',
+    category: 'Academic & Office Support',
     ranks: [
       'Administrative Officer II',
       'Administrative Assistant',
@@ -97,7 +135,7 @@ const FACULTY_POSITIONS = [
   },
 ];
 
-const FACULTY_DEPARTMENTS = [
+const DEFAULT_DEPARTMENTS = [
   'Office of the Principal / Administration',
   'Junior High School',
   'Senior High School',
@@ -112,9 +150,9 @@ const FACULTY_DEPARTMENTS = [
   'Guidance & Counseling Office',
 ];
 
-const SUFFIX_OPTIONS = ['', 'Jr.', 'Sr.', 'II', 'III', 'IV', 'V'];
+const SUFFIX_OPTIONS = ['', 'Jr.', 'Sr.', 'II', 'III', 'IV'];
 
-const INITIAL_FORM_DATA = {
+const INITIAL_FORM_DATA: FacultyFormState = {
   employee_id: '',
   first_name: '',
   middle_name: '',
@@ -124,167 +162,405 @@ const INITIAL_FORM_DATA = {
   department: 'Junior High School',
   contact_number: '',
   email: '',
-  qr_token: '',
-  photo: null as string | null,
+  can_teach: true,
+  is_active: true,
+  photo: null,
+};
+
+const LEADERSHIP_ROLES = new Set(['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD']);
+const DEVICE_RESET_ROLES = new Set(['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL']);
+
+const cleanInput = (raw: string, maxLength = 120): string => {
+  const stripped = String(raw || '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/[<>]/g, '');
+  return sanitizeText(stripped, maxLength);
+};
+
+const getSafeAvatarUrl = (faculty: Pick<Faculty, 'photo_url' | 'photo'>): string | null => {
+  const candidate = faculty.photo_url || faculty.photo || null;
+  return isSafeImageUrl(candidate) ? candidate : null;
+};
+
+const getInitials = (name: string): string => {
+  const words = cleanInput(name, 80)
+    .replace(/,/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length >= 2) return `${words[0][0]}${words[1][0]}`.toUpperCase();
+  return (words[0] || 'F').slice(0, 2).toUpperCase();
+};
+
+const getUserScopedCacheKey = (): string => {
+  const scope = localStorage.getItem('attendsure_user_id') || localStorage.getItem('attendsure_username') || 'default';
+  return `${CACHE_STORAGE_KEY}_${scope}`;
+};
+
+const readCachedFacultyList = (): { items: Faculty[]; count: number } | null => {
+  try {
+    const raw = localStorage.getItem(getUserScopedCacheKey());
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { items?: Faculty[]; count?: number; savedAt?: number };
+    if (!Array.isArray(parsed.items)) return null;
+    return {
+      items: parsed.items,
+      count: typeof parsed.count === 'number' ? parsed.count : parsed.items.length,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeCachedFacultyList = (items: Faculty[], count: number): void => {
+  try {
+    const compact = items.slice(0, 100).map((item) => ({
+      ...item,
+      photo: item.photo && item.photo.length > 500 ? null : item.photo,
+    }));
+    localStorage.setItem(
+      getUserScopedCacheKey(),
+      JSON.stringify({ items: compact, count, savedAt: Date.now() })
+    );
+  } catch {
+    // Ignore storage quota restrictions
+  }
 };
 
 export const FacultyTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
-  const { tokens, brand } = useTheme();
+  const { mode, tokens, brand, fonts, radius, ui } = useTheme();
+  const { school, refreshSchool } = useSchool();
 
-  const [facultys, setFacultys] = useState<Faculty[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [departmentFilter, setDepartmentFilter] = useState('');
+  const currentRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
+  const canManageFaculty = LEADERSHIP_ROLES.has(currentRole);
+  const canResetPhoneLock = DEVICE_RESET_ROLES.has(currentRole);
+
+  const initialCache = useMemo(() => {
+    const apiHit = peekApiCache<PaginatedResponse<Faculty> | Faculty[]>(FACULTY_ENDPOINT, {
+      page: 1,
+      page_size: 25,
+    });
+    if (apiHit) {
+      if ('results' in apiHit && Array.isArray(apiHit.results)) {
+        return { items: apiHit.results, count: apiHit.count };
+      }
+      if (Array.isArray(apiHit)) {
+        return { items: apiHit, count: apiHit.length };
+      }
+    }
+    return readCachedFacultyList();
+  }, []);
+
+  const [facultyList, setFacultyList] = useState<Faculty[]>(() => initialCache?.items || []);
+  const [directoryDepartments, setDirectoryDepartments] = useState<string[]>([]);
+  const [loading, setLoading] = useState<boolean>(() => !initialCache);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string>('');
+
+  const [search, setSearch] = useState<string>('');
+  const [departmentFilter, setDepartmentFilter] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
 
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
   const [totalPages, setTotalPages] = useState<number>(1);
-  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalCount, setTotalCount] = useState<number>(() => initialCache?.count || 0);
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingFaculty, setEditingFaculty] = useState<Faculty | null>(null);
   const [inspectingFaculty, setInspectingFaculty] = useState<Faculty | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [formData, setFormData] = useState(INITIAL_FORM_DATA);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [resettingDeviceId, setResettingDeviceId] = useState<number | null>(null);
+  const [formData, setFormData] = useState<FacultyFormState>(INITIAL_FORM_DATA);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const activeAbortController = useRef<AbortController | null>(null);
-  const isInteracting = useRef(false);
-  isInteracting.current = isModalOpen || Boolean(inspectingFaculty);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileReaderRef = useRef<FileReader | null>(null);
+  const mountedRef = useRef<boolean>(true);
+  const activeAbortRef = useRef<AbortController | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevSearchRef = useRef<string>(search);
+  const hasLoadedItemsRef = useRef<boolean>((initialCache?.items.length || 0) > 0);
+  const isInteractingRef = useRef<boolean>(false);
+  isInteractingRef.current = isModalOpen || Boolean(inspectingFaculty);
 
-  const handleCopy = async (text: string, id: string) => {
-    let success = false;
+  const handleCopy = useCallback(async (text: string, key: string) => {
+    const cleanValue = cleanInput(text, 120);
+    if (!cleanValue) return;
+
+    let copied = false;
     if (navigator.clipboard && window.isSecureContext) {
       try {
-        await navigator.clipboard.writeText(text);
-        success = true;
+        await navigator.clipboard.writeText(cleanValue);
+        copied = true;
       } catch {
-        success = false;
+        copied = false;
       }
     }
-    if (!success) {
-      try {
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        success = document.execCommand('copy');
-        textArea.remove();
-      } catch (err) {
-        console.error('Clipboard copy error:', err);
-      }
-    }
-    if (success) {
-      setCopiedKey(id);
-      setTimeout(() => setCopiedKey(null), 2000);
-    }
-  };
 
-  const fetchFacultys = useCallback(
-    async (page = 1, size = 25, query = '', deptVal = '', silent = false) => {
-      if (activeAbortController.current) {
-        activeAbortController.current.abort();
+    if (!copied) {
+      try {
+        const helper = document.createElement('textarea');
+        helper.value = cleanValue;
+        helper.style.position = 'fixed';
+        helper.style.left = '-99999px';
+        document.body.appendChild(helper);
+        helper.focus();
+        helper.select();
+        copied = document.execCommand('copy');
+        helper.remove();
+      } catch {
+        copied = false;
       }
+    }
+
+    if (copied) {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      setCopiedKey(key);
+      copyTimerRef.current = setTimeout(() => setCopiedKey(null), 2000);
+    }
+  }, []);
+
+  const loadFacultyList = useCallback(
+    async (
+      page = 1,
+      size = 25,
+      query = '',
+      deptVal = '',
+      silent = false,
+      bypassCache = false
+    ) => {
+      activeAbortRef.current?.abort();
       const controller = new AbortController();
-      activeAbortController.current = controller;
+      activeAbortRef.current = controller;
+
+      const cleanQuery = cleanInput(query, 80);
+      const cleanDept = cleanInput(deptVal, 100);
+      const isAll = size >= ALL_ROWS_SIZE;
 
       try {
-        if (!silent) setLoading(true);
-        setError(null);
-        const isAll = size >= ALL_ROWS_SIZE;
-
-        const res = await apiClient.get<PaginatedResponse<Faculty> | Faculty[]>('/v1/accounts/teachers/', {
-          params: {
-            page: isAll ? 1 : page,
-            page_size: isAll ? 'ALL' : size,
-            search: query.trim() || undefined,
-            department: deptVal || undefined,
-          },
-          signal: controller.signal,
-        });
-
-        if (res.data && 'results' in res.data) {
-          setFacultys(res.data.results);
-          setTotalCount(res.data.count);
-          setTotalPages(isAll ? 1 : res.data.total_pages || Math.ceil(res.data.count / size) || 1);
-          setCurrentPage(isAll ? 1 : res.data.current_page || page);
-        } else if (Array.isArray(res.data)) {
-          setFacultys(res.data);
-          setTotalCount(res.data.length);
-          setTotalPages(1);
-          setCurrentPage(1);
-        }
-      } catch (err: any) {
-        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
         if (!silent) {
-          setError('Unable to load faculty records. Please check server connectivity.');
+          if (!hasLoadedItemsRef.current) setLoading(true);
+          setRefreshing(true);
+        }
+        setErrorMessage(null);
+
+        const [listOutcome, dropdownOutcome] = await Promise.allSettled([
+          apiClient.get<PaginatedResponse<Faculty> | Faculty[]>(FACULTY_ENDPOINT, {
+            params: {
+              page: isAll ? 1 : page,
+              page_size: isAll ? 'ALL' : size,
+              search: cleanQuery || undefined,
+              department: cleanDept || undefined,
+              ...(bypassCache ? { nocache: 1 } : {}),
+            },
+            signal: controller.signal,
+          }),
+          apiClient.get<Faculty[]>(FACULTY_DROPDOWN_ENDPOINT, {
+            params: { include_all: 1 },
+            signal: controller.signal,
+          }),
+        ]);
+
+        if (controller.signal.aborted) return;
+
+        if (listOutcome.status === 'fulfilled') {
+          const payload = listOutcome.value.data;
+          if (payload && !Array.isArray(payload) && Array.isArray(payload.results)) {
+            setFacultyList(payload.results);
+            hasLoadedItemsRef.current = payload.results.length > 0;
+            setTotalCount(payload.count);
+            setTotalPages(isAll ? 1 : payload.total_pages || Math.ceil(payload.count / size) || 1);
+            setCurrentPage(isAll ? 1 : payload.current_page || page);
+            if (!cleanQuery && !cleanDept && page === 1) {
+              writeCachedFacultyList(payload.results, payload.count);
+            }
+          } else if (Array.isArray(payload)) {
+            setFacultyList(payload);
+            hasLoadedItemsRef.current = payload.length > 0;
+            setTotalCount(payload.length);
+            setTotalPages(1);
+            setCurrentPage(1);
+            if (!cleanQuery && !cleanDept) {
+              writeCachedFacultyList(payload, payload.length);
+            }
+          }
+          setLastUpdated(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        } else {
+          const reason = listOutcome.reason as { name?: string; code?: string };
+          if (reason?.name === 'CanceledError' || reason?.name === 'AbortError' || reason?.code === 'ERR_CANCELED') {
+            return;
+          }
+          if (!silent) {
+            setErrorMessage(
+              extractApiError(
+                listOutcome.reason,
+                'Could not load the faculty directory right now. Please check your connection and try again.'
+              )
+            );
+          }
+        }
+
+        if (dropdownOutcome.status === 'fulfilled' && Array.isArray(dropdownOutcome.value.data)) {
+          const foundDepts = Array.from(
+            new Set(
+              dropdownOutcome.value.data
+                .map((item) => cleanInput(item.department || '', 100))
+                .filter(Boolean)
+            )
+          ).sort((a, b) => a.localeCompare(b));
+          setDirectoryDepartments(foundDepts);
         }
       } finally {
-        if (!silent) setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     []
   );
 
+  // Clean up pending requests, readers, and timers on unmount
   useEffect(() => {
-    const timeout = setTimeout(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      activeAbortRef.current?.abort();
+      fileReaderRef.current?.abort();
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  // Reload when search (debounced), department filter, or page size changes
+  useEffect(() => {
+    const searchChanged = prevSearchRef.current !== search;
+    prevSearchRef.current = search;
+    const delay = searchChanged ? 280 : 0;
+    const timer = setTimeout(() => {
       setCurrentPage(1);
-      fetchFacultys(1, pageSize, search, departmentFilter, false);
-    }, 300);
-    return () => clearTimeout(timeout);
-  }, [search, departmentFilter, pageSize, fetchFacultys]);
+      void loadFacultyList(1, pageSize, search, departmentFilter, false, false);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [search, departmentFilter, pageSize, loadFacultyList]);
 
+  // Gentle background refresh only while page is visible and user is not inside a modal
   useEffect(() => {
-    const liveInterval = setInterval(() => {
-      if (!isInteracting.current) {
-        fetchFacultys(currentPage, pageSize, search, departmentFilter, true);
+    const intervalId = setInterval(() => {
+      if (document.visibilityState === 'visible' && !isInteractingRef.current) {
+        void loadFacultyList(currentPage, pageSize, search, departmentFilter, true, true);
       }
-    }, 4000);
+    }, 15000);
+    return () => clearInterval(intervalId);
+  }, [currentPage, pageSize, search, departmentFilter, loadFacultyList]);
 
-    return () => clearInterval(liveInterval);
-  }, [currentPage, pageSize, search, departmentFilter, fetchFacultys]);
+  // Merge built-in departments with any live database departments
+  const departmentOptions = useMemo(() => {
+    const combined = new Set<string>(DEFAULT_DEPARTMENTS);
+    directoryDepartments.forEach((d) => combined.add(d));
+    facultyList.forEach((f) => {
+      if (f.department?.trim()) combined.add(f.department.trim());
+    });
+    if (formData.department.trim()) combined.add(formData.department.trim());
+    return Array.from(combined).sort((a, b) => a.localeCompare(b));
+  }, [directoryDepartments, facultyList, formData.department]);
 
-  const handlePageChange = (newPage: number) => {
-    if (newPage < 1 || newPage > totalPages) return;
-    setCurrentPage(newPage);
-    fetchFacultys(newPage, pageSize, search, departmentFilter, false);
+  // Preserve any custom position already stored in the database when editing
+  const positionGroups = useMemo(() => {
+    const knownRanks = new Set(DEFAULT_POSITION_GROUPS.flatMap((g) => g.ranks));
+    const currentPos = formData.position.trim();
+    if (!currentPos || knownRanks.has(currentPos)) {
+      return DEFAULT_POSITION_GROUPS;
+    }
+    return [
+      { category: 'Current Assignment', ranks: [currentPos] },
+      ...DEFAULT_POSITION_GROUPS,
+    ];
+  }, [formData.position]);
+
+  const displayedFaculty = useMemo(() => {
+    return facultyList.filter((item) => {
+      if (statusFilter === 'ACTIVE') return item.is_active;
+      if (statusFilter === 'INACTIVE') return !item.is_active;
+      if (statusFilter === 'BOUND') return Boolean(item.bound_device_id);
+      if (statusFilter === 'UNBOUND') return !item.bound_device_id;
+      return true;
+    });
+  }, [facultyList, statusFilter]);
+
+  const activeFacultyCount = useMemo(
+    () => facultyList.filter((f) => f.is_active).length,
+    [facultyList]
+  );
+
+  const boundPhonesCount = useMemo(
+    () => facultyList.filter((f) => Boolean(f.bound_device_id && f.bound_device_id.trim())).length,
+    [facultyList]
+  );
+
+  const uniqueDepartmentCount = useMemo(() => {
+    const source = directoryDepartments.length > 0 ? directoryDepartments : facultyList.map((f) => f.department);
+    return new Set(source.filter(Boolean)).size;
+  }, [directoryDepartments, facultyList]);
+
+  const handlePageChange = (nextPage: number) => {
+    if (nextPage < 1 || nextPage > totalPages) return;
+    setCurrentPage(nextPage);
+    void loadFacultyList(nextPage, pageSize, search, departmentFilter, false, false);
   };
 
-  const handlePageSizeChange = (newSize: number) => {
-    setPageSize(newSize);
+  const handlePageSizeChange = (nextSize: number) => {
+    if (nextSize === pageSize) return;
+    setPageSize(nextSize);
     setCurrentPage(1);
-    fetchFacultys(1, newSize, search, departmentFilter, false);
   };
 
-  const handleExportFacultyCsv = () => {
-    const suffix = pageSize >= ALL_ROWS_SIZE ? 'ALL' : `Page${currentPage}_${pageSize}rows`;
+  const handleManualRefresh = () => {
+    void refreshSchool();
+    void loadFacultyList(currentPage, pageSize, search, departmentFilter, false, true);
+  };
+
+  const handleExportCsv = () => {
+    const suffix = pageSize >= ALL_ROWS_SIZE ? 'All' : `Page${currentPage}_${pageSize}rows`;
     const exported = exportToCsv(
       `AttendSure_Faculty_${suffix}.csv`,
-      ['Employee ID', 'Full Name', 'Position', 'Department', 'Email', 'Contact', 'qr_id UID', 'Status'],
-      facultys.map((f) => [
+      [
+        'Employee ID',
+        'Full Name',
+        'Position',
+        'Department',
+        'Handles Classes',
+        'Email',
+        'Phone Number',
+        'Linked Mobile Device',
+        'Status',
+      ],
+      displayedFaculty.map((f) => [
         f.employee_id,
         f.full_name,
         f.position,
         f.department,
+        f.can_teach ? 'YES' : 'NO',
         f.email || '',
         f.contact_number || '',
-        f.qr_token || '',
+        f.bound_device_id ? f.device_model || 'Linked Phone' : 'Not Linked',
         f.is_active ? 'ACTIVE' : 'INACTIVE',
       ])
     );
 
     if (exported) {
       showAlert({
-        title: 'CSV Exported',
-        message: `Exported ${facultys.length} faculty records to CSV.`,
+        title: 'CSV Downloaded',
+        message: `Saved ${displayedFaculty.length} faculty records to a CSV file.`,
         type: 'success',
+      });
+    } else {
+      showAlert({
+        title: 'Nothing to Export',
+        message: 'There are no faculty records matching your current filters.',
+        type: 'info',
       });
     }
   };
@@ -296,8 +572,8 @@ export const FacultyTab: React.FC = () => {
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (!allowedTypes.includes(file.type)) {
       showAlert({
-        title: 'Unsupported Image Format',
-        message: 'Only JPG, PNG, and WebP image formats are accepted.',
+        title: 'Unsupported Image',
+        message: 'Please choose a JPG, PNG, or WebP photo.',
         type: 'error',
       });
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -306,7 +582,7 @@ export const FacultyTab: React.FC = () => {
 
     if (file.size > 2.5 * 1024 * 1024) {
       showAlert({
-        title: 'File Too Large',
+        title: 'Photo Too Large',
         message: 'Profile photos must be 2.5 MB or smaller.',
         type: 'error',
       });
@@ -314,11 +590,22 @@ export const FacultyTab: React.FC = () => {
       return;
     }
 
+    fileReaderRef.current?.abort();
     const reader = new FileReader();
+    fileReaderRef.current = reader;
     reader.onloadend = () => {
-      const base64String = reader.result as string;
-      setPhotoPreview(base64String);
-      setFormData((prev) => ({ ...prev, photo: base64String }));
+      if (!mountedRef.current || reader.readyState !== FileReader.DONE) return;
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (!isSafeImageUrl(result)) {
+        showAlert({
+          title: 'Invalid Image',
+          message: 'Could not verify the selected image file.',
+          type: 'error',
+        });
+        return;
+      }
+      setPhotoPreview(result);
+      setFormData((prev) => ({ ...prev, photo: result }));
     };
     reader.readAsDataURL(file);
   };
@@ -349,67 +636,89 @@ export const FacultyTab: React.FC = () => {
       department: faculty.department || 'Junior High School',
       contact_number: faculty.contact_number || '',
       email: faculty.email || '',
-      qr_token: faculty.qr_token || '',
+      can_teach: faculty.can_teach ?? true,
+      is_active: faculty.is_active ?? true,
       photo: null,
     });
-    setPhotoPreview(faculty.photo_url || faculty.photo || null);
+    setPhotoPreview(getSafeAvatarUrl(faculty));
     if (fileInputRef.current) fileInputRef.current.value = '';
     setIsModalOpen(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
+
+    const cleanEmployeeId = cleanInput(formData.employee_id, 50).toUpperCase();
+    const cleanFirstName = cleanInput(formData.first_name, 100);
+    const cleanMiddleName = cleanInput(formData.middle_name, 100);
+    const cleanLastName = cleanInput(formData.last_name, 100);
+    const cleanSuffix = SUFFIX_OPTIONS.includes(formData.suffix) ? formData.suffix : '';
+    const cleanEmail = cleanInput(formData.email, 150).toLowerCase();
+    const cleanPhone = cleanInput(formData.contact_number, 30).replace(/[^\d+\-()\s]/g, '').replace(/[\s()-]/g, '');
+
+    if (!cleanEmployeeId || !cleanFirstName || !cleanLastName) {
+      showAlert({
+        title: 'Missing Information',
+        message: 'Please enter the Employee ID, First Name, and Last Name.',
+        type: 'warning',
+      });
+      return;
+    }
+
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      showAlert({
+        title: 'Invalid Email Address',
+        message: 'Please enter a valid email address or leave the email box blank.',
+        type: 'warning',
+      });
+      return;
+    }
+
     setSaving(true);
 
-    const cleanedContact = formData.contact_number.trim().replace(/[\s-]/g, '');
-    const cleanPayload: Record<string, any> = {
-      employee_id: formData.employee_id.trim().toUpperCase(),
-      first_name: formData.first_name.trim(),
-      middle_name: formData.middle_name.trim(),
-      last_name: formData.last_name.trim(),
-      suffix: formData.suffix.trim(),
-      position: formData.position.trim(),
-      department: formData.department.trim(),
-      email: formData.email.trim().toLowerCase(),
-      contact_number: cleanedContact,
-      qr_token: formData.qr_token.trim().toUpperCase() || null,
+    const payload: Record<string, unknown> = {
+      employee_id: cleanEmployeeId,
+      first_name: cleanFirstName,
+      middle_name: cleanMiddleName,
+      last_name: cleanLastName,
+      suffix: cleanSuffix,
+      position: cleanInput(formData.position, 100),
+      department: cleanInput(formData.department, 100),
+      email: cleanEmail,
+      contact_number: cleanPhone,
+      can_teach: Boolean(formData.can_teach),
+      is_active: Boolean(formData.is_active),
     };
 
     if (formData.photo !== null) {
-      cleanPayload.photo = formData.photo === '' ? null : formData.photo;
+      payload.photo = formData.photo === '' ? null : formData.photo;
     }
 
     try {
       if (editingFaculty) {
-        const res = await apiClient.put<Faculty>(`/v1/accounts/teachers/${editingFaculty.id}/`, cleanPayload);
-        setFacultys((prev) => prev.map((f) => (f.id === editingFaculty.id ? res.data : f)));
+        const res = await apiClient.put<Faculty>(`${FACULTY_ENDPOINT}${editingFaculty.id}/`, payload);
+        setFacultyList((prev) => prev.map((f) => (f.id === editingFaculty.id ? res.data : f)));
         showAlert({
-          title: 'Profile Updated',
-          message: `Saved changes for ${editingFaculty.first_name} ${editingFaculty.last_name}.`,
+          title: 'Profile Saved',
+          message: `Updated details for ${cleanFirstName} ${cleanLastName}.`,
           type: 'success',
         });
       } else {
-        const res = await apiClient.post<Faculty>('/v1/accounts/teachers/', cleanPayload);
-        setFacultys((prev) => [res.data, ...prev]);
+        const res = await apiClient.post<Faculty>(FACULTY_ENDPOINT, payload);
+        setFacultyList((prev) => [res.data, ...prev]);
         showAlert({
-          title: 'Faculty Registered',
-          message: `${cleanPayload.first_name} ${cleanPayload.last_name} registered successfully.`,
+          title: 'Faculty Added',
+          message: `${cleanFirstName} ${cleanLastName} has been added to the directory.`,
           type: 'success',
         });
       }
       setIsModalOpen(false);
-      fetchFacultys(currentPage, pageSize, search, departmentFilter, true);
-    } catch (err: any) {
-      const serverMessage =
-        err.response?.data?.employee_id?.[0] ||
-        err.response?.data?.qr_token?.[0] ||
-        err.response?.data?.email?.[0] ||
-        err.response?.data?.detail ||
-        'Failed to save faculty record. Please verify details.';
-
+      void loadFacultyList(currentPage, pageSize, search, departmentFilter, true, true);
+    } catch (err: unknown) {
       showAlert({
-        title: 'Save Failed',
-        message: serverMessage,
+        title: 'Could Not Save',
+        message: extractApiError(err, 'Unable to save this faculty record. Please check the details and try again.'),
         type: 'error',
       });
     } finally {
@@ -417,27 +726,69 @@ export const FacultyTab: React.FC = () => {
     }
   };
 
+  const handleResetDeviceBinding = (faculty: Faculty) => {
+    showConfirm({
+      title: 'Reset Phone Lock',
+      message: `Unlink the current mobile phone for ${faculty.full_name}? Their next GPS & facial check-in will automatically pair their new phone.`,
+      confirmLabel: 'Reset Phone Lock',
+      isDestructive: false,
+      onConfirm: async () => {
+        setResettingDeviceId(faculty.id);
+        try {
+          const res = await apiClient.post<{ message?: string }>(`${FACULTY_ENDPOINT}${faculty.id}/reset-device/`, {
+            faculty_id: faculty.id,
+          });
+          setFacultyList((prev) =>
+            prev.map((item) =>
+              item.id === faculty.id
+                ? { ...item, bound_device_id: null, device_model: null, device_bound_at: null }
+                : item
+            )
+          );
+          if (inspectingFaculty?.id === faculty.id) {
+            setInspectingFaculty((prev) =>
+              prev ? { ...prev, bound_device_id: null, device_model: null, device_bound_at: null } : null
+            );
+          }
+          showAlert({
+            title: 'Phone Lock Cleared',
+            message: res.data?.message || `Cleared the bound phone for ${faculty.full_name}.`,
+            type: 'success',
+          });
+        } catch (err: unknown) {
+          showAlert({
+            title: 'Reset Failed',
+            message: extractApiError(err, 'Could not reset the phone lock for this faculty member.'),
+            type: 'error',
+          });
+        } finally {
+          setResettingDeviceId(null);
+        }
+      },
+    });
+  };
+
   const promptDelete = (faculty: Faculty) => {
     showConfirm({
-      title: 'Delete Faculty Member',
-      message: `Permanently delete ${faculty.full_name || faculty.first_name} (${faculty.employee_id}) from the faculty registry?`,
-      confirmLabel: 'Delete Faculty',
+      title: 'Remove Faculty Member',
+      message: `Permanently remove ${faculty.full_name || faculty.first_name} (${faculty.employee_id}) from the AttendSure faculty directory?`,
+      confirmLabel: 'Remove Faculty',
       isDestructive: true,
       onConfirm: async () => {
         try {
-          await apiClient.delete(`/v1/accounts/teachers/${faculty.id}/`);
-          setFacultys((prev) => prev.filter((f) => f.id !== faculty.id));
+          await apiClient.delete(`${FACULTY_ENDPOINT}${faculty.id}/`);
+          setFacultyList((prev) => prev.filter((f) => f.id !== faculty.id));
           if (inspectingFaculty?.id === faculty.id) setInspectingFaculty(null);
           showAlert({
             title: 'Faculty Removed',
-            message: `Record for ${faculty.first_name} has been deleted.`,
+            message: `Removed ${faculty.full_name || faculty.first_name} from the directory.`,
             type: 'info',
           });
-          fetchFacultys(currentPage, pageSize, search, departmentFilter, true);
-        } catch (err: any) {
+          void loadFacultyList(currentPage, pageSize, search, departmentFilter, true, true);
+        } catch (err: unknown) {
           showAlert({
-            title: 'Delete Failed',
-            message: err?.response?.data?.detail || 'Unable to delete faculty member.',
+            title: 'Could Not Remove',
+            message: extractApiError(err, 'Unable to remove this faculty record right now.'),
             type: 'error',
           });
         }
@@ -445,337 +796,545 @@ export const FacultyTab: React.FC = () => {
     });
   };
 
-  const activeFacultyCount = facultys.filter((f) => f.is_active).length;
-  const pairedCardsCount = facultys.filter((f) => Boolean(f.qr_token && f.qr_token.trim().length > 0)).length;
-  const uniqueDepartments = new Set(facultys.map((f) => f.department).filter(Boolean)).size;
-
-
-  // Dynamic Theme-Driven Styles
-  const dynamicStyles = useMemo(() => {
-    return {
-      container: {
+  const styles = useMemo(
+    () => ({
+      page: {
         display: 'flex',
         flexDirection: 'column' as const,
         gap: 16,
-        padding: 'clamp(12px, 2.5vw, 20px)',
+        padding: 'clamp(12px, 2.2vw, 20px)',
+        maxWidth: 1400,
+        margin: '0 auto',
+        fontFamily: fonts.sans,
       },
-      statsContainer: {
+      headerCard: {
+        ...ui.card,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap' as const,
+        gap: 12,
+      },
+      statsGrid: {
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))',
-        gap: 14,
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 205px), 1fr))',
+        gap: 12,
       },
-      statCard: {
-        backgroundColor: tokens.bgSurface,
-        borderRadius: 14,
-        border: `1px solid ${tokens.borderSubtle}`,
-        boxShadow: tokens.cardShadow,
-        padding: '16px 18px',
-        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+      controlsBar: {
+        ...ui.card,
+        padding: '12px 16px',
+        display: 'flex',
+        flexDirection: 'column' as const,
+        gap: 10,
       },
-      statLabel: {
-        fontSize: '0.66rem',
-        fontWeight: 800,
-        color: tokens.textMuted,
-        letterSpacing: '0.4px',
-        textTransform: 'uppercase' as const,
-      },
-      statValue: {
-        fontSize: '1.60rem',
-        fontWeight: 800,
-        color: tokens.textPrimary,
-        margin: '6px 0 2px 0',
-      },
-      statHelp: {
-        fontSize: '0.70rem',
-        color: tokens.textSecondary,
-      },
-      filterBar: {
+      controlsTopRow: {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
         flexWrap: 'wrap' as const,
-        gap: 12,
-        backgroundColor: tokens.bgSurface,
-        padding: '12px 18px',
-        borderRadius: 12,
-        border: `1px solid ${tokens.borderSubtle}`,
-        boxShadow: tokens.cardShadow,
-        transition: 'background-color 0.2s ease, border-color 0.2s ease',
+        gap: 10,
+      },
+      searchWrap: {
+        position: 'relative' as const,
+        flex: '1 1 220px',
+        maxWidth: 320,
       },
       searchInput: {
-        width: 240,
-        padding: '8px 12px 8px 34px',
-        borderRadius: 8,
-        border: `1px solid ${tokens.borderStrong}`,
+        ...ui.input,
+        paddingLeft: 34,
         backgroundColor: tokens.bgSurfaceSubtle,
-        color: tokens.textPrimary,
-        fontSize: '0.82rem',
-        outline: 'none',
       },
-      selectInput: {
-        padding: '8px 12px',
-        borderRadius: 8,
-        border: `1px solid ${tokens.borderStrong}`,
+      deptSelect: {
+        ...ui.input,
+        width: 'auto',
+        minWidth: 210,
         backgroundColor: tokens.bgSurfaceSubtle,
-        color: tokens.textPrimary,
-        fontSize: '0.82rem',
-        outline: 'none',
+        cursor: 'pointer',
+      },
+      filterPillsRow: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap' as const,
       },
       tableCard: {
-        backgroundColor: tokens.bgSurface,
-        borderRadius: 14,
-        border: `1px solid ${tokens.borderSubtle}`,
-        boxShadow: tokens.cardShadow,
+        ...ui.card,
+        padding: 0,
         overflow: 'hidden',
-        transition: 'background-color 0.2s ease, border-color 0.2s ease',
-      },
-      th: {
-        padding: '12px 14px',
-        fontSize: '0.72rem',
-        fontWeight: 800,
-        color: tokens.textMuted,
-        textTransform: 'uppercase' as const,
-        letterSpacing: '0.4px',
-        borderBottom: `1px solid ${tokens.borderSubtle}`,
-        backgroundColor: tokens.bgSurfaceSubtle,
-      },
-      td: {
-        padding: '12px 14px',
-        fontSize: '0.80rem',
-        color: tokens.textPrimary,
-        borderBottom: `1px solid ${tokens.borderSubtle}`,
       },
       actionBtn: {
         width: 30,
         height: 30,
-        borderRadius: 6,
-        border: `1px solid ${tokens.borderSubtle}`,
+        borderRadius: radius.sm,
+        borderWidth: 1,
+        borderStyle: 'solid' as const,
+        borderColor: tokens.borderSubtle,
         backgroundColor: tokens.bgSurfaceSubtle,
         color: tokens.textSecondary,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
         cursor: 'pointer',
-        transition: 'all 0.15s ease',
       },
-    };
-  }, [tokens, brand]);
+      modalBodySurface: {
+        backgroundColor: tokens.bgSurface,
+        color: tokens.textPrimary,
+        margin: -20,
+        padding: 20,
+        fontFamily: fonts.sans,
+      },
+      formGrid2: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: 10,
+      },
+      nameGrid: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(115px, 1fr))',
+        gap: 10,
+      },
+    }),
+    [tokens, fonts, radius, ui]
+  );
+
+  const filterPillOptions: { key: StatusFilter; label: string }[] = [
+    { key: 'ALL', label: `All (${facultyList.length})` },
+    { key: 'ACTIVE', label: `Active (${activeFacultyCount})` },
+    { key: 'INACTIVE', label: `Inactive (${Math.max(0, facultyList.length - activeFacultyCount)})` },
+    { key: 'BOUND', label: `Phone Linked (${boundPhonesCount})` },
+    { key: 'UNBOUND', label: `Unlinked (${Math.max(0, facultyList.length - boundPhonesCount)})` },
+  ];
+
+  const activeSchoolName = school.school_name?.trim() || 'AttendSure School Campus';
+
+  const inspectingQrValue = inspectingFaculty
+    ? `ATTENDSURE-FACULTY:${inspectingFaculty.employee_id}`
+    : '';
 
   return (
-    <div style={dynamicStyles.container}>
-      {/* 1. Statistics Cards */}
-      <div style={dynamicStyles.statsContainer}>
-        <div style={dynamicStyles.statCard}>
-          <div style={dynamicStyles.statLabel}>TOTAL REGISTERED FACULTY</div>
-          <div style={dynamicStyles.statValue}>{totalCount || facultys.length}</div>
-          <div style={dynamicStyles.statHelp}>Teaching and non-teaching personnel</div>
+    <div style={styles.page}>
+      {/* Top Directory Header */}
+      <div style={styles.headerCard}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <AttendSureBrandBadge size={42} mode={mode} />
+          <div style={{ minWidth: 0 }}>
+            <h2
+              style={{
+                margin: 0,
+                fontSize: fonts.size.lg,
+                fontWeight: fonts.weight.extrabold,
+                color: tokens.textPrimary,
+                fontFamily: fonts.display,
+              }}
+            >
+              Faculty Directory
+            </h2>
+            <p style={{ margin: '2px 0 0', fontSize: fonts.size.xs, color: tokens.textSecondary }}>
+              Manage faculty profiles, class list assignments, and 1-to-1 mobile check-in phone bindings.
+            </p>
+          </div>
         </div>
 
-        <div style={dynamicStyles.statCard}>
-          <div style={dynamicStyles.statLabel}>ACTIVE ON DUTY</div>
-          <div style={{ ...dynamicStyles.statValue, color: brand.success }}>{activeFacultyCount}</div>
-          <div style={dynamicStyles.statHelp}>Cleared for real-time tracking</div>
-        </div>
-
-        <div style={dynamicStyles.statCard}>
-          <div style={dynamicStyles.statLabel}>qr_id CARDS PAIRED</div>
-          <div style={{ ...dynamicStyles.statValue, color: brand.primary }}>
-            {pairedCardsCount}
-            <span style={{ fontSize: '0.82rem', color: tokens.textMuted, fontWeight: 500 }}>
-              {' '}
-              / {facultys.length}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {lastUpdated && (
+            <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted, fontFamily: fonts.mono }}>
+              Synced {lastUpdated}
             </span>
-          </div>
-          <div style={dynamicStyles.statHelp}>Active smart ID credentials</div>
-        </div>
-
-        <div style={dynamicStyles.statCard}>
-          <div style={dynamicStyles.statLabel}>DEPARTMENTS</div>
-          <div style={{ ...dynamicStyles.statValue, color: brand.secondary }}>{uniqueDepartments}</div>
-          <div style={dynamicStyles.statHelp}>Academic instructional units</div>
-        </div>
-      </div>
-
-      {/* 2. Controls & Filter Bar */}
-      <div style={dynamicStyles.filterBar}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ position: 'relative' }}>
-            <Search size={14} color={tokens.textMuted} style={{ position: 'absolute', left: 10, top: 10 }} />
-            <input
-              type="text"
-              placeholder="Search faculty name, ID..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={dynamicStyles.searchInput}
-            />
-          </div>
-
-          <select
-            value={departmentFilter}
-            onChange={(e) => setDepartmentFilter(e.target.value)}
-            style={dynamicStyles.selectInput}
+          )}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleManualRefresh}
+            loading={refreshing}
+            icon={<RefreshCw size={13} />}
           >
-            <option value="">All Departments</option>
-            {FACULTY_DEPARTMENTS.map((dept) => (
-              <option key={dept} value={dept}>{dept}</option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Button variant="secondary" size="md" onClick={handleExportFacultyCsv}>
-            <Download size={14} />
-            <span style={{ marginLeft: 6 }}>Export CSV</span>
+            Refresh
           </Button>
-
-          <Button variant="primary" size="md" onClick={handleOpenCreate}>
-            <Plus size={14} />
-            <span style={{ marginLeft: 6 }}>Add Faculty Member</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleExportCsv}
+            icon={<Download size={13} />}
+          >
+            Export CSV
           </Button>
+          {canManageFaculty && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleOpenCreate}
+              icon={<Plus size={14} />}
+            >
+              Add Faculty
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* 3. Faculty Table */}
-      <div style={dynamicStyles.tableCard}>
+      {/* Recoverable Network Error Banner */}
+      {errorMessage && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 10,
+            padding: '10px 14px',
+            borderRadius: radius.lg,
+            backgroundColor: tokens.dangerLight,
+            border: `1px solid ${brand.danger}`,
+            color: brand.danger,
+            fontSize: fonts.size.sm,
+            fontWeight: fonts.weight.bold,
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <AlertCircle size={16} />
+            {errorMessage}
+          </span>
+          <Button variant="secondary" size="sm" onClick={handleManualRefresh}>
+            Try Again
+          </Button>
+        </div>
+      )}
+
+      {/* Telemetry Summary Cards */}
+      <div style={styles.statsGrid}>
+        <StatsCard
+          label="Total Faculty"
+          value={(totalCount || facultyList.length).toLocaleString()}
+          helpText="Registered classroom & support personnel"
+          badge={<Users size={17} color={brand.primary} />}
+        />
+        <StatsCard
+          label="Active Faculty"
+          value={activeFacultyCount.toLocaleString()}
+          valueColor={brand.success}
+          helpText="Cleared for daily mobile GPS check-in"
+          badge={<ShieldCheck size={17} color={brand.success} />}
+        />
+        <StatsCard
+          label="Mobile Phones Linked"
+          value={`${boundPhonesCount} / ${facultyList.length}`}
+          valueColor={brand.primary}
+          helpText="1-to-1 bound for face & GPS verification"
+          badge={<Smartphone size={17} color={brand.primary} />}
+        />
+        <StatsCard
+          label="Departments"
+          value={uniqueDepartmentCount.toLocaleString()}
+          valueColor={brand.secondary}
+          helpText="Active school academic units"
+          badge={<Building2 size={17} color={brand.secondary} />}
+        />
+      </div>
+
+      {/* Search, Department Selector & Status Filter Pills */}
+      <div style={styles.controlsBar}>
+        <div style={styles.controlsTopRow}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: 1 }}>
+            <div style={styles.searchWrap}>
+              <Search
+                size={14}
+                color={tokens.textMuted}
+                style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
+              />
+              <input
+                type="text"
+                aria-label="Search faculty"
+                placeholder="Search by name, Employee ID, or role..."
+                value={search}
+                maxLength={80}
+                onChange={(e) => setSearch(e.target.value)}
+                style={styles.searchInput}
+              />
+            </div>
+
+            <select
+              aria-label="Filter by department"
+              value={departmentFilter}
+              onChange={(e) => setDepartmentFilter(e.target.value)}
+              style={styles.deptSelect}
+            >
+              <option value="">All Departments</option>
+              {departmentOptions.map((dept) => (
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted, fontWeight: fonts.weight.semibold }}>
+            Showing {displayedFaculty.length} of {facultyList.length} loaded
+          </span>
+        </div>
+
+        <div style={styles.filterPillsRow}>
+          {filterPillOptions.map((pill) => {
+            const active = statusFilter === pill.key;
+            return (
+              <button
+                key={pill.key}
+                type="button"
+                onClick={() => setStatusFilter(pill.key)}
+                style={{
+                  padding: '5px 11px',
+                  borderRadius: radius.pill,
+                  borderWidth: 1,
+                  borderStyle: 'solid',
+                  borderColor: active ? brand.primary : tokens.borderStrong,
+                  backgroundColor: active ? tokens.primaryLight : tokens.bgSurfaceSubtle,
+                  color: active ? brand.primary : tokens.textSecondary,
+                  fontSize: fonts.size.xs,
+                  fontWeight: fonts.weight.bold,
+                  cursor: 'pointer',
+                }}
+              >
+                {pill.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Faculty Directory Table */}
+      <div style={styles.tableCard}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr>
-                <th style={{ ...dynamicStyles.th, width: 50 }}>Photo</th>
-                <th style={dynamicStyles.th}>Employee ID</th>
-                <th style={dynamicStyles.th}>Full Name</th>
-                <th style={dynamicStyles.th}>Position</th>
-                <th style={dynamicStyles.th}>Department</th>
-                <th style={dynamicStyles.th}>Contact</th>
-                <th style={dynamicStyles.th}>qr_id Card UID</th>
-                <th style={dynamicStyles.th}>Status</th>
-                <th style={{ ...dynamicStyles.th, textAlign: 'right' }}>Actions</th>
+                <th style={{ ...ui.th, width: 54 }}>Photo</th>
+                <th style={ui.th}>Employee ID</th>
+                <th style={ui.th}>Full Name</th>
+                <th style={ui.th}>Position &amp; Department</th>
+                <th style={ui.th}>Contact Details</th>
+                <th style={ui.th}>Mobile Check-In Phone</th>
+                <th style={ui.th}>Status</th>
+                <th style={{ ...ui.th, textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {loading ? (
+              {loading && facultyList.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ padding: 40, textAlign: 'center', color: tokens.textMuted }}>
-                    <Loader2 className="animate-spin" size={24} style={{ margin: '0 auto 8px auto', color: brand.primary }} />
-                    <span>Loading faculty records...</span>
+                  <td colSpan={8} style={{ padding: 44, textAlign: 'center', color: tokens.textMuted }}>
+                    <Loader2
+                      className="animate-spin"
+                      size={24}
+                      style={{ margin: '0 auto 8px', display: 'block', color: brand.primary }}
+                    />
+                    <span style={{ fontSize: fonts.size.sm, fontWeight: fonts.weight.semibold }}>
+                      Loading faculty directory...
+                    </span>
                   </td>
                 </tr>
-              ) : facultys.length === 0 ? (
+              ) : displayedFaculty.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ padding: 40, textAlign: 'center', color: tokens.textMuted }}>
-                    No faculty members found matching your search.
+                  <td colSpan={8} style={{ padding: 44, textAlign: 'center', color: tokens.textMuted }}>
+                    <Users size={26} style={{ margin: '0 auto 8px', display: 'block', opacity: 0.6 }} />
+                    <div style={{ fontSize: fonts.size.base, fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>
+                      No faculty members found
+                    </div>
+                    <div style={{ fontSize: fonts.size.xs, marginTop: 4 }}>
+                      Try clearing your search or switching the department filter.
+                    </div>
                   </td>
                 </tr>
               ) : (
-                facultys.map((f) => (
-                  <tr key={f.id}>
-                    <td style={dynamicStyles.td}>
-                      <div
-                        style={{
-                          width: 36,
-                          height: 36,
-                          borderRadius: '50%',
-                          overflow: 'hidden',
-                          backgroundColor: tokens.bgSurfaceSubtle,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          border: `1px solid ${tokens.borderSubtle}`,
-                        }}
-                      >
-                        {f.photo_url || f.photo ? (
-                          <img
-                            src={f.photo_url || f.photo!}
-                            alt={f.full_name}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                          />
-                        ) : (
-                          <User size={16} color={tokens.textMuted} />
-                        )}
-                      </div>
-                    </td>
-                    <td style={{ ...dynamicStyles.td, fontFamily: 'monospace', fontWeight: 700 }}>
-                      {f.employee_id}
-                    </td>
-                    <td style={{ ...dynamicStyles.td, fontWeight: 700 }}>
-                      {f.full_name}
-                    </td>
-                    <td style={dynamicStyles.td}>{f.position}</td>
-                    <td style={{ ...dynamicStyles.td, color: tokens.textSecondary }}>{f.department}</td>
-                    <td style={dynamicStyles.td}>
-                      <div style={{ fontSize: '0.74rem' }}>{f.email || '—'}</div>
-                      <div style={{ fontSize: '0.70rem', color: tokens.textMuted }}>{f.contact_number || '—'}</div>
-                    </td>
-                    <td style={dynamicStyles.td}>
-                      {f.qr_token ? (
-                        <span
-                          onClick={() => handleCopy(f.qr_token!, `qr-${f.id}`)}
+                displayedFaculty.map((faculty) => {
+                  const avatarUrl = getSafeAvatarUrl(faculty);
+                  const isPhoneLinked = Boolean(faculty.bound_device_id && faculty.bound_device_id.trim());
+                  return (
+                    <tr key={faculty.id}>
+                      <td style={ui.td}>
+                        <div
                           style={{
-                            fontFamily: 'monospace',
-                            backgroundColor: tokens.bgSurfaceSubtle,
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            cursor: 'pointer',
+                            width: 38,
+                            height: 38,
+                            borderRadius: '50%',
+                            overflow: 'hidden',
+                            backgroundColor: tokens.primaryLight,
+                            color: brand.primary,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            border: `1px solid ${tokens.borderSubtle}`,
+                            fontWeight: fonts.weight.extrabold,
+                            fontSize: fonts.size.xs,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {avatarUrl ? (
+                            <img
+                              src={avatarUrl}
+                              alt={faculty.full_name}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          ) : (
+                            getInitials(faculty.full_name || faculty.first_name)
+                          )}
+                        </div>
+                      </td>
+
+                      <td style={ui.td}>
+                        <button
+                          type="button"
+                          onClick={() => void handleCopy(faculty.employee_id, `emp-${faculty.id}`)}
+                          title="Copy Employee ID"
+                          style={{
                             display: 'inline-flex',
                             alignItems: 'center',
-                            gap: 4,
+                            gap: 5,
+                            padding: '3px 8px',
+                            borderRadius: radius.sm,
+                            border: `1px solid ${tokens.borderSubtle}`,
+                            backgroundColor: tokens.bgSurfaceSubtle,
+                            color: tokens.textPrimary,
+                            fontFamily: fonts.mono,
+                            fontSize: fonts.size.xs,
+                            fontWeight: fonts.weight.bold,
+                            cursor: 'pointer',
                           }}
-                          title="Click to copy UID"
                         >
-                          {copiedKey === `qr-${f.id}` ? <Check size={11} color={brand.success} /> : <Copy size={11} />}
-                          <span>{f.qr_token}</span>
+                          {copiedKey === `emp-${faculty.id}` ? (
+                            <Check size={11} color={brand.success} />
+                          ) : (
+                            <Copy size={11} color={tokens.textMuted} />
+                          )}
+                          <span>{faculty.employee_id}</span>
+                        </button>
+                      </td>
+
+                      <td style={ui.td}>
+                        <div style={{ fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>
+                          {faculty.full_name}
+                        </div>
+                        {faculty.can_teach && (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              marginTop: 3,
+                              fontSize: '0.66rem',
+                              fontWeight: fonts.weight.bold,
+                              color: brand.secondary,
+                            }}
+                          >
+                            <BookOpen size={10} /> Handles Class Lists
+                          </span>
+                        )}
+                      </td>
+
+                      <td style={ui.td}>
+                        <div style={{ fontWeight: fonts.weight.semibold, color: tokens.textPrimary }}>
+                          {faculty.position || 'Faculty'}
+                        </div>
+                        <div style={{ fontSize: fonts.size.xs, color: tokens.textSecondary, marginTop: 2 }}>
+                          {faculty.department || 'Unassigned Department'}
+                        </div>
+                      </td>
+
+                      <td style={ui.td}>
+                        <div style={{ fontSize: fonts.size.sm, color: tokens.textPrimary }}>
+                          {faculty.email || '—'}
+                        </div>
+                        <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted, marginTop: 2 }}>
+                          {faculty.contact_number || '—'}
+                        </div>
+                      </td>
+
+                      <td style={ui.td}>
+                        {isPhoneLinked ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span style={ui.badge(tokens.primaryLight, brand.primary)}>
+                              <Smartphone size={11} />
+                              {faculty.device_model || 'Phone Linked'}
+                            </span>
+                            {canResetPhoneLock && (
+                              <button
+                                type="button"
+                                disabled={resettingDeviceId === faculty.id}
+                                onClick={() => handleResetDeviceBinding(faculty)}
+                                title="Unlink current phone so faculty can pair a replacement phone"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 3,
+                                  padding: '3px 7px',
+                                  borderRadius: radius.sm,
+                                  border: `1px solid ${tokens.borderStrong}`,
+                                  backgroundColor: tokens.bgSurfaceSubtle,
+                                  color: tokens.textSecondary,
+                                  fontSize: '0.66rem',
+                                  fontWeight: fonts.weight.bold,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <RotateCcw size={10} />
+                                {resettingDeviceId === faculty.id ? 'Resetting...' : 'Reset Lock'}
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>
+                            Pairs on first mobile check-in
+                          </span>
+                        )}
+                      </td>
+
+                      <td style={ui.td}>
+                        <span
+                          style={ui.badge(
+                            faculty.is_active ? tokens.successLight : tokens.dangerLight,
+                            faculty.is_active ? brand.success : brand.danger
+                          )}
+                        >
+                          {faculty.is_active ? 'ACTIVE' : 'INACTIVE'}
                         </span>
-                      ) : (
-                        <span style={{ fontSize: '0.72rem', color: tokens.textMuted }}>Unassigned</span>
-                      )}
-                    </td>
-                    <td style={dynamicStyles.td}>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          padding: '3px 8px',
-                          borderRadius: 6,
-                          fontSize: '0.68rem',
-                          fontWeight: 800,
-                          backgroundColor: f.is_active ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                          color: f.is_active ? brand.success : brand.danger,
-                        }}
-                      >
-                        {f.is_active ? 'ACTIVE' : 'INACTIVE'}
-                      </span>
-                    </td>
-                    <td style={{ ...dynamicStyles.td, textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', gap: 6 }}>
-                        <button
-                          type="button"
-                          onClick={() => setInspectingFaculty(f)}
-                          style={dynamicStyles.actionBtn}
-                          title="View Digital Pass"
-                        >
-                          <QrCode size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEdit(f)}
-                          style={dynamicStyles.actionBtn}
-                          title="Edit Profile"
-                        >
-                          <Pencil size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => promptDelete(f)}
-                          style={{ ...dynamicStyles.actionBtn, color: brand.danger }}
-                          title="Delete Faculty"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+
+                      <td style={{ ...ui.td, textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: 6 }}>
+                          <button
+                            type="button"
+                            onClick={() => setInspectingFaculty(faculty)}
+                            style={styles.actionBtn}
+                            title="View Digital Faculty Pass"
+                            aria-label={`View digital pass for ${faculty.full_name}`}
+                          >
+                            <QrCode size={14} />
+                          </button>
+
+                          {canManageFaculty && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEdit(faculty)}
+                                style={styles.actionBtn}
+                                title="Edit Faculty Profile"
+                                aria-label={`Edit ${faculty.full_name}`}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => promptDelete(faculty)}
+                                style={{ ...styles.actionBtn, color: brand.danger }}
+                                title="Remove Faculty Member"
+                                aria-label={`Remove ${faculty.full_name}`}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -789,285 +1348,498 @@ export const FacultyTab: React.FC = () => {
           onPageChange={handlePageChange}
           onPageSizeChange={handlePageSizeChange}
           itemLabel="faculty members"
-          style={{ backgroundColor: tokens.bgSurface, borderTop: `1px solid ${tokens.borderSubtle}` }}
+          style={{
+            backgroundColor: tokens.bgSurface,
+            borderTop: `1px solid ${tokens.borderSubtle}`,
+          }}
         />
       </div>
 
-      {/* 4. Add / Edit Faculty Modal */}
+      {/* Add / Edit Faculty Modal */}
       {isModalOpen && (
         <Modal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
-          title={editingFaculty ? `Edit Faculty: ${editingFaculty.full_name}` : 'Register New Faculty'}
+          title={editingFaculty ? `Edit Faculty: ${editingFaculty.full_name}` : 'Add New Faculty Member'}
+          maxWidth="580px"
         >
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={styles.modalBodySurface}>
+            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* Profile Photo Picker */}
               <div
                 style={{
-                  width: 52,
-                  height: 52,
-                  borderRadius: '50%',
-                  overflow: 'hidden',
-                  backgroundColor: tokens.bgSurfaceSubtle,
-                  border: `1px solid ${tokens.borderSubtle}`,
+                  ...ui.subtleBox,
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
                 }}
               >
-                {photoPreview ? (
-                  <img src={photoPreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                ) : (
-                  <User size={22} color={tokens.textMuted} />
-                )}
-              </div>
-
-              <div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  ref={fileInputRef}
-                  onChange={handlePhotoSelect}
-                  style={{ display: 'none' }}
-                />
-                <Button variant="secondary" size="sm" type="button" onClick={() => fileInputRef.current?.click()}>
-                  <Camera size={13} />
-                  <span style={{ marginLeft: 6 }}>Upload Photo</span>
-                </Button>
-                {photoPreview && (
-                  <button
-                    type="button"
-                    onClick={handleRemovePhoto}
-                    style={{ marginLeft: 8, fontSize: '0.74rem', color: brand.danger, background: 'none', border: 'none', cursor: 'pointer' }}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div
+                    style={{
+                      width: 54,
+                      height: 54,
+                      borderRadius: '50%',
+                      overflow: 'hidden',
+                      backgroundColor: tokens.bgSurface,
+                      border: `1.5px solid ${tokens.borderStrong}`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
                   >
-                    Remove
-                  </button>
-                )}
-              </div>
-            </div>
+                    {photoPreview && isSafeImageUrl(photoPreview) ? (
+                      <img
+                        src={photoPreview}
+                        alt="Profile preview"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <User size={22} color={tokens.textMuted} />
+                    )}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: fonts.size.sm, fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>
+                      Directory Profile Photo
+                    </div>
+                    <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>
+                      Optional JPG, PNG, or WebP (max 2.5 MB). Facial check-in runs privately on-device.
+                    </div>
+                  </div>
+                </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                  Employee ID *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.employee_id}
-                  onChange={(e) => setFormData({ ...formData, employee_id: e.target.value.toUpperCase() })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: `1px solid ${tokens.borderStrong}`,
-                    backgroundColor: tokens.bgSurface,
-                    color: tokens.textPrimary,
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                  }}
-                  placeholder="e.g. EMP-1049"
-                />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>
-                  qr_id Card UID
-                </label>
-                <input
-                  type="text"
-                  value={formData.qr_token}
-                  onChange={(e) => setFormData({ ...formData, qr_token: e.target.value.toUpperCase() })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: `1px solid ${tokens.borderStrong}`,
-                    backgroundColor: tokens.bgSurface,
-                    color: tokens.textPrimary,
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                    fontFamily: 'monospace',
-                  }}
-                  placeholder="e.g. 8A3F29C1"
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1.2fr 0.8fr', gap: 10 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>First Name *</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.first_name}
-                  onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Middle Name</label>
-                <input
-                  type="text"
-                  value={formData.middle_name}
-                  onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Last Name *</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.last_name}
-                  onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Suffix</label>
-                <select
-                  value={formData.suffix}
-                  onChange={(e) => setFormData({ ...formData, suffix: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
-                >
-                  {SUFFIX_OPTIONS.map((s) => (
-                    <option key={s} value={s}>{s || 'None'}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Position</label>
-                <select
-                  value={formData.position}
-                  onChange={(e) => setFormData({ ...formData, position: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
-                >
-                  {FACULTY_POSITIONS.map((grp) => (
-                    <optgroup key={grp.category} label={grp.category}>
-                      {grp.ranks.map((r) => (
-                        <option key={r} value={r}>{r}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    ref={fileInputRef}
+                    onChange={handlePhotoSelect}
+                    style={{ display: 'none' }}
+                  />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    icon={<Camera size={13} />}
+                  >
+                    Choose Photo
+                  </Button>
+                  {photoPreview && (
+                    <button
+                      type="button"
+                      onClick={handleRemovePhoto}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: brand.danger,
+                        fontSize: fonts.size.xs,
+                        fontWeight: fonts.weight.bold,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Department</label>
-                <select
-                  value={formData.department}
-                  onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
-                >
-                  {FACULTY_DEPARTMENTS.map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+              {/* Employee ID & Contact Email */}
+              <div style={styles.formGrid2}>
+                <div>
+                  <label htmlFor="faculty-emp-id" style={ui.label}>
+                    Employee ID *
+                  </label>
+                  <input
+                    id="faculty-emp-id"
+                    type="text"
+                    required
+                    maxLength={50}
+                    value={formData.employee_id}
+                    onChange={(e) =>
+                      setFormData({ ...formData, employee_id: e.target.value.toUpperCase() })
+                    }
+                    style={{ ...ui.input, fontFamily: fonts.mono }}
+                    placeholder="e.g. EMP-2026-014"
+                  />
+                </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Email</label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
-                />
+                <div>
+                  <label htmlFor="faculty-email" style={ui.label}>
+                    Email Address
+                  </label>
+                  <input
+                    id="faculty-email"
+                    type="email"
+                    maxLength={150}
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    style={ui.input}
+                    placeholder="name@school.edu"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: tokens.textSecondary, marginBottom: 4 }}>Contact Number</label>
-                <input
-                  type="text"
-                  value={formData.contact_number}
-                  onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.bgSurface, color: tokens.textPrimary, outline: 'none', boxSizing: 'border-box' }}
-                />
-              </div>
-            </div>
+              {/* Name Fields */}
+              <div style={styles.nameGrid}>
+                <div>
+                  <label htmlFor="faculty-first-name" style={ui.label}>
+                    First Name *
+                  </label>
+                  <input
+                    id="faculty-first-name"
+                    type="text"
+                    required
+                    maxLength={100}
+                    value={formData.first_name}
+                    onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
+                    style={ui.input}
+                  />
+                </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
-              <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button variant="primary" size="md" type="submit" disabled={saving}>
-                {saving ? <Loader2 className="animate-spin" size={16} /> : 'Save Faculty'}
-              </Button>
-            </div>
-          </form>
+                <div>
+                  <label htmlFor="faculty-middle-name" style={ui.label}>
+                    Middle Name
+                  </label>
+                  <input
+                    id="faculty-middle-name"
+                    type="text"
+                    maxLength={100}
+                    value={formData.middle_name}
+                    onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })}
+                    style={ui.input}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="faculty-last-name" style={ui.label}>
+                    Last Name *
+                  </label>
+                  <input
+                    id="faculty-last-name"
+                    type="text"
+                    required
+                    maxLength={100}
+                    value={formData.last_name}
+                    onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
+                    style={ui.input}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="faculty-suffix" style={ui.label}>
+                    Suffix
+                  </label>
+                  <select
+                    id="faculty-suffix"
+                    value={formData.suffix}
+                    onChange={(e) => setFormData({ ...formData, suffix: e.target.value })}
+                    style={ui.input}
+                  >
+                    {SUFFIX_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt || 'None'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Position & Department */}
+              <div style={styles.formGrid2}>
+                <div>
+                  <label htmlFor="faculty-position" style={ui.label}>
+                    Position
+                  </label>
+                  <select
+                    id="faculty-position"
+                    value={formData.position}
+                    onChange={(e) => setFormData({ ...formData, position: e.target.value })}
+                    style={ui.input}
+                  >
+                    {positionGroups.map((grp) => (
+                      <optgroup key={grp.category} label={grp.category}>
+                        {grp.ranks.map((rank) => (
+                          <option key={rank} value={rank}>
+                            {rank}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="faculty-department" style={ui.label}>
+                    Department
+                  </label>
+                  <select
+                    id="faculty-department"
+                    value={formData.department}
+                    onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                    style={ui.input}
+                  >
+                    {departmentOptions.map((dept) => (
+                      <option key={dept} value={dept}>
+                        {dept}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Phone Number & Role Toggles */}
+              <div style={styles.formGrid2}>
+                <div>
+                  <label htmlFor="faculty-contact" style={ui.label}>
+                    Mobile Phone Number
+                  </label>
+                  <input
+                    id="faculty-contact"
+                    type="tel"
+                    maxLength={30}
+                    value={formData.contact_number}
+                    onChange={(e) => setFormData({ ...formData, contact_number: e.target.value })}
+                    style={ui.input}
+                    placeholder="+63 917 000 0000"
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 8 }}>
+                  <label
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      fontSize: fonts.size.sm,
+                      fontWeight: fonts.weight.semibold,
+                      color: tokens.textPrimary,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={formData.can_teach}
+                      onChange={(e) => setFormData({ ...formData, can_teach: e.target.checked })}
+                      style={{ accentColor: brand.primary }}
+                    />
+                    Handles classroom schedules &amp; class lists
+                  </label>
+
+                  <label
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      fontSize: fonts.size.sm,
+                      fontWeight: fonts.weight.semibold,
+                      color: tokens.textPrimary,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={formData.is_active}
+                      onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+                      style={{ accentColor: brand.success }}
+                    />
+                    Active faculty member
+                  </label>
+                </div>
+              </div>
+
+              {/* Modal Footer Buttons */}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 8,
+                  marginTop: 8,
+                  paddingTop: 12,
+                  borderTop: `1px solid ${tokens.borderSubtle}`,
+                }}
+              >
+                <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
+                  Cancel
+                </Button>
+                <Button variant="primary" size="md" type="submit" loading={saving}>
+                  {editingFaculty ? 'Save Changes' : 'Add Faculty'}
+                </Button>
+              </div>
+            </form>
+          </div>
         </Modal>
       )}
 
-      {/* 5. Digital ID Card Inspection Modal */}
+      {/* Digital Faculty Pass Modal */}
       {inspectingFaculty && (
         <Modal
           isOpen={Boolean(inspectingFaculty)}
           onClose={() => setInspectingFaculty(null)}
           title="Digital Faculty Pass"
+          maxWidth="420px"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-            <div
-              style={{
-                width: 280,
-                backgroundColor: tokens.bgSurface,
-                border: `2px solid ${brand.primary}`,
-                borderRadius: 14,
-                overflow: 'hidden',
-                boxShadow: tokens.cardShadow,
-              }}
-            >
-              <div style={{ backgroundColor: brand.primary, color: '#ffffff', padding: '12px 14px' }}>
-                <div style={{ fontSize: '0.80rem', fontWeight: 800 }}>ATTENDSURE FACULTY PASS</div>
-                <div style={{ fontSize: '0.64rem', color: '#e0f2fe' }}>Macasandig National High School</div>
-              </div>
+          <div style={styles.modalBodySurface}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+              <div
+                style={{
+                  width: '100%',
+                  maxWidth: 310,
+                  backgroundColor: tokens.bgSurface,
+                  border: `2px solid ${brand.primary}`,
+                  borderRadius: radius.xl,
+                  overflow: 'hidden',
+                  boxShadow: tokens.cardShadow,
+                }}
+              >
+                <div
+                  style={{
+                    backgroundColor: brand.buttonBg,
+                    color: '#ffffff',
+                    padding: '12px 14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    textAlign: 'left',
+                  }}
+                >
+                  <AttendSureBrandBadge size={34} mode="light" />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: fonts.size.sm, fontWeight: fonts.weight.extrabold, letterSpacing: '0.4px' }}>
+                      ATTENDSURE FACULTY PASS
+                    </div>
+                    <div
+                      style={{
+                        fontSize: fonts.size.xs,
+                        color: '#e0f2fe',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {activeSchoolName}
+                    </div>
+                  </div>
+                </div>
 
-              <div style={{ padding: '16px 14px' }}>
-                <div style={{ width: 64, height: 64, borderRadius: '50%', margin: '0 auto 10px auto', overflow: 'hidden', border: `2px solid ${brand.primary}` }}>
-                  {inspectingFaculty.photo_url || inspectingFaculty.photo ? (
-                    <img src={inspectingFaculty.photo_url || inspectingFaculty.photo!} alt={inspectingFaculty.full_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  ) : (
-                    <User size={36} color={tokens.textMuted} style={{ margin: '14px auto' }} />
+                <div style={{ padding: '16px 14px' }}>
+                  <div
+                    style={{
+                      width: 68,
+                      height: 68,
+                      borderRadius: '50%',
+                      margin: '0 auto 10px',
+                      overflow: 'hidden',
+                      border: `2px solid ${brand.primary}`,
+                      backgroundColor: tokens.primaryLight,
+                      color: brand.primary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: fonts.weight.extrabold,
+                      fontSize: fonts.size.lg,
+                    }}
+                  >
+                    {getSafeAvatarUrl(inspectingFaculty) ? (
+                      <img
+                        src={getSafeAvatarUrl(inspectingFaculty)!}
+                        alt={inspectingFaculty.full_name}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      getInitials(inspectingFaculty.full_name || inspectingFaculty.first_name)
+                    )}
+                  </div>
+
+                  <div style={{ fontSize: fonts.size.md, fontWeight: fonts.weight.extrabold, color: tokens.textPrimary }}>
+                    {inspectingFaculty.full_name}
+                  </div>
+                  <div style={{ fontSize: fonts.size.sm, color: tokens.textSecondary, marginTop: 2 }}>
+                    {inspectingFaculty.position}
+                  </div>
+                  <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>
+                    {inspectingFaculty.department}
+                  </div>
+
+                  {inspectingQrValue && (
+                    <div
+                      style={{
+                        margin: '12px auto',
+                        width: 120,
+                        height: 120,
+                        padding: 6,
+                        backgroundColor: '#ffffff',
+                        borderRadius: radius.md,
+                        border: `1px solid ${tokens.borderSubtle}`,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <QrCodeSvg
+                        value={inspectingQrValue}
+                        size={108}
+                        label={`Faculty verification QR code for ${inspectingFaculty.full_name}`}
+                        style={{ width: '100%', height: '100%' }}
+                      />
+                    </div>
                   )}
+
+                  <div
+                    style={{
+                      fontSize: fonts.size.sm,
+                      fontFamily: fonts.mono,
+                      fontWeight: fonts.weight.bold,
+                      color: tokens.textPrimary,
+                    }}
+                  >
+                    ID: {inspectingFaculty.employee_id}
+                  </div>
                 </div>
 
-                <div style={{ fontSize: '1rem', fontWeight: 800, color: tokens.textPrimary }}>
-                  {inspectingFaculty.full_name}
-                </div>
-                <div style={{ fontSize: '0.74rem', color: tokens.textSecondary, marginTop: 2 }}>
-                  {inspectingFaculty.position}
-                </div>
-                <div style={{ fontSize: '0.70rem', color: tokens.textMuted }}>
-                  {inspectingFaculty.department}
-                </div>
-
-                <div style={{ margin: '12px auto', width: 110, height: 110, padding: 6, backgroundColor: '#ffffff', borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(inspectingFaculty.employee_id)}`}
-                    alt="QR"
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                  />
-                </div>
-
-                <div style={{ fontSize: '0.74rem', fontFamily: 'monospace', fontWeight: 700, color: tokens.textPrimary }}>
-                  ID: {inspectingFaculty.employee_id}
+                <div
+                  style={{
+                    backgroundColor: tokens.bgSurfaceSubtle,
+                    padding: '10px 12px',
+                    borderTop: `1px solid ${tokens.borderSubtle}`,
+                    fontSize: fonts.size.xs,
+                    color: tokens.textSecondary,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                  }}
+                >
+                  <div style={{ fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>
+                    Mobile Check-In:{' '}
+                    {inspectingFaculty.bound_device_id
+                      ? inspectingFaculty.device_model || 'Linked Phone Active'
+                      : 'Pairs on first mobile check-in'}
+                  </div>
+                  <div style={{ color: tokens.textMuted }}>
+                    On-device facial recognition &amp; campus GPS only. No raw face photos are stored on the server.
+                  </div>
                 </div>
               </div>
 
-              <div style={{ backgroundColor: tokens.bgSurfaceSubtle, padding: '8px 12px', borderTop: `1px solid ${tokens.borderSubtle}`, fontSize: '0.68rem', color: tokens.textSecondary }}>
-                Card UID: {inspectingFaculty.qr_token || 'No Card Linked'}
+              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                {canResetPhoneLock && inspectingFaculty.bound_device_id && (
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    onClick={() => handleResetDeviceBinding(inspectingFaculty)}
+                    loading={resettingDeviceId === inspectingFaculty.id}
+                    icon={<RotateCcw size={14} />}
+                  >
+                    Reset Phone Lock
+                  </Button>
+                )}
+                <Button variant="primary" size="md" onClick={() => setInspectingFaculty(null)}>
+                  Close
+                </Button>
               </div>
-            </div>
-
-            <div style={{ marginTop: 16 }}>
-              <Button variant="secondary" size="md" onClick={() => setInspectingFaculty(null)}>
-                Close
-              </Button>
             </div>
           </div>
         </Modal>

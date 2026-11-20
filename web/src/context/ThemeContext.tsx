@@ -1,16 +1,9 @@
 /**
- * ============================================================================
- * ATTENDSURE  - THEME CONTEXT & CSS VARIABLE ENGINE
+ * AttendSure - Theme Context & CSS Variable Engine
  * File: web/src/context/ThemeContext.tsx
- *
- * PURPOSE:
- * Controls Light, Dark, and High-Contrast Daylight modes across the entire app.
- * Automatically updates CSS variables (--bg-surface, --text-primary, etc.)
- * and provides ready-made `ui` styles to every component.
- * ============================================================================
  */
 
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   THEME_PALETTES,
   BRAND_COLORS,
@@ -41,16 +34,27 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return saved && THEME_PALETTES[saved] ? saved : 'light';
   });
 
-  const setThemeMode = (nextMode: ThemeMode) => {
+  const setThemeMode = useCallback((nextMode: ThemeMode) => {
     setMode(nextMode);
-    localStorage.setItem(STORAGE_KEY, nextMode);
-  };
+    try {
+      localStorage.setItem(STORAGE_KEY, nextMode);
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, []);
 
-  const toggleTheme = () => {
-    const order: ThemeMode[] = ['light', 'dark', 'high-contrast'];
-    const next = order[(order.indexOf(mode) + 1) % order.length];
-    setThemeMode(next);
-  };
+  const toggleTheme = useCallback(() => {
+    setMode((prev) => {
+      const order: ThemeMode[] = ['light', 'dark', 'high-contrast'];
+      const next = order[(order.indexOf(prev) + 1) % order.length];
+      try {
+        localStorage.setItem(STORAGE_KEY, next);
+      } catch {
+        // Ignore storage quota errors
+      }
+      return next;
+    });
+  }, []);
 
   const tokens = THEME_PALETTES[mode];
   const brand = BRAND_COLORS[mode];
@@ -64,16 +68,21 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     root.style.setProperty('--bg-canvas', tokens.bgCanvas);
     root.style.setProperty('--bg-surface', tokens.bgSurface);
     root.style.setProperty('--bg-surface-subtle', tokens.bgSurfaceSubtle);
+    root.style.setProperty('--bg-input', tokens.bgInput);
     root.style.setProperty('--text-primary', tokens.textPrimary);
     root.style.setProperty('--text-secondary', tokens.textSecondary);
     root.style.setProperty('--text-muted', tokens.textMuted);
     root.style.setProperty('--border-subtle', tokens.borderSubtle);
+    root.style.setProperty('--border-input', tokens.borderInput);
     root.style.setProperty('--border-strong', tokens.borderStrong);
     root.style.setProperty('--brand-primary', brand.primary);
     root.style.setProperty('--brand-button-bg', brand.buttonBg);
     root.style.setProperty('--brand-success', brand.success);
     root.style.setProperty('--brand-warning', brand.warning);
     root.style.setProperty('--brand-danger', brand.danger);
+    root.style.setProperty('--success', tokens.success);
+    root.style.setProperty('--danger', tokens.danger);
+    root.style.setProperty('--danger-bg', tokens.dangerBg);
     root.style.setProperty('--card-shadow', tokens.cardShadow);
     root.style.setProperty('--font-sans', FONTS.sans);
   }, [mode, tokens, brand]);
@@ -88,12 +97,15 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode]);
+  }, [toggleTheme]);
+
+  const contextValue = useMemo<ThemeContextValue>(
+    () => ({ mode, setThemeMode, toggleTheme, tokens, brand, fonts: FONTS, radius: RADIUS, ui }),
+    [mode, setThemeMode, toggleTheme, tokens, brand, ui]
+  );
 
   return (
-    <ThemeContext.Provider
-      value={{ mode, setThemeMode, toggleTheme, tokens, brand, fonts: FONTS, radius: RADIUS, ui }}
-    >
+    <ThemeContext.Provider value={contextValue}>
       {children}
     </ThemeContext.Provider>
   );

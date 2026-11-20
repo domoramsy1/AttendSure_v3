@@ -1,4 +1,5 @@
-// D:\AttendSure_V3\mobile\metro.config.js
+// AttendSure Mobile - Metro Bundler Configuration
+// File: mobile/metro.config.js
 
 const path = require('path');
 const { getDefaultConfig } = require('expo/metro-config');

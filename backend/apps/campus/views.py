@@ -1,7 +1,7 @@
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from common.permissions import IsLeadershipOrReadOnly
+from common.permissions import IsLeadershipOrReadOnly, IsStaffOrFaculty
 from .selectors import (
     get_campus_audit_history,
     get_campus_boundary_overview,
@@ -19,7 +19,11 @@ class CampusBoundaryView(APIView):
         return Response(get_campus_boundary_overview(user=request.user))
 
     def put(self, request):
-        payload = dict(request.data)
+        payload = (
+            {k: request.data.get(k) for k in request.data.keys()}
+            if hasattr(request.data, "keys")
+            else dict(request.data)
+        )
         if "geofence_radius_meters" in payload and "radius_meters" not in payload:
             payload["radius_meters"] = payload["geofence_radius_meters"]
         serializer = CampusBoundaryInputSerializer(data=payload)
@@ -35,7 +39,7 @@ class CampusBoundaryView(APIView):
 
 
 class TeacherCheckInView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsStaffOrFaculty]
 
     def post(self, request):
         serializer = TeacherCheckInSerializer(data=request.data)
@@ -49,14 +53,14 @@ class TeacherCheckInView(APIView):
 
 
 class BoundaryAuditView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsStaffOrFaculty]
 
     def get(self, request):
         return Response(get_campus_audit_history(user=request.user))
 
 
 class CampusAnomalyListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsStaffOrFaculty]
 
     def get(self, request):
         anomalies = get_live_campus_anomalies(user=request.user)
@@ -64,7 +68,7 @@ class CampusAnomalyListView(APIView):
 
 
 class EmergencyRollCallView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsStaffOrFaculty]
 
     def get(self, request):
         return Response(get_emergency_roll_call(request=request))

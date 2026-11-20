@@ -1,3 +1,5 @@
+# D:\AttendSure_V3\backend\common\security.py
+
 import time
 from django.core.cache import cache
 from django.db import connection
@@ -7,12 +9,12 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
 from common.audit import record_audit_log
-from common.permissions import IsSystemAdmin
+from common.permissions import IsSchoolLeader
 
 
 class ApiSecurityMiddleware:
     """
-    Applies OWASP security headers and prevents 40 KB Django debug HTML pages
+    Applies OWASP security headers and prevents Django debug HTML pages
     from leaking internal URL patterns when an /api/ path returns 404.
     """
 
@@ -25,11 +27,14 @@ class ApiSecurityMiddleware:
         if request.path.startswith("/api/") and response.status_code == 404:
             content_type = response.get("Content-Type", "")
             if "text/html" in content_type:
+                msg = f"API route not found: {request.path}"
                 response = JsonResponse(
                     {
                         "ok": False,
                         "error_code": "ENDPOINT_NOT_FOUND",
-                        "message": f"API route not found: {request.path}",
+                        "message": msg,
+                        "detail": msg,
+                        "error": msg,
                     },
                     status=404,
                 )
@@ -39,7 +44,7 @@ class ApiSecurityMiddleware:
         response["Referrer-Policy"] = "same-origin"
         response["Permissions-Policy"] = "camera=(self), geolocation=(self), microphone=()"
 
-        if request.path.startswith(("/api/auth/", "/api/v1/accounts/login", "/api/me")):
+        if request.path.startswith(("/api/auth/", "/api/v1/accounts/login", "/api/me", "/api/v1/accounts/me")):
             response["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
 
         return response
@@ -48,7 +53,7 @@ class ApiSecurityMiddleware:
 @api_view(["GET"])
 @permission_classes([permissions.AllowAny])
 def database_health_view(request):
-    """Checks live PostgreSQL connectivity without exposing database names or hosts."""
+    """Checks live PostgreSQL connectivity without exposing database credentials or hosts."""
     started = time.perf_counter()
     with connection.cursor() as cursor:
         cursor.execute("SELECT 1;")
@@ -66,9 +71,9 @@ def database_health_view(request):
 
 
 @api_view(["POST"])
-@permission_classes([permissions.IsAuthenticated, IsSystemAdmin])
+@permission_classes([permissions.IsAuthenticated, IsSchoolLeader])
 def clear_system_cache_view(request):
-    """Clears server cache for system administrators only and logs the action."""
+    """Clears server cache for school leaders (Principals & Admins) and logs the action."""
     cache.clear()
     record_audit_log(
         request=request,

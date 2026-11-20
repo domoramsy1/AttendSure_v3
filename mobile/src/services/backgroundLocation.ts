@@ -1,13 +1,14 @@
 /**
- * AttendSure - 1-Minute Background & Sleep Mode GPS Service
+ * AttendSure - Background Campus GPS Presence Service
  * File: mobile/src/services/backgroundLocation.ts
  */
 
 import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
 import defaultApiClient, { apiClient as namedClient } from '../api/client';
+import { PALETTES } from '../constants/theme';
+import { getHardwareDeviceUuid } from './deviceService';
 import {
-  getHardwareDeviceUuid,
   getRealDeviceModel,
   getRealBatteryPercentage,
   evaluateRealSignal,
@@ -17,78 +18,91 @@ import { enqueueOfflineHeartbeat, QueuedTelemetryPayload } from './offlineQueue'
 const client = defaultApiClient || namedClient;
 export const BACKGROUND_TELEMETRY_TASK = 'ATTENDSURE_BACKGROUND_TELEMETRY';
 
-TaskManager.defineTask(BACKGROUND_TELEMETRY_TASK, async ({ data, error }: any) => {
-  if (error || !data) return;
+interface BackgroundLocationTaskData {
+  locations?: Location.LocationObject[];
+}
 
-  const { locations } = data as { locations: Location.LocationObject[] };
-  const latest = locations && locations.length > 0 ? locations[locations.length - 1] : null;
+TaskManager.defineTask<BackgroundLocationTaskData>(
+  BACKGROUND_TELEMETRY_TASK,
+  async ({ data, error }) => {
+    if (error || !data) return;
 
-  if (!latest || !latest.coords) return;
+    const locations = Array.isArray(data.locations) ? data.locations : [];
+    const latest = locations.length > 0 ? locations[locations.length - 1] : null;
 
-  const lat = latest.coords.latitude;
-  const lng = latest.coords.longitude;
+    if (!latest || !latest.coords) return;
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-    return;
-  }
+    const lat = latest.coords.latitude;
+    const lng = latest.coords.longitude;
 
-  const isMock = Boolean(latest.mocked);
-  const accuracy = latest.coords.accuracy ?? null;
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      return;
+    }
 
-  try {
-    const [deviceId, batteryLevel] = await Promise.all([
+    const isMock = Boolean(latest.mocked);
+    const accuracy = latest.coords.accuracy ?? null;
+
+    const [deviceRes, batteryRes] = await Promise.allSettled([
       getHardwareDeviceUuid(),
       getRealBatteryPercentage(),
     ]);
 
+    const deviceId = deviceRes.status === 'fulfilled' ? deviceRes.value : '';
+    const batteryLevel = batteryRes.status === 'fulfilled' ? batteryRes.value : null;
     const deviceModel = getRealDeviceModel();
     const signal = evaluateRealSignal(accuracy);
 
-    await client.post(
-      'geofence/checkin/',
-      {
-        latitude: lat,
-        longitude: lng,
-        accuracy: accuracy,
-        accuracy_meters: accuracy,
-        is_mock_location: isMock,
-        battery_level: batteryLevel,
-        device_id: deviceId,
-        client_device_id: deviceId,
-        mac_address: deviceId,
-        device_model: deviceModel,
-        signal_strength: signal.label,
-        signal_percentage: signal.percentage,
-      },
-      { timeout: 8000 }
-    );
-  } catch (err: any) {
-    if (err?.response?.status === 403) return;
-
     try {
-      const [deviceId, batteryLevel] = await Promise.all([
-        getHardwareDeviceUuid(),
-        getRealBatteryPercentage(),
-      ]);
-      const deviceModel = getRealDeviceModel();
-      const signal = evaluateRealSignal(accuracy);
+      await client.post(
+        'geofence/check-in/',
+        {
+          latitude: lat,
+          longitude: lng,
+          accuracy,
+          accuracy_meters: accuracy,
+          is_mock_location: isMock,
+          battery_level: batteryLevel,
+          device_id: deviceId,
+          client_device_id: deviceId,
+          mac_address: deviceId,
+          device_model: deviceModel,
+          signal_strength: signal.label,
+          signal_percentage: signal.percentage,
+        },
+        { timeout: 8000 }
+      );
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      // Never queue unauthorized (401) or forbidden (403) responses
+      if (status === 401 || status === 403) return;
 
-      const offlinePayload: QueuedTelemetryPayload = {
-        client_device_id: deviceId ?? '',
-        latitude: lat,
-        longitude: lng,
-        accuracy: accuracy,
-        battery_level: batteryLevel,
-        is_mock_location: isMock,
-        mac_address: deviceId,
-        signal_strength: signal.label,
-        signal_percentage: signal.percentage,
-        device_model: deviceModel,
-      };
-      await enqueueOfflineHeartbeat(offlinePayload);
-    } catch {}
+      try {
+        const offlinePayload: QueuedTelemetryPayload = {
+          client_device_id: deviceId,
+          latitude: lat,
+          longitude: lng,
+          accuracy,
+          battery_level: batteryLevel,
+          is_mock_location: isMock,
+          mac_address: deviceId,
+          signal_strength: signal.label,
+          signal_percentage: signal.percentage,
+          device_model: deviceModel,
+        };
+        await enqueueOfflineHeartbeat(offlinePayload);
+      } catch {
+        // Ignore background storage failures quietly
+      }
+    }
   }
-});
+);
 
 export async function startPassivePresenceTracking(): Promise<boolean> {
   try {
@@ -101,17 +115,17 @@ export async function startPassivePresenceTracking(): Promise<boolean> {
     const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_TELEMETRY_TASK);
     if (!isRegistered) {
       await Location.startLocationUpdatesAsync(BACKGROUND_TELEMETRY_TASK, {
-        accuracy: Location.Accuracy.High, // High accuracy satellite GPS
-        timeInterval: 60000,              // 1 minute interval
-        distanceInterval: 5,               // 5 meters moved
+        accuracy: Location.Accuracy.High,
+        timeInterval: 60000,
+        distanceInterval: 5,
         deferredUpdatesInterval: 60000,
         pausesUpdatesAutomatically: false,
         showsBackgroundLocationIndicator: true,
         activityType: Location.ActivityType.Fitness,
         foregroundService: {
           notificationTitle: 'AttendSure Attendance Active',
-          notificationBody: 'Location check-in active every minute.',
-          notificationColor: '#004b87',
+          notificationBody: 'Campus location check-in is active.',
+          notificationColor: PALETTES.light.primary,
         },
       });
     }

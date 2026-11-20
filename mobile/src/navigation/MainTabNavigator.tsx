@@ -1,4 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+/**
+ * AttendSure Mobile - Main Tab Navigator
+ * File: mobile/src/navigation/MainTabNavigator.tsx
+ */
+
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -15,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
 import { useThemeMode } from '../context/ThemeContext';
+import { getFriendlyErrorMessage, type ThemePalette } from '../constants/theme';
 
 import DashboardScreen from '../screens/DashboardScreen';
 import CalendarScreen from '../screens/CalendarScreen';
@@ -37,15 +43,25 @@ export type TabType =
   | 'reports'
   | 'calendar'
   | 'settings'
-  | 'dtr'
-  | 'dept_monitor'
-  | 'qr_feed'
-  | 'device_approval'
-  | 'system_status';
+  | 'dtr';
+
+const isCanceledError = (err: unknown): boolean => {
+  const e = err as { code?: string; name?: string };
+  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
+};
+
+const showNotice = (title: string, message: string): void => {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.alert(`${title}: ${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+};
 
 export const MainTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
-  const { palette } = useThemeMode();
+  const { palette, fonts } = useThemeMode();
+  const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
   const [activeTab, setActiveTab] = useState<TabType>('home');
 
   const [dtrMonth, setDtrMonth] = useState<number>(new Date().getMonth() + 1);
@@ -63,12 +79,12 @@ export const MainTabNavigator: React.FC = () => {
       const controller = new AbortController();
       dtrAbortRef.current = controller;
 
-      if (!silent) setDtrLoading(true);
+      if (!silent && isMounted.current) setDtrLoading(true);
       const cacheKey = `attendsure_dtr_menu_${dtrMonth}_${dtrYear}`;
 
       try {
         const cached = await AsyncStorage.getItem(cacheKey);
-        if (cached && isMounted.current) {
+        if (cached && isMounted.current && !controller.signal.aborted) {
           setDtrData(JSON.parse(cached));
         }
       } catch {}
@@ -78,12 +94,12 @@ export const MainTabNavigator: React.FC = () => {
           params: { month: dtrMonth, year: dtrYear },
           signal: controller.signal,
         });
-        if (isMounted.current) {
+        if (isMounted.current && !controller.signal.aborted) {
           setDtrData(res.data);
-          await AsyncStorage.setItem(cacheKey, JSON.stringify(res.data));
+          await AsyncStorage.setItem(cacheKey, JSON.stringify(res.data)).catch(() => {});
         }
-      } catch (err: any) {
-        if (err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+      } catch (err: unknown) {
+        if (isCanceledError(err)) return;
       } finally {
         if (isMounted.current && !silent) {
           setDtrLoading(false);
@@ -95,9 +111,17 @@ export const MainTabNavigator: React.FC = () => {
 
   useEffect(() => {
     isMounted.current = true;
-    if (activeTab === 'dtr') fetchDTR(false);
     return () => {
       isMounted.current = false;
+      dtrAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'dtr') {
+      void fetchDTR(false);
+    }
+    return () => {
       dtrAbortRef.current?.abort();
     };
   }, [activeTab, fetchDTR]);
@@ -106,7 +130,8 @@ export const MainTabNavigator: React.FC = () => {
     if (!dtrData || dtrSubmitting) return;
     setDtrSubmitting(true);
     try {
-      await apiClient.post(`reports/dtr/${dtrData.faculty_id}/`, {
+      const encodedFacultyId = encodeURIComponent(String(dtrData.faculty_id));
+      await apiClient.post(`reports/dtr/${encodedFacultyId}/`, {
         action: 'SUBMIT_DTR',
         faculty_id: dtrData.faculty_id,
         month: dtrData.month_number,
@@ -114,29 +139,37 @@ export const MainTabNavigator: React.FC = () => {
         regular_days_hours: dtrData.regular_days_hours,
         saturdays_hours: dtrData.saturdays_hours,
       });
-      Alert.alert('Submitted', 'Your Daily Time Record has been sent to your Department Head.');
-      fetchDTR(true);
-    } catch (err: any) {
-      Alert.alert('Unable to Submit', err?.response?.data?.error || 'Could not submit DTR right now.');
+      showNotice('Submitted', 'Your Daily Time Record has been sent to your Department Head.');
+      void fetchDTR(true);
+    } catch (err: unknown) {
+      showNotice(
+        'Unable to Submit',
+        getFriendlyErrorMessage(err, 'Could not submit your Daily Time Record right now.')
+      );
     } finally {
       if (isMounted.current) setDtrSubmitting(false);
     }
   };
 
-  const renderRoyalSubHeader = (title: string, subtitle: string, backTarget: TabType = 'menu') => (
-    <View style={[styles.royalHeader, { backgroundColor: palette.headerBg, paddingTop: Math.max(insets.top, 14) }]}>
-      <View style={styles.royalHeaderTop}>
+  const renderSubHeader = (title: string, subtitle: string, backTarget: TabType = 'menu') => (
+    <View style={[styles.subHeader, { paddingTop: Math.max(insets.top, 14) }]}>
+      <View style={styles.subHeaderTop}>
         <TouchableOpacity
-          style={styles.royalBackCircle}
+          style={styles.backCircle}
           onPress={() => setActiveTab(backTarget)}
           activeOpacity={0.75}
+          accessibilityLabel="Go back"
         >
-          <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
+          <Ionicons name="arrow-back" size={20} color={palette.onPrimary} />
         </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.royalEyebrow}>PROFILE &amp; OPERATIONS</Text>
-          <Text style={styles.royalTitle} numberOfLines={1}>{title}</Text>
-          <Text style={styles.royalSub} numberOfLines={1}>{subtitle}</Text>
+        <View style={styles.subHeaderTextWrap}>
+          <Text style={styles.subHeaderEyebrow}>PROFILE &amp; TOOLS</Text>
+          <Text style={styles.subHeaderTitle} numberOfLines={1}>
+            {title}
+          </Text>
+          <Text style={styles.subHeaderSubtitle} numberOfLines={1}>
+            {subtitle}
+          </Text>
         </View>
       </View>
     </View>
@@ -150,17 +183,16 @@ export const MainTabNavigator: React.FC = () => {
   }> = [
     { key: 'home', label: 'Home', icon: 'home-outline', activeIcon: 'home' },
     { key: 'class_list', label: 'Classes', icon: 'book-outline', activeIcon: 'book' },
-    { key: 'gate_pass', label: 'Clearances', icon: 'clipboard-outline', activeIcon: 'clipboard' },
+    { key: 'gate_pass', label: 'Passes', icon: 'clipboard-outline', activeIcon: 'clipboard' },
     { key: 'chat', label: 'Messages', icon: 'chatbubble-outline', activeIcon: 'chatbubble' },
     { key: 'menu', label: 'Profile', icon: 'person-outline', activeIcon: 'person' },
   ];
 
-  const resolvedNavKey: TabType = ['menu', 'settings', 'calendar', 'dtr', 'reports', 'scanner', 'dept_monitor', 'qr_feed', 'device_approval', 'system_status'].includes(activeTab)
-    ? 'menu'
-    : activeTab;
+  const menuSubTabs: TabType[] = ['menu', 'settings', 'calendar', 'dtr', 'reports', 'scanner'];
+  const resolvedNavKey: TabType = menuSubTabs.includes(activeTab) ? 'menu' : activeTab;
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.background }]}>
+    <View style={styles.container}>
       <View style={styles.screenContainer}>
         {activeTab === 'home' && <DashboardScreen onNavigate={setActiveTab} />}
         {activeTab === 'class_list' && <AdvisoryMatrixScreen />}
@@ -169,41 +201,42 @@ export const MainTabNavigator: React.FC = () => {
         {activeTab === 'menu' && <MenuScreen onSelectScreen={setActiveTab} />}
         {activeTab === 'scanner' && <ScannerScreen onBack={() => setActiveTab('menu')} />}
         {activeTab === 'reports' && (
-          <View style={{ flex: 1 }}>
-            {renderRoyalSubHeader('School Reports', 'SF1, SF2, SF4 and Form 48 exports', 'menu')}
-            <ReportsScreen />
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('School Reports', 'SF1, SF2, SF4 and Form 48 records', 'menu')}
+            <ReportsScreen embedded />
           </View>
         )}
         {activeTab === 'calendar' && (
-          <View style={{ flex: 1 }}>
-            {renderRoyalSubHeader('School Calendar', 'Suspensions, holidays and schedules', 'menu')}
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('School Calendar', 'Suspensions, holidays and schedules', 'menu')}
             <CalendarScreen />
           </View>
         )}
         {activeTab === 'settings' && (
-          <View style={{ flex: 1 }}>
-            {renderRoyalSubHeader('Settings', 'Account protection, dark mode and preferences', 'menu')}
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('Settings', 'Profile, color mode and server address', 'menu')}
             <SettingsScreen />
           </View>
         )}
         {activeTab === 'dtr' && (
-          <View style={{ flex: 1 }}>
-            {renderRoyalSubHeader('Daily Time Record', 'Civil Service Form No. 48', 'menu')}
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('Daily Time Record', 'Civil Service Form No. 48', 'menu')}
             <ScrollView
               contentContainerStyle={styles.subScreenScroll}
               showsVerticalScrollIndicator={false}
               refreshControl={
                 <RefreshControl
                   refreshing={dtrLoading}
-                  onRefresh={() => fetchDTR(false)}
+                  onRefresh={() => void fetchDTR(false)}
                   colors={[palette.primary]}
+                  tintColor={palette.primary}
                 />
               }
             >
               {dtrLoading && !dtrData ? (
                 <View style={styles.loadingBox}>
                   <ActivityIndicator size="small" color={palette.primary} />
-                  <Text style={[styles.loadingText, { color: palette.textMuted }]}>Loading attendance records...</Text>
+                  <Text style={styles.loadingText}>Loading attendance records...</Text>
                 </View>
               ) : (
                 <DTRReportView
@@ -216,7 +249,7 @@ export const MainTabNavigator: React.FC = () => {
                   }}
                   submitting={dtrSubmitting}
                   onSubmit={handleSubmitDtr}
-                  onRefreshNeeded={() => fetchDTR(true)}
+                  onRefreshNeeded={() => void fetchDTR(true)}
                 />
               )}
             </ScrollView>
@@ -224,7 +257,7 @@ export const MainTabNavigator: React.FC = () => {
         )}
       </View>
 
-      {/* Floating Pill Bottom Navigation Dock */}
+      {/* Floating Bottom Navigation Dock */}
       <View
         style={[
           styles.floatingDockWrapper,
@@ -232,15 +265,7 @@ export const MainTabNavigator: React.FC = () => {
         ]}
         pointerEvents="box-none"
       >
-        <View
-          style={[
-            styles.floatingDock,
-            {
-              backgroundColor: palette.surface,
-              borderColor: palette.border,
-            },
-          ]}
-        >
+        <View style={styles.floatingDock}>
           {navItems.map((item) => {
             const isFocused = resolvedNavKey === item.key;
             return (
@@ -248,13 +273,10 @@ export const MainTabNavigator: React.FC = () => {
                 key={item.key}
                 onPress={() => setActiveTab(item.key)}
                 activeOpacity={0.8}
-                style={[
-                  styles.navPillBtn,
-                  isFocused && [
-                    styles.navPillBtnActive,
-                    { backgroundColor: palette.primarySoft },
-                  ],
-                ]}
+                style={[styles.navPillBtn, isFocused && styles.navPillBtnActive]}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: isFocused }}
+                accessibilityLabel={item.label}
               >
                 <Ionicons
                   name={isFocused ? item.activeIcon : item.icon}
@@ -262,7 +284,7 @@ export const MainTabNavigator: React.FC = () => {
                   color={isFocused ? palette.primary : palette.textMuted}
                 />
                 {isFocused && (
-                  <Text style={[styles.navPillText, { color: palette.primary }]} numberOfLines={1}>
+                  <Text style={styles.navPillText} numberOfLines={1}>
                     {item.label}
                   </Text>
                 )}
@@ -275,99 +297,113 @@ export const MainTabNavigator: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  screenContainer: { flex: 1 },
-  royalHeader: {
-    paddingHorizontal: 18,
-    paddingBottom: 20,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
-  },
-  royalHeaderTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  royalBackCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  royalEyebrow: {
-    fontSize: 10.5,
-    fontWeight: '700',
-    color: '#DBE4FF',
-    letterSpacing: 0.8,
-  },
-  royalTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    marginTop: 2,
-  },
-  royalSub: {
-    fontSize: 13,
-    color: '#E0E7FF',
-    marginTop: 2,
-  },
-  subScreenScroll: {
-    padding: 14,
-    paddingBottom: 120,
-  },
-  loadingBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
-  },
-  loadingText: {
-    fontSize: 12,
-    marginTop: 8,
-  },
-  floatingDockWrapper: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 0,
-    alignItems: 'center',
-  },
-  floatingDock: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '100%',
-    borderRadius: 32,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#0F172A',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.12,
-        shadowRadius: 16,
-      },
-      android: { elevation: 12 },
-    }),
-  },
-  navPillBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 22,
-    gap: 6,
-  },
-  navPillBtnActive: {
-    paddingHorizontal: 16,
-  },
-  navPillText: {
-    fontSize: 13,
-    fontWeight: '800',
-  },
-});
+const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMode>['fonts']) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: palette.background },
+    screenContainer: { flex: 1 },
+    subScreenFill: { flex: 1, backgroundColor: palette.background },
+    subHeader: {
+      backgroundColor: palette.headerBg,
+      paddingHorizontal: 18,
+      paddingBottom: 20,
+      borderBottomLeftRadius: 28,
+      borderBottomRightRadius: 28,
+    },
+    subHeaderTop: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    subHeaderTextWrap: {
+      flex: 1,
+      marginLeft: 12,
+    },
+    backCircle: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: palette.headerSurface,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    subHeaderEyebrow: {
+      fontSize: fonts.xxs,
+      fontWeight: fonts.weight.bold,
+      color: palette.onPrimary,
+      opacity: 0.8,
+      letterSpacing: 0.8,
+    },
+    subHeaderTitle: {
+      fontSize: fonts.xl,
+      fontWeight: fonts.weight.extrabold,
+      color: palette.onPrimary,
+      marginTop: 2,
+    },
+    subHeaderSubtitle: {
+      fontSize: fonts.sm,
+      color: palette.onPrimary,
+      opacity: 0.88,
+      marginTop: 2,
+    },
+    subScreenScroll: {
+      padding: 14,
+      paddingBottom: 120,
+    },
+    loadingBox: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 40,
+    },
+    loadingText: {
+      fontSize: fonts.sm,
+      color: palette.textMuted,
+      marginTop: 8,
+    },
+    floatingDockWrapper: {
+      position: 'absolute',
+      left: 16,
+      right: 16,
+      bottom: 0,
+      alignItems: 'center',
+    },
+    floatingDock: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      width: '100%',
+      backgroundColor: palette.surface,
+      borderRadius: 32,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      borderWidth: 1,
+      borderColor: palette.border,
+      ...Platform.select({
+        ios: {
+          shadowColor: palette.isDark ? '#000000' : '#0f172a',
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: palette.isDark ? 0.35 : 0.12,
+          shadowRadius: 16,
+        },
+        android: { elevation: 12 },
+      }),
+    },
+    navPillBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: 22,
+      gap: 6,
+    },
+    navPillBtnActive: {
+      paddingHorizontal: 16,
+      backgroundColor: palette.primarySoft,
+    },
+    navPillText: {
+      fontSize: fonts.sm,
+      fontWeight: fonts.weight.extrabold,
+      color: palette.primary,
+    },
+  });
 
 export default MainTabNavigator;

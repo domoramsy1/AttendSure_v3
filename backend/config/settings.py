@@ -23,7 +23,7 @@ ALLOWED_HOSTS = [
     h.strip()
     for h in os.getenv(
         "ALLOWED_HOSTS",
-        "localhost,127.0.0.1,0.0.0.0,testserver,.attendsure.com.ph,.trycloudflare.com",
+        "localhost,127.0.0.1,0.0.0.0,testserver,.attendsure.ph,.attendsure.com.ph,.trycloudflare.com",
     ).split(",")
     if h.strip()
 ]
@@ -245,3 +245,19 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+ENABLE_HTTPS_STRICT = os.getenv("ENABLE_HTTPS_STRICT", "False").strip().lower() in ("true", "1", "yes")
+if ENABLE_HTTPS_STRICT and not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+# Security & Competition Feature Flags
+ALLOW_LEGACY_UNSIGNED_QR = os.getenv("ALLOW_LEGACY_UNSIGNED_QR", "False").strip().lower() in ("true", "1", "yes")
+REQUIRE_GPS_FOR_QR_SCAN = os.getenv("REQUIRE_GPS_FOR_QR_SCAN", "False").strip().lower() in ("true", "1", "yes")
+# Judge Demo Mode is enabled automatically in local DEBUG mode or when ENABLE_JUDGE_DEMO=True is explicitly set
+ENABLE_JUDGE_DEMO = os.getenv("ENABLE_JUDGE_DEMO", "False").strip().lower() in ("true", "1", "yes")

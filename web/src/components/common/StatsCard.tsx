@@ -1,6 +1,6 @@
 /**
- * AttendSure - Reusable Telemetry Metric Card
- * Replaces duplicate statistic cards across Faculty, Gate Logs, and Classes tabs.
+ * AttendSure - Reusable Metric Summary Card
+ * Replaces duplicate statistic cards across Faculty, Attendance Logs, and Classes tabs.
  * File: web/src/components/common/StatsCard.tsx
  */
 

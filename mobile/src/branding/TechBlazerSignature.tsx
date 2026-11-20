@@ -1,42 +1,26 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+/**
+ * AttendSure Mobile - TechBlazer Signature Wrapper
+ * File: mobile/src/branding/TechBlazerSignature.tsx
+ */
 
-interface TechBlazerSignatureProps {
+import React from 'react';
+import type { StyleProp, ViewStyle } from 'react-native';
+import { TechBlazerSignature as BrandTechBlazerSignature } from './BrandLogos';
+import { useThemeMode } from '../context/ThemeContext';
+
+export interface TechBlazerSignatureProps {
   size?: number;
+  style?: StyleProp<ViewStyle>;
 }
 
-export const TechBlazerSignature: React.FC<TechBlazerSignatureProps> = ({ size = 22 }) => {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.fromText}>from</Text>
-      <View style={styles.brandRow}>
-        <Text style={[styles.brandText, { fontSize: size }]}>TECHBLAZER</Text>
-      </View>
-    </View>
-  );
-};
+export const TechBlazerSignature: React.FC<TechBlazerSignatureProps> = ({
+  size = 22,
+  style,
+}) => {
+  // Ensure re-render on theme mode changes while delegating rendering to BrandLogos
+  useThemeMode();
 
-const styles = StyleSheet.create({
-  container: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fromText: {
-    fontSize: 11,
-    color: '#94a3b8',
-    marginBottom: 3,
-    textTransform: 'lowercase',
-    letterSpacing: 0.5,
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  brandText: {
-    fontWeight: '800',
-    color: '#0f172a',
-    letterSpacing: 2.5,
-  },
-});
+  return <BrandTechBlazerSignature size={size} style={style} />;
+};
 
 export default TechBlazerSignature;

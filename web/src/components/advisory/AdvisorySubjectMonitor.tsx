@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { sanitizeText } from '../../theme/tokens';
@@ -63,22 +63,48 @@ interface StudentMatrixRow {
 
 type MatrixFilterMode = 'ALL' | 'CUTTING' | 'ABSENT';
 
+const normalizeMatrixRows = (rows: unknown): StudentMatrixRow[] =>
+  (Array.isArray(rows) ? rows : []).map((row: any) => ({
+    ...row,
+    campus_status: String(row.campus_status || 'Not Seen Yet'),
+    presence_state: row.presence_state === 'ACTIVE' ? 'ACTIVE' : 'NONE',
+  }));
+
 export const AdvisorySubjectMonitor: React.FC = () => {
   const { tokens, brand, fonts, ui } = useTheme();
 
-  const [loading, setLoading] = useState<boolean>(true);
+  const warmData = useMemo(
+    () => peekApiCache<Record<string, any>>(API_ROUTES.attendance.adviserMatrix),
+    []
+  );
+
+  const [loading, setLoading] = useState<boolean>(() => warmData === undefined);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState<string>('');
   const [filterMode, setFilterMode] = useState<MatrixFilterMode>('ALL');
 
-  const [hasAdvisoryClass, setHasAdvisoryClass] = useState<boolean>(false);
-  const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
-  const [sectionTitle, setSectionTitle] = useState<string>('');
-  const [availableSections, setAvailableSections] = useState<AvailableSection[]>([]);
-  const [isAdviserOfSection, setIsAdviserOfSection] = useState<boolean>(false);
-  const [schedules, setSchedules] = useState<SubjectHeader[]>([]);
-  const [matrix, setMatrix] = useState<StudentMatrixRow[]>([]);
+  const [hasAdvisoryClass, setHasAdvisoryClass] = useState<boolean>(() => Boolean(warmData?.has_advisory_class));
+  const [selectedSectionId, setSelectedSectionId] = useState<number | null>(() =>
+    warmData?.has_advisory_class ? warmData.section_id || null : null
+  );
+  const [sectionTitle, setSectionTitle] = useState<string>(() =>
+    warmData?.has_advisory_class
+      ? [warmData.grade_level, warmData.section_name].filter(Boolean).join(' - ') || 'Selected Section'
+      : ''
+  );
+  const [availableSections, setAvailableSections] = useState<AvailableSection[]>(() =>
+    Array.isArray(warmData?.available_sections) ? warmData.available_sections : []
+  );
+  const [isAdviserOfSection, setIsAdviserOfSection] = useState<boolean>(() =>
+    Boolean(warmData?.has_advisory_class && warmData?.is_adviser)
+  );
+  const [schedules, setSchedules] = useState<SubjectHeader[]>(() =>
+    warmData?.has_advisory_class && Array.isArray(warmData?.schedules) ? warmData.schedules : []
+  );
+  const [matrix, setMatrix] = useState<StudentMatrixRow[]>(() =>
+    warmData?.has_advisory_class ? normalizeMatrixRows(warmData.matrix) : []
+  );
 
   const abortRef = useRef<AbortController | null>(null);
   const selectedSectionRef = useRef<number | null>(null);
@@ -103,6 +129,7 @@ export const AdvisorySubjectMonitor: React.FC = () => {
           params,
           signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
 
         const d = res.data || {};
         const sectionsList: AvailableSection[] = Array.isArray(d.available_sections)
@@ -118,13 +145,7 @@ export const AdvisorySubjectMonitor: React.FC = () => {
           );
           setIsAdviserOfSection(Boolean(d.is_adviser));
           setSchedules(Array.isArray(d.schedules) ? d.schedules : []);
-          setMatrix(
-            (Array.isArray(d.matrix) ? d.matrix : []).map((row: any) => ({
-              ...row,
-              campus_status: String(row.campus_status || 'Not Seen Yet'),
-              presence_state: row.presence_state === 'ACTIVE' ? 'ACTIVE' : 'NONE',
-            }))
-          );
+          setMatrix(normalizeMatrixRows(d.matrix));
         } else {
           setHasAdvisoryClass(false);
           setMatrix([]);
@@ -132,24 +153,33 @@ export const AdvisorySubjectMonitor: React.FC = () => {
         }
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
-        if (anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
+        if (
+          controller.signal.aborted ||
+          anyErr?.name === 'CanceledError' ||
+          anyErr?.name === 'AbortError' ||
+          anyErr?.code === 'ERR_CANCELED'
+        ) {
+          return;
+        }
         if (!silent) {
           setError(extractApiError(err, 'Unable to load the subject attendance matrix.'));
         }
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     []
   );
 
   useEffect(() => {
-    fetchMatrixData(null, false, false);
+    void fetchMatrixData(null, warmData !== undefined, false);
     return () => {
       abortRef.current?.abort();
     };
-  }, [fetchMatrixData]);
+  }, [fetchMatrixData, warmData]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -335,7 +365,7 @@ export const AdvisorySubjectMonitor: React.FC = () => {
             margin: '6px auto 16px',
           }}
         >
-          Your profile is not yet assigned as a Class Adviser or subject teacher for an active
+          Your profile is not yet assigned as a Class Adviser or subject faculty for an active
           section. Contact your school administrator to link your schedule.
         </p>
         <button
@@ -498,7 +528,7 @@ export const AdvisorySubjectMonitor: React.FC = () => {
             maxLength={50}
             placeholder="Search student name or LRN..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value.replace(/[\u0000-\u001F\u007F<>]/g, ''))}
             style={{ ...ui.input, paddingLeft: 32 }}
           />
         </div>

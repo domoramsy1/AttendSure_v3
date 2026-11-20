@@ -13,6 +13,10 @@ def resolve_teacher_for_user(user: User | None) -> TeacherProfile | None:
     if not user or not getattr(user, "is_authenticated", False):
         return None
 
+    # Parents must never resolve to a TeacherProfile
+    if get_user_role(user) == "PARENT":
+        return None
+
     cache_key = f"accounts:teacher_for_user:{user.id}"
     cached_id = cache.get(cache_key)
     if cached_id is not None:
@@ -34,14 +38,23 @@ def resolve_teacher_for_user(user: User | None) -> TeacherProfile | None:
         cache.set(cache_key, by_account.id, timeout=60)
         return by_account
 
-    by_username = (
-        TeacherProfile.objects.select_related("account")
-        .filter(Q(employee_id__iexact=user.username) | Q(email__iexact=user.email), is_active=True)
-        .first()
-    )
-    if by_username:
-        cache.set(cache_key, by_username.id, timeout=60)
-        return by_username
+    lookup = Q()
+    clean_username = str(getattr(user, "username", "") or "").strip()
+    clean_email = str(getattr(user, "email", "") or "").strip()
+    if clean_username:
+        lookup |= Q(employee_id__iexact=clean_username)
+    if clean_email:
+        lookup |= Q(email__iexact=clean_email)
+
+    if lookup:
+        by_identity = (
+            TeacherProfile.objects.select_related("account")
+            .filter(lookup, is_active=True)
+            .first()
+        )
+        if by_identity:
+            cache.set(cache_key, by_identity.id, timeout=60)
+            return by_identity
 
     cache.set(cache_key, 0, timeout=30)
     return None
@@ -80,77 +93,14 @@ def get_teacher_student_ids(teacher: TeacherProfile | None) -> set[int]:
     return set(
         Enrollment.objects.filter(
             section_id__in=section_ids,
-            status="ENROLLED",
+            status__in=["ENROLLED", "TRANSFERRED_IN"],
             student__is_active=True,
         ).values_list("student_id", flat=True)
     )
 
 
 def build_user_session_payload(user: User, request=None) -> dict:
-    """Builds the authenticated user session payload from real PostgreSQL profile & teacher data."""
-    profile = UserProfile.objects.select_related("teacher").filter(user=user).first()
-    teacher = resolve_teacher_for_user(user)
-    role = get_user_role(user)
+    """Delegates to accounts.services.build_user_session_payload to keep one canonical session format."""
+    from .services import build_user_session_payload as _canonical_payload
 
-    section_ids = get_teacher_section_ids(teacher) if teacher else set()
-    period_count = (
-        ClassPeriod.objects.filter(teacher=teacher, is_active=True).count()
-        if teacher
-        else 0
-    )
-    assigned_class_count = len(section_ids) + period_count
-
-    can_teach = bool(
-        (teacher and getattr(teacher, "can_teach", False))
-        or assigned_class_count > 0
-        or role == "FACULTY"
-    )
-
-    if teacher:
-        full_name = teacher.full_name or user.get_full_name() or user.username
-        employee_id = teacher.employee_id or user.username
-        department = teacher.department or ""
-        position = teacher.position or ""
-        contact_number = teacher.contact_number or ""
-        email = teacher.email or user.email or ""
-        photo_raw = teacher.photo or (getattr(profile, "photo", None) if profile else None)
-    else:
-        full_name = user.get_full_name() or user.username
-        employee_id = user.username
-        department = "Parent / Guardian" if role == "PARENT" else ""
-        position = "Parent / Guardian" if role == "PARENT" else ""
-        contact_number = getattr(profile, "phone_number", "") if profile else ""
-        email = user.email or ""
-        photo_raw = getattr(profile, "photo", None) if profile else None
-
-    photo_url = build_media_url(photo_raw, request)
-
-    return {
-        "id": user.id,
-        "user_id": user.id,
-        "username": user.username,
-        "employee_id": employee_id,
-        "first_name": user.first_name,
-        "middle_name": teacher.middle_name if teacher else "",
-        "last_name": user.last_name,
-        "suffix": teacher.suffix if teacher else "",
-        "full_name": full_name,
-        "faculty_name": full_name,
-        "email": email,
-        "contact_number": contact_number,
-        "department": department,
-        "position": position,
-        "role": role,
-        "current_role": role,
-        "can_teach": can_teach,
-        "is_teaching": can_teach,
-        "assigned_class_count": assigned_class_count,
-        "is_profile_completed": bool(
-            getattr(profile, "is_profile_completed", True) if profile else True
-        ),
-        "faculty_id": teacher.id if teacher else None,
-        "photo": photo_url,
-        "photo_url": photo_url,
-        "is_active": user.is_active,
-        "is_superuser": user.is_superuser,
-    }
+    return _canonical_payload(user, request=request)

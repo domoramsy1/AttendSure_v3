@@ -7,6 +7,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
 
 const OFFLINE_QUEUE_KEY = 'attendsure_offline_queue';
+const MAX_RETRY_ATTEMPTS = 8;
+const MAX_HEARTBEAT_AGE_MS = 24 * 60 * 60 * 1000;
+
+let isSyncing = false;
 
 export interface QueuedTelemetryPayload {
   client_device_id?: string | null;
@@ -26,42 +30,72 @@ export interface OfflineQueueItem {
   id: string;
   endpoint: string;
   method: 'POST' | 'PUT' | 'PATCH';
-  payload: any;
+  payload: unknown;
   timestamp: number;
   retryCount?: number;
+}
+
+/**
+ * Cybersecurity: Only allow relative AttendSure API paths inside the offline queue.
+ * Rejects absolute http(s):// URLs, dangerous schemes, protocol-relative URLs, and path traversal.
+ */
+function isAllowedRelativeEndpoint(endpoint?: string | null): endpoint is string {
+  if (!endpoint || typeof endpoint !== 'string') return false;
+  const trimmed = endpoint.trim();
+  if (!trimmed) return false;
+  if (
+    /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ||
+    trimmed.startsWith('//') ||
+    trimmed.includes('..') ||
+    /[\u0000-\u001F\u007F]/.test(trimmed)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isHeartbeatEndpoint(endpoint: string): boolean {
+  const lower = endpoint.toLowerCase();
+  return (
+    lower.includes('check-in') ||
+    lower.includes('checkin') ||
+    lower.includes('heartbeat')
+  );
+}
+
+async function readQueueSafe(): Promise<OfflineQueueItem[]> {
+  try {
+    const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as OfflineQueueItem[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
  * Returns the total number of records waiting to be uploaded.
  */
 export async function getUnsyncedCount(): Promise<number> {
-  try {
-    const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    if (!raw) return 0;
-    const items: OfflineQueueItem[] = JSON.parse(raw);
-    return Array.isArray(items) ? items.length : 0;
-  } catch {
-    return 0;
-  }
+  const items = await readQueueSafe();
+  return items.length;
 }
 
 /**
- * Queues an offline telemetry heartbeat with automatic deduplication.
- * Replaces older heartbeats so breadcrumbs do not stack up during long offline periods.
+ * Queues an offline campus location check-in with automatic deduplication.
+ * Replaces older check-ins so records do not stack up during long offline periods.
  */
 export async function enqueueOfflineHeartbeat(payload: QueuedTelemetryPayload): Promise<void> {
   try {
-    const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    let queue: OfflineQueueItem[] = raw ? JSON.parse(raw) : [];
+    const current = await readQueueSafe();
 
-    // Remove any previous pending heartbeat to keep only the newest location
-    queue = queue.filter(
-      (item) => !item.endpoint.includes('checkin') && !item.endpoint.includes('heartbeat')
-    );
+    // Keep only the newest campus location ping
+    const filtered = current.filter((item) => !isHeartbeatEndpoint(item.endpoint || ''));
 
-    queue.push({
-      id: `hb_${Date.now()}`,
-      endpoint: 'geofence/checkin/',
+    filtered.push({
+      id: `hb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      endpoint: 'geofence/check-in/',
       method: 'POST',
       payload: {
         ...payload,
@@ -72,33 +106,36 @@ export async function enqueueOfflineHeartbeat(payload: QueuedTelemetryPayload): 
       retryCount: 0,
     });
 
-    await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
-  } catch (err) {
-    console.warn('[OfflineQueue] Save notice:', err);
+    await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(filtered));
+  } catch {
+    // Storage failures are ignored safely without leaking raw error objects
   }
 }
 
 /**
- * Generic queue action for class roll calls and gate logs.
+ * Generic queue action for class attendance and campus check-in records.
  */
 export async function queueOfflineAction(
   endpoint: string,
-  payload: any,
+  payload: unknown,
   method: 'POST' | 'PUT' | 'PATCH' = 'POST'
 ): Promise<void> {
-  try {
-    const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    let queue: OfflineQueueItem[] = raw ? JSON.parse(raw) : [];
+  if (!isAllowedRelativeEndpoint(endpoint)) {
+    return;
+  }
 
-    if (endpoint.includes('checkin') || endpoint.includes('heartbeat')) {
-      queue = queue.filter(
-        (item) => !item.endpoint.includes('checkin') && !item.endpoint.includes('heartbeat')
-      );
+  const safeEndpoint = endpoint.trim();
+
+  try {
+    let queue = await readQueueSafe();
+
+    if (isHeartbeatEndpoint(safeEndpoint)) {
+      queue = queue.filter((item) => !isHeartbeatEndpoint(item.endpoint || ''));
     }
 
     queue.push({
       id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      endpoint,
+      endpoint: safeEndpoint,
       method,
       payload,
       timestamp: Date.now(),
@@ -106,32 +143,42 @@ export async function queueOfflineAction(
     });
 
     await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
-  } catch (err) {
-    console.warn('[OfflineQueue] Save notice:', err);
+  } catch {
+    // Ignore storage write errors safely
   }
 }
 
 /**
  * Uploads all queued offline records to the school server.
+ * Protected by a concurrency lock to prevent duplicate submissions.
  */
 export async function syncOfflineQueue(): Promise<{ synced: number; remaining: number }> {
-  try {
-    const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    if (!raw) return { synced: 0, remaining: 0 };
+  if (isSyncing) {
+    return { synced: 0, remaining: await getUnsyncedCount() };
+  }
 
-    const queue: OfflineQueueItem[] = JSON.parse(raw);
-    if (!Array.isArray(queue) || queue.length === 0) {
+  isSyncing = true;
+
+  try {
+    const queue = await readQueueSafe();
+    if (queue.length === 0) {
       return { synced: 0, remaining: 0 };
     }
 
+    const snapshotIds = new Set(queue.map((item) => item.id));
     const remaining: OfflineQueueItem[] = [];
     let synced = 0;
 
     for (const item of queue) {
-      // Discard location pings older than 24 hours
+      // Discard unsafe or external endpoints
+      if (!isAllowedRelativeEndpoint(item?.endpoint)) {
+        continue;
+      }
+
+      // Discard stale location pings older than 24 hours
       if (
-        (item.endpoint.includes('checkin') || item.endpoint.includes('heartbeat')) &&
-        Date.now() - item.timestamp > 86400000
+        isHeartbeatEndpoint(item.endpoint) &&
+        Date.now() - item.timestamp > MAX_HEARTBEAT_AGE_MS
       ) {
         continue;
       }
@@ -139,30 +186,44 @@ export async function syncOfflineQueue(): Promise<{ synced: number; remaining: n
       try {
         if (item.method === 'PUT') {
           await apiClient.put(item.endpoint, item.payload, { timeout: 7000 });
+        } else if (item.method === 'PATCH') {
+          await apiClient.patch(item.endpoint, item.payload, { timeout: 7000 });
         } else {
           await apiClient.post(item.endpoint, item.payload, { timeout: 7000 });
         }
         synced += 1;
-      } catch (err: any) {
-        const status = err?.response?.status;
-        // If server rejected the record (bad payload or 403 lock), remove it from queue
-        if (status === 400 || status === 403 || status === 409) {
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+
+        // Stop retrying immediately when session expires (401)
+        if (status === 401) {
+          break;
+        }
+
+        // Discard permanently rejected records (bad payload, forbidden, missing, or conflict)
+        if (status === 400 || status === 403 || status === 404 || status === 409) {
           continue;
         }
 
-        // Retry temporary network errors up to 8 times
-        item.retryCount = (item.retryCount || 0) + 1;
-        if ((item.retryCount || 0) < 8) {
-          remaining.push(item);
+        // Retry temporary network errors up to the retry limit
+        const nextRetry = (item.retryCount || 0) + 1;
+        if (nextRetry < MAX_RETRY_ATTEMPTS) {
+          remaining.push({ ...item, retryCount: nextRetry });
         }
       }
     }
 
-    await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remaining));
-    return { synced, remaining: remaining.length };
-  } catch (err) {
-    console.warn('[OfflineQueue] Sync notice:', err);
+    // Preserve any new items queued while this sync pass was running
+    const latestQueue = await readQueueSafe();
+    const newlyAdded = latestQueue.filter((item) => !snapshotIds.has(item.id));
+    const nextQueue = [...remaining, ...newlyAdded];
+
+    await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(nextQueue));
+    return { synced, remaining: nextQueue.length };
+  } catch {
     return { synced: 0, remaining: await getUnsyncedCount() };
+  } finally {
+    isSyncing = false;
   }
 }
 

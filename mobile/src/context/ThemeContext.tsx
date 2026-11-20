@@ -1,8 +1,6 @@
 /**
- * ============================================================================
- * ATTENDSURE  MOBILE - LIVE THEME CONTEXT (Light, Dark & High-Contrast)
+ * AttendSure Mobile - Live Theme Context (Light, Dark & High-Contrast)
  * File: mobile/src/context/ThemeContext.tsx
- * ============================================================================
  */
 
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
@@ -51,13 +49,17 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [mode, setMode] = useState<ThemeMode>('light');
 
   useEffect(() => {
+    let mounted = true;
     AsyncStorage.getItem(THEME_STORAGE_KEY)
       .then((saved) => {
-        if (saved === 'dark' || saved === 'light' || saved === 'high-contrast') {
+        if (mounted && (saved === 'dark' || saved === 'light' || saved === 'high-contrast')) {
           setMode(saved);
         }
       })
       .catch(() => {});
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const setThemeMode = (nextMode: ThemeMode) => {

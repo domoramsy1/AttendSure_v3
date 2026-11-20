@@ -1,12 +1,6 @@
 /**
- * AttendSure - Global Modern Alert & Confirmation System
+ * AttendSure - Global Alert & Confirmation System (Referentially Stable)
  * File: web/src/context/AlertContext.tsx
- *
- * Cybersecurity & Stability Hardening:
- * 1. Safe Type Parsing: Converts raw objects/arrays to clean text to prevent UI render crashes.
- * 2. Unhandled Exception Shield: Encapsulates async confirmations in try-catch-finally.
- * 3. Keyboard & Focus Trap Protection: Adds native Escape key dismiss handlers.
- * 4. Fast Auto-Dismiss: Closes non-critical success notifications automatically after 3.5 seconds.
  */
 
 import React, {
@@ -15,17 +9,13 @@ import React, {
   useState,
   useEffect,
   useCallback,
+  useMemo,
   useRef,
   type ReactNode,
 } from 'react';
-import {
-  CheckCircle2,
-  AlertTriangle,
-  XCircle,
-  Info,
-  X,
-  Loader2,
-} from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, Info, X, Loader2 } from 'lucide-react';
+import { extractApiError } from '../api/routes';
+import { useTheme } from './ThemeContext';
 
 export type AlertType = 'success' | 'error' | 'warning' | 'info';
 
@@ -34,7 +24,7 @@ export interface AlertOptions {
   message: string | unknown;
   type?: AlertType;
   actionLabel?: string;
-  autoCloseDuration?: number; // Milliseconds (defaults to 3500ms for success)
+  autoCloseDuration?: number;
   onAction?: () => void;
   onClose?: () => void;
 }
@@ -58,47 +48,52 @@ interface AlertContextType {
 
 const AlertContext = createContext<AlertContextType | undefined>(undefined);
 
-/**
- * Defensive Sanitizer: Ensures message is always a safe, readable string.
- * Prevents React child injection crashes from raw backend error dictionaries.
- */
 const toSafeString = (val: unknown): string => {
   if (val === null || val === undefined) return '';
-  if (typeof val === 'string') return val;
-  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
-  if (val instanceof Error) return val.message;
-  try {
-    return JSON.stringify(val);
-  } catch {
-    return 'An unexpected system event occurred.';
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html') || trimmed.includes('Traceback (most recent call last)')) {
+      return 'Something went wrong on the server. Please try again.';
+    }
+    return trimmed;
   }
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  return extractApiError(val, 'An unexpected error occurred. Please try again.');
 };
 
 export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { tokens, brand } = useTheme();
   const [alertData, setAlertData] = useState<AlertOptions | null>(null);
   const [confirmData, setConfirmData] = useState<ConfirmOptions | null>(null);
   const [isConfirmLoading, setIsConfirmLoading] = useState(false);
 
+  const alertDataRef = useRef<AlertOptions | null>(null);
+  const confirmDataRef = useRef<ConfirmOptions | null>(null);
+  const confirmLoadingRef = useRef<boolean>(false);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  alertDataRef.current = alertData;
+  confirmDataRef.current = confirmData;
+  confirmLoadingRef.current = isConfirmLoading;
 
   const closeAlert = useCallback(() => {
     if (autoCloseTimerRef.current) {
       clearTimeout(autoCloseTimerRef.current);
       autoCloseTimerRef.current = null;
     }
-    if (alertData?.onClose) {
-      alertData.onClose();
-    }
+    const current = alertDataRef.current;
+    alertDataRef.current = null;
     setAlertData(null);
-  }, [alertData]);
+    current?.onClose?.();
+  }, []);
 
   const closeConfirm = useCallback(() => {
-    if (isConfirmLoading) return;
-    if (confirmData?.onCancel) {
-      confirmData.onCancel();
-    }
+    if (confirmLoadingRef.current) return;
+    const current = confirmDataRef.current;
+    confirmDataRef.current = null;
     setConfirmData(null);
-  }, [confirmData, isConfirmLoading]);
+    current?.onCancel?.();
+  }, []);
 
   const showAlert = useCallback(
     (options: AlertOptions) => {
@@ -107,13 +102,14 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         autoCloseTimerRef.current = null;
       }
 
-      setAlertData({
+      const normalized: AlertOptions = {
         ...options,
         title: toSafeString(options.title) || 'Notification',
         message: toSafeString(options.message),
-      });
+      };
+      alertDataRef.current = normalized;
+      setAlertData(normalized);
 
-      // Auto-dismiss success notifications to keep workflows fast
       if (options.type === 'success' && !options.actionLabel) {
         const duration = options.autoCloseDuration ?? 3500;
         autoCloseTimerRef.current = setTimeout(() => {
@@ -125,88 +121,133 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   );
 
   const showConfirm = useCallback((options: ConfirmOptions) => {
-    setConfirmData({
+    const normalized: ConfirmOptions = {
       ...options,
       title: toSafeString(options.title) || 'Confirm Action',
       message: toSafeString(options.message),
-    });
+    };
+    confirmDataRef.current = normalized;
+    setConfirmData(normalized);
   }, []);
 
-  // Keyboard navigation protection (Escape key closes modals)
+  useEffect(() => {
+    return () => {
+      if (autoCloseTimerRef.current) clearTimeout(autoCloseTimerRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (confirmData && !isConfirmLoading) {
+        if (confirmDataRef.current && !confirmLoadingRef.current) {
           closeConfirm();
-        } else if (alertData) {
+        } else if (alertDataRef.current) {
           closeAlert();
         }
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [alertData, confirmData, isConfirmLoading, closeAlert, closeConfirm]);
+  }, [closeAlert, closeConfirm]);
 
   const handleConfirmAction = async () => {
-    if (!confirmData || isConfirmLoading) return;
+    const activeConfirm = confirmDataRef.current;
+    if (!activeConfirm || confirmLoadingRef.current) return;
     try {
       setIsConfirmLoading(true);
-      await confirmData.onConfirm();
+      confirmLoadingRef.current = true;
+      await activeConfirm.onConfirm();
+      confirmDataRef.current = null;
       setConfirmData(null);
     } catch (err) {
-      console.error('[AlertContext] Confirm action failed:', err);
-      // Display error modal if confirmation action throws
       showAlert({
         title: 'Action Error',
         message: err,
         type: 'error',
       });
     } finally {
+      confirmLoadingRef.current = false;
       setIsConfirmLoading(false);
     }
   };
 
   const handleAlertAction = () => {
-    if (alertData?.onAction) {
-      alertData.onAction();
-    }
+    alertDataRef.current?.onAction?.();
     closeAlert();
   };
 
   const getAlertIcon = (type: AlertType) => {
     switch (type) {
       case 'success':
-        return <CheckCircle2 size={24} color="#059669" />;
+        return <CheckCircle2 size={24} color={tokens.success} />;
       case 'error':
-        return <XCircle size={24} color="#dc2626" />;
+        return <XCircle size={24} color={tokens.danger} />;
       case 'warning':
-        return <AlertTriangle size={24} color="#d97706" />;
+        return <AlertTriangle size={24} color={tokens.warning} />;
       case 'info':
       default:
-        return <Info size={24} color="#0284c7" />;
+        return <Info size={24} color={brand.primary} />;
     }
   };
 
   const getAlertColorTheme = (type: AlertType) => {
     switch (type) {
       case 'success':
-        return { bg: '#ecfdf5', border: '#a7f3d0' };
+        return { bg: tokens.successBg, border: tokens.borderSubtle };
       case 'error':
-        return { bg: '#fef2f2', border: '#fecaca' };
+        return { bg: tokens.dangerBg, border: tokens.borderSubtle };
       case 'warning':
-        return { bg: '#fffbeb', border: '#fde68a' };
+        return { bg: tokens.warningBg, border: tokens.borderSubtle };
       case 'info':
       default:
-        return { bg: '#f0f9ff', border: '#bae6fd' };
+        return { bg: brand.primarySoft, border: tokens.borderSubtle };
     }
   };
 
+  const modalBoxStyle: React.CSSProperties = {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: tokens.bgSurface,
+    borderRadius: 12,
+    padding: 18,
+    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.15)',
+    border: `1px solid ${tokens.borderSubtle}`,
+  };
+
+  const primaryBtnStyle: React.CSSProperties = {
+    backgroundColor: brand.buttonBg,
+    color: '#ffffff',
+    border: 'none',
+    borderRadius: 6,
+    padding: '7px 16px',
+    fontSize: '0.80rem',
+    fontWeight: 700,
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
+
+  const secondaryBtnStyle: React.CSSProperties = {
+    backgroundColor: tokens.bgSurfaceSubtle,
+    color: tokens.textPrimary,
+    border: `1px solid ${tokens.borderInput}`,
+    borderRadius: 6,
+    padding: '7px 14px',
+    fontSize: '0.80rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+  };
+
+  const contextValue = useMemo(
+    () => ({ showAlert, showConfirm, closeAlert, closeConfirm }),
+    [showAlert, showConfirm, closeAlert, closeConfirm]
+  );
+
   return (
-    <AlertContext.Provider value={{ showAlert, showConfirm, closeAlert, closeConfirm }}>
+    <AlertContext.Provider value={contextValue}>
       {children}
 
-      {/* 1. INFORMATIONAL / ACTION ALERT MODAL */}
       {alertData && (
         <div style={overlayStyle} role="dialog" aria-modal="true">
           <div style={modalBoxStyle}>
@@ -222,14 +263,14 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               </div>
 
               <div style={{ flex: 1, minWidth: 0 }}>
-                <h3 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 800, color: '#0f172a' }}>
+                <h3 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 800, color: tokens.textPrimary }}>
                   {alertData.title}
                 </h3>
                 <p
                   style={{
                     margin: '6px 0 0 0',
                     fontSize: '0.82rem',
-                    color: '#475569',
+                    color: tokens.textSecondary,
                     lineHeight: 1.45,
                     wordBreak: 'break-word',
                   }}
@@ -245,7 +286,7 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 title="Close"
                 aria-label="Close alert"
               >
-                <X size={16} color="#64748b" />
+                <X size={16} color={tokens.textMuted} />
               </button>
             </div>
 
@@ -269,7 +310,6 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         </div>
       )}
 
-      {/* 2. CONFIRMATION DIALOG MODAL */}
       {confirmData && (
         <div style={overlayStyle} role="dialog" aria-modal="true">
           <div style={modalBoxStyle}>
@@ -277,26 +317,26 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               <div
                 style={{
                   ...iconContainerStyle,
-                  backgroundColor: confirmData.isDestructive ? '#fef2f2' : '#eff6ff',
-                  border: `1px solid ${confirmData.isDestructive ? '#fecaca' : '#bfdbfe'}`,
+                  backgroundColor: confirmData.isDestructive ? tokens.dangerBg : brand.primarySoft,
+                  border: `1px solid ${tokens.borderSubtle}`,
                 }}
               >
                 {confirmData.isDestructive ? (
-                  <AlertTriangle size={24} color="#dc2626" />
+                  <AlertTriangle size={24} color={tokens.danger} />
                 ) : (
-                  <Info size={24} color="#0284c7" />
+                  <Info size={24} color={brand.primary} />
                 )}
               </div>
 
               <div style={{ flex: 1, minWidth: 0 }}>
-                <h3 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 800, color: '#0f172a' }}>
+                <h3 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 800, color: tokens.textPrimary }}>
                   {confirmData.title}
                 </h3>
                 <p
                   style={{
                     margin: '6px 0 0 0',
                     fontSize: '0.82rem',
-                    color: '#475569',
+                    color: tokens.textSecondary,
                     lineHeight: 1.45,
                     wordBreak: 'break-word',
                   }}
@@ -322,7 +362,7 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 onClick={handleConfirmAction}
                 style={{
                   ...primaryBtnStyle,
-                  backgroundColor: confirmData.isDestructive ? '#dc2626' : '#0284c7',
+                  backgroundColor: confirmData.isDestructive ? '#dc2626' : brand.buttonBg,
                 }}
               >
                 {isConfirmLoading ? (
@@ -346,33 +386,19 @@ export const useAlert = () => {
   return context;
 };
 
-// ============================================================================
-// STYLES
-// ============================================================================
-
 const overlayStyle: React.CSSProperties = {
   position: 'fixed',
   top: 0,
   left: 0,
   right: 0,
   bottom: 0,
-  backgroundColor: 'rgba(15, 23, 42, 0.45)',
+  backgroundColor: 'rgba(15, 23, 42, 0.55)',
   backdropFilter: 'blur(3px)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   zIndex: 9999,
   padding: 16,
-};
-
-const modalBoxStyle: React.CSSProperties = {
-  width: '100%',
-  maxWidth: 420,
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  padding: 18,
-  boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
-  border: '1px solid #e2e8f0',
 };
 
 const iconContainerStyle: React.CSSProperties = {
@@ -392,29 +418,4 @@ const closeBtnStyle: React.CSSProperties = {
   padding: 4,
   display: 'flex',
   alignItems: 'center',
-};
-
-const primaryBtnStyle: React.CSSProperties = {
-  backgroundColor: '#0284c7',
-  color: '#ffffff',
-  border: 'none',
-  borderRadius: 6,
-  padding: '7px 16px',
-  fontSize: '0.80rem',
-  fontWeight: 700,
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const secondaryBtnStyle: React.CSSProperties = {
-  backgroundColor: '#ffffff',
-  color: '#334155',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  padding: '7px 14px',
-  fontSize: '0.80rem',
-  fontWeight: 600,
-  cursor: 'pointer',
 };

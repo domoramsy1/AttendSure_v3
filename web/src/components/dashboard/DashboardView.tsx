@@ -7,11 +7,13 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import apiClient, { peekApiCache, subscribeApiCache } from '../../api/client';
 import { API_ROUTES } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
+import { useCompliance } from '../../context/ComplianceContext';
 import { StatsCard } from '../common/StatsCard';
 import {
   UserCheck,
   UserX,
   Clock,
+  Globe,
   Radio,
   RefreshCw,
   Scan,
@@ -129,6 +131,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigateTab,
 }) => {
   const { tokens, brand, fonts, ui } = useTheme();
+  const { term } = useCompliance();
 
   const warmPayload = useMemo(
     () => peekApiCache<Record<string, any>>(API_ROUTES.reports.dashboard),
@@ -148,7 +151,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const abortRef = useRef<AbortController | null>(null);
   const role = (userRole || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
-  const isAdmin = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(role);
+  const isAdmin = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL'].includes(role);
   const isFaculty = role === 'FACULTY';
   const isOnline = isServerOnline && !fetchFailed;
 
@@ -161,7 +164,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, []);
 
   const navigateTo = (tab: string, report?: string) => {
-    onNavigateTab?.(tab, report);
+    if (onNavigateTab) {
+      onNavigateTab(tab, report);
+      return;
+    }
     window.dispatchEvent(new CustomEvent('attendsure:navigate', { detail: report ? { tab, report } : tab }));
   };
 
@@ -181,6 +187,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           signal: controller.signal,
         });
 
+        if (controller.signal.aborted) return;
         if (res.data) {
           setFetchFailed(false);
           setData(normalizeDashboardPayload(res.data));
@@ -189,13 +196,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         }
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
-        if (anyErr?.name !== 'CanceledError' && anyErr?.code !== 'ERR_CANCELED') {
-          setFetchFailed(true);
-          onStatusChange?.(false);
+        if (
+          controller.signal.aborted ||
+          anyErr?.name === 'CanceledError' ||
+          anyErr?.name === 'AbortError' ||
+          anyErr?.code === 'ERR_CANCELED'
+        ) {
+          return;
         }
+        setFetchFailed(true);
+        onStatusChange?.(false);
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [onStatusChange]
@@ -230,11 +245,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [calendarDate]);
 
   const quickActions = [
-    { label: 'QR Scanner', desc: 'Scan student QR ID card', icon: <QrCode size={19} />, onClick: () => navigateTo('classroom-scanner') },
-    { label: isFaculty ? 'Student Exit Permit' : 'Exit Passes', desc: 'Student exit & teacher travel', icon: <Ticket size={19} />, onClick: () => navigateTo('gate-passes') },
-    { label: 'Daily Attendance (SF2)', desc: 'Official DepEd register', icon: <CalendarCheck size={19} />, onClick: () => navigateTo('reports', 'sf2') },
-    { label: 'Monthly DTR', desc: 'CSC Form 48 work hours', icon: <Clock size={19} />, onClick: () => navigateTo('dtr') },
-    { label: isFaculty ? 'My Classes' : 'Student Lists', desc: 'Enrolled students by section', icon: isFaculty ? <BookOpen size={19} /> : <Users size={19} />, onClick: () => navigateTo(isFaculty ? 'my-classes' : 'students') },
+    { label: 'UN SDG Impact & Safety', desc: 'Early-warning, Ed-Fi & Roll-Call', icon: <Globe size={19} />, onClick: () => navigateTo('impact') },
+    { label: 'QR Scanner', desc: 'Scan signed student QR ID card', icon: <QrCode size={19} />, onClick: () => navigateTo('classroom-scanner') },
+    { label: isFaculty ? 'Student Exit Permit' : 'Exit Passes', desc: 'Student exit & faculty travel', icon: <Ticket size={19} />, onClick: () => navigateTo('gate-passes') },
+    {
+      label: term('Daily Attendance Register', 'Daily Attendance (SF2)'),
+      desc: term('Exportable attendance register', 'Official DepEd register'),
+      icon: <CalendarCheck size={19} />,
+      onClick: () => navigateTo('reports', 'sf2'),
+    },
+    {
+      label: term('Staff Timesheets', 'Monthly DTR'),
+      desc: term('GPS-verified faculty hours', 'CSC Form 48 work hours'),
+      icon: <Clock size={19} />,
+      onClick: () => navigateTo('dtr'),
+    },
+    { label: isFaculty ? 'My Classes' : 'Class Lists', desc: 'Enrolled students by section', icon: isFaculty ? <BookOpen size={19} /> : <Users size={19} />, onClick: () => navigateTo(isFaculty ? 'my-classes' : 'students') },
     ...(isAdmin ? [{ label: 'Push Alerts', desc: 'Send mobile alerts to parents', icon: <Send size={19} />, onClick: () => navigateTo('push') }] : []),
   ];
 
@@ -282,7 +308,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))', gap: 12 }}>
           <StatsCard
             label="STUDENTS IN CLASS"
             value={isOnline ? data.students_present.toLocaleString() : '—'}
@@ -297,9 +323,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             badge={<UserX size={18} color={brand.danger} />}
           />
           <StatsCard
-            label="TEACHERS ON CAMPUS"
+            label="FACULTY ON CAMPUS"
             value={isOnline ? `${data.faculty_on_duty}/${data.total_faculty}` : '—'}
-            helpText="Verified via mobile GPS check-in"
+            helpText="Verified via mobile face & GPS check-in"
             badge={<Clock size={18} color={brand.success} />}
           />
           <StatsCard
@@ -315,7 +341,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <Sparkles size={15} color={brand.primary} />
             <h3 style={{ margin: 0, fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>Quick Actions</h3>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(185px, 1fr))', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 185px), 1fr))', gap: 10 }}>
             {quickActions.map((act) => (
               <button
                 key={act.label}
@@ -335,7 +361,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 14 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={ui.card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>

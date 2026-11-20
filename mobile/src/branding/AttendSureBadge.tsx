@@ -1,25 +1,33 @@
-// D:\AttendSure_V3\mobile\src\branding\AttendSureBadge.tsx
+/**
+ * AttendSure Mobile - Animated Brand Badge
+ * File: mobile/src/branding/AttendSureBadge.tsx
+ */
 
 import React, { useEffect, useRef } from 'react';
-import { StyleSheet, Animated } from 'react-native';
-import { Image } from 'expo-image';
+import { StyleSheet, Animated, type StyleProp, type ViewStyle } from 'react-native';
+import { AttendSureLogo } from './BrandLogos';
+import { useThemeMode } from '../context/ThemeContext';
 
-const LOGO_SOURCE = require('../../assets/attendsure-logo.svg');
-
-interface AttendSureBadgeProps {
+export interface AttendSureBadgeProps {
   size?: number;
   animate?: boolean;
+  style?: StyleProp<ViewStyle>;
 }
 
 export const AttendSureBadge: React.FC<AttendSureBadgeProps> = ({
   size = 96,
   animate = false,
+  style,
 }) => {
+  const { palette } = useThemeMode();
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const iconSize = Math.round(size * 0.62);
 
   useEffect(() => {
-    if (!animate) return;
+    if (!animate) {
+      scaleAnim.setValue(1);
+      return;
+    }
 
     const breatheAnimation = Animated.loop(
       Animated.sequence([
@@ -37,7 +45,9 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = ({
     );
 
     breatheAnimation.start();
-    return () => breatheAnimation.stop();
+    return () => {
+      breatheAnimation.stop();
+    };
   }, [animate, scaleAnim]);
 
   return (
@@ -48,15 +58,14 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = ({
           width: size,
           height: size,
           borderRadius: size / 2,
+          borderColor: palette.borderStrong,
+          shadowColor: palette.primary,
           transform: [{ scale: scaleAnim }],
         },
+        style,
       ]}
     >
-      <Image
-        source={LOGO_SOURCE}
-        style={{ width: iconSize, height: iconSize }}
-        contentFit="contain"
-      />
+      <AttendSureLogo size={iconSize} style={{ borderWidth: 0 }} />
     </Animated.View>
   );
 };
@@ -67,8 +76,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#e2e8f0',
-    shadowColor: '#004b87',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.18,
     shadowRadius: 10,

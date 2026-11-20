@@ -18,6 +18,8 @@ import {
   X,
   ArrowRight,
 } from 'lucide-react';
+import { extractApiError } from '../../api/routes';
+import { useTheme } from '../../context/ThemeContext';
 
 export type AlertType = 'info' | 'success' | 'warning' | 'error';
 
@@ -36,18 +38,18 @@ export interface AlertDialogProps {
 
 /**
  * Defensive Sanitizer: Ensures message is always rendered as a safe, readable string.
- * Prevents React rendering crashes when Django or Axios returns error objects or arrays.
  */
 const sanitizeMessage = (msg: unknown): string => {
   if (msg === null || msg === undefined) return '';
-  if (typeof msg === 'string') return msg;
-  if (typeof msg === 'number' || typeof msg === 'boolean') return String(msg);
-  if (msg instanceof Error) return msg.message;
-  try {
-    return JSON.stringify(msg);
-  } catch {
-    return 'An unexpected system notification was received.';
+  if (typeof msg === 'string') {
+    const trimmed = msg.trim();
+    if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html') || trimmed.includes('Traceback (most recent call last)')) {
+      return 'Something went wrong on the server. Please try again.';
+    }
+    return trimmed;
   }
+  if (typeof msg === 'number' || typeof msg === 'boolean') return String(msg);
+  return extractApiError(msg, 'An unexpected notice was received. Please try again.');
 };
 
 export const AlertDialog: React.FC<AlertDialogProps> = ({
@@ -62,6 +64,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
   onAction,
   onClose,
 }) => {
+  const { tokens, brand } = useTheme();
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -77,7 +80,6 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
-    // Focus primary action button immediately
     const focusTimeout = setTimeout(() => {
       confirmBtnRef.current?.focus();
     }, 50);
@@ -90,7 +92,6 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
 
-    // Auto-dismiss success notifications to speed up operator actions
     const shouldAutoClose = autoClose ?? (type === 'success' && !actionLabel);
     if (shouldAutoClose) {
       autoCloseTimerRef.current = setTimeout(() => {
@@ -112,31 +113,35 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
   const config = {
     info: {
       icon: Info,
-      color: '#0284c7',
-      bgColor: '#e0f2fe',
-      borderColor: '#bae6fd',
+      color: brand.primary,
+      buttonBg: brand.buttonBg,
+      bgColor: brand.primarySoft,
+      borderColor: tokens.borderSubtle,
       defaultTitle: 'Notice',
     },
     success: {
       icon: CheckCircle2,
-      color: '#059669',
-      bgColor: '#d1fae5',
-      borderColor: '#a7f3d0',
-      defaultTitle: 'Operation Successful',
+      color: tokens.success,
+      buttonBg: '#059669',
+      bgColor: tokens.successBg,
+      borderColor: tokens.borderSubtle,
+      defaultTitle: 'Saved Successfully',
     },
     warning: {
       icon: AlertTriangle,
-      color: '#d97706',
-      bgColor: '#fef3c7',
-      borderColor: '#fde68a',
-      defaultTitle: 'Action Required',
+      color: tokens.warning,
+      buttonBg: '#d97706',
+      bgColor: tokens.warningBg,
+      borderColor: tokens.borderSubtle,
+      defaultTitle: 'Action Needed',
     },
     error: {
       icon: XCircle,
-      color: '#dc2626',
-      bgColor: '#fee2e2',
-      borderColor: '#fecaca',
-      defaultTitle: 'System Alert',
+      color: tokens.danger,
+      buttonBg: '#dc2626',
+      bgColor: tokens.dangerBg,
+      borderColor: tokens.borderSubtle,
+      defaultTitle: 'Notice',
     },
   }[type];
 
@@ -152,7 +157,15 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
       aria-labelledby="alert-dialog-title"
     >
       <div
-        style={modalBoxStyle}
+        style={{
+          width: '100%',
+          maxWidth: 420,
+          backgroundColor: tokens.bgSurface,
+          borderRadius: 12,
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.14)',
+          border: `1px solid ${tokens.borderSubtle}`,
+          overflow: 'hidden',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Accent Color Line */}
@@ -184,7 +197,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
                 style={{
                   fontSize: '0.96rem',
                   fontWeight: 800,
-                  color: '#0f172a',
+                  color: tokens.textPrimary,
                   marginBottom: 6,
                 }}
               >
@@ -193,7 +206,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
               <div
                 style={{
                   fontSize: '0.82rem',
-                  color: '#475569',
+                  color: tokens.textSecondary,
                   lineHeight: 1.5,
                   maxHeight: '40vh',
                   overflowY: 'auto',
@@ -209,11 +222,9 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
             <button
               type="button"
               onClick={handleClose}
-              style={closeBtnStyle}
+              style={{ ...closeBtnStyle, color: tokens.textMuted }}
               title="Close"
               aria-label="Close dialog"
-              onMouseEnter={(e) => (e.currentTarget.style.color = '#334155')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = '#94a3b8')}
             >
               <X size={16} />
             </button>
@@ -228,7 +239,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
               gap: 8,
               marginTop: 18,
               paddingTop: 12,
-              borderTop: '1px solid #f1f5f9',
+              borderTop: `1px solid ${tokens.borderSubtle}`,
             }}
           >
             {actionLabel && onAction && (
@@ -238,9 +249,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
                   onAction();
                   handleClose();
                 }}
-                style={actionBtnStyle}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#0369a1')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#0284c7')}
+                style={{ ...actionBtnStyle, backgroundColor: brand.buttonBg }}
               >
                 <span>{actionLabel}</span>
                 <ArrowRight size={13} />
@@ -253,17 +262,15 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
               onClick={handleClose}
               style={{
                 padding: '7px 16px',
-                backgroundColor: actionLabel ? '#f1f5f9' : config.color,
-                color: actionLabel ? '#475569' : '#ffffff',
+                backgroundColor: actionLabel ? tokens.bgSurfaceSubtle : config.buttonBg,
+                color: actionLabel ? tokens.textPrimary : '#ffffff',
                 borderRadius: 6,
-                border: actionLabel ? '1px solid #e2e8f0' : 'none',
+                border: actionLabel ? `1px solid ${tokens.borderInput}` : 'none',
                 fontSize: '0.80rem',
                 fontWeight: 700,
                 cursor: 'pointer',
                 transition: 'opacity 0.15s ease',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
-              onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
             >
               {confirmLabel}
             </button>
@@ -273,10 +280,6 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
     </div>
   );
 };
-
-// ============================================================================
-// STYLES
-// ============================================================================
 
 const overlayStyle: React.CSSProperties = {
   position: 'fixed',
@@ -293,20 +296,9 @@ const overlayStyle: React.CSSProperties = {
   padding: 16,
 };
 
-const modalBoxStyle: React.CSSProperties = {
-  width: '100%',
-  maxWidth: 420,
-  backgroundColor: '#ffffff',
-  borderRadius: 12,
-  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
-  border: '1px solid #e2e8f0',
-  overflow: 'hidden',
-};
-
 const closeBtnStyle: React.CSSProperties = {
   background: 'none',
   border: 'none',
-  color: '#94a3b8',
   cursor: 'pointer',
   padding: 4,
   borderRadius: 6,
@@ -320,12 +312,11 @@ const actionBtnStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 6,
   padding: '7px 14px',
-  backgroundColor: '#0284c7',
   color: '#ffffff',
   borderRadius: 6,
   border: 'none',
   fontSize: '0.80rem',
   fontWeight: 700,
   cursor: 'pointer',
-  transition: 'background 0.15s ease',
+  transition: 'opacity 0.15s ease',
 };

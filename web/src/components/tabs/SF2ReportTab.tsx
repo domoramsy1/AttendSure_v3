@@ -1,9 +1,15 @@
-// web/src/components/tabs/SF2ReportTab.tsx
+/**
+ * AttendSure - DepEd School Form 2 (SF 2) Daily Attendance Report of Learners
+ * File: web/src/components/tabs/SF2ReportTab.tsx
+ */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
+import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
+import { useTheme } from '../../context/ThemeContext';
+import { exportToCsv } from '../common/Pagination';
 import { ReportNavBar } from '../reports/ReportNavBar';
 import { PageSetupModal } from '../common/PageSetupModal';
 import { usePageSetup } from '../../hooks/usePageSetup';
@@ -11,6 +17,28 @@ import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
+
+const HTML2PDF_CDN_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+const HTML2PDF_SRI_HASH =
+  'sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==';
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+const sanitizeSearch = (raw: string): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, 80);
+
+const getDynamicSchoolYear = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  return now.getMonth() >= 5 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
+};
 
 export interface SchoolDay {
   dateNumber: number;
@@ -80,10 +108,10 @@ export interface SF2ReportTabProps {
   onSelectReport?: (reportId: string) => void;
 }
 
-const SVG_PRESENT =
+const SVG_DIAGONAL_ONLY =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16" preserveAspectRatio="none"><line x1="0" y1="16" x2="24" y2="0" stroke="#000000" stroke-width="0.75"/></svg>'
+    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16" preserveAspectRatio="none"><line x1="0" y1="16" x2="24" y2="0" stroke="#000000" stroke-width="0.6"/></svg>'
   );
 
 const SVG_ABSENT =
@@ -104,10 +132,19 @@ const SVG_CUTTING =
     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16" preserveAspectRatio="none"><polygon points="24,0 24,16 0,16" fill="#000000"/><line x1="0" y1="16" x2="24" y2="0" stroke="#000000" stroke-width="0.75"/></svg>'
   );
 
-const AttendanceCell: React.FC<{ status?: string | number | null }> = ({ status }) => {
+const PRESENT_STATUSES = new Set(['present', 'late', 'tardy', 'cutting', 'excused']);
+
+const AttendanceCell: React.FC<{ status?: string | number | null; isSchoolDay?: boolean }> = ({
+  status,
+  isSchoolDay = true,
+}) => {
+  if (!isSchoolDay) {
+    return <div style={{ width: '100%', height: '16px', backgroundColor: '#ffffff' }} />;
+  }
+
   const s = String(status ?? '').toLowerCase().trim();
-  let src = SVG_PRESENT;
-  let alt = 'Present';
+  let src = SVG_DIAGONAL_ONLY;
+  let alt = 'Blank / Present';
 
   if (s === 'absent' || s === 'x' || s === '1' || s === 'a') {
     src = SVG_ABSENT;
@@ -146,6 +183,11 @@ const AttendanceCell: React.FC<{ status?: string | number | null }> = ({ status 
   );
 };
 
+const getCurrentMonthName = (): string => {
+  const idx = new Date().getMonth();
+  return MONTH_NAMES[idx] || MONTH_NAMES[0];
+};
+
 export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
   sectionId,
   activeReportId = 'sf2',
@@ -153,14 +195,18 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 }) => {
   const { school } = useSchool();
   const { showAlert } = useAlert();
+  const { tokens, brand } = useTheme();
 
-  const [sections, setSections] = useState<any[]>([]);
+  const cachedSections = peekApiCache<any>(API_ROUTES.school.sections);
+  const initialSections = Array.isArray(cachedSections) ? cachedSections : cachedSections?.results || [];
+
+  const [sections, setSections] = useState<any[]>(initialSections);
   const [selectedSectionId, setSelectedSectionId] = useState<string>(
-    sectionId ? String(sectionId) : ''
+    sectionId ? String(sectionId) : initialSections[0] ? String(initialSections[0].id) : ''
   );
   const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('');
   const [selectedGradeLevel, setSelectedGradeLevel] = useState<string>('ALL');
-  const [selectedMonth, setSelectedMonth] = useState<string>('October');
+  const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonthName);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [reportData, setReportData] = useState<SF2ReportData | null>(null);
@@ -189,6 +235,8 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
   const [fitToWidth, setFitToWidth] = useState<boolean>(true);
   const viewportContainerRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
+  const reportAbortRef = useRef<AbortController | null>(null);
+  const printTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handleBeforePrint = () => setIsPrinting(true);
@@ -198,6 +246,10 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     return () => {
       window.removeEventListener('beforeprint', handleBeforePrint);
       window.removeEventListener('afterprint', handleAfterPrint);
+      if (printTimerRef.current) {
+        clearTimeout(printTimerRef.current);
+        printTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -206,42 +258,82 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
   }, [sectionId]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchSections = async () => {
       try {
-        const res = await apiClient.get('/v1/school/sections/');
-        const data = Array.isArray(res.data) ? res.data : res.data.results || [];
+        const res = await apiClient.get(API_ROUTES.school.sections, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        const data = Array.isArray(res.data) ? res.data : res.data?.results || [];
         setSections(data);
-        if (!selectedSectionId && data.length > 0) {
-          setSelectedSectionId(String(data[0].id));
+        if (data.length > 0) {
+          setSelectedSectionId((prev) => prev || String(data[0].id));
         }
-      } catch (err) {
-        console.error('Failed to load sections:', err);
+      } catch (err: unknown) {
+        const anyErr = err as { name?: string; code?: string };
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
       }
     };
-    fetchSections();
-  }, [selectedSectionId]);
+    void fetchSections();
+    return () => {
+      controller.abort();
+    };
+  }, []);
 
   const fetchSF2 = useCallback(async () => {
     if (!selectedSectionId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiClient.get<SF2ReportData>(
-        `/v1/reports/sf2/${selectedSectionId}/?month=${selectedMonth}&year=${selectedYear}`
-      );
-      setReportData(res.data);
-      if (res.data?.academic_year && !selectedAcademicYear) {
-        setSelectedAcademicYear(res.data.academic_year);
-      }
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to retrieve attendance register from database.');
-    } finally {
+    reportAbortRef.current?.abort();
+    const controller = new AbortController();
+    reportAbortRef.current = controller;
+
+    const endpoint = `${API_ROUTES.reports.sf2}${selectedSectionId}/`;
+    const baseParams: Record<string, string | number> = {
+      month: selectedMonth,
+      year: selectedYear,
+    };
+    if (selectedAcademicYear) {
+      baseParams.academic_year = selectedAcademicYear;
+      baseParams.school_year = selectedAcademicYear;
+    }
+
+    const cached = peekApiCache<SF2ReportData>(endpoint, baseParams);
+    if (cached) {
+      setReportData(cached);
       setLoading(false);
+    } else {
+      setLoading(true);
+    }
+    setError(null);
+
+    try {
+      const res = await apiClient.get<SF2ReportData>(endpoint, {
+        params: {
+          ...baseParams,
+          nocache: 1,
+        },
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      setReportData(res.data);
+    } catch (err: unknown) {
+      const anyErr = err as { name?: string; code?: string };
+      if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+        return;
+      }
+      setError(extractApiError(err, 'Failed to retrieve attendance register from database.'));
+    } finally {
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   }, [selectedSectionId, selectedMonth, selectedYear, selectedAcademicYear]);
 
   useEffect(() => {
-    fetchSF2();
+    void fetchSF2();
+    return () => {
+      reportAbortRef.current?.abort();
+    };
   }, [fetchSF2]);
 
   const updateFitScale = useCallback(() => {
@@ -270,12 +362,13 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
       new Set(
         [
           reportData?.academic_year,
-          ...sections.map((s) => s.academic_year),
+          school.academic_year,
+          ...sections.map((s) => s.academic_year || s.school_year_code),
         ].filter(Boolean)
       )
     ) as string[];
-    return years.length > 0 ? years : ['2026-2027'];
-  }, [reportData, sections]);
+    return years.length > 0 ? years : [getDynamicSchoolYear()];
+  }, [reportData, school.academic_year, sections]);
 
   const auditMeta = useMemo(() => {
     const now = new Date();
@@ -303,7 +396,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
-      await apiClient.post('/v1/reports/audit-logs/', {
+      await apiClient.post(API_ROUTES.reports.auditLogs, {
         report_name: 'School Form 2 (SF2)',
         document_tracking_id: auditMeta.trackingId,
         section_id: selectedSectionId,
@@ -312,7 +405,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
         timestamp: new Date().toISOString(),
       });
     } catch {
-      // Offline fallback
+      // Non-blocking audit fallback
     }
   };
 
@@ -325,20 +418,32 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     return `SF2_Report_${cleanGrade}_${cleanSection}_${selectedMonth}_${timestamp}`;
   };
 
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const cleanSearch = useMemo(() => sanitizeSearch(searchQuery).toLowerCase(), [searchQuery]);
+
   const males = useMemo(() => {
     const list = reportData?.males || [];
-    if (!searchQuery.trim()) return list;
-    const q = searchQuery.toLowerCase().trim();
-    return list.filter((m) => m.name.toLowerCase().includes(q) || m.lrn.toLowerCase().includes(q));
-  }, [reportData, searchQuery]);
+    if (!cleanSearch) return list;
+    return list.filter((m) => m.name.toLowerCase().includes(cleanSearch) || m.lrn.toLowerCase().includes(cleanSearch));
+  }, [reportData, cleanSearch]);
 
   const females = useMemo(() => {
     const list = reportData?.females || [];
-    if (!searchQuery.trim()) return list;
-    const q = searchQuery.toLowerCase().trim();
-    return list.filter((f) => f.name.toLowerCase().includes(q) || f.lrn.toLowerCase().includes(q));
-  }, [reportData, searchQuery]);
+    if (!cleanSearch) return list;
+    return list.filter((f) => f.name.toLowerCase().includes(cleanSearch) || f.lrn.toLowerCase().includes(cleanSearch));
+  }, [reportData, cleanSearch]);
 
+  // Accurate per-day attendance totals: counts only recorded present/late/tardy/cutting/excused (never blank unrecorded days)
   const dailyAttendanceTotals = useMemo(() => {
     if (!reportData || !reportData.school_days) return { males: [], females: [], combined: [] };
     const maxCols = 25;
@@ -346,24 +451,21 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     const femalesCount: number[] = new Array(maxCols).fill(0);
     const combinedCount: number[] = new Array(maxCols).fill(0);
 
-    const safeMales = reportData.males || [];
-    const safeFemales = reportData.females || [];
-
     reportData.school_days.forEach((day, idx) => {
       if (idx >= maxCols) return;
       let mPresent = 0;
       let fPresent = 0;
 
-      safeMales.forEach((m) => {
+      males.forEach((m) => {
         const status = String(m.attendance?.[day.dateNumber] ?? '').toLowerCase().trim();
-        if (status === 'present' || status === 'tardy' || status === 'cutting' || status === '0' || status === '') {
+        if (PRESENT_STATUSES.has(status)) {
           mPresent++;
         }
       });
 
-      safeFemales.forEach((f) => {
+      females.forEach((f) => {
         const status = String(f.attendance?.[day.dateNumber] ?? '').toLowerCase().trim();
-        if (status === 'present' || status === 'tardy' || status === 'cutting' || status === '0' || status === '') {
+        if (PRESENT_STATUSES.has(status)) {
           fPresent++;
         }
       });
@@ -374,20 +476,16 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     });
 
     return { males: malesCount, females: femalesCount, combined: combinedCount };
-  }, [reportData]);
+  }, [reportData, males, females]);
 
   const fitsOnSinglePage = useMemo(() => {
     if (activePageConfig.layoutMode === 'pageless') return true;
-
     const printableHeight =
       pageHeightInches - (activePageConfig.margins.top || 0.25) - (activePageConfig.margins.bottom || 0.25);
-
     const singlePageOverhead = 5.95;
     const rowHeight = 0.17;
     const totalRows = (males.length || 0) + (females.length || 0);
-    const totalHeightNeeded = singlePageOverhead + totalRows * rowHeight;
-
-    return totalHeightNeeded <= printableHeight;
+    return singlePageOverhead + totalRows * rowHeight <= printableHeight;
   }, [activePageConfig, males.length, females.length, pageHeightInches]);
 
   const handleToggleLayoutMode = (newMode: LayoutMode) => {
@@ -397,25 +495,30 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
   };
 
   const handlePrint = () => {
-    logReportAudit('PRINT');
+    void logReportAudit('PRINT');
     setIsPrinting(true);
-    setTimeout(() => {
+    if (printTimerRef.current) clearTimeout(printTimerRef.current);
+    printTimerRef.current = setTimeout(() => {
       window.print();
       setIsPrinting(false);
+      printTimerRef.current = null;
     }, 120);
   };
 
   const handleDownloadPDF = async () => {
     if (!reportRef.current || !reportData) return;
     setExportingPdf(true);
-    logReportAudit('PDF');
+    void logReportAudit('PDF');
 
     try {
       let html2pdfInstance = (window as any).html2pdf;
       if (!html2pdfInstance) {
         await new Promise((resolve, reject) => {
           const script = document.createElement('script');
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+          script.src = HTML2PDF_CDN_URL;
+          script.integrity = HTML2PDF_SRI_HASH;
+          script.crossOrigin = 'anonymous';
+          script.referrerPolicy = 'no-referrer';
           script.onload = () => resolve((window as any).html2pdf);
           script.onerror = reject;
           document.head.appendChild(script);
@@ -442,21 +545,65 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
       };
 
       const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
-      const url = URL.createObjectURL(pdfBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${getBaseFilename()}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
+      triggerDownload(pdfBlob, `${getBaseFilename()}.pdf`);
       showAlert({ title: 'PDF Exported', message: 'School Form 2 successfully exported.', type: 'success' });
     } catch {
       handlePrint();
     } finally {
       setExportingPdf(false);
     }
+  };
+
+  const handleExportExcel = () => {
+    if (!reportRef.current || !reportData) return;
+    void logReportAudit('EXCEL');
+    const html = `<html><head><meta charset="utf-8"></head><body>${reportRef.current.innerHTML}</body></html>`;
+    triggerDownload(new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' }), `${getBaseFilename()}.xls`);
+    showAlert({ title: 'Excel Exported', message: 'SF2 spreadsheet saved.', type: 'success' });
+  };
+
+  const handleExportWord = () => {
+    if (!reportRef.current || !reportData) return;
+    void logReportAudit('WORD');
+    const html = `<html><head><meta charset="utf-8"></head><body>${reportRef.current.innerHTML}</body></html>`;
+    triggerDownload(new Blob([html], { type: 'application/msword;charset=utf-8;' }), `${getBaseFilename()}.doc`);
+    showAlert({ title: 'Word Exported', message: 'SF2 document saved.', type: 'success' });
+  };
+
+  const handleExportCsv = () => {
+    if (!reportData) return;
+    void logReportAudit('CSV');
+    const dayCols = (reportData.school_days || []).map((d) => `${d.dateNumber} (${d.dayOfWeek})`);
+    const headers = ['LRN', 'Learner Name', 'Sex', ...dayCols, 'Total Absent', 'Total Tardy', 'Remarks'];
+    const rows = [...males, ...females].map((st) => [
+      st.lrn,
+      st.name,
+      st.sex,
+      ...(reportData.school_days || []).map((d) => st.attendance?.[d.dateNumber] || ''),
+      st.total_absent || 0,
+      st.total_tardy || 0,
+      st.remarks || '',
+    ]);
+    if (exportToCsv(`${getBaseFilename()}.csv`, headers, rows)) {
+      showAlert({ title: 'CSV Exported', message: 'SF2 CSV saved.', type: 'success' });
+    } else {
+      showAlert({ title: 'No Records', message: 'No attendance records to export.', type: 'warning' });
+    }
+  };
+
+  const handleExportJson = () => {
+    if (!reportData) return;
+    void logReportAudit('JSON');
+    const payload = {
+      tracking_id: auditMeta.trackingId,
+      date_and_time_printed: auditMeta.printedAt,
+      report_data: reportData,
+    };
+    triggerDownload(
+      new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
+      `${getBaseFilename()}.json`
+    );
+    showAlert({ title: 'JSON Exported', message: 'SF2 JSON saved.', type: 'success' });
   };
 
   const isListEmpty =
@@ -469,7 +616,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
       <tr>
         <th rowSpan={2} style={{ width: '1.8%', ...thCell }}>#</th>
         <th rowSpan={2} style={{ width: '16.0%', ...thCell }}>
-          LEARNER'S NAME<br />
+          LEARNER&apos;S NAME<br />
           <span style={{ fontSize: '4.2pt', fontWeight: 400, fontStyle: 'italic', color: '#000000' }}>
             (Last Name, First Name, Middle Name)
           </span>
@@ -522,7 +669,9 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
             <thead>
               <tr>
                 <th style={{ width: '27%', ...thCell, textAlign: 'left', paddingLeft: 4 }}>Month: {reportData?.month}</th>
-                <th style={{ width: '31%', ...thCell, textAlign: 'left', paddingLeft: 4 }}>Days: {reportData?.school_days ? reportData.school_days.length : 0}</th>
+                <th style={{ width: '31%', ...thCell, textAlign: 'left', paddingLeft: 4 }}>
+                  Days: {reportData?.school_days ? reportData.school_days.length : 0}
+                </th>
                 <th colSpan={3} style={{ width: '42%', ...thCell, fontSize: '4.8pt' }}>Summary for Month</th>
               </tr>
               <tr>
@@ -543,47 +692,58 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                 <td colSpan={2} style={metricsLabelCell}>Average Daily Attendance</td>
                 <td style={centerCell}>{(reportData?.metrics?.average_daily_attendance?.m ?? 0).toFixed(1)}</td>
                 <td style={centerCell}>{(reportData?.metrics?.average_daily_attendance?.f ?? 0).toFixed(1)}</td>
-                <td style={{ ...centerCell, fontWeight: 700 }}>{(reportData?.metrics?.average_daily_attendance?.total ?? 0).toFixed(1)}</td>
+                <td style={{ ...centerCell, fontWeight: 700 }}>
+                  {(reportData?.metrics?.average_daily_attendance?.total ?? 0).toFixed(1)}
+                </td>
               </tr>
               <tr>
                 <td colSpan={2} style={metricsLabelCell}>Percentage of Attendance</td>
                 <td style={centerCell}>{(reportData?.metrics?.percentage_attendance?.m ?? 0).toFixed(1)}%</td>
                 <td style={centerCell}>{(reportData?.metrics?.percentage_attendance?.f ?? 0).toFixed(1)}%</td>
-                <td style={{ ...centerCell, fontWeight: 700 }}>{(reportData?.metrics?.percentage_attendance?.total ?? 0).toFixed(1)}%</td>
+                <td style={{ ...centerCell, fontWeight: 700 }}>
+                  {(reportData?.metrics?.percentage_attendance?.total ?? 0).toFixed(1)}%
+                </td>
               </tr>
             </tbody>
           </table>
 
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', width: '100%' }}>
-            <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>I certify that this is true and correct:</div>
+            <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>
+              I certify that this is true and correct:
+            </div>
             <div style={sigLineStyle}>{reportData?.adviser_name || '\u00A0'}</div>
-            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, marginBottom: 8, color: '#000000' }}>(Signature of Faculty over Printed Name)</div>
+            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, marginBottom: 8, color: '#000000' }}>
+              (Signature of Faculty over Printed Name)
+            </div>
 
             <div style={{ fontSize: '5pt', fontStyle: 'italic', marginBottom: 8, color: '#000000' }}>Attested by:</div>
             <div style={sigLineStyle}>{reportData?.school_head || school.principal_name || '\u00A0'}</div>
-            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, color: '#000000' }}>(Signature of School Head over Printed Name)</div>
+            <div style={{ textAlign: 'center', fontSize: '4.4pt', marginTop: 1, color: '#000000' }}>
+              (Signature of School Head over Printed Name)
+            </div>
           </div>
         </div>
       </div>
 
-        {/* Centralized Dynamic DepEd DMOS Footer Sourced From Database */}
-        <DepEdReportFooter
-          sealUrl={school.school_logo}
-          address={reportData?.school_address || school.address}
-          contactNumber={reportData?.school_contact || school.contact_number}
-          email={reportData?.school_email || school.email}
-          reportData={reportData}
-        />
-    </div> 
+      <DepEdReportFooter
+        sealUrl={school.school_logo}
+        address={reportData?.school_address || school.address}
+        contactNumber={reportData?.school_contact || school.contact_number}
+        email={reportData?.school_email || school.email}
+        reportData={reportData}
+      />
+    </div>
   );
 
+  const effectiveAcademicYear = selectedAcademicYear || reportData?.academic_year || availableAcademicYears[0] || '';
+
   return (
-    <div className="report-tab-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#f1f5f9' }}>
+    <div className="report-tab-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: tokens.bgApp }}>
       <ReportNavBar
         activeReportId={activeReportId}
         onSelectReport={onSelectReport}
         academicYears={availableAcademicYears}
-        selectedAcademicYear={selectedAcademicYear}
+        selectedAcademicYear={effectiveAcademicYear}
         onAcademicYearChange={setSelectedAcademicYear}
         showAcademicYearFilter={true}
         sections={sections}
@@ -609,32 +769,47 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
         onOpenPageSetup={() => setIsPageSetupOpen(true)}
         exportHandlers={{
           onExportPdf: handleDownloadPDF,
-          onExportExcel: () => {},
-          onExportWord: () => {},
-          onExportCsv: () => {},
-          onExportJson: () => {},
+          onExportExcel: handleExportExcel,
+          onExportGoogleSheets: () => {
+            window.open('https://sheets.new', '_blank', 'noopener,noreferrer');
+          },
+          onExportWord: handleExportWord,
+          onExportGoogleDocs: () => {
+            window.open('https://docs.new', '_blank', 'noopener,noreferrer');
+          },
+          onExportCsv: handleExportCsv,
+          onExportJson: handleExportJson,
         }}
         onPrint={handlePrint}
         isExporting={exportingPdf}
       />
 
-      <div className="no-print" style={controlStripStyle}>
+      <div
+        className="no-print"
+        style={{
+          ...controlStripStyle,
+          backgroundColor: tokens.bgSurface,
+          borderBottom: `1px solid ${tokens.borderSubtle}`,
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#334155' }}>
+          <span style={{ fontSize: '0.80rem', fontWeight: 700, color: tokens.textPrimary }}>
             {selectedMonth} {selectedYear} &bull; Section {reportData?.section_name || '—'}
           </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button
+            type="button"
             onClick={() => {
               setFitToWidth(true);
               updateFitScale();
             }}
             style={{
               ...toggleBtnStyle,
-              backgroundColor: fitToWidth ? '#e0f2fe' : '#ffffff',
-              color: fitToWidth ? '#0284c7' : '#475569',
+              backgroundColor: fitToWidth ? tokens.primaryLight : tokens.bgSurfaceSubtle,
+              border: `1px solid ${fitToWidth ? brand.primary : tokens.borderStrong}`,
+              color: fitToWidth ? brand.primary : tokens.textSecondary,
             }}
           >
             <Maximize2 size={13} /> Fit Screen ({Math.round(zoomScale * 100)}%)
@@ -642,23 +817,37 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button
+              type="button"
+              aria-label="Zoom out"
               onClick={() => {
                 setFitToWidth(false);
                 setZoomScale((prev) => Math.max(0.35, Number((prev - 0.05).toFixed(2))));
               }}
-              style={zoomBtnStyle}
+              style={{
+                ...zoomBtnStyle,
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                color: tokens.textPrimary,
+              }}
             >
               <ZoomOut size={13} />
             </button>
-            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem' }}>
+            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem', color: tokens.textPrimary }}>
               {Math.round(zoomScale * 100)}%
             </span>
             <button
+              type="button"
+              aria-label="Zoom in"
               onClick={() => {
                 setFitToWidth(false);
                 setZoomScale((prev) => Math.min(1.4, Number((prev + 0.05).toFixed(2))));
               }}
-              style={zoomBtnStyle}
+              style={{
+                ...zoomBtnStyle,
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                color: tokens.textPrimary,
+              }}
             >
               <ZoomIn size={13} />
             </button>
@@ -668,13 +857,20 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
       <div ref={viewportContainerRef} className="report-viewer-viewport" style={viewerScrollContainerStyle}>
         {loading ? (
-          <div style={loadingStateStyle}>
-            <Loader2 className="animate-spin" size={28} color="#0284c7" />
+          <div style={{ ...loadingStateStyle, color: tokens.textSecondary }}>
+            <Loader2 className="animate-spin" size={28} color={brand.primary} />
             <span>Generating School Form 2...</span>
           </div>
         ) : error ? (
-          <div style={errorStateStyle}>
-            <AlertCircle size={24} color="#dc2626" />
+          <div
+            style={{
+              ...errorStateStyle,
+              color: brand.danger,
+              backgroundColor: tokens.dangerLight,
+              border: `1px solid ${brand.danger}`,
+            }}
+          >
+            <AlertCircle size={24} color={brand.danger} />
             <span>{error}</span>
           </div>
         ) : reportData ? (
@@ -745,7 +941,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                                   const status = day ? m.attendance?.[day.dateNumber] : undefined;
                                   return (
                                     <td key={`m-${m.id}-d-${i}`} style={cellDateWrapper}>
-                                      <AttendanceCell status={status} />
+                                      <AttendanceCell status={status} isSchoolDay={Boolean(day)} />
                                     </td>
                                   );
                                 })}
@@ -756,9 +952,14 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                             ))}
                             <tr style={summaryRowStyle}>
                               <td colSpan={2} style={{ ...leftCell, fontWeight: 800 }}>&larr; MALE | TOTAL Per Day &rarr;</td>
-                              {Array.from({ length: 25 }).map((_, i) => (
-                                <td key={`m-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>{dailyAttendanceTotals.males[i] || ''}</td>
-                              ))}
+                              {Array.from({ length: 25 }).map((_, i) => {
+                                const day = reportData.school_days ? reportData.school_days[i] : undefined;
+                                return (
+                                  <td key={`m-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>
+                                    {day ? dailyAttendanceTotals.males[i] : ''}
+                                  </td>
+                                );
+                              })}
                               <td style={{ ...centerCell, fontWeight: 800 }}>{males.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}</td>
                               <td style={{ ...centerCell, fontWeight: 800 }}>{males.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}</td>
                               <td style={centerCell}></td>
@@ -776,7 +977,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                                   const status = day ? f.attendance?.[day.dateNumber] : undefined;
                                   return (
                                     <td key={`f-${f.id}-d-${i}`} style={cellDateWrapper}>
-                                      <AttendanceCell status={status} />
+                                      <AttendanceCell status={status} isSchoolDay={Boolean(day)} />
                                     </td>
                                   );
                                 })}
@@ -787,9 +988,14 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                             ))}
                             <tr style={summaryRowStyle}>
                               <td colSpan={2} style={{ ...leftCell, fontWeight: 800 }}>&larr; FEMALE | TOTAL Per Day &rarr;</td>
-                              {Array.from({ length: 25 }).map((_, i) => (
-                                <td key={`f-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>{dailyAttendanceTotals.females[i] || ''}</td>
-                              ))}
+                              {Array.from({ length: 25 }).map((_, i) => {
+                                const day = reportData.school_days ? reportData.school_days[i] : undefined;
+                                return (
+                                  <td key={`f-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>
+                                    {day ? dailyAttendanceTotals.females[i] : ''}
+                                  </td>
+                                );
+                              })}
                               <td style={{ ...centerCell, fontWeight: 800 }}>{females.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}</td>
                               <td style={{ ...centerCell, fontWeight: 800 }}>{females.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}</td>
                               <td style={centerCell}></td>
@@ -797,9 +1003,14 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
                             <tr style={{ ...summaryRowStyle, backgroundColor: '#e2e8f0' }}>
                               <td colSpan={2} style={{ ...leftCell, fontWeight: 900 }}>Combined TOTAL PER DAY</td>
-                              {Array.from({ length: 25 }).map((_, i) => (
-                                <td key={`c-tot-${i}`} style={{ ...centerCell, fontWeight: 900 }}>{dailyAttendanceTotals.combined[i] || ''}</td>
-                              ))}
+                              {Array.from({ length: 25 }).map((_, i) => {
+                                const day = reportData.school_days ? reportData.school_days[i] : undefined;
+                                return (
+                                  <td key={`c-tot-${i}`} style={{ ...centerCell, fontWeight: 900 }}>
+                                    {day ? dailyAttendanceTotals.combined[i] : ''}
+                                  </td>
+                                );
+                              })}
                               <td style={{ ...centerCell, fontWeight: 900 }}>
                                 {males.reduce((acc, cur) => acc + (cur.total_absent || 0), 0) +
                                   females.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}
@@ -872,7 +1083,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                                     const status = day ? m.attendance?.[day.dateNumber] : undefined;
                                     return (
                                       <td key={`m-${m.id}-d-${i}`} style={cellDateWrapper}>
-                                        <AttendanceCell status={status} />
+                                        <AttendanceCell status={status} isSchoolDay={Boolean(day)} />
                                       </td>
                                     );
                                   })}
@@ -883,9 +1094,14 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                               ))}
                               <tr style={summaryRowStyle}>
                                 <td colSpan={2} style={{ ...leftCell, fontWeight: 800 }}>&larr; MALE | TOTAL Per Day &rarr;</td>
-                                {Array.from({ length: 25 }).map((_, i) => (
-                                  <td key={`m-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>{dailyAttendanceTotals.males[i] || ''}</td>
-                                ))}
+                                {Array.from({ length: 25 }).map((_, i) => {
+                                  const day = reportData.school_days ? reportData.school_days[i] : undefined;
+                                  return (
+                                    <td key={`m-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>
+                                      {day ? dailyAttendanceTotals.males[i] : ''}
+                                    </td>
+                                  );
+                                })}
                                 <td style={{ ...centerCell, fontWeight: 800 }}>{males.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}</td>
                                 <td style={{ ...centerCell, fontWeight: 800 }}>{males.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}</td>
                                 <td style={centerCell}></td>
@@ -944,7 +1160,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                                     const status = day ? f.attendance?.[day.dateNumber] : undefined;
                                     return (
                                       <td key={`f-${f.id}-d-${i}`} style={cellDateWrapper}>
-                                        <AttendanceCell status={status} />
+                                        <AttendanceCell status={status} isSchoolDay={Boolean(day)} />
                                       </td>
                                     );
                                   })}
@@ -955,9 +1171,14 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                               ))}
                               <tr style={summaryRowStyle}>
                                 <td colSpan={2} style={{ ...leftCell, fontWeight: 800 }}>&larr; FEMALE | TOTAL Per Day &rarr;</td>
-                                {Array.from({ length: 25 }).map((_, i) => (
-                                  <td key={`f-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>{dailyAttendanceTotals.females[i] || ''}</td>
-                                ))}
+                                {Array.from({ length: 25 }).map((_, i) => {
+                                  const day = reportData.school_days ? reportData.school_days[i] : undefined;
+                                  return (
+                                    <td key={`f-tot-${i}`} style={{ ...centerCell, fontWeight: 800 }}>
+                                      {day ? dailyAttendanceTotals.females[i] : ''}
+                                    </td>
+                                  );
+                                })}
                                 <td style={{ ...centerCell, fontWeight: 800 }}>{females.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}</td>
                                 <td style={{ ...centerCell, fontWeight: 800 }}>{females.reduce((acc, cur) => acc + (cur.total_tardy || 0), 0)}</td>
                                 <td style={centerCell}></td>
@@ -965,9 +1186,14 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
                               <tr style={{ ...summaryRowStyle, backgroundColor: '#e2e8f0' }}>
                                 <td colSpan={2} style={{ ...leftCell, fontWeight: 900 }}>Combined TOTAL PER DAY</td>
-                                {Array.from({ length: 25 }).map((_, i) => (
-                                  <td key={`c-tot-${i}`} style={{ ...centerCell, fontWeight: 900 }}>{dailyAttendanceTotals.combined[i] || ''}</td>
-                                ))}
+                                {Array.from({ length: 25 }).map((_, i) => {
+                                  const day = reportData.school_days ? reportData.school_days[i] : undefined;
+                                  return (
+                                    <td key={`c-tot-${i}`} style={{ ...centerCell, fontWeight: 900 }}>
+                                      {day ? dailyAttendanceTotals.combined[i] : ''}
+                                    </td>
+                                  );
+                                })}
                                 <td style={{ ...centerCell, fontWeight: 900 }}>
                                   {males.reduce((acc, cur) => acc + (cur.total_absent || 0), 0) +
                                     females.reduce((acc, cur) => acc + (cur.total_absent || 0), 0)}
@@ -1025,7 +1251,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
             size: ${pageWidthInches}in ${pageHeightInches}in;
             margin: 0 !important;
           }
-          
+
           .no-print,
           nav,
           aside,
@@ -1118,8 +1344,8 @@ const controlStripStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   padding: '8px 24px',
-  backgroundColor: '#ffffff',
-  borderBottom: '1px solid #e2e8f0',
+  flexWrap: 'wrap',
+  gap: 10,
 };
 
 const toggleBtnStyle: React.CSSProperties = {
@@ -1128,7 +1354,6 @@ const toggleBtnStyle: React.CSSProperties = {
   gap: 5,
   padding: '4px 10px',
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
   cursor: 'pointer',
   fontSize: '0.76rem',
   fontWeight: 700,
@@ -1137,8 +1362,6 @@ const toggleBtnStyle: React.CSSProperties = {
 const zoomBtnStyle: React.CSSProperties = {
   padding: '4px 8px',
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
   cursor: 'pointer',
 };
 
@@ -1344,7 +1567,6 @@ const loadingStateStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 12,
   marginTop: 80,
-  color: '#475569',
   fontWeight: 600,
 };
 
@@ -1353,10 +1575,7 @@ const errorStateStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 8,
   marginTop: 80,
-  color: '#dc2626',
   fontWeight: 600,
-  backgroundColor: '#fef2f2',
   padding: '12px 20px',
   borderRadius: 8,
-  border: '1px solid #fecaca',
 };

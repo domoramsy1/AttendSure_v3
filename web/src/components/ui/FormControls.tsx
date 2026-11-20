@@ -4,7 +4,7 @@
  */
 
 import React, { useId } from 'react';
-import { theme } from '../../theme/tokens';
+import { useTheme } from '../../context/ThemeContext';
 
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -13,6 +13,7 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
 export const TextInput: React.FC<InputProps> = ({ label, id, style, ...props }) => {
   const generatedId = useId();
   const inputId = id || generatedId;
+  const { tokens, radius } = useTheme();
 
   return (
     <div style={{ width: '100%' }}>
@@ -24,7 +25,7 @@ export const TextInput: React.FC<InputProps> = ({ label, id, style, ...props }) 
             fontSize: '0.8rem',
             fontWeight: 700,
             marginBottom: 4,
-            color: theme.colors.textPrimary,
+            color: tokens.textPrimary,
           }}
         >
           {label}
@@ -35,12 +36,12 @@ export const TextInput: React.FC<InputProps> = ({ label, id, style, ...props }) 
         style={{
           width: '100%',
           padding: '9px 12px',
-          borderRadius: theme.radius.sm,
+          borderRadius: radius.sm,
           borderWidth: 1,
           borderStyle: 'solid',
-          borderColor: theme.colors.border,
-          backgroundColor: theme.colors.surfaceSubtle,
-          color: theme.colors.textPrimary,
+          borderColor: tokens.borderInput,
+          backgroundColor: tokens.bgInput,
+          color: tokens.textPrimary,
           fontSize: '0.875rem',
           outline: 'none',
           boxSizing: 'border-box',
@@ -60,6 +61,7 @@ interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
 export const Select: React.FC<SelectProps> = ({ label, id, children, style, ...props }) => {
   const generatedId = useId();
   const selectId = id || generatedId;
+  const { tokens, radius } = useTheme();
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -69,7 +71,7 @@ export const Select: React.FC<SelectProps> = ({ label, id, children, style, ...p
           style={{
             fontSize: '0.875rem',
             fontWeight: 700,
-            color: theme.colors.textPrimary,
+            color: tokens.textPrimary,
             whiteSpace: 'nowrap',
           }}
         >
@@ -80,13 +82,13 @@ export const Select: React.FC<SelectProps> = ({ label, id, children, style, ...p
         id={selectId}
         style={{
           padding: '8px 12px',
-          borderRadius: theme.radius.sm,
+          borderRadius: radius.sm,
           borderWidth: 1,
           borderStyle: 'solid',
-          borderColor: theme.colors.border,
+          borderColor: tokens.borderInput,
           fontSize: '0.875rem',
-          backgroundColor: theme.colors.surface,
-          color: theme.colors.textPrimary,
+          backgroundColor: tokens.bgInput,
+          color: tokens.textPrimary,
           outline: 'none',
           cursor: 'pointer',
           ...style,

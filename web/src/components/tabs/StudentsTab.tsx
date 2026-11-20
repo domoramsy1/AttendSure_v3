@@ -1,16 +1,17 @@
 /**
- * AttendSure - Students Directory & DepEd SF1 Enrollment (Zero Mock Data & Role-Aware)
+ * AttendSure - Students Directory & DepEd SF1 Enrollment
  * File: web/src/components/tabs/StudentsTab.tsx
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
-import { isSafeImageUrl, sanitizeText } from '../../theme/tokens';
+import { isSafeImageUrl } from '../../theme/tokens';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
+import { QrCodeSvg } from '../common/QrCodeSvg';
 import { Pagination, exportToCsv, ALL_ROWS_SIZE } from '../common/Pagination';
 import { ControlSwitch } from '../ui/ControlSwitch';
 import { Modal } from '../ui/Modal';
@@ -63,7 +64,9 @@ interface Student {
   guardian_relationship?: string;
   parent_contact: string;
   qr_token?: string;
+  qr_payload?: string;
   current_section?: string;
+  current_section_id?: number | null;
   section_id?: number;
   grade_level_name?: string;
   photo?: string | null;
@@ -94,6 +97,12 @@ interface MetricsData {
 
 type ModalFormTab = 'BASIC' | 'ADDRESS' | 'PARENTS' | 'DEPED';
 
+const sanitizeInput = (raw: string, maxLength = 150): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, maxLength);
+
 const maskQrToken = (token?: string): string => {
   const clean = String(token || '').trim();
   if (!clean) return '';
@@ -105,29 +114,42 @@ export const StudentsTab: React.FC = () => {
   const { school } = useSchool();
   const { showAlert, showConfirm } = useAlert();
 
-  const userRole = useMemo(
-    () => (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(),
-    []
-  );
-  const canManageStudents = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
+  const userRole = useMemo(() => (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(), []);
+  const canManageStudents = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
 
-  const [students, setStudents] = useState<Student[]>([]);
-  const [gradeLevels, setGradeLevels] = useState<GradeLevelItem[]>([]);
-  const [sections, setSections] = useState<SectionItem[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const cachedStudentsPayload = peekApiCache<any>(API_ROUTES.students.list, { page: 1, page_size: 25 });
+  const cachedMetricsPayload = peekApiCache<any>(API_ROUTES.students.metrics);
+  const cachedGradesPayload = peekApiCache<any>(API_ROUTES.school.gradeLevels, { page_size: 200 });
+  const cachedSectionsPayload = peekApiCache<any>(API_ROUTES.school.sections, { page_size: 300 });
+
+  const [students, setStudents] = useState<Student[]>(() => {
+    if (cachedStudentsPayload && 'results' in cachedStudentsPayload) return cachedStudentsPayload.results || [];
+    if (Array.isArray(cachedStudentsPayload)) return cachedStudentsPayload;
+    return [];
+  });
+  const [gradeLevels, setGradeLevels] = useState<GradeLevelItem[]>(() =>
+    Array.isArray(cachedGradesPayload) ? cachedGradesPayload : cachedGradesPayload?.results || []
+  );
+  const [sections, setSections] = useState<SectionItem[]>(() =>
+    Array.isArray(cachedSectionsPayload) ? cachedSectionsPayload : cachedSectionsPayload?.results || []
+  );
+  const [loading, setLoading] = useState<boolean>(() => !cachedStudentsPayload);
   const [error, setError] = useState<string | null>(null);
 
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
-  const [totalCount, setTotalCount] = useState<number>(0);
-
-  // Strictly zero mock numbers — hydrated 100% from PostgreSQL
-  const [metrics, setMetrics] = useState<MetricsData>({
-    total: 0,
-    active: 0,
-    paired: 0,
-    total_sections: 0,
+  const [totalCount, setTotalCount] = useState<number>(() => {
+    if (cachedStudentsPayload && 'results' in cachedStudentsPayload) return Number(cachedStudentsPayload.count) || 0;
+    if (Array.isArray(cachedStudentsPayload)) return cachedStudentsPayload.length;
+    return 0;
   });
+
+  const [metrics, setMetrics] = useState<MetricsData>(() => ({
+    total: Number(cachedMetricsPayload?.total ?? cachedMetricsPayload?.total_students ?? 0),
+    active: Number(cachedMetricsPayload?.active ?? cachedMetricsPayload?.total_students ?? 0),
+    paired: Number(cachedMetricsPayload?.paired ?? 0),
+    total_sections: Number(cachedMetricsPayload?.total_sections ?? 0),
+  }));
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [debouncedSearch, setDebouncedSearch] = useState<string>('');
@@ -141,6 +163,7 @@ export const StudentsTab: React.FC = () => {
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [photoRemoved, setPhotoRemoved] = useState<boolean>(false);
 
   const [formData, setFormData] = useState({
     lrn: '',
@@ -169,41 +192,59 @@ export const StudentsTab: React.FC = () => {
   });
 
   const abortRef = useRef<AbortController | null>(null);
+  const metricsAbortRef = useRef<AbortController | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInteracting = useRef<boolean>(false);
   isInteracting.current = isModalOpen || Boolean(badgeStudent);
 
-  // Debounce search input by 300ms
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedSearch(sanitizeText(searchQuery, 60));
+      setDebouncedSearch(sanitizeInput(searchQuery, 60));
       setCurrentPage(1);
     }, 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Load static lookups (Grade Levels & Sections) once on mount
   useEffect(() => {
-    let active = true;
-    Promise.all([
-      apiClient.get(API_ROUTES.school.gradeLevels, { params: { page_size: 200 } }),
-      apiClient.get(API_ROUTES.school.sections, { params: { page_size: 300 } }),
-    ])
-      .then(([glRes, secRes]) => {
-        if (!active) return;
-        setGradeLevels(Array.isArray(glRes.data) ? glRes.data : glRes.data?.results || []);
-        setSections(Array.isArray(secRes.data) ? secRes.data : secRes.data?.results || []);
-      })
-      .catch(() => {});
+    const controller = new AbortController();
+    Promise.allSettled([
+      apiClient.get(API_ROUTES.school.gradeLevels, { params: { page_size: 200 }, signal: controller.signal }),
+      apiClient.get(API_ROUTES.school.sections, { params: { page_size: 300 }, signal: controller.signal }),
+    ]).then(([glRes, secRes]) => {
+      if (controller.signal.aborted) return;
+      if (glRes.status === 'fulfilled' && glRes.value?.data) {
+        setGradeLevels(Array.isArray(glRes.value.data) ? glRes.value.data : glRes.value.data?.results || []);
+      }
+      if (secRes.status === 'fulfilled' && secRes.value?.data) {
+        setSections(Array.isArray(secRes.value.data) ? secRes.value.data : secRes.value.data?.results || []);
+      }
+    });
     return () => {
-      active = false;
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      metricsAbortRef.current?.abort();
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
     };
   }, []);
 
   const loadMetrics = useCallback(async (bypassCache = false) => {
+    metricsAbortRef.current?.abort();
+    const controller = new AbortController();
+    metricsAbortRef.current = controller;
+
     try {
       const res = await apiClient.get(API_ROUTES.students.metrics, {
         params: bypassCache ? { nocache: 1 } : undefined,
+        signal: controller.signal,
       });
+      if (controller.signal.aborted) return;
       if (res.data) {
         setMetrics({
           total: Number(res.data.total ?? res.data.total_students ?? 0),
@@ -213,7 +254,7 @@ export const StudentsTab: React.FC = () => {
         });
       }
     } catch {
-      // Keep existing metrics if offline
+      // Keep existing metrics if offline or canceled
     }
   }, []);
 
@@ -223,23 +264,38 @@ export const StudentsTab: React.FC = () => {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      if (!silent) setLoading(true);
+      const isAll = size >= ALL_ROWS_SIZE;
+      const baseParams: Record<string, string | number> = {
+        page: isAll ? 1 : page,
+        page_size: isAll ? 'ALL' : size,
+      };
+      if (debouncedSearch) baseParams.search = debouncedSearch;
+      if (selectedSectionFilter !== 'ALL') baseParams.section_id = selectedSectionFilter;
+
+      const cached = !bypassCache ? peekApiCache<any>(API_ROUTES.students.list, baseParams) : undefined;
+      if (cached) {
+        if ('results' in cached) {
+          setStudents(cached.results || []);
+          setTotalCount(Number(cached.count) || 0);
+        } else if (Array.isArray(cached)) {
+          setStudents(cached);
+          setTotalCount(cached.length);
+        }
+        setLoading(false);
+      } else if (!silent) {
+        setLoading(true);
+      }
       setError(null);
 
       try {
-        const isAll = size >= ALL_ROWS_SIZE;
-        const params: Record<string, string | number> = {
-          page: isAll ? 1 : page,
-          page_size: isAll ? 'ALL' : size,
-        };
-        if (debouncedSearch) params.search = debouncedSearch;
-        if (selectedSectionFilter !== 'ALL') params.section_id = selectedSectionFilter;
+        const params: Record<string, string | number> = { ...baseParams };
         if (bypassCache) params.nocache = 1;
 
         const res = await apiClient.get(API_ROUTES.students.list, {
           params,
           signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
 
         if (res.data && 'results' in res.data) {
           setStudents(res.data.results);
@@ -250,21 +306,23 @@ export const StudentsTab: React.FC = () => {
         }
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
-        if (anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
         if (!silent) setError(extractApiError(err, 'Could not load student directory.'));
       } finally {
-        if (!silent) setLoading(false);
+        if (!controller.signal.aborted && !silent) setLoading(false);
       }
     },
     [debouncedSearch, selectedSectionFilter]
   );
 
   useEffect(() => {
-    loadMetrics(false);
+    void loadMetrics(false);
   }, [loadMetrics]);
 
   useEffect(() => {
-    loadStudents(currentPage, pageSize, false, false);
+    void loadStudents(currentPage, pageSize, false, false);
     return () => {
       abortRef.current?.abort();
     };
@@ -273,8 +331,8 @@ export const StudentsTab: React.FC = () => {
   useEffect(() => {
     const timer = setInterval(() => {
       if (!isInteracting.current && document.visibilityState === 'visible') {
-        loadStudents(currentPage, pageSize, true, true);
-        loadMetrics(true);
+        void loadStudents(currentPage, pageSize, true, true);
+        void loadMetrics(true);
       }
     }, 20000);
     return () => clearInterval(timer);
@@ -284,9 +342,7 @@ export const StudentsTab: React.FC = () => {
     if (!formData.grade_level_id) return sections;
     return sections.filter((sec) => {
       const glId =
-        typeof sec.grade_level === 'object' && sec.grade_level !== null
-          ? sec.grade_level.id
-          : sec.grade_level;
+        typeof sec.grade_level === 'object' && sec.grade_level !== null ? sec.grade_level.id : sec.grade_level;
       return String(glId) === String(formData.grade_level_id);
     });
   }, [sections, formData.grade_level_id]);
@@ -296,7 +352,11 @@ export const StudentsTab: React.FC = () => {
     try {
       await navigator.clipboard.writeText(val);
       setCopiedValue(val);
-      setTimeout(() => setCopiedValue((prev) => (prev === val ? null : prev)), 2000);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        setCopiedValue((prev) => (prev === val ? null : prev));
+        copyTimerRef.current = null;
+      }, 2000);
     } catch {
       // Ignore clipboard failure
     }
@@ -362,9 +422,15 @@ export const StudentsTab: React.FC = () => {
       return;
     }
     setFormError(null);
+    setPhotoRemoved(false);
     const reader = new FileReader();
     reader.onloadend = () => {
-      setFormData((prev) => ({ ...prev, photo: reader.result as string }));
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (!isSafeImageUrl(result)) {
+        setFormError('Selected file is not a valid image.');
+        return;
+      }
+      setFormData((prev) => ({ ...prev, photo: result }));
     };
     reader.readAsDataURL(file);
   };
@@ -372,6 +438,7 @@ export const StudentsTab: React.FC = () => {
   const handleOpenCreate = () => {
     setEditingStudent(null);
     setFormError(null);
+    setPhotoRemoved(false);
     setFormTab('BASIC');
     setFormData({
       lrn: '',
@@ -404,11 +471,13 @@ export const StudentsTab: React.FC = () => {
   const handleOpenEdit = (st: Student) => {
     setEditingStudent(st);
     setFormError(null);
+    setPhotoRemoved(false);
     setFormTab('BASIC');
 
-    const matchedSec = sections.find(
-      (s) => s.id === st.section_id || s.name === st.current_section
-    );
+    const exactSecId = st.current_section_id ?? st.section_id;
+    const matchedSec =
+      (exactSecId ? sections.find((s) => s.id === exactSecId) : undefined) ||
+      sections.find((s) => s.name === st.current_section);
     const glVal =
       matchedSec && typeof matchedSec.grade_level === 'object' && matchedSec.grade_level !== null
         ? matchedSec.grade_level.id
@@ -423,9 +492,9 @@ export const StudentsTab: React.FC = () => {
       sex: st.sex === 'Female' || st.sex === 'F' ? 'Female' : 'Male',
       birthdate: st.birthdate || '2012-01-01',
       grade_level_id: glVal ? String(glVal) : gradeLevels[0] ? String(gradeLevels[0].id) : '',
-      section_id: st.section_id ? String(st.section_id) : matchedSec ? String(matchedSec.id) : '',
+      section_id: exactSecId ? String(exactSecId) : matchedSec ? String(matchedSec.id) : '',
       qr_token: '',
-      photo: isSafeImageUrl(st.photo_url || st.photo) ? (st.photo_url || st.photo || null) : null,
+      photo: isSafeImageUrl(st.photo_url || st.photo) ? st.photo_url || st.photo || null : null,
       house_street_sitio: st.house_street_sitio || '',
       barangay: st.barangay || '',
       municipality_city: st.municipality_city || '',
@@ -451,9 +520,21 @@ export const StudentsTab: React.FC = () => {
       setFormTab('BASIC');
       return;
     }
+    if (!formData.first_name.trim() || !formData.last_name.trim()) {
+      setFormError('First name and last name are required.');
+      setFormTab('BASIC');
+      return;
+    }
     if (!formData.section_id) {
       setFormError('Please select a class section.');
       setFormTab('BASIC');
+      return;
+    }
+
+    const cleanParentPhone = formData.parent_contact.trim().replace(/[\s-]/g, '');
+    if (!cleanParentPhone) {
+      setFormError('Parent mobile number is required in the "3. Guardian" tab.');
+      setFormTab('PARENTS');
       return;
     }
 
@@ -461,32 +542,32 @@ export const StudentsTab: React.FC = () => {
     try {
       const payload: Record<string, unknown> = {
         lrn: formData.lrn.trim(),
-        first_name: sanitizeText(formData.first_name, 100),
-        middle_name: sanitizeText(formData.middle_name, 100),
-        last_name: sanitizeText(formData.last_name, 100),
-        suffix: sanitizeText(formData.suffix, 20),
+        first_name: sanitizeInput(formData.first_name, 100),
+        middle_name: sanitizeInput(formData.middle_name, 100),
+        last_name: sanitizeInput(formData.last_name, 100),
+        suffix: sanitizeInput(formData.suffix, 20),
         sex: formData.sex,
         birthdate: formData.birthdate,
-        mother_tongue: sanitizeText(formData.mother_tongue, 80),
-        ethnic_group: sanitizeText(formData.ethnic_group, 80),
-        religion: sanitizeText(formData.religion, 80),
-        house_street_sitio: sanitizeText(formData.house_street_sitio, 150),
-        barangay: sanitizeText(formData.barangay, 100),
-        municipality_city: sanitizeText(formData.municipality_city, 100),
-        province: sanitizeText(formData.province, 100),
-        father_name: sanitizeText(formData.father_name, 150),
-        mother_maiden_name: sanitizeText(formData.mother_maiden_name, 150),
-        guardian_name: sanitizeText(formData.guardian_name, 150),
-        guardian_relationship: sanitizeText(formData.guardian_relationship, 60),
-        parent_contact: formData.parent_contact.trim().replace(/[\s-]/g, ''),
+        mother_tongue: sanitizeInput(formData.mother_tongue, 80),
+        ethnic_group: sanitizeInput(formData.ethnic_group, 80),
+        religion: sanitizeInput(formData.religion, 80),
+        house_street_sitio: sanitizeInput(formData.house_street_sitio, 150),
+        barangay: sanitizeInput(formData.barangay, 100),
+        municipality_city: sanitizeInput(formData.municipality_city, 100),
+        province: sanitizeInput(formData.province, 100),
+        father_name: sanitizeInput(formData.father_name, 150),
+        mother_maiden_name: sanitizeInput(formData.mother_maiden_name, 150),
+        guardian_name: sanitizeInput(formData.guardian_name, 150),
+        guardian_relationship: sanitizeInput(formData.guardian_relationship, 60),
+        parent_contact: sanitizeInput(cleanParentPhone, 20),
         section_id: Number(formData.section_id),
       };
 
-      if (formData.qr_token.trim()) {
-        payload.qr_token = formData.qr_token.trim().toUpperCase();
-      }
-      if (formData.photo && formData.photo.startsWith('data:image/')) {
+      if (formData.photo && formData.photo.startsWith('data:image/') && isSafeImageUrl(formData.photo)) {
         payload.photo = formData.photo;
+      } else if (photoRemoved && editingStudent) {
+        payload.photo = null;
+        payload.remove_photo = true;
       }
 
       if (editingStudent) {
@@ -498,8 +579,8 @@ export const StudentsTab: React.FC = () => {
       }
 
       setIsModalOpen(false);
-      loadMetrics(true);
-      loadStudents(currentPage, pageSize, false, true);
+      await loadMetrics(true);
+      await loadStudents(currentPage, pageSize, false, true);
     } catch (err) {
       setFormError(extractApiError(err, 'Failed to save student record.'));
     } finally {
@@ -514,9 +595,14 @@ export const StudentsTab: React.FC = () => {
       confirmLabel: 'Delete Student',
       isDestructive: true,
       onConfirm: async () => {
-        await apiClient.delete(`${API_ROUTES.students.list}${st.id}/`);
-        loadMetrics(true);
-        loadStudents(currentPage, pageSize, true, true);
+        try {
+          await apiClient.delete(`${API_ROUTES.students.list}${st.id}/`);
+          showAlert({ title: 'Student Removed', message: `${st.full_name} was removed from the student list.`, type: 'info' });
+          await loadMetrics(true);
+          await loadStudents(currentPage, pageSize, true, true);
+        } catch (err) {
+          showAlert({ title: 'Delete Failed', message: extractApiError(err, 'Could not delete student record.'), type: 'error' });
+        }
       },
     });
   };
@@ -526,8 +612,7 @@ export const StudentsTab: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(12px, 2vw, 20px)' }}>
-      {/* 1. Real Database KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))', gap: 12 }}>
         <StatsCard
           label="REGISTERED STUDENTS"
           value={metrics.total.toLocaleString()}
@@ -557,7 +642,6 @@ export const StudentsTab: React.FC = () => {
         />
       </div>
 
-      {/* 2. Section Filter & Actions Bar */}
       <div
         style={{
           ...ui.card,
@@ -625,7 +709,6 @@ export const StudentsTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Students Table */}
       <div style={{ ...ui.card, padding: 0, overflow: 'hidden' }}>
         {error && (
           <div
@@ -731,7 +814,17 @@ export const StudentsTab: React.FC = () => {
 
                       <td style={ui.td}>
                         {row.qr_token ? (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: brand.success, fontFamily: fonts.mono, fontSize: fonts.size.sm }}>
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              fontWeight: 700,
+                              color: brand.success,
+                              fontFamily: fonts.mono,
+                              fontSize: fonts.size.sm,
+                            }}
+                          >
                             <CreditCard size={13} /> {maskQrToken(row.qr_token)}
                           </span>
                         ) : (
@@ -809,15 +902,24 @@ export const StudentsTab: React.FC = () => {
         />
       </div>
 
-      {/* 4. Enroll / Edit Student Modal (Leadership Only) */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title={editingStudent ? `Edit Student: ${editingStudent.full_name}` : 'Enroll New Student (DepEd SF1)'}
       >
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <form onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {formError && (
-            <div style={{ ...ui.subtleBox, backgroundColor: tokens.dangerLight, borderColor: brand.danger, color: brand.danger, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div
+              style={{
+                ...ui.subtleBox,
+                backgroundColor: tokens.dangerLight,
+                borderColor: brand.danger,
+                color: brand.danger,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
               <AlertCircle size={15} /> <span>{formError}</span>
             </div>
           )}
@@ -844,31 +946,58 @@ export const StudentsTab: React.FC = () => {
                     <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoUpload} style={{ display: 'none' }} />
                   </label>
                   {formData.photo && (
-                    <button type="button" onClick={() => setFormData((p) => ({ ...p, photo: null }))} style={{ ...ui.btnSecondary, color: brand.danger }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData((p) => ({ ...p, photo: null }));
+                        setPhotoRemoved(true);
+                      }}
+                      style={{ ...ui.btnSecondary, color: brand.danger }}
+                    >
                       <X size={13} /> Remove
                     </button>
                   )}
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
                 <div>
                   <label style={ui.label}>12-Digit LRN *</label>
-                  <input required maxLength={12} value={formData.lrn} onChange={(e) => setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })} style={ui.input} placeholder="128936000001" />
+                  <input
+                    maxLength={12}
+                    value={formData.lrn}
+                    onChange={(e) => setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })}
+                    style={ui.input}
+                    placeholder="Enter 12-digit LRN"
+                  />
                 </div>
                 <div>
                   <label style={ui.label}>Birthdate *</label>
-                  <input type="date" required value={formData.birthdate} onChange={(e) => setFormData({ ...formData, birthdate: e.target.value })} style={ui.input} />
+                  <input
+                    type="date"
+                    value={formData.birthdate}
+                    onChange={(e) => setFormData({ ...formData, birthdate: e.target.value })}
+                    style={ui.input}
+                  />
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div><label style={ui.label}>First Name *</label><input required value={formData.first_name} onChange={(e) => setFormData({ ...formData, first_name: e.target.value })} style={ui.input} /></div>
-                <div><label style={ui.label}>Last Name *</label><input required value={formData.last_name} onChange={(e) => setFormData({ ...formData, last_name: e.target.value })} style={ui.input} /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
+                <div>
+                  <label style={ui.label}>First Name *</label>
+                  <input maxLength={100} value={formData.first_name} onChange={(e) => setFormData({ ...formData, first_name: e.target.value })} style={ui.input} />
+                </div>
+                <div>
+                  <label style={ui.label}>Last Name *</label>
+                  <input maxLength={100} value={formData.last_name} onChange={(e) => setFormData({ ...formData, last_name: e.target.value })} style={ui.input} />
+                </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.8fr 0.9fr', gap: 10 }}>
-                <div><label style={ui.label}>Middle Name</label><input value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })} style={ui.input} /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 10 }}>
+                <div>
+                  <label style={ui.label}>Middle Name</label>
+                  <input maxLength={100} value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })} style={ui.input} />
+                </div>
                 <div>
                   <label style={ui.label}>Suffix</label>
                   <select value={formData.suffix} onChange={(e) => setFormData({ ...formData, suffix: e.target.value })} style={ui.input}>
@@ -877,6 +1006,8 @@ export const StudentsTab: React.FC = () => {
                     <option value="Sr.">Sr.</option>
                     <option value="II">II</option>
                     <option value="III">III</option>
+                    <option value="IV">IV</option>
+                    <option value="V">V</option>
                   </select>
                 </div>
                 <div>
@@ -888,27 +1019,34 @@ export const StudentsTab: React.FC = () => {
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
                 <div>
                   <label style={ui.label}>Grade Level *</label>
                   <select
-                    required
                     value={formData.grade_level_id}
                     onChange={(e) => setFormData({ ...formData, grade_level_id: e.target.value, section_id: '' })}
                     style={ui.input}
                   >
                     <option value="">-- Select Grade --</option>
                     {gradeLevels.map((gl) => (
-                      <option key={gl.id} value={gl.id}>{gl.name}</option>
+                      <option key={gl.id} value={gl.id}>
+                        {gl.name}
+                      </option>
                     ))}
                   </select>
                 </div>
                 <div>
                   <label style={ui.label}>Class Section *</label>
-                  <select required value={formData.section_id} onChange={(e) => setFormData({ ...formData, section_id: e.target.value })} style={ui.input}>
+                  <select
+                    value={formData.section_id}
+                    onChange={(e) => setFormData({ ...formData, section_id: e.target.value })}
+                    style={ui.input}
+                  >
                     <option value="">-- Select Section --</option>
                     {modalAvailableSections.map((sec) => (
-                      <option key={sec.id} value={sec.id}>{sec.name}</option>
+                      <option key={sec.id} value={sec.id}>
+                        {sec.name}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -918,41 +1056,85 @@ export const StudentsTab: React.FC = () => {
 
           {formTab === 'ADDRESS' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div><label style={ui.label}>House # / Street / Sitio</label><input value={formData.house_street_sitio} onChange={(e) => setFormData({ ...formData, house_street_sitio: e.target.value })} style={ui.input} /></div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div><label style={ui.label}>Barangay</label><input value={formData.barangay} onChange={(e) => setFormData({ ...formData, barangay: e.target.value })} style={ui.input} /></div>
-                <div><label style={ui.label}>Municipality / City</label><input value={formData.municipality_city} onChange={(e) => setFormData({ ...formData, municipality_city: e.target.value })} style={ui.input} /></div>
+              <div>
+                <label style={ui.label}>House # / Street / Sitio</label>
+                <input maxLength={150} value={formData.house_street_sitio} onChange={(e) => setFormData({ ...formData, house_street_sitio: e.target.value })} style={ui.input} />
               </div>
-              <div><label style={ui.label}>Province</label><input value={formData.province} onChange={(e) => setFormData({ ...formData, province: e.target.value })} style={ui.input} /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
+                <div>
+                  <label style={ui.label}>Barangay</label>
+                  <input maxLength={100} value={formData.barangay} onChange={(e) => setFormData({ ...formData, barangay: e.target.value })} style={ui.input} />
+                </div>
+                <div>
+                  <label style={ui.label}>Municipality / City</label>
+                  <input maxLength={100} value={formData.municipality_city} onChange={(e) => setFormData({ ...formData, municipality_city: e.target.value })} style={ui.input} />
+                </div>
+              </div>
+              <div>
+                <label style={ui.label}>Province</label>
+                <input maxLength={100} value={formData.province} onChange={(e) => setFormData({ ...formData, province: e.target.value })} style={ui.input} />
+              </div>
             </div>
           )}
 
           {formTab === 'PARENTS' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div><label style={ui.label}>Father&apos;s Name</label><input value={formData.father_name} onChange={(e) => setFormData({ ...formData, father_name: e.target.value })} style={ui.input} /></div>
-                <div><label style={ui.label}>Mother&apos;s Maiden Name</label><input value={formData.mother_maiden_name} onChange={(e) => setFormData({ ...formData, mother_maiden_name: e.target.value })} style={ui.input} /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
+                <div>
+                  <label style={ui.label}>Father&apos;s Name</label>
+                  <input maxLength={150} value={formData.father_name} onChange={(e) => setFormData({ ...formData, father_name: e.target.value })} style={ui.input} />
+                </div>
+                <div>
+                  <label style={ui.label}>Mother&apos;s Maiden Name</label>
+                  <input maxLength={150} value={formData.mother_maiden_name} onChange={(e) => setFormData({ ...formData, mother_maiden_name: e.target.value })} style={ui.input} />
+                </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 10 }}>
-                <div><label style={ui.label}>Guardian Name</label><input value={formData.guardian_name} onChange={(e) => setFormData({ ...formData, guardian_name: e.target.value })} style={ui.input} /></div>
-                <div><label style={ui.label}>Relationship</label><input value={formData.guardian_relationship} onChange={(e) => setFormData({ ...formData, guardian_relationship: e.target.value })} style={ui.input} /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
+                <div>
+                  <label style={ui.label}>Guardian Name</label>
+                  <input maxLength={150} value={formData.guardian_name} onChange={(e) => setFormData({ ...formData, guardian_name: e.target.value })} style={ui.input} />
+                </div>
+                <div>
+                  <label style={ui.label}>Relationship</label>
+                  <input maxLength={60} value={formData.guardian_relationship} onChange={(e) => setFormData({ ...formData, guardian_relationship: e.target.value })} style={ui.input} />
+                </div>
               </div>
-              <div><label style={ui.label}>Parent Mobile Number (11 Digits) *</label><input required value={formData.parent_contact} onChange={(e) => setFormData({ ...formData, parent_contact: e.target.value })} style={ui.input} placeholder="09171234567" /></div>
+              <div>
+                <label style={ui.label}>Parent Mobile Number (11 Digits) *</label>
+                <input
+                  maxLength={20}
+                  value={formData.parent_contact}
+                  onChange={(e) => setFormData({ ...formData, parent_contact: e.target.value })}
+                  style={ui.input}
+                  placeholder="Enter 11-digit mobile number"
+                />
+              </div>
             </div>
           )}
 
           {formTab === 'DEPED' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div><label style={ui.label}>Mother Tongue</label><input value={formData.mother_tongue} onChange={(e) => setFormData({ ...formData, mother_tongue: e.target.value })} style={ui.input} /></div>
-                <div><label style={ui.label}>IP / Ethnic Group</label><input value={formData.ethnic_group} onChange={(e) => setFormData({ ...formData, ethnic_group: e.target.value })} style={ui.input} /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
+                <div>
+                  <label style={ui.label}>Mother Tongue</label>
+                  <input maxLength={80} value={formData.mother_tongue} onChange={(e) => setFormData({ ...formData, mother_tongue: e.target.value })} style={ui.input} />
+                </div>
+                <div>
+                  <label style={ui.label}>IP / Ethnic Group</label>
+                  <input maxLength={80} value={formData.ethnic_group} onChange={(e) => setFormData({ ...formData, ethnic_group: e.target.value })} style={ui.input} />
+                </div>
               </div>
-              <div><label style={ui.label}>Religion</label><input value={formData.religion} onChange={(e) => setFormData({ ...formData, religion: e.target.value })} style={ui.input} /></div>
+              <div>
+                <label style={ui.label}>Religion</label>
+                <input maxLength={80} value={formData.religion} onChange={(e) => setFormData({ ...formData, religion: e.target.value })} style={ui.input} />
+              </div>
             </div>
           )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-            <Button variant="secondary" type="button" onClick={() => setIsModalOpen(false)}>Cancel</Button>
+            <Button variant="secondary" type="button" onClick={() => setIsModalOpen(false)}>
+              Cancel
+            </Button>
             <Button variant="primary" type="submit" loading={saving}>
               {editingStudent ? 'Save Changes' : 'Enroll Student'}
             </Button>
@@ -960,11 +1142,21 @@ export const StudentsTab: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 5. Student QR Pass Modal */}
       {badgeStudent && (
         <Modal isOpen={Boolean(badgeStudent)} onClose={() => setBadgeStudent(null)} title="Student QR ID Card">
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-            <div style={{ width: 292, backgroundColor: tokens.bgSurface, borderWidth: 2, borderStyle: 'solid', borderColor: brand.primary, borderRadius: 14, overflow: 'hidden', boxShadow: tokens.cardShadow }}>
+            <div
+              style={{
+                width: 292,
+                backgroundColor: tokens.bgSurface,
+                borderWidth: 2,
+                borderStyle: 'solid',
+                borderColor: brand.primary,
+                borderRadius: 14,
+                overflow: 'hidden',
+                boxShadow: tokens.cardShadow,
+              }}
+            >
               <div style={{ backgroundColor: brand.buttonBg, color: '#ffffff', padding: '12px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: fonts.size.xs, fontWeight: 800 }}>
                   <ShieldCheck size={14} /> OFFICIAL STUDENT QR PASS
@@ -977,24 +1169,55 @@ export const StudentsTab: React.FC = () => {
                   <ProfileAvatar photoUrl={badgeStudent.photo_url || badgeStudent.photo} name={badgeStudent.full_name} size={56} iconSize={26} />
                 </div>
                 <div style={{ fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>{badgeStudent.full_name}</div>
-                <div style={{ fontSize: fonts.size.sm, color: tokens.textSecondary, marginTop: 2 }}>{badgeStudent.current_section || 'Enrolled Student'}</div>
-                <div style={{ margin: '8px auto', padding: '3px 10px', backgroundColor: tokens.bgSurfaceSubtle, borderRadius: 6, fontFamily: fonts.mono, fontWeight: 700, fontSize: fonts.size.sm, display: 'inline-block' }}>
+                <div style={{ fontSize: fonts.size.sm, color: tokens.textSecondary, marginTop: 2 }}>
+                  {badgeStudent.current_section || 'Enrolled Student'}
+                </div>
+                <div
+                  style={{
+                    margin: '8px auto',
+                    padding: '3px 10px',
+                    backgroundColor: tokens.bgSurfaceSubtle,
+                    borderRadius: 6,
+                    fontFamily: fonts.mono,
+                    fontWeight: 700,
+                    fontSize: fonts.size.sm,
+                    display: 'inline-block',
+                  }}
+                >
                   LRN: {badgeStudent.lrn}
                 </div>
-                <div style={{ width: 122, height: 122, margin: '8px auto', padding: 6, backgroundColor: '#ffffff', borderWidth: 1, borderStyle: 'solid', borderColor: tokens.borderSubtle, borderRadius: 10 }}>
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(badgeStudent.lrn)}`}
-                    alt="Student QR"
-                    referrerPolicy="no-referrer"
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                <div
+                  style={{
+                    width: 124,
+                    height: 124,
+                    margin: '8px auto',
+                    padding: 6,
+                    backgroundColor: '#ffffff',
+                    borderWidth: 1,
+                    borderStyle: 'solid',
+                    borderColor: tokens.borderSubtle,
+                    borderRadius: 10,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <QrCodeSvg
+                    value={badgeStudent.qr_payload || badgeStudent.lrn}
+                    size={112}
+                    label={`QR code for ${badgeStudent.full_name}`}
                   />
                 </div>
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-              <Button variant="secondary" type="button" onClick={() => setBadgeStudent(null)}>Close</Button>
-              <Button variant="primary" type="button" onClick={() => window.print()} icon={<Printer size={14} />}>Print Pass</Button>
+              <Button variant="secondary" type="button" onClick={() => setBadgeStudent(null)}>
+                Close
+              </Button>
+              <Button variant="primary" type="button" onClick={() => window.print()} icon={<Printer size={14} />}>
+                Print Pass
+              </Button>
             </div>
           </div>
         </Modal>

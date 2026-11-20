@@ -34,7 +34,9 @@ export interface SectionOption {
   id: number | string;
   name: string;
   grade_level?: any;
+  grade_level_name?: string;
   academic_year?: string;
+  school_year_code?: string;
   adviser_name?: string;
   display_label?: string;
 }
@@ -101,7 +103,7 @@ const DEFAULT_REPORTS: ReportTabItem[] = [
 
 const DEFAULT_MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'
+  'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
 const getCurrentMonthName = (): string => {
@@ -112,15 +114,19 @@ const getCurrentMonthName = (): string => {
   }
 };
 
-const extractGradeLevelName = (val: any): string => {
-  if (val === null || val === undefined) return '';
-  if (typeof val === 'string') return val.trim();
-  if (typeof val === 'number') return `Grade ${val}`;
-  if (typeof val === 'object') {
-    const name = val.name || val.level || val.grade_name || val.grade || val.id;
-    return name !== undefined && name !== null ? String(name).trim() : '';
+const extractSectionGradeName = (sec?: SectionOption | null): string => {
+  if (!sec) return '';
+  if (sec.grade_level_name && String(sec.grade_level_name).trim()) {
+    return String(sec.grade_level_name).trim();
   }
-  return String(val).trim();
+  const val = sec.grade_level;
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return /^\d+$/.test(val.trim()) ? '' : val.trim();
+  if (typeof val === 'object') {
+    const name = val.name || val.grade_name || val.level || val.code;
+    return name ? String(name).trim() : '';
+  }
+  return '';
 };
 
 export const ReportNavBar: React.FC<ReportNavBarProps> = ({
@@ -169,14 +175,14 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const userRole = (localStorage.getItem('attendsure_role') || '').toUpperCase();
-  const isAdminOrPrincipal = userRole === 'ADMIN' || userRole === 'PRINCIPAL';
+  const isSchoolLeader = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
 
   const filteredReports = useMemo(() => {
     return reports.filter((rep) => {
-      if (rep.id === 'sf4' && !isAdminOrPrincipal) return false;
+      if (rep.id === 'sf4' && !isSchoolLeader) return false;
       return true;
     });
-  }, [reports, isAdminOrPrincipal]);
+  }, [reports, isSchoolLeader]);
 
   useEffect(() => {
     if (!isExportDropdownOpen) return;
@@ -205,9 +211,9 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
     if (!selectedGradeLevel || selectedGradeLevel === 'ALL') {
       return sections;
     }
+    const target = selectedGradeLevel.toLowerCase().trim();
     return sections.filter((sec) => {
-      const g = extractGradeLevelName(sec.grade_level).toLowerCase();
-      const target = selectedGradeLevel.toLowerCase().trim();
+      const g = extractSectionGradeName(sec).toLowerCase();
       return g === target || g.includes(target);
     });
   }, [sections, selectedGradeLevel]);
@@ -215,31 +221,41 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   const availableGradeLevels = useMemo(() => {
     if (gradeLevels && gradeLevels.length > 0) {
       return gradeLevels
-        .map(extractGradeLevelName)
+        .map((g) => String(g || '').trim())
         .filter(Boolean)
-        .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
     }
-    const extracted = Array.from(
-      new Set(
-        sections
-          .map((s) => extractGradeLevelName(s?.grade_level))
-          .filter(Boolean)
-      )
-    );
-    return extracted.sort((a, b) =>
-      String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
-    );
+    const extracted = Array.from(new Set(sections.map(extractSectionGradeName).filter(Boolean)));
+    return extracted.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
   }, [gradeLevels, sections]);
 
   const handleExportAction = (action?: () => void | Promise<void>) => {
     setIsExportDropdownOpen(false);
-    if (action) action();
+    if (action) void action();
   };
 
   return (
-    <div className="no-print" style={{ display: 'flex', flexDirection: 'column', width: '100%', flexShrink: 0, backgroundColor: tokens.bgSurface, boxSizing: 'border-box' }}>
-      {/* 1. Form Type Selector Tabs */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', backgroundColor: tokens.bgSurface, borderBottom: `1px solid ${tokens.borderSubtle}` }}>
+    <div
+      className="no-print"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        flexShrink: 0,
+        backgroundColor: tokens.bgSurface,
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '10px 24px',
+          backgroundColor: tokens.bgSurface,
+          borderBottom: `1px solid ${tokens.borderSubtle}`,
+        }}
+      >
         <span style={{ fontSize: '0.74rem', fontWeight: 800, color: tokens.textMuted, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
           REPORT FORM:
         </span>
@@ -262,7 +278,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  backgroundColor: isActive ? brand.primary : 'transparent',
+                  backgroundColor: isActive ? brand.buttonBg : 'transparent',
                   color: isActive ? '#FFFFFF' : tokens.textSecondary,
                   boxShadow: isActive ? tokens.cardShadow : 'none',
                   transition: 'all 0.15s ease',
@@ -276,8 +292,18 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
         </div>
       </div>
 
-      {/* 2. Filters & Action Buttons */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 24px', backgroundColor: tokens.bgSurface, borderBottom: `1px solid ${tokens.borderSubtle}`, flexWrap: 'wrap', gap: 12 }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '10px 24px',
+          backgroundColor: tokens.bgSurface,
+          borderBottom: `1px solid ${tokens.borderSubtle}`,
+          flexWrap: 'wrap',
+          gap: 12,
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           {showAcademicYearFilter && onAcademicYearChange && academicYears.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -285,11 +311,22 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               <select
                 value={selectedAcademicYear}
                 onChange={(e) => onAcademicYearChange(e.target.value)}
-                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none' }}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${tokens.borderStrong}`,
+                  fontSize: '0.80rem',
+                  fontWeight: 600,
+                  backgroundColor: tokens.bgSurfaceSubtle,
+                  color: tokens.textPrimary,
+                  outline: 'none',
+                }}
               >
                 {!selectedAcademicYear && <option value="">-- Select S.Y. --</option>}
                 {academicYears.map((sy) => (
-                  <option key={sy} value={sy}>{sy}</option>
+                  <option key={sy} value={sy}>
+                    {sy}
+                  </option>
                 ))}
               </select>
             </div>
@@ -301,11 +338,22 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               <select
                 value={selectedGradeLevel}
                 onChange={(e) => onGradeLevelChange(e.target.value)}
-                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none' }}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${tokens.borderStrong}`,
+                  fontSize: '0.80rem',
+                  fontWeight: 600,
+                  backgroundColor: tokens.bgSurfaceSubtle,
+                  color: tokens.textPrimary,
+                  outline: 'none',
+                }}
               >
                 <option value="ALL">All Grades</option>
                 {availableGradeLevels.map((g) => (
-                  <option key={g} value={g}>{g}</option>
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
                 ))}
               </select>
             </div>
@@ -317,17 +365,29 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               <select
                 value={String(selectedSectionId ?? '')}
                 onChange={(e) => onSectionChange(e.target.value)}
-                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none' }}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${tokens.borderStrong}`,
+                  fontSize: '0.80rem',
+                  fontWeight: 600,
+                  backgroundColor: tokens.bgSurfaceSubtle,
+                  color: tokens.textPrimary,
+                  outline: 'none',
+                }}
               >
                 {!selectedSectionId && <option value="">-- Choose Section --</option>}
                 {filteredSections.length === 0 ? (
-                  <option value="" disabled>No sections available</option>
+                  <option value="" disabled>
+                    No sections available
+                  </option>
                 ) : (
                   filteredSections.map((sec) => {
-                    const gradeStr = extractGradeLevelName(sec.grade_level);
+                    const gradeStr = extractSectionGradeName(sec);
                     return (
                       <option key={sec.id} value={String(sec.id)}>
-                        {sec.display_label || `${gradeStr ? `${gradeStr} - ` : ''}${sec.name}${sec.adviser_name ? ` (${sec.adviser_name})` : ''}`}
+                        {sec.display_label ||
+                          `${gradeStr ? `${gradeStr} - ` : ''}${sec.name}${sec.adviser_name ? ` (${sec.adviser_name})` : ''}`}
                       </option>
                     );
                   })
@@ -357,10 +417,21 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               <select
                 value={selectedMonth}
                 onChange={(e) => onMonthChange(e.target.value)}
-                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none' }}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${tokens.borderStrong}`,
+                  fontSize: '0.80rem',
+                  fontWeight: 600,
+                  backgroundColor: tokens.bgSurfaceSubtle,
+                  color: tokens.textPrimary,
+                  outline: 'none',
+                }}
               >
                 {monthsList.map((m) => (
-                  <option key={m} value={m}>{m}</option>
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
                 ))}
               </select>
             </div>
@@ -373,7 +444,17 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 type="number"
                 value={selectedCalendarYear || new Date().getFullYear()}
                 onChange={(e) => onCalendarYearChange(Number(e.target.value) || new Date().getFullYear())}
-                style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${tokens.borderStrong}`, fontSize: '0.80rem', fontWeight: 600, backgroundColor: tokens.bgSurfaceSubtle, color: tokens.textPrimary, outline: 'none', width: 80 }}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${tokens.borderStrong}`,
+                  fontSize: '0.80rem',
+                  fontWeight: 600,
+                  backgroundColor: tokens.bgSurfaceSubtle,
+                  color: tokens.textPrimary,
+                  outline: 'none',
+                  width: 80,
+                }}
               />
             </div>
           )}
@@ -383,9 +464,10 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
               <Search size={14} color={tokens.textMuted} />
               <input
                 type="text"
+                maxLength={80}
                 value={searchQuery}
                 placeholder="Search name or LRN..."
-                onChange={(e) => onSearchChange(e.target.value)}
+                onChange={(e) => onSearchChange(e.target.value.replace(/[\u0000-\u001F\u007F<>]/g, ''))}
                 style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: '0.78rem', width: '100%', color: tokens.textPrimary }}
               />
               {searchQuery && (
@@ -488,8 +570,8 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                   alignItems: 'center',
                   gap: 6,
                   padding: '6px 12px',
-                  backgroundColor: 'rgba(16, 185, 129, 0.12)',
-                  border: '1px solid rgba(16, 185, 129, 0.28)',
+                  backgroundColor: tokens.successLight,
+                  border: `1px solid ${brand.success}`,
                   borderRadius: 6,
                   fontSize: '0.80rem',
                   fontWeight: 700,
@@ -530,9 +612,9 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                     </>
                   )}
 
-                  {(exportHandlers.onExportExcel || exportHandlers.onExportGoogleSheets) && (
+                  {(exportHandlers.onExportExcel || exportHandlers.onExportGoogleSheets || exportHandlers.onExportWord) && (
                     <>
-                      <div style={{ padding: '6px 14px 2px 14px', fontSize: '0.62rem', fontWeight: 800, color: tokens.textMuted, letterSpacing: '0.5px' }}>OFFICIAL SPREADSHEETS</div>
+                      <div style={{ padding: '6px 14px 2px 14px', fontSize: '0.62rem', fontWeight: 800, color: tokens.textMuted, letterSpacing: '0.5px' }}>OFFICE DOCUMENTS</div>
                       {exportHandlers.onExportExcel && (
                         <button
                           type="button"
@@ -541,8 +623,21 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                         >
                           <FileSpreadsheet size={15} color={brand.success} />
                           <div style={{ flex: 1, textAlign: 'left' }}>
-                            <div style={{ fontWeight: 700, color: tokens.textPrimary }}>Microsoft Excel (.xlsx)</div>
+                            <div style={{ fontWeight: 700, color: tokens.textPrimary }}>Microsoft Excel (.xls)</div>
                             <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Formatted DepEd spreadsheet</div>
+                          </div>
+                        </button>
+                      )}
+                      {exportHandlers.onExportWord && (
+                        <button
+                          type="button"
+                          onClick={() => handleExportAction(exportHandlers.onExportWord)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '0.78rem', textAlign: 'left', width: '100%', color: tokens.textPrimary }}
+                        >
+                          <FileText size={15} color={brand.primary} />
+                          <div style={{ flex: 1, textAlign: 'left' }}>
+                            <div style={{ fontWeight: 700, color: tokens.textPrimary }}>Microsoft Word (.doc)</div>
+                            <div style={{ fontSize: '0.68rem', color: tokens.textMuted }}>Editable official form</div>
                           </div>
                         </button>
                       )}
@@ -608,7 +703,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 alignItems: 'center',
                 gap: 6,
                 padding: '6px 16px',
-                backgroundColor: brand.primary,
+                backgroundColor: brand.buttonBg,
                 border: 'none',
                 borderRadius: 6,
                 fontSize: '0.80rem',

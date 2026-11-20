@@ -1,6 +1,9 @@
-// D:\AttendSure_V3\mobile\src\components\reports\DTRReportView.tsx
+/**
+ * AttendSure - Civil Service Form No. 48 Daily Time Record View
+ * File: mobile/src/components/reports/DTRReportView.tsx
+ */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,9 +13,13 @@ import {
   Modal,
   ActivityIndicator,
   Alert,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 import { apiClient } from '../../api/client';
+import { useThemeMode } from '../../context/ThemeContext';
+import { cleanText, getFriendlyErrorMessage } from '../../constants/theme';
 
 export interface DailyDTRRow {
   day: number;
@@ -69,6 +76,14 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
+const showNotice = (title: string, message: string) => {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.alert(`${title}: ${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+};
+
 export const DTRReportView: React.FC<DTRReportViewProps> = ({
   data,
   selectedMonth = new Date().getMonth() + 1,
@@ -78,18 +93,44 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
   onSubmit,
   onRefreshNeeded,
 }) => {
-  if (!data) return null;
-
+  const { palette } = useThemeMode();
   const [viewSide, setViewSide] = useState<'FRONT' | 'BACK' | 'BOTH'>('FRONT');
   const [selectedViolationRow, setSelectedViolationRow] = useState<DailyDTRRow | null>(null);
   const [pardonRemarks, setPardonRemarks] = useState<string>('');
   const [actionProcessing, setActionProcessing] = useState<boolean>(false);
   const [showDatePickerModal, setShowDatePickerModal] = useState<boolean>(false);
 
+  const isMountedRef = useRef<boolean>(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  // Dynamically derive year choices from the current calendar year (never hardcoded)
+  const yearOptions = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const anchor = Math.max(currentYear, selectedYear);
+    const list = [anchor - 2, anchor - 1, anchor, anchor + 1];
+    if (!list.includes(selectedYear)) {
+      list.unshift(selectedYear);
+    }
+    return Array.from(new Set(list)).sort((a, b) => a - b);
+  }, [selectedYear]);
+
+  if (!data) return null;
+
   const isApproved = Boolean(data.dept_head_approved);
   const isSubmitted = Boolean(data.dtr_submitted);
-  const resolvedHead = (data.school_head || 'School Head / In-Charge').trim();
-  const resolvedTitle = (data.school_head_title || 'In-Charge').trim();
+  const facultyDisplayName = cleanText(data.faculty_name, 160) || 'Faculty Member';
+  const resolvedHead = cleanText(data.school_head, 160) || 'School Head / In-Charge';
+  const resolvedTitle = cleanText(data.school_head_title, 120) || 'In-Charge';
+  const safeMonthIndex = Math.max(0, Math.min(11, selectedMonth - 1));
+  const selectedMonthLabel = MONTH_NAMES[safeMonthIndex] || '';
 
   // Normalize 31 rows
   const rawRows = Array.isArray(data.rows) ? data.rows : [];
@@ -120,7 +161,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
   // Month navigation handlers
   const handlePrevMonth = () => {
     if (!onMonthChange) return;
-    if (selectedMonth === 1) {
+    if (selectedMonth <= 1) {
       onMonthChange(12, selectedYear - 1);
     } else {
       onMonthChange(selectedMonth - 1, selectedYear);
@@ -129,46 +170,64 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
 
   const handleNextMonth = () => {
     if (!onMonthChange) return;
-    if (selectedMonth === 12) {
+    if (selectedMonth >= 12) {
       onMonthChange(1, selectedYear + 1);
     } else {
       onMonthChange(selectedMonth + 1, selectedYear);
     }
   };
 
-  // Excuse loafing
+  // Excuse early departure / attendance flag
   const handleExcuseLoafing = async () => {
-    if (!selectedViolationRow) return;
+    if (!selectedViolationRow || actionProcessing) return;
 
-    const cleanRemarks = pardonRemarks.replace(/[\r\n\t]/g, ' ').trim();
+    const cleanRemarks = cleanText(pardonRemarks, 300);
     if (!cleanRemarks) {
-      Alert.alert('Required', 'Please enter official remarks or justification.');
+      showNotice('Required', 'Please enter official remarks or justification.');
       return;
     }
 
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setActionProcessing(true);
     try {
-      await apiClient.post(`/reports/dtr/${data.faculty_id}/`, {
-        action: 'EXCUSE_LOAFING',
-        faculty_id: data.faculty_id,
-        date_str: selectedViolationRow.date_str,
-        remarks: cleanRemarks,
-      });
+      const encodedFacultyId = encodeURIComponent(String(data.faculty_id));
+      await apiClient.post(
+        `/reports/dtr/${encodedFacultyId}/`,
+        {
+          action: 'EXCUSE_LOAFING',
+          faculty_id: data.faculty_id,
+          date_str: selectedViolationRow.date_str,
+          remarks: cleanRemarks,
+        },
+        { signal: controller.signal }
+      );
 
-      Alert.alert('Excused', `Departure on ${selectedViolationRow.date_str} excused.`);
+      if (!isMountedRef.current) return;
+      showNotice('Excused', `Departure on ${selectedViolationRow.date_str} has been excused.`);
       setSelectedViolationRow(null);
       setPardonRemarks('');
       if (onRefreshNeeded) onRefreshNeeded();
-    } catch (err: any) {
-      Alert.alert('Denied', err?.response?.data?.error || 'Could not excuse record.');
+    } catch (err: unknown) {
+      if (axios.isCancel(err) || (err as { code?: string })?.code === 'ERR_CANCELED') {
+        return;
+      }
+      showNotice(
+        'Unable to Update',
+        getFriendlyErrorMessage(err, 'Could not excuse this attendance record. Please try again.')
+      );
     } finally {
-      setActionProcessing(false);
+      if (isMountedRef.current) {
+        setActionProcessing(false);
+      }
     }
   };
 
-  // Front DTR Sheet
+  // Front DTR Sheet (official printed document stays white paper with crisp ink)
   const renderFrontSheet = () => (
-    <View style={styles.sheetContainer}>
+    <View style={[styles.sheetContainer, { borderColor: palette.borderStrong }]}>
       {/* Draft Watermark */}
       {!isApproved && (
         <View style={styles.watermarkOverlay} pointerEvents="none">
@@ -181,26 +240,40 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
         </View>
       )}
 
-      {/* Date Navigation Bar on Top of Form */}
-      <View style={styles.topDateNavCard}>
-        <TouchableOpacity style={styles.dateNavArrow} onPress={handlePrevMonth}>
-          <Ionicons name="chevron-back" size={16} color="#004b87" />
+      {/* Interactive Date Navigation Bar */}
+      <View
+        style={[
+          styles.topDateNavCard,
+          { backgroundColor: palette.surfaceSubtle, borderColor: palette.border },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.dateNavArrow}
+          onPress={handlePrevMonth}
+          accessibilityLabel="Previous month"
+        >
+          <Ionicons name="chevron-back" size={16} color={palette.primary} />
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.dateDisplayBtn}
           onPress={() => setShowDatePickerModal(true)}
           activeOpacity={0.7}
+          accessibilityLabel="Choose month and year"
         >
-          <Ionicons name="calendar-outline" size={14} color="#004b87" />
-          <Text style={styles.dateDisplayText}>
-            {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
+          <Ionicons name="calendar-outline" size={14} color={palette.primary} />
+          <Text style={[styles.dateDisplayText, { color: palette.textPrimary }]}>
+            {selectedMonthLabel} {selectedYear}
           </Text>
-          <Ionicons name="caret-down-outline" size={11} color="#64748b" />
+          <Ionicons name="caret-down-outline" size={11} color={palette.textMuted} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.dateNavArrow} onPress={handleNextMonth}>
-          <Ionicons name="chevron-forward" size={16} color="#004b87" />
+        <TouchableOpacity
+          style={styles.dateNavArrow}
+          onPress={handleNextMonth}
+          accessibilityLabel="Next month"
+        >
+          <Ionicons name="chevron-forward" size={16} color={palette.primary} />
         </TouchableOpacity>
       </View>
 
@@ -211,18 +284,18 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
 
       {/* Name Line */}
       <View style={styles.nameBlock}>
-        <Text style={styles.nameText}>{data.faculty_name.toUpperCase()}</Text>
+        <Text style={styles.nameText}>{facultyDisplayName.toUpperCase()}</Text>
         <View style={styles.blackUnderline} />
         <Text style={styles.captionText}>(Name)</Text>
         {data.employee_id ? (
-          <Text style={styles.empIdCaption}>Employee ID: {data.employee_id}</Text>
+          <Text style={styles.empIdCaption}>Employee ID: {cleanText(data.employee_id, 60)}</Text>
         ) : null}
       </View>
 
       {/* Month & Prescribed Hours */}
       <View style={styles.hoursBlock}>
         <Text style={styles.monthCoverText}>
-          For the month of <Text style={styles.boldUnderline}>{MONTH_NAMES[selectedMonth - 1]}</Text>, 20
+          For the month of <Text style={styles.boldUnderline}>{selectedMonthLabel}</Text>, 20
           <Text style={styles.boldUnderline}>{String(selectedYear).slice(-2)}</Text>
         </Text>
 
@@ -232,10 +305,16 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
           </Text>
           <View style={styles.hoursSpecBox}>
             <Text style={styles.hoursText}>
-              Regular Days: <Text style={styles.underlineVal}>{data.regular_days_hours || '8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM'}</Text>
+              Regular Days:{' '}
+              <Text style={styles.underlineVal}>
+                {cleanText(data.regular_days_hours, 80) || '8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM'}
+              </Text>
             </Text>
             <Text style={styles.hoursText}>
-              Saturdays: <Text style={styles.underlineVal}>{data.saturdays_hours || 'As Required'}</Text>
+              Saturdays:{' '}
+              <Text style={styles.underlineVal}>
+                {cleanText(data.saturdays_hours, 80) || 'As Required'}
+              </Text>
             </Text>
           </View>
         </View>
@@ -361,9 +440,10 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
           );
         })}
 
-        {/* Totals */}
+        {/* Totals Row (flex aligned with data columns) */}
         <View style={styles.totalRow}>
-          <View style={[styles.cell, styles.colTotalSpan]}>
+          <View style={[styles.cell, styles.colDay]} />
+          <View style={[styles.cell, styles.colTotalFlex]}>
             <Text style={styles.totalThText}>TOTAL</Text>
           </View>
           <View style={[styles.cell, styles.colUtPart, styles.borderLeft]}>
@@ -387,7 +467,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
       </Text>
 
       <View style={styles.sigBox}>
-        <Text style={styles.sigName}>{data.faculty_name}</Text>
+        <Text style={styles.sigName}>{facultyDisplayName}</Text>
         <View style={styles.sigLine} />
         <Text style={styles.captionText}>(Signature of Faculty / Employee)</Text>
       </View>
@@ -404,16 +484,23 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
       {/* Submit Button */}
       {!isSubmitted && onSubmit && (
         <TouchableOpacity
-          style={[styles.submitBtn, submitting && { opacity: 0.6 }]}
+          style={[
+            styles.submitBtn,
+            { backgroundColor: palette.buttonBg },
+            submitting && { opacity: 0.6 },
+          ]}
           onPress={onSubmit}
           disabled={submitting}
+          activeOpacity={0.85}
         >
           {submitting ? (
-            <ActivityIndicator size="small" color="#ffffff" />
+            <ActivityIndicator size="small" color={palette.onPrimary} />
           ) : (
             <>
-              <Ionicons name="send-outline" size={16} color="#ffffff" />
-              <Text style={styles.submitBtnText}>Submit DTR</Text>
+              <Ionicons name="send-outline" size={16} color={palette.onPrimary} />
+              <Text style={[styles.submitBtnText, { color: palette.onPrimary }]}>
+                Submit DTR
+              </Text>
             </>
           )}
         </TouchableOpacity>
@@ -423,12 +510,12 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
 
   // Back Instructions Sheet
   const renderBackSheet = () => (
-    <View style={styles.sheetContainer}>
+    <View style={[styles.sheetContainer, { borderColor: palette.borderStrong }]}>
       <Text style={styles.instTitle}>INSTRUCTIONS</Text>
       <View style={styles.instLine} />
 
       <Text style={styles.instP}>
-        Civil Service Form No. 48, after completion, Should be filed in the records
+        Civil Service Form No. 48, after completion, should be filed in the records
         of the Bureau or Office which submits the monthly report on Civil Service Form
         No. 3 to the Bureau of Civil Service.
       </Text>
@@ -440,15 +527,15 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
         the judge with whom service has been rendered, or by an officer of the
         Department of Justice authorized to do so. The original should be forwarded
         promptly after the end of the month to the Bureau of Civil Service, thru the
-        Department of Justice; the duplicate to kept in the department of justice;
+        Department of Justice; the duplicate kept in the Department of Justice;
         and the triplicate, in the office of the Clerk of Court where service was
         rendered.
       </Text>
 
       <Text style={styles.instP}>
         In the space provided for the purpose on the other side will be indicated the
-        office hours the employee is required to observe, as for example, "Regular
-        days, 8:00 to 12:00 and 1:00 to 4:00; Saturdays 8:00 to 1:00."
+        office hours the employee is required to observe, as for example, &quot;Regular
+        days, 8:00 to 12:00 and 1:00 to 4:00; Saturdays 8:00 to 1:00.&quot;
       </Text>
 
       <Text style={styles.instP}>
@@ -458,7 +545,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
 
       <View style={styles.instQuote}>
         <Text style={styles.instQuoteText}>
-          "Each chief of a Bureau or Office shall require a daily record of
+          &quot;Each chief of a Bureau or Office shall require a daily record of
           attendance of all the officers and employees under him entitled to leave or
           absence or vacation (including faculty) to be kept on the proper form and
           also a systematic office record showing for each day all absences from
@@ -469,7 +556,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
           required to keep a daily record, but all absences of such employees must
           be included in the monthly report of changes and absences. Falsification of
           time records will render the offending officers or employee liable to
-          summary removal from the service and criminal prosecution."
+          summary removal from the service and criminal prosecution.&quot;
         </Text>
       </View>
 
@@ -487,17 +574,35 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
   return (
     <View style={{ gap: 10 }}>
       {/* Side Toggle Bar */}
-      <View style={styles.sideToggleRow}>
+      <View
+        style={[
+          styles.sideToggleRow,
+          { backgroundColor: palette.surface, borderColor: palette.border },
+        ]}
+      >
         {(['FRONT', 'BACK', 'BOTH'] as const).map((side) => {
           const active = viewSide === side;
           return (
             <TouchableOpacity
               key={side}
-              style={[styles.sideToggleBtn, active && styles.sideToggleBtnActive]}
+              style={[
+                styles.sideToggleBtn,
+                active && { backgroundColor: palette.buttonBg },
+              ]}
               onPress={() => setViewSide(side)}
+              activeOpacity={0.8}
             >
-              <Text style={[styles.sideToggleText, active && styles.sideToggleTextActive]}>
-                {side === 'FRONT' ? 'Front (DTR)' : side === 'BACK' ? 'Back (Instructions)' : 'Full View'}
+              <Text
+                style={[
+                  styles.sideToggleText,
+                  { color: active ? palette.onPrimary : palette.textSecondary },
+                ]}
+              >
+                {side === 'FRONT'
+                  ? 'Front (DTR)'
+                  : side === 'BACK'
+                  ? 'Back (Instructions)'
+                  : 'Full View'}
               </Text>
             </TouchableOpacity>
           );
@@ -511,35 +616,56 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
       {/* Month & Year Picker Modal */}
       <Modal
         visible={showDatePickerModal}
-        transparent={true}
+        transparent
         animationType="fade"
         onRequestClose={() => setShowDatePickerModal(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
+          <View
+            style={[
+              styles.modalCard,
+              { backgroundColor: palette.surface, borderColor: palette.border },
+            ]}
+          >
             <View style={styles.modalHeader}>
-              <Ionicons name="calendar" size={20} color="#004b87" />
-              <Text style={styles.modalTitle}>Select Month & Year</Text>
+              <Ionicons name="calendar" size={20} color={palette.primary} />
+              <Text style={[styles.modalTitle, { color: palette.textPrimary }]}>
+                Select Month &amp; Year
+              </Text>
             </View>
 
-            {/* Year Selector */}
-            <Text style={styles.pickerSectionLabel}>YEAR</Text>
+            {/* Dynamic Year Selector */}
+            <Text style={[styles.pickerSectionLabel, { color: palette.textMuted }]}>YEAR</Text>
             <View style={styles.yearGrid}>
-              {[2024, 2025, 2026, 2027].map((y) => (
-                <TouchableOpacity
-                  key={y}
-                  style={[styles.yearChip, selectedYear === y && styles.yearChipActive]}
-                  onPress={() => onMonthChange && onMonthChange(selectedMonth, y)}
-                >
-                  <Text style={[styles.yearChipText, selectedYear === y && styles.yearChipTextActive]}>
-                    {y}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {yearOptions.map((y) => {
+                const active = selectedYear === y;
+                return (
+                  <TouchableOpacity
+                    key={y}
+                    style={[
+                      styles.yearChip,
+                      {
+                        backgroundColor: active ? palette.buttonBg : palette.surfaceSubtle,
+                        borderColor: active ? palette.buttonBg : palette.border,
+                      },
+                    ]}
+                    onPress={() => onMonthChange && onMonthChange(selectedMonth, y)}
+                  >
+                    <Text
+                      style={[
+                        styles.yearChipText,
+                        { color: active ? palette.onPrimary : palette.textSecondary },
+                      ]}
+                    >
+                      {y}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             {/* Months 3x4 Grid */}
-            <Text style={styles.pickerSectionLabel}>MONTH</Text>
+            <Text style={[styles.pickerSectionLabel, { color: palette.textMuted }]}>MONTH</Text>
             <View style={styles.monthsGrid}>
               {MONTH_NAMES.map((m, idx) => {
                 const mNum = idx + 1;
@@ -547,13 +673,24 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
                 return (
                   <TouchableOpacity
                     key={m}
-                    style={[styles.monthChip, active && styles.monthChipActive]}
+                    style={[
+                      styles.monthChip,
+                      {
+                        backgroundColor: active ? palette.buttonBg : palette.surfaceSubtle,
+                        borderColor: active ? palette.buttonBg : palette.border,
+                      },
+                    ]}
                     onPress={() => {
                       if (onMonthChange) onMonthChange(mNum, selectedYear);
                       setShowDatePickerModal(false);
                     }}
                   >
-                    <Text style={[styles.monthChipText, active && styles.monthChipTextActive]}>
+                    <Text
+                      style={[
+                        styles.monthChipText,
+                        { color: active ? palette.onPrimary : palette.textSecondary },
+                      ]}
+                    >
                       {m.slice(0, 3)}
                     </Text>
                   </TouchableOpacity>
@@ -562,69 +699,106 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
             </View>
 
             <TouchableOpacity
-              style={styles.modalCloseBtn}
+              style={[
+                styles.modalCloseBtn,
+                { backgroundColor: palette.surfaceSubtle, borderColor: palette.borderStrong },
+              ]}
               onPress={() => setShowDatePickerModal(false)}
             >
-              <Text style={styles.modalCloseBtnText}>Close</Text>
+              <Text style={[styles.modalCloseBtnText, { color: palette.textPrimary }]}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Loafing Review Modal */}
+      {/* Early Departure Review Modal */}
       {selectedViolationRow && (
         <Modal
           visible={Boolean(selectedViolationRow)}
-          transparent={true}
+          transparent
           animationType="fade"
           onRequestClose={() => setSelectedViolationRow(null)}
         >
           <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
+            <View
+              style={[
+                styles.modalCard,
+                { backgroundColor: palette.surface, borderColor: palette.border },
+              ]}
+            >
               <View style={styles.modalHeader}>
-                <Ionicons name="warning" size={24} color="#dc2626" />
-                <Text style={styles.modalTitle}>Loafing Violation Review</Text>
+                <Ionicons name="warning" size={24} color={palette.danger} />
+                <Text style={[styles.modalTitle, { color: palette.textPrimary }]}>
+                  Early Departure Review
+                </Text>
               </View>
 
-              <Text style={styles.modalDesc}>
+              <Text style={[styles.modalDesc, { color: palette.textSecondary }]}>
                 An unexcused departure was recorded for{' '}
-                <Text style={{ fontWeight: '800' }}>{data.faculty_name}</Text> on{' '}
-                <Text style={{ fontWeight: '800' }}>{selectedViolationRow.date_str}</Text>.
-                If not excused, this day incurs a salary deduction.
+                <Text style={{ fontWeight: '800', color: palette.textPrimary }}>
+                  {facultyDisplayName}
+                </Text>{' '}
+                on{' '}
+                <Text style={{ fontWeight: '800', color: palette.textPrimary }}>
+                  {selectedViolationRow.date_str}
+                </Text>
+                . If not excused, this day may incur a deduction.
               </Text>
 
-              <Text style={styles.gateNote}>
-                Gate Note: {selectedViolationRow.loafing_remarks || 'None'}
+              <Text style={[styles.violationNote, { color: palette.danger }]}>
+                Attendance Note: {cleanText(selectedViolationRow.loafing_remarks, 200) || 'None'}
               </Text>
 
-              <Text style={styles.modalInputLabel}>Official Remarks / Justification:</Text>
+              <Text style={[styles.modalInputLabel, { color: palette.textPrimary }]}>
+                Official Remarks / Justification:
+              </Text>
               <TextInput
-                style={styles.modalInput}
+                style={[
+                  styles.modalInput,
+                  {
+                    backgroundColor: palette.surfaceSubtle,
+                    borderColor: palette.borderStrong,
+                    color: palette.textPrimary,
+                  },
+                ]}
                 value={pardonRemarks}
                 onChangeText={setPardonRemarks}
                 placeholder="Enter justification for excusing departure..."
-                placeholderTextColor="#94a3b8"
+                placeholderTextColor={palette.textMuted}
+                maxLength={300}
               />
 
               <View style={styles.modalActions}>
                 <TouchableOpacity
-                  style={styles.modalBtnCancel}
+                  style={[
+                    styles.modalBtnCancel,
+                    { backgroundColor: palette.surfaceSubtle, borderColor: palette.border },
+                  ]}
                   onPress={() => setSelectedViolationRow(null)}
+                  disabled={actionProcessing}
                 >
-                  <Text style={styles.modalBtnCancelText}>Cancel</Text>
+                  <Text style={[styles.modalBtnCancelText, { color: palette.textPrimary }]}>
+                    Cancel
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.modalBtnConfirm, actionProcessing && { opacity: 0.6 }]}
+                  style={[
+                    styles.modalBtnConfirm,
+                    { backgroundColor: palette.buttonBg },
+                    actionProcessing && { opacity: 0.6 },
+                  ]}
                   onPress={handleExcuseLoafing}
                   disabled={actionProcessing}
                 >
                   {actionProcessing ? (
-                    <ActivityIndicator size="small" color="#ffffff" />
+                    <ActivityIndicator size="small" color={palette.onPrimary} />
                   ) : (
                     <>
-                      <Ionicons name="checkmark-done" size={15} color="#ffffff" />
-                      <Text style={styles.modalBtnConfirmText}>Pardon &amp; Clear</Text>
+                      <Ionicons name="checkmark-done" size={15} color={palette.onPrimary} />
+                      <Text style={[styles.modalBtnConfirmText, { color: palette.onPrimary }]}>
+                        Excuse &amp; Clear
+                      </Text>
                     </>
                   )}
                 </TouchableOpacity>
@@ -640,22 +814,25 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
 const styles = StyleSheet.create({
   sideToggleRow: {
     flexDirection: 'row',
-    backgroundColor: '#ffffff',
     borderRadius: 8,
     padding: 3,
     borderWidth: 1,
-    borderColor: '#cbd5e1',
     gap: 4,
   },
-  sideToggleBtn: { flex: 1, paddingVertical: 6, alignItems: 'center', borderRadius: 6 },
-  sideToggleBtnActive: { backgroundColor: '#004b87' },
-  sideToggleText: { fontSize: 10.5, fontWeight: '800', color: '#64748b' },
-  sideToggleTextActive: { color: '#ffffff' },
+  sideToggleBtn: {
+    flex: 1,
+    paddingVertical: 7,
+    alignItems: 'center',
+    borderRadius: 6,
+  },
+  sideToggleText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+  },
 
   sheetContainer: {
     backgroundColor: '#ffffff',
     borderWidth: 1.5,
-    borderColor: '#0f172a',
     borderRadius: 4,
     padding: 10,
     position: 'relative',
@@ -665,9 +842,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#cbd5e1',
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 5,
@@ -675,7 +850,7 @@ const styles = StyleSheet.create({
   },
   dateNavArrow: { padding: 4 },
   dateDisplayBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
-  dateDisplayText: { fontSize: 12, fontWeight: '800', color: '#004b87' },
+  dateDisplayText: { fontSize: 12, fontWeight: '800' },
 
   watermarkOverlay: {
     position: 'absolute',
@@ -738,9 +913,25 @@ const styles = StyleSheet.create({
   underlineVal: { textDecorationLine: 'underline', fontWeight: '700' },
 
   table: { borderWidth: 1.2, borderColor: '#0f172a', backgroundColor: '#ffffff', marginTop: 4 },
-  tableRowHeader: { flexDirection: 'row', backgroundColor: '#f8fafc', borderBottomWidth: 1, borderColor: '#0f172a' },
-  tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#cbd5e1', minHeight: 18, alignItems: 'center' },
-  totalRow: { flexDirection: 'row', backgroundColor: '#f1f5f9', minHeight: 20, alignItems: 'center' },
+  tableRowHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#f8fafc',
+    borderBottomWidth: 1,
+    borderColor: '#0f172a',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderColor: '#cbd5e1',
+    minHeight: 18,
+    alignItems: 'center',
+  },
+  totalRow: {
+    flexDirection: 'row',
+    backgroundColor: '#f1f5f9',
+    minHeight: 20,
+    alignItems: 'center',
+  },
   cell: { paddingVertical: 1, paddingHorizontal: 1, alignItems: 'center', justifyContent: 'center' },
   borderLeft: { borderLeftWidth: 1, borderLeftColor: '#0f172a' },
   colDay: { width: 30 },
@@ -748,13 +939,13 @@ const styles = StyleSheet.create({
   colTime: { flex: 1 },
   colUt: { flex: 1.2 },
   colUtPart: { flex: 0.6 },
-  colTotalSpan: { width: 30 + 4 * 56 },
+  colTotalFlex: { flex: 4, alignItems: 'flex-end', paddingRight: 6 },
   thBold: { fontSize: 8.5, fontWeight: '800', color: '#0f172a', textAlign: 'center' },
   thSmall: { fontSize: 6.8, fontWeight: '800', color: '#334155', textAlign: 'center' },
   dayText: { fontSize: 9, fontWeight: '800', color: '#0f172a' },
   tdText: { fontSize: 8.5, color: '#334155', textAlign: 'center' },
   redText: { color: '#dc2626', fontWeight: '800' },
-  totalThText: { fontSize: 9, fontWeight: '900', color: '#0f172a', textAlign: 'right', paddingRight: 6 },
+  totalThText: { fontSize: 9, fontWeight: '900', color: '#0f172a', textAlign: 'right' },
   totalValText: { fontSize: 9, fontWeight: '900', color: '#dc2626', textAlign: 'center' },
   certBody: { fontSize: 8.5, color: '#0f172a', textAlign: 'justify', lineHeight: 12, marginTop: 8 },
   sigBox: { alignItems: 'center', marginTop: 12 },
@@ -767,19 +958,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#004b87',
     paddingVertical: 10,
     borderRadius: 8,
     marginTop: 12,
     gap: 6,
   },
-  submitBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
+  submitBtnText: { fontSize: 12, fontWeight: '800' },
 
-  instTitle: { fontSize: 13, fontWeight: '900', textAlign: 'center', color: '#0f172a', letterSpacing: 0.6 },
+  instTitle: {
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
+    color: '#0f172a',
+    letterSpacing: 0.6,
+  },
   instLine: { height: 1, backgroundColor: '#0f172a', marginVertical: 6 },
   instP: { fontSize: 8.5, color: '#0f172a', lineHeight: 12.5, textAlign: 'justify', marginBottom: 6 },
   instQuote: { borderLeftWidth: 1.5, borderLeftColor: '#0f172a', paddingLeft: 6, marginVertical: 4 },
-  instQuoteText: { fontSize: 8, fontStyle: 'italic', color: '#0f172a', lineHeight: 11.5, textAlign: 'justify' },
+  instQuoteText: {
+    fontSize: 8,
+    fontStyle: 'italic',
+    color: '#0f172a',
+    lineHeight: 11.5,
+    textAlign: 'justify',
+  },
   instNote: { fontSize: 8, color: '#334155', lineHeight: 11.5, textAlign: 'justify', marginTop: 4 },
 
   modalOverlay: {
@@ -790,80 +992,69 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   modalCard: {
-    backgroundColor: '#ffffff',
     borderRadius: 12,
     padding: 16,
     width: '100%',
     maxWidth: 380,
     borderWidth: 1,
-    borderColor: '#cbd5e1',
   },
   modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-  modalTitle: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
-  pickerSectionLabel: { fontSize: 10, fontWeight: '800', color: '#64748b', marginBottom: 6, letterSpacing: 0.5 },
+  modalTitle: { fontSize: 14, fontWeight: '800' },
+  pickerSectionLabel: { fontSize: 10, fontWeight: '800', marginBottom: 6, letterSpacing: 0.5 },
   yearGrid: { flexDirection: 'row', gap: 6, marginBottom: 14 },
   yearChip: {
     flex: 1,
     paddingVertical: 6,
-    backgroundColor: '#f1f5f9',
     borderRadius: 6,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
   },
-  yearChipActive: { backgroundColor: '#004b87', borderColor: '#004b87' },
-  yearChipText: { fontSize: 11.5, fontWeight: '700', color: '#475569' },
-  yearChipTextActive: { color: '#ffffff' },
+  yearChipText: { fontSize: 11.5, fontWeight: '700' },
   monthsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 14 },
   monthChip: {
     width: '31%',
     paddingVertical: 8,
-    backgroundColor: '#f1f5f9',
     borderRadius: 6,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
   },
-  monthChipActive: { backgroundColor: '#004b87', borderColor: '#004b87' },
-  monthChipText: { fontSize: 11.5, fontWeight: '700', color: '#475569' },
-  monthChipTextActive: { color: '#ffffff' },
+  monthChipText: { fontSize: 11.5, fontWeight: '700' },
   modalCloseBtn: {
     paddingVertical: 8,
-    backgroundColor: '#f1f5f9',
     borderRadius: 6,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#cbd5e1',
   },
-  modalCloseBtnText: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  modalCloseBtnText: { fontSize: 12, fontWeight: '700' },
 
-  modalDesc: { fontSize: 11, color: '#334155', lineHeight: 15, marginBottom: 8 },
-  gateNote: { fontSize: 10.5, fontStyle: 'italic', color: '#dc2626', marginBottom: 10 },
-  modalInputLabel: { fontSize: 10.5, fontWeight: '700', color: '#0f172a', marginBottom: 4 },
+  modalDesc: { fontSize: 11, lineHeight: 15, marginBottom: 8 },
+  violationNote: { fontSize: 10.5, fontStyle: 'italic', marginBottom: 10 },
+  modalInputLabel: { fontSize: 10.5, fontWeight: '700', marginBottom: 4 },
   modalInput: {
-    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#cbd5e1',
     borderRadius: 6,
-    paddingVertical: 6,
+    paddingVertical: 8,
     paddingHorizontal: 10,
     fontSize: 12,
-    color: '#0f172a',
     marginBottom: 12,
   },
   modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
-  modalBtnCancel: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, backgroundColor: '#f1f5f9' },
-  modalBtnCancelText: { fontSize: 11.5, fontWeight: '700', color: '#475569' },
+  modalBtnCancel: {
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  modalBtnCancelText: { fontSize: 11.5, fontWeight: '700' },
   modalBtnConfirm: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingVertical: 6,
+    paddingVertical: 7,
     paddingHorizontal: 12,
     borderRadius: 6,
-    backgroundColor: '#059669',
   },
-  modalBtnConfirmText: { fontSize: 11.5, fontWeight: '800', color: '#ffffff' },
+  modalBtnConfirmText: { fontSize: 11.5, fontWeight: '800' },
 });
 
 export default DTRReportView;

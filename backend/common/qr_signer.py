@@ -19,7 +19,9 @@ def sign_student_qr(lrn: str, qr_token: str) -> str:
     return f"ATTENDSURE:{clean_lrn}:{clean_token}:{sig}"
 
 
-def verify_student_qr(raw_scan: str, *, allow_legacy_unsigned: bool = True) -> VerifiedQrData | None:
+def verify_student_qr(raw_scan: str, *, allow_legacy_unsigned: bool | None = None) -> VerifiedQrData | None:
+    if allow_legacy_unsigned is None:
+        allow_legacy_unsigned = bool(getattr(settings, "ALLOW_LEGACY_UNSIGNED_QR", False))
     clean = str(raw_scan or "").strip().replace("\r", "").replace("\n", "").replace("\0", "")[:128]
     if not clean:
         return None

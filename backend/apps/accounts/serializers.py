@@ -108,7 +108,7 @@ class UserAccountSerializer(serializers.ModelSerializer):
         emp_id = str(validated_data.pop("employee_id", "") or validated_data["username"]).strip().upper()
         phone = normalize_ph_phone(validated_data.pop("contact_number", ""))
         dept = validated_data.pop("department", "Junior High School")
-        pos = validated_data.pop("position", "Teacher I")
+        pos = validated_data.pop("position", "Faculty I")
         photo = validated_data.pop("photo", None)
 
         user = User(**validated_data, is_staff=(role == "ADMIN"), is_superuser=(role == "ADMIN"))
@@ -162,7 +162,8 @@ class UserAccountSerializer(serializers.ModelSerializer):
         phone = validated_data.pop("contact_number", None)
         dept = validated_data.pop("department", None)
         pos = validated_data.pop("position", None)
-        validated_data.pop("employee_id", None)
+        emp_id = validated_data.pop("employee_id", None)
+        has_photo = "photo" in validated_data
         photo = validated_data.pop("photo", None)
 
         if not is_admin:
@@ -187,7 +188,7 @@ class UserAccountSerializer(serializers.ModelSerializer):
             profile.is_teaching = False if profile.role == "PARENT" else bool(is_teaching)
         if phone is not None:
             profile.phone_number = normalize_ph_phone(phone)
-        if photo:
+        if has_photo:
             profile.avatar = photo
         profile.is_profile_completed = bool(instance.first_name and instance.last_name)
         profile.save()
@@ -197,15 +198,27 @@ class UserAccountSerializer(serializers.ModelSerializer):
             t.first_name = instance.first_name or t.first_name
             t.last_name = instance.last_name or t.last_name
             t.email = instance.email or t.email
+            if emp_id is not None and str(emp_id).strip():
+                clean_emp = str(emp_id).strip().upper()[:50]
+                if clean_emp != t.employee_id:
+                    if TeacherProfile.objects.filter(employee_id__iexact=clean_emp).exclude(id=t.id).exists():
+                        raise serializers.ValidationError({"employee_id": "Employee ID is already assigned to another faculty member."})
+                    t.employee_id = clean_emp
             if phone is not None:
                 t.contact_number = profile.phone_number
             if dept is not None:
                 t.department = dept
             if pos is not None:
                 t.position = pos
+            if has_photo:
+                if photo and hasattr(photo, "seek"):
+                    photo.seek(0)
+                t.photo = photo
             t.can_teach = profile.is_teaching
             t.is_active = instance.is_active
             t.save()
+            profile.teacher = t
 
+        instance.profile = profile
         cache.delete(user_session_cache_key(instance.id))
         return instance

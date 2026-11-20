@@ -1,10 +1,15 @@
 from datetime import datetime
 from django.utils import timezone
-from rest_framework import permissions, status, viewsets
+from rest_framework import permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import ClassAttendance
+
+from apps.accounts.selectors import get_teacher_student_ids, resolve_teacher_for_user
+from common.audit import AuditedModelViewSet, record_audit_log
+from common.exceptions import AppError
+from common.permissions import get_user_role, is_school_leader
+from .models import ClassAttendance, DailyAttendance
 from .selectors import (
     get_adviser_matrix,
     get_assigned_classes_with_rosters,
@@ -80,6 +85,8 @@ class ClassAttendanceView(APIView):
 
     def post(self, request):
         student_id = request.data.get("student_id")
+        if not student_id or not str(student_id).isdigit():
+            return Response({"error": "Valid student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
         per_id = request.data.get("schedule_id") or request.data.get("period_id")
         log = save_manual_attendance(
             user=request.user,
@@ -88,30 +95,80 @@ class ClassAttendanceView(APIView):
             period_id=int(per_id) if (per_id and str(per_id).isdigit()) else None,
             date_str=request.data.get("attendance_date"),
         )
+        record_audit_log(
+            request=request,
+            table_name=log._meta.db_table,
+            record_id=log.id,
+            action="CREATE",
+            new_data={"student_id": log.student_id, "status": log.status},
+        )
         return Response({"ok": True, "success": True, "id": log.id, "status": log.status}, status=status.HTTP_201_CREATED)
 
     def put(self, request):
         rec_id = request.data.get("id") or request.query_params.get("id")
-        if rec_id and str(rec_id).isdigit():
+        if rec_id is not None and str(rec_id).strip() != "":
+            if not str(rec_id).isdigit():
+                return Response({"error": "Valid attendance record id is required."}, status=status.HTTP_400_BAD_REQUEST)
             existing = ClassAttendance.objects.filter(id=int(rec_id)).first()
-            if existing:
-                log = save_manual_attendance(
-                    user=request.user,
-                    student_id=existing.student_id,
-                    status_code=str(request.data.get("status", existing.status)),
-                    period_id=existing.class_period_id,
-                    date_str=str(existing.attendance_date),
-                )
-                return Response({"ok": True, "success": True, "id": log.id, "status": log.status})
+            if not existing:
+                return Response({"error": "Attendance record not found."}, status=status.HTTP_404_NOT_FOUND)
+            log = save_manual_attendance(
+                user=request.user,
+                student_id=existing.student_id,
+                status_code=str(request.data.get("status", existing.status)),
+                period_id=existing.class_period_id,
+                date_str=str(existing.attendance_date),
+            )
+            record_audit_log(
+                request=request,
+                table_name=log._meta.db_table,
+                record_id=log.id,
+                action="UPDATE",
+                new_data={"student_id": log.student_id, "status": log.status},
+            )
+            return Response({"ok": True, "success": True, "id": log.id, "status": log.status})
         return self.post(request)
 
     def patch(self, request):
         return self.put(request)
 
     def delete(self, request):
+        if get_user_role(request.user) == "PARENT":
+            return Response({"error": "Parent accounts cannot remove attendance records."}, status=status.HTTP_403_FORBIDDEN)
+
         rec_id = request.data.get("id") or request.query_params.get("id")
-        ClassAttendance.objects.filter(id=int(rec_id)).delete()
+        if not rec_id or not str(rec_id).isdigit():
+            return Response({"error": "Valid attendance record id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing = ClassAttendance.objects.filter(id=int(rec_id)).first()
+        if not existing:
+            return Response({"error": "Attendance record not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not is_school_leader(request.user):
+            teacher = resolve_teacher_for_user(request.user)
+            if not teacher or existing.student_id not in get_teacher_student_ids(teacher):
+                return Response({"error": "You can only remove attendance for your assigned students."}, status=status.HTTP_403_FORBIDDEN)
+
+        student_id = existing.student_id
+        att_date = existing.attendance_date
+        rec_pk = existing.id
+        existing.delete()
+
+        remaining = ClassAttendance.objects.filter(student_id=student_id, attendance_date=att_date).order_by("-scanned_at").first()
+        if remaining:
+            DailyAttendance.objects.filter(student_id=student_id, attendance_date=att_date).update(status=remaining.status)
+        else:
+            DailyAttendance.objects.filter(student_id=student_id, attendance_date=att_date).delete()
+
+        record_audit_log(
+            request=request,
+            table_name=ClassAttendance._meta.db_table,
+            record_id=rec_pk,
+            action="DELETE",
+            new_data={"student_id": student_id, "attendance_date": str(att_date)},
+        )
         return Response({"ok": True, "success": True, "message": "Attendance record removed."})
+
 
 class AssignedClassRosterView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -127,7 +184,8 @@ class AssignedClassRosterView(APIView):
                 request=request,
             )
         )
-        
+
+
 class SectionStudentListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -151,7 +209,7 @@ class AdviserMatrixView(APIView):
         )
 
 
-class ExitPassViewSet(viewsets.ModelViewSet):
+class ExitPassViewSet(AuditedModelViewSet):
     serializer_class = ExitPassSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -161,6 +219,26 @@ class ExitPassViewSet(viewsets.ModelViewSet):
             status_filter=self.request.query_params.get("status", "ALL"),
             search=self.request.query_params.get("search", "").strip(),
         )
+
+    def _assert_can_modify_pass(self, instance):
+        user = self.request.user
+        if get_user_role(user) == "PARENT":
+            raise AppError("FORBIDDEN", "Parent accounts cannot modify or delete exit passes.", 403)
+        if is_school_leader(user):
+            return
+        own_teacher = resolve_teacher_for_user(user)
+        if not own_teacher or (instance.issued_by_id != own_teacher.id and instance.teacher_id != own_teacher.id):
+            raise AppError("FORBIDDEN", "You can only edit or remove exit passes you issued.", 403)
+        if instance.status == "USED":
+            raise AppError("PASS_LOCKED", "Used exit passes cannot be modified by non-administrators.", 400)
+
+    def perform_update(self, serializer):
+        self._assert_can_modify_pass(serializer.instance)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._assert_can_modify_pass(instance)
+        super().perform_destroy(instance)
 
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, pk=None):

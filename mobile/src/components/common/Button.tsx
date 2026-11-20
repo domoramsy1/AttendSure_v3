@@ -15,8 +15,8 @@ export function Button({ title, onPress, variant = 'primary', loading = false, d
   const { palette, radius, spacing, fonts } = useThemeMode();
 
   const stylesMap = {
-    primary: { bg: palette.primary, text: '#ffffff', border: 'transparent' },
-    danger: { bg: palette.danger, text: '#ffffff', border: 'transparent' },
+    primary: { bg: palette.buttonBg, text: palette.onPrimary, border: 'transparent' },
+    danger: { bg: palette.dangerBg, text: palette.onPrimary, border: 'transparent' },
     secondary: { bg: palette.surfaceSubtle, text: palette.textPrimary, border: palette.border },
     outline: { bg: 'transparent', text: palette.textSecondary, border: palette.borderStrong },
   };

@@ -4,37 +4,151 @@
  */
 
 import React from 'react';
-import { View, ViewStyle } from 'react-native';
+import { View, Text, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { Image } from 'expo-image';
+import { useThemeMode } from '../context/ThemeContext';
 
-const ATTENDSURE_SVG = require('../../assets/AttendSureLogo.svg');
-const TECHBLAZER_SVG = require('../../assets/techblazer.svg');
+export const ATTENDSURE_LOGO_ASSET = require('../../assets/AttendSureLogo.svg');
+export const TECHBLAZER_LOGO_ASSET = require('../../assets/techblazer.svg');
 
-interface LogoProps {
+export interface AttendSureLogoProps {
   size?: number;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }
 
-export const AttendSureLogo: React.FC<LogoProps> = ({ size = 48, style }) => (
-  <View
-    style={[
-      {
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: '#ffffff',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-      },
-      style,
-    ]}
-  >
-    <Image source={ATTENDSURE_SVG} style={{ width: size, height: size }} contentFit="contain" />
-  </View>
-);
+export const AttendSureLogo: React.FC<AttendSureLogoProps> = ({ size = 48, style }) => {
+  const { palette } = useThemeMode();
 
-export const TechBlazerLogo: React.FC<{ width?: number; height?: number }> = ({
+  return (
+    <View
+      style={[
+        styles.logoCircle,
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderColor: palette.border,
+          borderWidth: palette.isDark ? 1 : 0,
+        },
+        style,
+      ]}
+    >
+      <Image
+        source={ATTENDSURE_LOGO_ASSET}
+        style={{ width: size, height: size }}
+        contentFit="contain"
+        priority="high"
+        cachePolicy="memory-disk"
+      />
+    </View>
+  );
+};
+
+export interface TechBlazerLogoProps {
+  width?: number;
+  height?: number;
+  style?: StyleProp<ViewStyle>;
+}
+
+export const TechBlazerLogo: React.FC<TechBlazerLogoProps> = ({
   width = 76,
   height = 16,
-}) => <Image source={TECHBLAZER_SVG} style={{ width, height }} contentFit="contain" />;
+  style,
+}) => {
+  const { palette } = useThemeMode();
+
+  if (palette.isDark) {
+    return (
+      <View
+        style={[
+          styles.darkLogoPill,
+          { borderColor: palette.border },
+          style,
+        ]}
+      >
+        <Image
+          source={TECHBLAZER_LOGO_ASSET}
+          style={{ width, height }}
+          contentFit="contain"
+          cachePolicy="memory-disk"
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View style={style}>
+      <Image
+        source={TECHBLAZER_LOGO_ASSET}
+        style={{ width, height }}
+        contentFit="contain"
+        cachePolicy="memory-disk"
+      />
+    </View>
+  );
+};
+
+export interface TechBlazerSignatureProps {
+  size?: number;
+  style?: StyleProp<ViewStyle>;
+}
+
+export const TechBlazerSignature: React.FC<TechBlazerSignatureProps> = ({
+  size = 22,
+  style,
+}) => {
+  const { palette } = useThemeMode();
+
+  return (
+    <View style={[styles.signatureContainer, style]}>
+      <Text style={[styles.fromText, { color: palette.textMuted }]}>from</Text>
+      <View style={styles.brandRow}>
+        <Text style={[styles.brandText, { fontSize: size, color: palette.textPrimary }]}>
+          TECHBLAZER
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  logoCircle: {
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  darkLogoPill: {
+    backgroundColor: '#ffffff',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  signatureContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fromText: {
+    fontSize: 11,
+    marginBottom: 3,
+    textTransform: 'lowercase',
+    letterSpacing: 0.5,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  brandText: {
+    fontWeight: '800',
+    letterSpacing: 2.5,
+  },
+});
+
+export default {
+  AttendSureLogo,
+  TechBlazerLogo,
+  TechBlazerSignature,
+};

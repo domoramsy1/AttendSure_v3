@@ -1,31 +1,23 @@
+# D:\AttendSure_V3\backend\gunicorn.conf.py
 """
 ATTENDSURE - Gunicorn Production Configuration
-Formula for workers: (2 x CPU cores) + 1
-Example: 4 CPU cores = 9 workers
+Reads GUNICORN_BIND so Blue (8001), Green (8002), and standalone (8000) all work from one config.
 """
 
 import multiprocessing
+import os
 
-# Bind to internal port (Nginx will talk to this)
-bind = "127.0.0.1:8000"
-
-# Number of worker processes handling requests
-workers = (multiprocessing.cpu_count() * 2) + 1
-
-# Worker type
-worker_class = "sync"
-
-# Maximum time a worker can take to answer before restarting (prevents frozen requests)
-timeout = 30
-
-# Keep-alive connections for fast mobile requests
+bind = os.getenv("GUNICORN_BIND", "0.0.0.0:8000")
+workers = int(os.getenv("GUNICORN_WORKERS", str(min((multiprocessing.cpu_count() * 2) + 1, 9))))
+threads = int(os.getenv("GUNICORN_THREADS", "2"))
+worker_class = "gthread"
+timeout = 60
 keepalive = 5
 
-# Restart workers periodically to prevent memory leaks from photo processing
+# Periodically recycle workers to prevent Pillow image memory growth
 max_requests = 1000
 max_requests_jitter = 100
 
-# Logging
 accesslog = "-"
 errorlog = "-"
-loglevel = "info"
+loglevel = os.getenv("GUNICORN_LOG_LEVEL", "info")

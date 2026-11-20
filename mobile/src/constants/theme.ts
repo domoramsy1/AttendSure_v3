@@ -1,5 +1,5 @@
 /**
- * AttendSure Mobile - Master Colors, Fonts, Reusable Styles & Security
+ * AttendSure Mobile - Master Theme Tokens, Shared Styles & Input Safety
  * File: mobile/src/constants/theme.ts
  */
 
@@ -48,6 +48,9 @@ export interface ThemePalette {
   primary: string;
   primaryDark: string;
   primarySoft: string;
+  buttonBg: string;
+  dangerBg: string;
+  onPrimary: string;
   secondary: string;
   background: string;
   surface: string;
@@ -76,6 +79,9 @@ export const PALETTES: Record<ThemeMode, ThemePalette> = {
     primary: '#004b87',
     primaryDark: '#003460',
     primarySoft: '#dbe4ff',
+    buttonBg: '#004b87',
+    dangerBg: '#dc2626',
+    onPrimary: '#ffffff',
     secondary: '#0284c7',
     background: '#f4f6fb',
     surface: '#ffffff',
@@ -102,6 +108,9 @@ export const PALETTES: Record<ThemeMode, ThemePalette> = {
     primary: '#38bdf8',
     primaryDark: '#0284c7',
     primarySoft: 'rgba(56, 189, 248, 0.18)',
+    buttonBg: '#0284c7',
+    dangerBg: '#dc2626',
+    onPrimary: '#ffffff',
     secondary: '#60a5fa',
     background: '#0b1120',
     surface: '#1e293b',
@@ -128,6 +137,9 @@ export const PALETTES: Record<ThemeMode, ThemePalette> = {
     primary: '#002b4d',
     primaryDark: '#001a33',
     primarySoft: '#dbeafe',
+    buttonBg: '#002b4d',
+    dangerBg: '#b91c1c',
+    onPrimary: '#ffffff',
     secondary: '#004b87',
     background: '#ffffff',
     surface: '#ffffff',
@@ -202,13 +214,13 @@ export const createUiStyles = (p: ThemePalette) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: p.primary,
+      backgroundColor: p.buttonBg,
       height: 44,
       borderRadius: RADIUS.md,
       paddingHorizontal: SPACING.md,
       gap: 6,
     },
-    buttonPrimaryText: { color: '#ffffff', fontSize: FONTS.sm, fontWeight: FONTS.weight.extrabold },
+    buttonPrimaryText: { color: p.onPrimary, fontSize: FONTS.sm, fontWeight: FONTS.weight.extrabold },
     buttonSecondary: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -232,18 +244,98 @@ export const createUiStyles = (p: ThemePalette) =>
 
 export const createMobileStyles = createUiStyles;
 
+const SAFE_RASTER_DATA_URI = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i;
+
 export const isSafeUrl = (url?: string | null): url is string => {
   if (!url || typeof url !== 'string') return false;
-  const clean = url.trim().toLowerCase();
+  const trimmed = url.trim();
+  const clean = trimmed.toLowerCase();
   if (!clean || ['null', 'undefined', 'none'].includes(clean)) return false;
-  if (clean.startsWith('javascript:') || clean.startsWith('vbscript:') || clean.startsWith('file:')) return false;
-  if (clean.startsWith('data:') && !clean.startsWith('data:image/')) return false;
-  return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('/') || clean.startsWith('data:image/');
+  if (
+    clean.startsWith('javascript:') ||
+    clean.startsWith('vbscript:') ||
+    clean.startsWith('file:') ||
+    clean.startsWith('data:image/svg')
+  ) {
+    return false;
+  }
+  if (clean.startsWith('data:')) {
+    return SAFE_RASTER_DATA_URI.test(trimmed);
+  }
+  if (clean.startsWith('/')) {
+    return !clean.startsWith('//');
+  }
+  return clean.startsWith('http://') || clean.startsWith('https://');
 };
 
 export const cleanText = (val?: string | null, maxLen = 200): string => {
   if (!val) return '';
-  return String(val).replace(/[\r\n\t<>]/g, ' ').trim().slice(0, maxLen);
+  return String(val)
+    .replace(/[\u0000-\u001F\u007F<>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+};
+
+export const getFriendlyErrorMessage = (
+  err: unknown,
+  fallback = 'Something went wrong. Please try again.'
+): string => {
+  const e = err as {
+    response?: { status?: number; data?: unknown };
+    code?: string;
+    message?: string;
+  };
+  const status = e?.response?.status;
+  const data = e?.response?.data;
+
+  const isUnsafeRaw = (text: string): boolean => {
+    const trimmed = text.trim();
+    return (
+      trimmed.startsWith('<!DOCTYPE') ||
+      trimmed.startsWith('<html') ||
+      trimmed.includes('Traceback (most recent call last)') ||
+      trimmed.includes('File "/') ||
+      trimmed.length > 280
+    );
+  };
+
+  if (typeof data === 'string' && data.trim() && !isUnsafeRaw(data)) {
+    return data.trim();
+  }
+
+  if (data && typeof data === 'object') {
+    const record = data as Record<string, unknown>;
+    const candidate = record.detail || record.error || record.message;
+    if (typeof candidate === 'string' && candidate.trim() && !isUnsafeRaw(candidate)) {
+      return candidate.trim();
+    }
+    const firstVal = Object.values(record)[0];
+    if (Array.isArray(firstVal) && typeof firstVal[0] === 'string' && !isUnsafeRaw(firstVal[0])) {
+      return firstVal[0];
+    }
+    if (typeof firstVal === 'string' && firstVal.trim() && !isUnsafeRaw(firstVal)) {
+      return firstVal.trim();
+    }
+  }
+
+  if (status === 401) return 'Your session expired. Please sign in again.';
+  if (status === 403) return 'You do not have permission to perform this action.';
+  if (status === 404) return 'The requested information could not be found.';
+  if (status && status >= 500) return 'The server is temporarily unavailable. Please try again shortly.';
+
+  if (e?.code === 'ECONNABORTED' || e?.message?.toLowerCase().includes('timeout')) {
+    return 'The request took too long. Please check your connection and try again.';
+  }
+  if (e?.message?.toLowerCase().includes('network error')) {
+    return 'Cannot reach the school server. Check your Wi-Fi or server address.';
+  }
+
+  if (err instanceof Error && err.message && !isUnsafeRaw(err.message) && !err.message.includes('Request failed with status')) {
+    return err.message;
+  }
+
+  return fallback;
 };
 
 export const COLORS = {

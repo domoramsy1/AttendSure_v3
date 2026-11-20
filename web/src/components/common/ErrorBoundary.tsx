@@ -1,9 +1,8 @@
 /**
  * AttendSure - Fault Isolation Error Boundary
- * File: frontend/src/components/common/ErrorBoundary.tsx
+ * File: web/src/components/common/ErrorBoundary.tsx
  *
- * Prevents sub-feature crashes (such as heavy DepEd report calculations,
- * canvas layout engines, or station monitors) from crashing the entire portal.
+ * Prevents isolated page issues from crashing the entire web portal.
  */
 
 import React, { Component } from 'react';
@@ -16,7 +15,7 @@ export interface ErrorBoundaryProps {
   fallback?: ReactNode | ((props: { error: Error; resetError: () => void }) => ReactNode);
   onReset?: () => void;
   onError?: (error: Error, errorInfo: ErrorInfo) => void;
-  resetKeys?: any[];
+  resetKeys?: unknown[];
 }
 
 interface State {
@@ -27,7 +26,11 @@ interface State {
   showDetails: boolean;
 }
 
+const IS_DEV = Boolean(import.meta.env.DEV);
+
 export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
+  private copyTimer: ReturnType<typeof setTimeout> | null = null;
+
   public state: State = {
     hasError: false,
     error: null,
@@ -43,18 +46,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     this.setState({ errorInfo });
     this.props.onError?.(error, errorInfo);
-
-    console.error(
-      `[AttendSure Fault Isolation] Critical render failure in ${this.props.featureName || 'Component'}:`,
-      error,
-      errorInfo
-    );
   }
 
   public componentDidUpdate(prevProps: ErrorBoundaryProps) {
     if (!this.state.hasError) return;
 
-    // Automatically recover if any resetKey changed (e.g. user switched tabs, selected another section, or re-navigated)
     if (this.props.resetKeys && prevProps.resetKeys) {
       const hasChanged = this.props.resetKeys.some(
         (key, index) => key !== prevProps.resetKeys?.[index]
@@ -62,6 +58,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
       if (hasChanged) {
         this.handleReset();
       }
+    }
+  }
+
+  public componentWillUnmount() {
+    if (this.copyTimer) {
+      clearTimeout(this.copyTimer);
+      this.copyTimer = null;
     }
   }
 
@@ -77,13 +80,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
   };
 
   private handleCopyDiagnostic = async () => {
-    const errorText = [
-      `Feature: ${this.props.featureName || 'Application Module'}`,
+    const lines = [
+      `Feature: ${this.props.featureName || 'Application Section'}`,
       `Time: ${new Date().toISOString()}`,
-      `Error: ${this.state.error?.name}: ${this.state.error?.message}`,
-      `Stack: ${this.state.error?.stack || 'No stack trace'}`,
-      `Component Stack: ${this.state.errorInfo?.componentStack || 'No component stack'}`,
-    ].join('\n');
+      `Error: ${this.state.error?.name || 'Error'}`,
+    ];
+    if (IS_DEV) {
+      lines.push(`Message: ${this.state.error?.message || ''}`);
+      lines.push(`Stack: ${this.state.error?.stack || 'None'}`);
+    }
+    const errorText = lines.join('\n');
 
     let success = false;
     if (navigator.clipboard && window.isSecureContext) {
@@ -107,14 +113,18 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
         textArea.select();
         success = document.execCommand('copy');
         textArea.remove();
-      } catch (err) {
-        console.error('Copy fallback failed:', err);
+      } catch {
+        success = false;
       }
     }
 
     if (success) {
       this.setState({ copied: true });
-      setTimeout(() => this.setState({ copied: false }), 2500);
+      if (this.copyTimer) clearTimeout(this.copyTimer);
+      this.copyTimer = setTimeout(() => {
+        this.setState({ copied: false });
+        this.copyTimer = null;
+      }, 2500);
     }
   };
 
@@ -131,31 +141,33 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
         return this.props.fallback;
       }
 
-      const featureTitle = this.props.featureName || 'Module';
+      const featureTitle = this.props.featureName || 'Section';
 
       return (
         <div style={errorContainerStyle}>
           <div style={errorCardStyle}>
             <div style={iconBadgeStyle}>
-              <AlertTriangle size={24} color="#dc2626" />
+              <AlertTriangle size={24} color="var(--danger, #dc2626)" />
             </div>
 
             <div style={{ textAlign: 'center', width: '100%' }}>
-              <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', fontWeight: 800, color: '#0f172a' }}>
+              <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary, #0f172a)' }}>
                 {featureTitle} Temporarily Unavailable
               </h3>
-              <p style={{ margin: '0 0 14px 0', fontSize: '0.80rem', color: '#64748b', lineHeight: 1.45 }}>
-                An isolated issue occurred while rendering this feature. Other AttendSure tabs, gate monitors, and background tasks remain operational.
+              <p style={{ margin: '0 0 14px 0', fontSize: '0.82rem', color: 'var(--text-secondary, #64748b)', lineHeight: 1.45 }}>
+                A temporary problem occurred while displaying this section. Other AttendSure tabs, classroom QR scanning, and background tasks are still running normally.
               </p>
 
-              <div style={debugCodeStyle}>
-                {this.state.error.message || String(this.state.error)}
-              </div>
+              {IS_DEV && (
+                <div style={debugCodeStyle}>
+                  {this.state.error.message || 'Unexpected rendering error.'}
+                </div>
+              )}
 
-              {this.state.showDetails && (
+              {IS_DEV && this.state.showDetails && (
                 <div style={stackTraceContainerStyle}>
                   <pre style={stackTracePreStyle}>
-                    {this.state.error.stack || 'No extended stack trace available.'}
+                    {this.state.error.stack || 'No extended details available.'}
                     {this.state.errorInfo?.componentStack || ''}
                   </pre>
                 </div>
@@ -169,32 +181,34 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
                 style={primaryBtnStyle}
               >
                 <RefreshCw size={14} />
-                <span>Retry Feature</span>
+                <span>Try Again</span>
               </button>
 
               <button
                 type="button"
                 onClick={this.handleCopyDiagnostic}
                 style={secondaryBtnStyle}
-                title="Copy technical diagnostic details to clipboard"
+                title="Copy report reference"
               >
-                {this.state.copied ? <Check size={14} color="#059669" /> : <Copy size={14} />}
-                <span>{this.state.copied ? 'Copied' : 'Copy Log'}</span>
+                {this.state.copied ? <Check size={14} color="var(--success, #059669)" /> : <Copy size={14} />}
+                <span>{this.state.copied ? 'Copied' : 'Copy Details'}</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => this.setState((prev) => ({ showDetails: !prev.showDetails }))}
-                style={secondaryBtnStyle}
-              >
-                <span>{this.state.showDetails ? 'Hide Stack' : 'Details'}</span>
-              </button>
+              {IS_DEV && (
+                <button
+                  type="button"
+                  onClick={() => this.setState((prev) => ({ showDetails: !prev.showDetails }))}
+                  style={secondaryBtnStyle}
+                >
+                  <span>{this.state.showDetails ? 'Hide Details' : 'Details'}</span>
+                </button>
+              )}
 
               <button
                 type="button"
                 onClick={() => window.location.reload()}
                 style={secondaryBtnStyle}
-                title="Perform a full page reload"
+                title="Reload the page"
               >
                 <RotateCcw size={14} />
                 <span>Reload</span>
@@ -211,10 +225,6 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
 
 export default ErrorBoundary;
 
-// ============================================================================
-// STYLES
-// ============================================================================
-
 const errorContainerStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -223,17 +233,17 @@ const errorContainerStyle: React.CSSProperties = {
   minHeight: '280px',
   padding: '24px 16px',
   boxSizing: 'border-box',
-  backgroundColor: '#f8fafc',
+  backgroundColor: 'var(--bg-app, #f8fafc)',
 };
 
 const errorCardStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
-  backgroundColor: '#ffffff',
+  backgroundColor: 'var(--bg-surface, #ffffff)',
   borderRadius: 12,
-  border: '1px solid #fecaca',
-  boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.02)',
+  border: '1px solid var(--border-subtle, #e2e8f0)',
+  boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.12)',
   padding: '28px 32px',
   maxWidth: 540,
   width: '100%',
@@ -244,24 +254,24 @@ const iconBadgeStyle: React.CSSProperties = {
   width: 48,
   height: 48,
   borderRadius: '50%',
-  backgroundColor: '#fef2f2',
+  backgroundColor: 'var(--danger-bg, #fef2f2)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   marginBottom: 14,
-  border: '1px solid #fee2e2',
+  border: '1px solid var(--border-subtle, #fee2e2)',
 };
 
 const debugCodeStyle: React.CSSProperties = {
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   fontSize: '0.74rem',
-  color: '#991b1b',
-  backgroundColor: '#fef2f2',
+  color: 'var(--danger, #991b1b)',
+  backgroundColor: 'var(--danger-bg, #fef2f2)',
   padding: '8px 12px',
   borderRadius: 6,
   marginBottom: 16,
   wordBreak: 'break-word',
-  border: '1px solid #fee2e2',
+  border: '1px solid var(--border-subtle, #fee2e2)',
   textAlign: 'left',
 };
 
@@ -300,12 +310,11 @@ const primaryBtnStyle: React.CSSProperties = {
   padding: '8px 16px',
   borderRadius: 6,
   border: 'none',
-  backgroundColor: '#0284c7',
+  backgroundColor: 'var(--brand-button-bg, #0284c7)',
   color: '#ffffff',
   fontWeight: 700,
   fontSize: '0.78rem',
   cursor: 'pointer',
-  boxShadow: '0 2px 4px rgba(2, 132, 199, 0.2)',
 };
 
 const secondaryBtnStyle: React.CSSProperties = {
@@ -314,9 +323,9 @@ const secondaryBtnStyle: React.CSSProperties = {
   gap: 6,
   padding: '8px 12px',
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
-  color: '#475569',
+  border: '1px solid var(--border-input, #cbd5e1)',
+  backgroundColor: 'var(--bg-surface-subtle, #ffffff)',
+  color: 'var(--text-primary, #475569)',
   fontWeight: 600,
   fontSize: '0.78rem',
   cursor: 'pointer',

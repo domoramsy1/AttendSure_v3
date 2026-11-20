@@ -95,10 +95,16 @@ class UserProfile(models.Model):
         return bool(self.locked_until and timezone.now() < self.locked_until)
 
     def record_failed_attempt(self):
+        now = timezone.now()
+        if self.locked_until and now >= self.locked_until:
+            UserProfile.objects.filter(pk=self.pk).update(failed_attempts=1, locked_until=None)
+            self.failed_attempts = 1
+            self.locked_until = None
+            return
         UserProfile.objects.filter(pk=self.pk).update(failed_attempts=F("failed_attempts") + 1)
         self.refresh_from_db(fields=["failed_attempts"])
         if self.failed_attempts >= 5:
-            self.locked_until = timezone.now() + timezone.timedelta(minutes=15)
+            self.locked_until = now + timezone.timedelta(minutes=15)
             self.save(update_fields=["locked_until"])
 
     def reset_failed_attempts(self):

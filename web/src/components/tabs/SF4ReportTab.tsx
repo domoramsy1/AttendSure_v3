@@ -1,9 +1,15 @@
-// web/src/components/tabs/SF4ReportTab.tsx
+/**
+ * AttendSure - DepEd School Form 4 (SF 4) Monthly Learner's Movement and Attendance
+ * File: web/src/components/tabs/SF4ReportTab.tsx
+ */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
+import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
+import { useTheme } from '../../context/ThemeContext';
+import { exportToCsv } from '../common/Pagination';
 import { ReportNavBar } from '../reports/ReportNavBar';
 import { PageSetupModal } from '../common/PageSetupModal';
 import { usePageSetup } from '../../hooks/usePageSetup';
@@ -11,6 +17,30 @@ import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
+
+const HTML2PDF_CDN_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+const HTML2PDF_SRI_HASH =
+  'sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==';
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+const getCurrentMonthName = (): string => MONTH_NAMES[new Date().getMonth()] || MONTH_NAMES[0];
+
+const getDynamicSchoolYear = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  return now.getMonth() >= 5 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
+};
+
+const sanitizeSearch = (raw: string): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, 80);
 
 export interface MetricTriplet {
   m: number;
@@ -111,9 +141,13 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 }) => {
   const { school } = useSchool();
   const { showAlert } = useAlert();
+  const { tokens, brand } = useTheme();
 
-  const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('2026-2027');
-  const [selectedMonth, setSelectedMonth] = useState<string>('October');
+  const [schoolYearOptions, setSchoolYearOptions] = useState<string[]>([]);
+  const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>(
+    () => school.academic_year || getDynamicSchoolYear()
+  );
+  const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonthName);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [reportData, setReportData] = useState<SF4ReportData | null>(null);
@@ -146,6 +180,8 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
   const [fitToWidth, setFitToWidth] = useState<boolean>(true);
   const viewportContainerRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
+  const reportAbortRef = useRef<AbortController | null>(null);
+  const printTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handleBeforePrint = () => setIsPrinting(true);
@@ -155,26 +191,101 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     return () => {
       window.removeEventListener('beforeprint', handleBeforePrint);
       window.removeEventListener('afterprint', handleAfterPrint);
+      if (printTimerRef.current) {
+        clearTimeout(printTimerRef.current);
+        printTimerRef.current = null;
+      }
     };
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const cached = peekApiCache<any>(API_ROUTES.school.schoolYears);
+    const extractYears = (payload: any): string[] => {
+      const list = Array.isArray(payload) ? payload : payload?.results || [];
+      return list
+        .map((item: any) => (typeof item === 'string' ? item : item?.name || item?.code || item?.school_year || ''))
+        .filter(Boolean);
+    };
+    if (cached) {
+      setSchoolYearOptions(extractYears(cached));
+    }
+
+    apiClient
+      .get(API_ROUTES.school.schoolYears, { signal: controller.signal })
+      .then((res) => {
+        if (controller.signal.aborted) return;
+        setSchoolYearOptions(extractYears(res.data));
+      })
+      .catch(() => {
+        // Fallback dynamically to active school year / calendar year
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  const availableAcademicYears = useMemo(() => {
+    const years = Array.from(
+      new Set(
+        [
+          ...schoolYearOptions,
+          reportData?.school_year,
+          school.academic_year,
+          selectedAcademicYear,
+          getDynamicSchoolYear(),
+        ].filter(Boolean)
+      )
+    ) as string[];
+    return years;
+  }, [schoolYearOptions, reportData?.school_year, school.academic_year, selectedAcademicYear]);
+
   const fetchSF4 = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiClient.get<SF4ReportData>(
-        `/v1/reports/sf4/?month=${selectedMonth}&year=${selectedYear}&school_year=${selectedAcademicYear}`
-      );
-      setReportData(res.data);
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to retrieve official SF4 report data from database.');
-    } finally {
+    reportAbortRef.current?.abort();
+    const controller = new AbortController();
+    reportAbortRef.current = controller;
+
+    const params = {
+      month: selectedMonth,
+      year: selectedYear,
+      school_year: selectedAcademicYear,
+    };
+
+    const cached = peekApiCache<SF4ReportData>(API_ROUTES.reports.sf4, params);
+    if (cached) {
+      setReportData(cached);
       setLoading(false);
+    } else {
+      setLoading(true);
+    }
+    setError(null);
+
+    try {
+      const res = await apiClient.get<SF4ReportData>(API_ROUTES.reports.sf4, {
+        params,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      setReportData(res.data);
+    } catch (err: unknown) {
+      const anyErr = err as { name?: string; code?: string };
+      if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+        return;
+      }
+      setError(extractApiError(err, 'Failed to retrieve official SF4 report data from database.'));
+    } finally {
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   }, [selectedMonth, selectedYear, selectedAcademicYear]);
 
   useEffect(() => {
-    fetchSF4();
+    void fetchSF4();
+    return () => {
+      reportAbortRef.current?.abort();
+    };
   }, [fetchSF4]);
 
   const updateFitScale = useCallback(() => {
@@ -231,7 +342,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
-      await apiClient.post('/v1/reports/audit-logs/', {
+      await apiClient.post(API_ROUTES.reports.auditLogs, {
         report_name: 'School Form 4 (SF4)',
         document_tracking_id: auditMeta.trackingId,
         action: actionType,
@@ -243,10 +354,21 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
     }
   };
 
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   const filteredGradeGroups = useMemo(() => {
     if (!reportData?.grade_groups) return [];
-    if (!searchQuery.trim()) return reportData.grade_groups;
-    const q = searchQuery.toLowerCase().trim();
+    const q = sanitizeSearch(searchQuery).toLowerCase();
+    if (!q) return reportData.grade_groups;
 
     return reportData.grade_groups
       .map((group) => {
@@ -355,25 +477,30 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
   };
 
   const handlePrint = () => {
-    logReportAudit('PRINT');
+    void logReportAudit('PRINT');
     setIsPrinting(true);
-    setTimeout(() => {
+    if (printTimerRef.current) clearTimeout(printTimerRef.current);
+    printTimerRef.current = setTimeout(() => {
       window.print();
       setIsPrinting(false);
+      printTimerRef.current = null;
     }, 120);
   };
 
   const handleDownloadPDF = async () => {
     if (!reportRef.current || !reportData) return;
     setExportingPdf(true);
-    logReportAudit('PDF');
+    void logReportAudit('PDF');
 
     try {
       let html2pdfInstance = (window as any).html2pdf;
       if (!html2pdfInstance) {
         await new Promise((resolve, reject) => {
           const script = document.createElement('script');
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+          script.src = HTML2PDF_CDN_URL;
+          script.integrity = HTML2PDF_SRI_HASH;
+          script.crossOrigin = 'anonymous';
+          script.referrerPolicy = 'no-referrer';
           script.onload = () => resolve((window as any).html2pdf);
           script.onerror = reject;
           document.head.appendChild(script);
@@ -400,15 +527,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       };
 
       const pdfBlob: Blob = await html2pdfInstance().from(reportRef.current).set(opt).outputPdf('blob');
-      const url = URL.createObjectURL(pdfBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${getBaseFilename()}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
+      triggerDownload(pdfBlob, `${getBaseFilename()}.pdf`);
       showAlert({ title: 'PDF Exported', message: 'School Form 4 successfully exported.', type: 'success' });
     } catch {
       handlePrint();
@@ -419,7 +538,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 
   const handleExportExcel = async () => {
     if (!reportRef.current || !reportData) return;
-    logReportAudit('EXCEL');
+    void logReportAudit('EXCEL');
     const excelContent = `
       <html>
         <head><meta charset="utf-8"></head>
@@ -436,20 +555,13 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       </html>
     `;
     const blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${getBaseFilename()}.xls`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    triggerDownload(blob, `${getBaseFilename()}.xls`);
     showAlert({ title: 'Excel Exported', message: 'SF4 spreadsheet exported successfully.', type: 'success' });
   };
 
   const handleExportWord = async () => {
     if (!reportRef.current || !reportData) return;
-    logReportAudit('WORD');
+    void logReportAudit('WORD');
     const wordContent = `
       <html>
         <head><meta charset="utf-8"></head>
@@ -464,20 +576,13 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       </html>
     `;
     const blob = new Blob([wordContent], { type: 'application/msword;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${getBaseFilename()}.doc`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    triggerDownload(blob, `${getBaseFilename()}.doc`);
     showAlert({ title: 'Word Exported', message: 'SF4 document exported successfully.', type: 'success' });
   };
 
   const handleExportCSV = async () => {
     if (!reportData) return;
-    logReportAudit('CSV');
+    void logReportAudit('CSV');
     const headers = [
       'Name of Adviser', 'Grade Level', 'Section',
       'Registered End M', 'Registered End F', 'Registered End T',
@@ -491,7 +596,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       'Transfer Out Total M', 'Transfer Out Total F', 'Transfer Out Total T',
       'Transfer In Prev M', 'Transfer In Prev F', 'Transfer In Prev T',
       'Transfer In Month M', 'Transfer In Month F', 'Transfer In Month T',
-      'Transfer In Total M', 'Transfer In Total F', 'Transfer In Total T'
+      'Transfer In Total M', 'Transfer In Total F', 'Transfer In Total T',
     ];
 
     const rows: (string | number)[][] = [];
@@ -499,7 +604,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       g.sections.forEach((s) => {
         const { grade, section } = parseGradeLevelAndSection(s.grade_level, s.section_name);
         rows.push([
-          `"${s.adviser_name}"`, `"${grade}"`, `"${section}"`,
+          s.adviser_name, grade, section,
           s.registered_end.m, s.registered_end.f, s.registered_end.total,
           s.daily_average.m, s.daily_average.f, s.daily_average.total,
           s.attendance_percentage.m, s.attendance_percentage.f, s.attendance_percentage.total,
@@ -516,41 +621,23 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       });
     });
 
-    const csvContent = '\uFEFF' + [
-      `# DOCUMENT TRACKING ID: ${auditMeta.trackingId}`,
-      `# DATE AND TIME PRINTED: ${auditMeta.printedAt}`,
-      headers.join(','),
-      ...rows.map((r) => r.join(','))
-    ].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${getBaseFilename()}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    showAlert({ title: 'CSV Exported', message: 'SF4 CSV file ready.', type: 'success' });
+    if (exportToCsv(`${getBaseFilename()}.csv`, headers, rows)) {
+      showAlert({ title: 'CSV Exported', message: 'SF4 CSV file ready.', type: 'success' });
+    } else {
+      showAlert({ title: 'No Records', message: 'No section summary records to export.', type: 'warning' });
+    }
   };
 
   const handleExportJSON = async () => {
     if (!reportData) return;
-    logReportAudit('JSON');
+    void logReportAudit('JSON');
     const exportPayload = {
       tracking_id: auditMeta.trackingId,
       date_and_time_printed: auditMeta.printedAt,
       report_data: reportData,
     };
     const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${getBaseFilename()}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    triggerDownload(blob, `${getBaseFilename()}.json`);
     showAlert({ title: 'JSON Exported', message: 'SF4 JSON export ready.', type: 'success' });
   };
 
@@ -603,7 +690,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
   );
 
   return (
-    <div className="report-tab-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#f1f5f9' }}>
+    <div className="report-tab-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: tokens.bgApp }}>
       <ReportNavBar
         reports={[
           { id: 'sf1', label: 'Form 1 (School Register)' },
@@ -612,7 +699,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         ]}
         activeReportId={activeReportId}
         onSelectReport={onSelectReport}
-        academicYears={['2026-2027', '2025-2026']}
+        academicYears={availableAcademicYears}
         selectedAcademicYear={selectedAcademicYear}
         onAcademicYearChange={setSelectedAcademicYear}
         showAcademicYearFilter={true}
@@ -639,7 +726,13 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         exportHandlers={{
           onExportPdf: handleDownloadPDF,
           onExportExcel: handleExportExcel,
+          onExportGoogleSheets: () => {
+            window.open('https://sheets.new', '_blank', 'noopener,noreferrer');
+          },
           onExportWord: handleExportWord,
+          onExportGoogleDocs: () => {
+            window.open('https://docs.new', '_blank', 'noopener,noreferrer');
+          },
           onExportCsv: handleExportCSV,
           onExportJson: handleExportJSON,
         }}
@@ -647,23 +740,32 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         isExporting={exportingPdf}
       />
 
-      <div className="no-print" style={controlStripStyle}>
+      <div
+        className="no-print"
+        style={{
+          ...controlStripStyle,
+          backgroundColor: tokens.bgSurface,
+          borderBottom: `1px solid ${tokens.borderSubtle}`,
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: '0.80rem', fontWeight: 700, color: '#334155' }}>
+          <span style={{ fontSize: '0.80rem', fontWeight: 700, color: tokens.textPrimary }}>
             {selectedMonth} {selectedYear} &bull; SY {selectedAcademicYear}
           </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button
+            type="button"
             onClick={() => {
               setFitToWidth(true);
               updateFitScale();
             }}
             style={{
               ...toggleBtnStyle,
-              backgroundColor: fitToWidth ? '#e0f2fe' : '#ffffff',
-              color: fitToWidth ? '#0284c7' : '#475569',
+              backgroundColor: fitToWidth ? tokens.primaryLight : tokens.bgSurfaceSubtle,
+              border: `1px solid ${fitToWidth ? brand.primary : tokens.borderStrong}`,
+              color: fitToWidth ? brand.primary : tokens.textSecondary,
             }}
           >
             <Maximize2 size={13} /> Fit Screen ({Math.round(zoomScale * 100)}%)
@@ -671,23 +773,37 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button
+              type="button"
+              aria-label="Zoom out"
               onClick={() => {
                 setFitToWidth(false);
                 setZoomScale((prev) => Math.max(0.35, Number((prev - 0.05).toFixed(2))));
               }}
-              style={zoomBtnStyle}
+              style={{
+                ...zoomBtnStyle,
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                color: tokens.textPrimary,
+              }}
             >
               <ZoomOut size={13} />
             </button>
-            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem' }}>
+            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem', color: tokens.textPrimary }}>
               {Math.round(zoomScale * 100)}%
             </span>
             <button
+              type="button"
+              aria-label="Zoom in"
               onClick={() => {
                 setFitToWidth(false);
                 setZoomScale((prev) => Math.min(1.4, Number((prev + 0.05).toFixed(2))));
               }}
-              style={zoomBtnStyle}
+              style={{
+                ...zoomBtnStyle,
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                color: tokens.textPrimary,
+              }}
             >
               <ZoomIn size={13} />
             </button>
@@ -701,13 +817,20 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         style={viewerScrollContainerStyle}
       >
         {loading ? (
-          <div style={loadingStateStyle}>
-            <Loader2 className="animate-spin" size={32} color="#0284c7" />
+          <div style={{ ...loadingStateStyle, color: tokens.textSecondary }}>
+            <Loader2 className="animate-spin" size={32} color={brand.primary} />
             <span style={{ fontSize: '9.5pt', fontWeight: 600 }}>Consolidating School Form 4 monthly learner figures...</span>
           </div>
         ) : error ? (
-          <div style={errorStateStyle}>
-            <AlertCircle size={26} color="#dc2626" />
+          <div
+            style={{
+              ...errorStateStyle,
+              color: brand.danger,
+              backgroundColor: tokens.dangerLight,
+              border: `1px solid ${brand.danger}`,
+            }}
+          >
+            <AlertCircle size={26} color={brand.danger} />
             <span style={{ fontSize: '9.5pt' }}>{error}</span>
           </div>
         ) : reportData ? (
@@ -1067,8 +1190,8 @@ const controlStripStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   padding: '8px 24px',
-  backgroundColor: '#ffffff',
-  borderBottom: '1px solid #e2e8f0',
+  flexWrap: 'wrap',
+  gap: 10,
 };
 
 const toggleBtnStyle: React.CSSProperties = {
@@ -1077,7 +1200,6 @@ const toggleBtnStyle: React.CSSProperties = {
   gap: 5,
   padding: '4px 10px',
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
   cursor: 'pointer',
   fontSize: '0.76rem',
   fontWeight: 700,
@@ -1086,8 +1208,6 @@ const toggleBtnStyle: React.CSSProperties = {
 const zoomBtnStyle: React.CSSProperties = {
   padding: '4px 8px',
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
   cursor: 'pointer',
 };
 
@@ -1299,7 +1419,6 @@ const loadingStateStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 12,
   marginTop: 80,
-  color: '#475569',
 };
 
 const errorStateStyle: React.CSSProperties = {
@@ -1307,10 +1426,7 @@ const errorStateStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 8,
   marginTop: 80,
-  color: '#dc2626',
   fontWeight: 600,
-  backgroundColor: '#fef2f2',
   padding: '12px 20px',
   borderRadius: 8,
-  border: '1px solid #fecaca',
 };

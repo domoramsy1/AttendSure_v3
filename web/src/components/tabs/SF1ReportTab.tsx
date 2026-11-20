@@ -4,9 +4,12 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { peekApiCache } from '../../api/client';
+import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
+import { useTheme } from '../../context/ThemeContext';
+import { exportToCsv } from '../common/Pagination';
 import { ReportNavBar } from '../reports/ReportNavBar';
 import { PageSetupModal } from '../common/PageSetupModal';
 import { usePageSetup } from '../../hooks/usePageSetup';
@@ -14,6 +17,23 @@ import { PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig, LayoutMode } from '../../types/pageSetup';
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize2, Users, Split } from 'lucide-react';
 import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
+
+const HTML2PDF_CDN_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+const HTML2PDF_SRI_HASH =
+  'sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==';
+
+const sanitizeSearch = (raw: string): string =>
+  String(raw || '')
+    .replace(/[\u0000-\u001F\u007F<>]/g, '')
+    .trim()
+    .slice(0, 80);
+
+const getDynamicSchoolYear = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  return now.getMonth() >= 5 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
+};
 
 interface Learner {
   id: number;
@@ -89,10 +109,14 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 }) => {
   const { school } = useSchool();
   const { showAlert } = useAlert();
+  const { tokens, brand, ui } = useTheme();
 
-  const [sections, setSections] = useState<any[]>([]);
+  const cachedSections = peekApiCache<any>(API_ROUTES.school.sections);
+  const initialSections = Array.isArray(cachedSections) ? cachedSections : cachedSections?.results || [];
+
+  const [sections, setSections] = useState<any[]>(initialSections);
   const [selectedSectionId, setSelectedSectionId] = useState<string>(
-    sectionId ? String(sectionId) : ''
+    sectionId ? String(sectionId) : initialSections[0] ? String(initialSections[0].id) : ''
   );
   const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('');
   const [selectedGradeLevel, setSelectedGradeLevel] = useState<string>('ALL');
@@ -128,6 +152,8 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   const [fitToWidth, setFitToWidth] = useState<boolean>(true);
   const viewportContainerRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
+  const reportAbortRef = useRef<AbortController | null>(null);
+  const printTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handleBeforePrint = () => setIsPrinting(true);
@@ -137,6 +163,10 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     return () => {
       window.removeEventListener('beforeprint', handleBeforePrint);
       window.removeEventListener('afterprint', handleAfterPrint);
+      if (printTimerRef.current) {
+        clearTimeout(printTimerRef.current);
+        printTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -145,47 +175,77 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   }, [sectionId]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchSections = async () => {
       try {
-        const res = await apiClient.get('/v1/school/sections/');
-        const data = Array.isArray(res.data) ? res.data : res.data.results || [];
+        const res = await apiClient.get(API_ROUTES.school.sections, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        const data = Array.isArray(res.data) ? res.data : res.data?.results || [];
         setSections(data);
-        if (!selectedSectionId && data.length > 0) {
-          setSelectedSectionId(String(data[0].id));
+        if (data.length > 0) {
+          setSelectedSectionId((prev) => prev || String(data[0].id));
         }
-      } catch (err) {
-        console.error('Failed to load sections:', err);
+      } catch (err: unknown) {
+        const anyErr = err as { name?: string; code?: string };
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
       }
     };
-    fetchSections();
-  }, [selectedSectionId]);
+    void fetchSections();
+    return () => {
+      controller.abort();
+    };
+  }, []);
 
   const fetchSF1 = useCallback(async () => {
     if (!selectedSectionId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiClient.get<SF1Data>(`/v1/reports/sf1/${selectedSectionId}/`, {
-        params: {
-          as_of_date: selectedDate || '',
-          date: selectedDate || '',
-          academic_year: selectedAcademicYear || '',
-          school_year: selectedAcademicYear || '',
-        },
-      });
-      setReportData(res.data);
-      if (res.data?.academic_year) {
-        setSelectedAcademicYear(res.data.academic_year);
-      }
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to generate official SF1 report.');
-    } finally {
+    reportAbortRef.current?.abort();
+    const controller = new AbortController();
+    reportAbortRef.current = controller;
+
+    const endpoint = `${API_ROUTES.reports.sf1}${selectedSectionId}/`;
+    const params = {
+      as_of_date: selectedDate || '',
+      date: selectedDate || '',
+      academic_year: selectedAcademicYear || '',
+      school_year: selectedAcademicYear || '',
+    };
+
+    const cached = peekApiCache<SF1Data>(endpoint, params);
+    if (cached) {
+      setReportData(cached);
       setLoading(false);
+    } else {
+      setLoading(true);
+    }
+    setError(null);
+
+    try {
+      const res = await apiClient.get<SF1Data>(endpoint, {
+        params,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      setReportData(res.data);
+    } catch (err: unknown) {
+      const anyErr = err as { name?: string; code?: string };
+      if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
+        return;
+      }
+      setError(extractApiError(err, 'Failed to generate official SF1 report.'));
+    } finally {
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   }, [selectedSectionId, selectedAcademicYear, selectedDate]);
 
   useEffect(() => {
-    fetchSF1();
+    void fetchSF1();
+    return () => {
+      reportAbortRef.current?.abort();
+    };
   }, [fetchSF1]);
 
   const updateFitScale = useCallback(() => {
@@ -237,24 +297,26 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       new Set(
         [
           reportData?.academic_year,
-          ...sections.map((s) => s.academic_year),
+          school.academic_year,
+          ...sections.map((s) => s.academic_year || s.school_year_code),
         ].filter(Boolean)
       )
     ) as string[];
-    return years.length > 0 ? years : ['2026-2027'];
-  }, [reportData, sections]);
+    return years.length > 0 ? years : [getDynamicSchoolYear()];
+  }, [reportData, school.academic_year, sections]);
+
+  const cleanSearch = useMemo(() => sanitizeSearch(searchQuery).toLowerCase(), [searchQuery]);
 
   const sortedCombinedLearners = useMemo(() => {
     if (!reportData || reportData.has_enrolled_students === false) return [];
     const raw = reportData.students || reportData.learners || [];
     const sorted = [...raw].sort((a, b) => a.name.localeCompare(b.name));
-    if (!searchQuery.trim()) return sorted;
+    if (!cleanSearch) return sorted;
 
-    const q = searchQuery.toLowerCase().trim();
     return sorted.filter(
-      (l) => l.name.toLowerCase().includes(q) || l.lrn.toLowerCase().includes(q)
+      (l) => l.name.toLowerCase().includes(cleanSearch) || l.lrn.toLowerCase().includes(cleanSearch)
     );
-  }, [reportData, searchQuery]);
+  }, [reportData, cleanSearch]);
 
   const { maleLearners, femaleLearners } = useMemo(() => {
     if (!reportData || reportData.has_enrolled_students === false) {
@@ -275,20 +337,19 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     const sortedMales = [...rawMales].sort((a, b) => a.name.localeCompare(b.name));
     const sortedFemales = [...rawFemales].sort((a, b) => a.name.localeCompare(b.name));
 
-    if (!searchQuery.trim()) {
+    if (!cleanSearch) {
       return { maleLearners: sortedMales, femaleLearners: sortedFemales };
     }
 
-    const q = searchQuery.toLowerCase().trim();
     return {
       maleLearners: sortedMales.filter(
-        (l) => l.name.toLowerCase().includes(q) || l.lrn.toLowerCase().includes(q)
+        (l) => l.name.toLowerCase().includes(cleanSearch) || l.lrn.toLowerCase().includes(cleanSearch)
       ),
       femaleLearners: sortedFemales.filter(
-        (l) => l.name.toLowerCase().includes(q) || l.lrn.toLowerCase().includes(q)
+        (l) => l.name.toLowerCase().includes(cleanSearch) || l.lrn.toLowerCase().includes(cleanSearch)
       ),
     };
-  }, [reportData, searchQuery]);
+  }, [reportData, cleanSearch]);
 
   const maleCount = useMemo(
     () => (reportData?.has_enrolled_students === false ? 0 : reportData?.total_male ?? maleLearners.length),
@@ -335,7 +396,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
   const logReportAudit = async (actionType: 'VIEW' | 'PRINT' | 'PDF' | 'EXCEL' | 'WORD' | 'CSV' | 'JSON') => {
     try {
-      await apiClient.post('/v1/reports/audit-logs/', {
+      await apiClient.post(API_ROUTES.reports.auditLogs, {
         report_name: 'School Form 1 (SF1)',
         document_tracking_id: auditMeta.trackingId,
         section_id: selectedSectionId,
@@ -469,28 +530,33 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const handlePrint = () => {
-    logReportAudit('PRINT');
+    void logReportAudit('PRINT');
     setIsPrinting(true);
-    setTimeout(() => {
+    if (printTimerRef.current) clearTimeout(printTimerRef.current);
+    printTimerRef.current = setTimeout(() => {
       window.print();
       setIsPrinting(false);
+      printTimerRef.current = null;
     }, 120);
   };
 
   const handleDownloadPDF = async () => {
     if (!reportRef.current || !reportData) return;
     setExportingPdf(true);
-    logReportAudit('PDF');
+    void logReportAudit('PDF');
     try {
       let html2pdfInstance = (window as any).html2pdf;
       if (!html2pdfInstance) {
         await new Promise((resolve, reject) => {
           const script = document.createElement('script');
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+          script.src = HTML2PDF_CDN_URL;
+          script.integrity = HTML2PDF_SRI_HASH;
+          script.crossOrigin = 'anonymous';
+          script.referrerPolicy = 'no-referrer';
           script.onload = () => resolve((window as any).html2pdf);
           script.onerror = reject;
           document.head.appendChild(script);
@@ -572,50 +638,47 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
   const handleExportCSV = async () => {
     if (!reportData) return;
-    logReportAudit('CSV');
+    void logReportAudit('CSV');
     const headers = [
       'No', 'LRN', 'Learner Name', 'Sex', 'Birth Date', 'Age',
       'Birth Place', 'Mother Tongue', 'IP Ethnic Group', 'Religion',
       'House Street', 'Barangay', 'Municipality City', 'Province',
       'Father Name', 'Mother Maiden Name', 'Guardian Name', 'Guardian Relationship',
-      'Contact Number', 'Remarks'
+      'Contact Number', 'Remarks',
     ];
 
     const rows = activeStudentList.map((l, idx) => {
-      const { gName, gRel } = parseGuardian(l.guardian_name, l.guardian_relationship);
+      const rawRel = l.guardian_relationship || (l as unknown as { guardian_rel?: string }).guardian_rel || '';
+      const { gName, gRel } = parseGuardian(l.guardian_name || '', rawRel);
       return [
         idx + 1,
-        `"${l.lrn}"`,
-        `"${l.name.replace(/"/g, '""')}"`,
-        l.sex,
-        l.birthdate,
-        l.age,
-        `"${(l.birth_place || l.province || '').replace(/"/g, '""')}"`,
-        `"${l.mother_tongue.replace(/"/g, '""')}"`,
-        `"${l.ethnic_group.replace(/"/g, '""')}"`,
-        `"${l.religion.replace(/"/g, '""')}"`,
-        `"${l.house_street.replace(/"/g, '""')}"`,
-        `"${l.barangay.replace(/"/g, '""')}"`,
-        `"${l.municipality_city.replace(/"/g, '""')}"`,
-        `"${l.province.replace(/"/g, '""')}"`,
-        `"${l.father_name.replace(/"/g, '""')}"`,
-        `"${l.mother_maiden_name.replace(/"/g, '""')}"`,
-        `"${gName.replace(/"/g, '""')}"`,
-        `"${gRel.replace(/"/g, '""')}"`,
-        `"${l.parent_contact}"`,
-        `"${l.remarks.replace(/"/g, '""')}"`,
+        l.lrn,
+        l.name,
+        l.sex || '',
+        l.birthdate || '',
+        l.age ?? '',
+        l.birth_place || l.province || '',
+        l.mother_tongue || '',
+        l.ethnic_group || '',
+        l.religion || '',
+        l.house_street || '',
+        l.barangay || '',
+        l.municipality_city || '',
+        l.province || '',
+        l.father_name || '',
+        l.mother_maiden_name || '',
+        gName,
+        gRel,
+        l.parent_contact || '',
+        l.remarks || '',
       ];
     });
 
-    const csvContent = '\uFEFF' + [
-      `# DOCUMENT TRACKING ID: ${auditMeta.trackingId}`,
-      `# DATE AND TIME PRINTED: ${auditMeta.printedAt}`,
-      headers.join(','),
-      ...rows.map((r) => r.join(','))
-    ].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    await saveFileWithPicker(blob, `${getBaseFilename()}.csv`, 'text/csv', 'csv', 'CSV Document (*.csv)');
-    showAlert({ title: 'CSV Exported', message: 'SF1 CSV export ready.', type: 'success' });
+    if (exportToCsv(`${getBaseFilename()}.csv`, headers, rows)) {
+      showAlert({ title: 'CSV Exported', message: 'SF1 CSV export ready.', type: 'success' });
+    } else {
+      showAlert({ title: 'No Records', message: 'No enrolled student records to export.', type: 'warning' });
+    }
   };
 
   const handleExportJSON = async () => {
@@ -805,13 +868,15 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     </div>
   );
 
+  const effectiveAcademicYear = selectedAcademicYear || reportData?.academic_year || availableAcademicYears[0] || '';
+
   return (
-    <div className="report-tab-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#f1f5f9' }}>
+    <div className="report-tab-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: tokens.bgApp }}>
       <ReportNavBar
         activeReportId={activeReportId}
         onSelectReport={onSelectReport}
         academicYears={availableAcademicYears}
-        selectedAcademicYear={selectedAcademicYear}
+        selectedAcademicYear={effectiveAcademicYear}
         onAcademicYearChange={setSelectedAcademicYear}
         showAcademicYearFilter={true}
         sections={sections}
@@ -833,11 +898,11 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
           onExportPdf: handleDownloadPDF,
           onExportExcel: handleExportExcel,
           onExportGoogleSheets: () => {
-            window.open('https://sheets.new', '_blank');
+            window.open('https://sheets.new', '_blank', 'noopener,noreferrer');
           },
           onExportWord: handleExportWord,
           onExportGoogleDocs: () => {
-            window.open('https://docs.new', '_blank');
+            window.open('https://docs.new', '_blank', 'noopener,noreferrer');
           },
           onExportCsv: handleExportCSV,
           onExportJson: handleExportJSON,
@@ -846,32 +911,39 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         isExporting={exportingPdf}
       />
 
-      <div className="no-print" style={controlStripStyle}>
+      <div
+        className="no-print"
+        style={{
+          ...controlStripStyle,
+          backgroundColor: tokens.bgSurface,
+          borderBottom: `1px solid ${tokens.borderSubtle}`,
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <label style={{ fontWeight: 700, color: '#334155', fontSize: '0.80rem' }}>As of Date:</label>
+            <label style={{ fontWeight: 700, color: tokens.textPrimary, fontSize: '0.80rem' }}>As of Date:</label>
             <input
               type="date"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              style={dateInputStyle}
+              style={{ ...ui.input, width: 'auto', padding: '4px 8px', fontSize: '0.80rem' }}
             />
           </div>
 
-          <div style={{ height: 20, width: 1, backgroundColor: '#cbd5e1' }} />
+          <div style={{ height: 20, width: 1, backgroundColor: tokens.borderStrong }} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Student List Layout:</span>
-            <div style={{ display: 'flex', backgroundColor: '#f1f5f9', padding: 2, borderRadius: 6, border: '1px solid #cbd5e1' }}>
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: tokens.textSecondary }}>Class List Layout:</span>
+            <div style={{ display: 'flex', backgroundColor: tokens.bgSurfaceSubtle, padding: 2, borderRadius: 6, border: `1px solid ${tokens.borderStrong}` }}>
               <button
                 type="button"
                 onClick={() => setGroupingMode('COMBINED')}
                 style={{
                   ...formatToggleBtn,
-                  backgroundColor: groupingMode === 'COMBINED' ? '#0284c7' : 'transparent',
-                  color: groupingMode === 'COMBINED' ? '#ffffff' : '#64748b',
+                  backgroundColor: groupingMode === 'COMBINED' ? brand.buttonBg : 'transparent',
+                  color: groupingMode === 'COMBINED' ? '#ffffff' : tokens.textSecondary,
                 }}
-                title="Single combined alphabetical learner student list (Default)"
+                title="Single combined alphabetical class list (Default)"
               >
                 <Users size={12} />
                 <span>One List (Default)</span>
@@ -882,10 +954,10 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                 onClick={() => setGroupingMode('SEPARATED')}
                 style={{
                   ...formatToggleBtn,
-                  backgroundColor: groupingMode === 'SEPARATED' ? '#0284c7' : 'transparent',
-                  color: groupingMode === 'SEPARATED' ? '#ffffff' : '#64748b',
+                  backgroundColor: groupingMode === 'SEPARATED' ? brand.buttonBg : 'transparent',
+                  color: groupingMode === 'SEPARATED' ? '#ffffff' : tokens.textSecondary,
                 }}
-                title="Separate male and female student list sections"
+                title="Separate male and female class list sections"
               >
                 <Split size={12} />
                 <span>Separate by Sex</span>
@@ -896,14 +968,16 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button
+            type="button"
             onClick={() => {
               setFitToWidth(true);
               updateFitScale();
             }}
             style={{
               ...toggleBtnStyle,
-              backgroundColor: fitToWidth ? '#e0f2fe' : '#ffffff',
-              color: fitToWidth ? '#0284c7' : '#475569',
+              backgroundColor: fitToWidth ? tokens.primaryLight : tokens.bgSurfaceSubtle,
+              border: `1px solid ${fitToWidth ? brand.primary : tokens.borderStrong}`,
+              color: fitToWidth ? brand.primary : tokens.textSecondary,
             }}
           >
             <Maximize2 size={13} /> Fit Screen ({Math.round(zoomScale * 100)}%)
@@ -911,23 +985,37 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button
+              type="button"
+              aria-label="Zoom out"
               onClick={() => {
                 setFitToWidth(false);
                 setZoomScale((prev) => Math.max(0.35, Number((prev - 0.05).toFixed(2))));
               }}
-              style={zoomBtnStyle}
+              style={{
+                ...zoomBtnStyle,
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                color: tokens.textPrimary,
+              }}
             >
               <ZoomOut size={13} />
             </button>
-            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem' }}>
+            <span style={{ minWidth: 42, textAlign: 'center', fontWeight: 700, fontSize: '0.76rem', color: tokens.textPrimary }}>
               {Math.round(zoomScale * 100)}%
             </span>
             <button
+              type="button"
+              aria-label="Zoom in"
               onClick={() => {
                 setFitToWidth(false);
                 setZoomScale((prev) => Math.min(1.4, Number((prev + 0.05).toFixed(2))));
               }}
-              style={zoomBtnStyle}
+              style={{
+                ...zoomBtnStyle,
+                backgroundColor: tokens.bgSurfaceSubtle,
+                border: `1px solid ${tokens.borderStrong}`,
+                color: tokens.textPrimary,
+              }}
             >
               <ZoomIn size={13} />
             </button>
@@ -935,15 +1023,22 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         </div>
       </div>
 
-      <div ref={viewportContainerRef} style={viewerScrollContainerStyle}>
+      <div ref={viewportContainerRef} className="report-viewer-viewport" style={viewerScrollContainerStyle}>
         {loading ? (
-          <div style={loadingStateStyle}>
-            <Loader2 className="animate-spin" size={28} color="#0284c7" />
+          <div style={{ ...loadingStateStyle, color: tokens.textSecondary }}>
+            <Loader2 className="animate-spin" size={28} color={brand.primary} />
             <span>Generating School Form 1...</span>
           </div>
         ) : error ? (
-          <div style={errorStateStyle}>
-            <AlertCircle size={24} color="#dc2626" />
+          <div
+            style={{
+              ...errorStateStyle,
+              color: brand.danger,
+              backgroundColor: tokens.dangerLight,
+              border: `1px solid ${brand.danger}`,
+            }}
+          >
+            <AlertCircle size={24} color={brand.danger} />
             <span>{error}</span>
           </div>
         ) : reportData ? (
@@ -1052,19 +1147,27 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                             )}
                           </>
                         ) : (
+                          (() => {
+                            const pageMales = page.learners.filter((l) => String(l.sex || '').toUpperCase().startsWith('M'));
+                            const pageFemales = page.learners.filter((l) => !String(l.sex || '').toUpperCase().startsWith('M'));
+                            const showMaleTotal = pageMales.length > 0 && (page.showFooter || pageFemales.length > 0);
+                            const showFemaleTotal = pageFemales.length > 0 && page.showFooter;
+                            return (
                           <>
-                            {maleLearners.length > 0 && (
+                            {pageMales.length > 0 && (
                               <>
                                 <tr style={{ backgroundColor: '#f1f5f9', fontWeight: 800 }}>
                                   <td colSpan={20} style={{ padding: '2px 8px', fontSize: fontSizes.header, textAlign: 'left', color: '#0284c7' }}>
                                     MALE
                                   </td>
                                 </tr>
-                                {maleLearners.map((learner, idx) => {
-                                  const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+                                {pageMales.map((learner) => {
+                                  const maleIdx = maleLearners.findIndex((m) => m.id === learner.id);
+                                  const rawRel = learner.guardian_relationship || (learner as unknown as { guardian_rel?: string }).guardian_rel || '';
+                                  const { gName, gRel } = parseGuardian(learner.guardian_name || '', rawRel);
                                   return (
                                     <tr key={`male-${learner.id}`} style={dataRowStyle}>
-                                      <td style={centerCell}>{idx + 1}</td>
+                                      <td style={centerCell}>{maleIdx >= 0 ? maleIdx + 1 : ''}</td>
                                       <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
                                       <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
                                       <td style={centerCell}>{learner.sex}</td>
@@ -1087,28 +1190,32 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                                     </tr>
                                   );
                                 })}
-                                <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
-                                  <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 800 }}>
-                                    TOTAL MALE
-                                  </td>
-                                  <td style={centerCell}>{maleCount}</td>
-                                  <td colSpan={16} style={centerCell}></td>
-                                </tr>
+                                {showMaleTotal && (
+                                  <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                                    <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 800 }}>
+                                      TOTAL MALE
+                                    </td>
+                                    <td style={centerCell}>{maleCount}</td>
+                                    <td colSpan={16} style={centerCell}></td>
+                                  </tr>
+                                )}
                               </>
                             )}
 
-                            {femaleLearners.length > 0 && (
+                            {pageFemales.length > 0 && (
                               <>
                                 <tr style={{ backgroundColor: '#fdf2f8', fontWeight: 800 }}>
                                   <td colSpan={20} style={{ padding: '2px 8px', fontSize: fontSizes.header, textAlign: 'left', color: '#db2777' }}>
                                     FEMALE
                                   </td>
                                 </tr>
-                                {femaleLearners.map((learner, idx) => {
-                                  const { gName, gRel } = parseGuardian(learner.guardian_name, learner.guardian_relationship);
+                                {pageFemales.map((learner) => {
+                                  const femaleIdx = femaleLearners.findIndex((f) => f.id === learner.id);
+                                  const rawRel = learner.guardian_relationship || (learner as unknown as { guardian_rel?: string }).guardian_rel || '';
+                                  const { gName, gRel } = parseGuardian(learner.guardian_name || '', rawRel);
                                   return (
                                     <tr key={`female-${learner.id}`} style={dataRowStyle}>
-                                      <td style={centerCell}>{idx + 1}</td>
+                                      <td style={centerCell}>{femaleIdx >= 0 ? femaleIdx + 1 : ''}</td>
                                       <td style={{ ...centerCell, fontFamily: 'monospace', fontWeight: 700 }}>{learner.lrn}</td>
                                       <td style={{ ...leftCell, fontWeight: 700 }}>{learner.name}</td>
                                       <td style={centerCell}>{learner.sex}</td>
@@ -1131,13 +1238,15 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                                     </tr>
                                   );
                                 })}
-                                <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
-                                  <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 800 }}>
-                                    TOTAL FEMALE
-                                  </td>
-                                  <td style={centerCell}>{femaleCount}</td>
-                                  <td colSpan={16} style={centerCell}></td>
-                                </tr>
+                                {showFemaleTotal && (
+                                  <tr style={{ backgroundColor: '#f8fafc', fontWeight: 800 }}>
+                                    <td colSpan={3} style={{ ...leftCell, paddingLeft: 12, fontWeight: 800 }}>
+                                      TOTAL FEMALE
+                                    </td>
+                                    <td style={centerCell}>{femaleCount}</td>
+                                    <td colSpan={16} style={centerCell}></td>
+                                  </tr>
+                                )}
                               </>
                             )}
 
@@ -1151,6 +1260,8 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
                               </tr>
                             )}
                           </>
+                            );
+                          })()
                         )}
                       </tbody>
                     </table>
@@ -1291,18 +1402,8 @@ const controlStripStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   padding: '8px 24px',
-  backgroundColor: '#ffffff',
-  borderBottom: '1px solid #e2e8f0',
   flexWrap: 'wrap',
   gap: 10,
-};
-
-const dateInputStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  fontSize: '0.80rem',
-  color: '#0f172a',
 };
 
 const formatToggleBtn: React.CSSProperties = {
@@ -1324,7 +1425,6 @@ const toggleBtnStyle: React.CSSProperties = {
   gap: 5,
   padding: '4px 10px',
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
   cursor: 'pointer',
   fontSize: '0.76rem',
   fontWeight: 700,
@@ -1333,8 +1433,6 @@ const toggleBtnStyle: React.CSSProperties = {
 const zoomBtnStyle: React.CSSProperties = {
   padding: '4px 8px',
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  backgroundColor: '#ffffff',
   cursor: 'pointer',
 };
 
@@ -1510,7 +1608,6 @@ const loadingStateStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 12,
   marginTop: 80,
-  color: '#475569',
   fontWeight: 600,
 };
 
@@ -1519,10 +1616,7 @@ const errorStateStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 8,
   marginTop: 80,
-  color: '#dc2626',
   fontWeight: 600,
-  backgroundColor: '#fef2f2',
   padding: '12px 20px',
   borderRadius: 8,
-  border: '1px solid #fecaca',
 };

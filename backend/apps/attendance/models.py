@@ -1,3 +1,5 @@
+# D:\AttendSure_V3\backend\apps\attendance\models.py
+
 from django.db import models
 from django.db.models import UniqueConstraint
 from django.utils import timezone
@@ -33,7 +35,7 @@ class ClassAttendance(models.Model):
     recorded_by = models.ForeignKey(
         "accounts.TeacherProfile", on_delete=models.CASCADE, db_column="faculty_id", related_name="recorded_scans"
     )
-    attendance_date = models.DateField(default=timezone.now, db_index=True)
+    attendance_date = models.DateField(default=timezone.localdate, db_index=True)
     scanned_at = models.DateTimeField(default=timezone.now)
     scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default="QR")
     status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default="PRESENT")
@@ -52,7 +54,7 @@ class DailyAttendance(models.Model):
     id = models.BigAutoField(primary_key=True)
     student = models.ForeignKey("students.Student", on_delete=models.CASCADE, related_name="daily_attendances")
     section = models.ForeignKey("school.Section", on_delete=models.CASCADE, related_name="daily_attendances")
-    attendance_date = models.DateField(default=timezone.now, db_index=True)
+    attendance_date = models.DateField(default=timezone.localdate, db_index=True)
     status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default="PRESENT")
     remarks = models.CharField(max_length=255, blank=True, default="")
     recorded_at = models.DateTimeField(default=timezone.now)
@@ -84,6 +86,7 @@ class ExitPass(models.Model):
     )
     pass_type = models.CharField(max_length=50, default="Exit Permit")
     reason = models.TextField()
+    attachment = models.FileField(upload_to="exit_passes/", null=True, blank=True)
     valid_from = models.DateTimeField()
     valid_until = models.DateTimeField(db_column="valid_to")
     status = models.CharField(max_length=20, choices=EXIT_PASS_STATUS_CHOICES, default="ACTIVE", db_index=True)

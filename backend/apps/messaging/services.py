@@ -1,6 +1,9 @@
+# D:\AttendSure_V3\backend\apps\messaging\services.py
+
 from django.db import transaction
-from common.exceptions import AppError
+
 from apps.accounts.models import UserProfile
+from common.exceptions import AppError
 from .models import ChatMessage, Notification
 from .tasks import deliver_expo_push_task
 
@@ -77,6 +80,28 @@ def mark_notifications_read(*, user, notification_ids: list[int] | None = None) 
     return qs.update(is_read=True)
 
 
+def retry_pending_push_notifications(limit: int = 100) -> int:
+    """Re-queues unpushed notifications for active mobile devices."""
+    pending = (
+        Notification.objects.filter(is_pushed=False)
+        .select_related("recipient__profile")
+        .order_by("-created_at")[:limit]
+    )
+    queued = 0
+    for notif in pending:
+        profile = getattr(notif.recipient, "profile", None)
+        push_token = profile.push_token if profile else None
+        if push_token and str(push_token).startswith(("ExponentPushToken", "ExpoPushToken")):
+            deliver_expo_push_task.delay(
+                notification_id=notif.id,
+                push_token=push_token,
+                title=notif.title[:150],
+                body=notif.message[:250],
+            )
+            queued += 1
+    return queued
+
+
 @transaction.atomic
 def create_chat_message(*, sender, student, teacher, parent_user, body: str) -> ChatMessage:
     clean_body = str(body or "").strip()
@@ -93,7 +118,8 @@ def create_chat_message(*, sender, student, teacher, parent_user, body: str) -> 
         body=clean_body,
     )
 
-    teacher_user = teacher.account.user if (hasattr(teacher, "account") and teacher.account) else None
+    linked_account = getattr(teacher, "account", None)
+    teacher_user = linked_account.user if linked_account else None
     recipient = teacher_user if sender.id == parent_user.id else parent_user
     sender_name = sender.get_full_name() or sender.username
 

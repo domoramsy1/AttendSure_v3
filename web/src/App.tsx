@@ -4,9 +4,10 @@
  */
 
 import React, { Suspense, lazy, startTransition, useState, useEffect, useMemo, useCallback } from 'react';
-import apiClient, { prefetchApiGet, warmupRoleEndpoints } from './api/client';
+import apiClient, { clearApiClientCache, prefetchApiGet, warmupRoleEndpoints } from './api/client';
 import { API_ROUTES } from './api/routes';
 import { AuthPage as LoginView } from './components/auth/AuthPage';
+import { StartupShowcasePage } from './components/showcase/StartupShowcasePage';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { Sidebar, type NavItemKey } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
@@ -17,10 +18,13 @@ import { CompleteProfileModal, type CompletedProfileUser } from './components/mo
 import { SchoolProvider, useSchool } from './context/SchoolContext';
 import { AlertProvider } from './context/AlertContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
+import { ComplianceProvider, useCompliance } from './context/ComplianceContext';
+import { isSafeImageUrl } from './theme/tokens';
 import type { UserSession } from './types/section';
 import { ShieldAlert, ArrowLeft, WifiOff } from 'lucide-react';
 
 const loadDashboard = () => import('./components/dashboard/DashboardView');
+const loadImpact = () => import('./components/dashboard/EnterpriseSDGWidget');
 const loadScanner = () => import('./components/scanner/ClassroomScanner');
 const loadMyClasses = () => import('./components/tabs/MyAssignedClassesTab');
 const loadAdvisory = () => import('./components/advisory/AdvisorySubjectMonitor');
@@ -39,6 +43,7 @@ const loadSf2 = () => import('./components/tabs/SF2ReportTab');
 const loadSf4 = () => import('./components/tabs/SF4ReportTab');
 
 const DashboardView = lazy(loadDashboard);
+const EnterpriseSDGWidget = lazy(loadImpact);
 const ClassroomScanner = lazy(loadScanner);
 const MyAssignedClassesTab = lazy(loadMyClasses);
 const AdvisorySubjectMonitor = lazy(loadAdvisory);
@@ -56,38 +61,94 @@ const SF1ReportTab = lazy(loadSf1);
 const SF2ReportTab = lazy(loadSf2);
 const SF4ReportTab = lazy(loadSf4);
 
+const LEADERSHIP_ROLES = new Set(['SUPERADMIN', 'ADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD']);
+
+const FULL_ADMIN_TABS: NavItemKey[] = [
+  'dashboard',
+  'impact',
+  'classroom-scanner',
+  'my-classes',
+  'advisory-monitor',
+  'students',
+  'facultys',
+  'users',
+  'gate-passes',
+  'schedules',
+  'dtr',
+  'geofence',
+  'messages',
+  'push',
+  'reports',
+  'settings',
+];
+
 export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
-  ADMIN: [
-    'dashboard', 'classroom-scanner', 'my-classes', 'advisory-monitor',
-    'students', 'facultys', 'users', 'gate-passes', 'schedules',
-    'dtr', 'geofence', 'messages', 'push', 'reports', 'settings',
-  ],
+  SUPERADMIN: FULL_ADMIN_TABS,
+  ADMIN: FULL_ADMIN_TABS,
+  FACULTY_ADMIN: FULL_ADMIN_TABS,
   PRINCIPAL: [
-    'dashboard', 'classroom-scanner', 'my-classes', 'advisory-monitor',
-    'students', 'facultys', 'gate-passes', 'schedules',
-    'dtr', 'geofence', 'messages', 'push', 'reports', 'settings',
+    'dashboard',
+    'impact',
+    'classroom-scanner',
+    'my-classes',
+    'advisory-monitor',
+    'students',
+    'facultys',
+    'gate-passes',
+    'schedules',
+    'dtr',
+    'geofence',
+    'messages',
+    'push',
+    'reports',
+    'settings',
   ],
   DEPT_HEAD: [
-    'dashboard', 'classroom-scanner', 'my-classes', 'advisory-monitor',
-    'students', 'facultys', 'gate-passes', 'schedules', 'dtr', 'messages', 'reports',
+    'dashboard',
+    'impact',
+    'classroom-scanner',
+    'my-classes',
+    'advisory-monitor',
+    'students',
+    'facultys',
+    'gate-passes',
+    'schedules',
+    'dtr',
+    'messages',
+    'reports',
   ],
   FACULTY: [
-    'dashboard', 'classroom-scanner', 'my-classes', 'advisory-monitor',
-    'students', 'dtr', 'gate-passes', 'messages', 'reports',
+    'dashboard',
+    'impact',
+    'classroom-scanner',
+    'my-classes',
+    'advisory-monitor',
+    'students',
+    'dtr',
+    'gate-passes',
+    'messages',
+    'reports',
   ],
 };
 
-/** Preloads both the Vite code chunk and PostgreSQL JSON data when hovering a Sidebar item. */
 let hoverPrefetchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const prefetchTabResources = (tab: NavItemKey): void => {
   if (hoverPrefetchTimer) clearTimeout(hoverPrefetchTimer);
   hoverPrefetchTimer = setTimeout(() => {
     const now = new Date();
+    const currentRole = (localStorage.getItem('attendsure_role') || '').toUpperCase();
+    const isLeader = LEADERSHIP_ROLES.has(currentRole);
+
     switch (tab) {
       case 'dashboard':
         void loadDashboard();
         prefetchApiGet(API_ROUTES.reports.dashboard);
+        break;
+      case 'impact':
+        void loadImpact();
+        prefetchApiGet(API_ROUTES.reports.sdgImpact);
+        prefetchApiGet(API_ROUTES.reports.dropoutRisk);
         break;
       case 'classroom-scanner':
         void loadScanner();
@@ -108,7 +169,7 @@ const prefetchTabResources = (tab: NavItemKey): void => {
         break;
       case 'facultys':
         void loadFaculty();
-        prefetchApiGet(API_ROUTES.accounts.teachers, { page: 1, page_size: 25 });
+        prefetchApiGet(API_ROUTES.accounts.faculty, { page: 1, page_size: 25 });
         break;
       case 'users':
         void loadUsers();
@@ -141,7 +202,9 @@ const prefetchTabResources = (tab: NavItemKey): void => {
       case 'reports':
         void loadSf1();
         void loadSf2();
-        void loadSf4();
+        if (isLeader) {
+          void loadSf4();
+        }
         prefetchApiGet(API_ROUTES.school.sections);
         break;
       case 'settings':
@@ -170,8 +233,10 @@ const SubtleSkeletonFallback: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
-  const { school, loading: isSchoolLoading } = useSchool();
+  const { school, loading: isSchoolLoading, refreshSchool } = useSchool();
   const { tokens, brand } = useTheme();
+  const { term } = useCompliance();
+  const [showStaffLogin, setShowStaffLogin] = useState<boolean>(false);
 
   const [session, setSession] = useState<UserSession | null>(() => {
     const token = localStorage.getItem('attendsure_token') || localStorage.getItem('attendsure_access');
@@ -186,7 +251,10 @@ const AppContent: React.FC = () => {
     };
   });
 
-  const [userPhoto, setUserPhoto] = useState<string | null>(() => localStorage.getItem('attendsure_user_photo'));
+  const [userPhoto, setUserPhoto] = useState<string | null>(() => {
+    const saved = localStorage.getItem('attendsure_user_photo');
+    return isSafeImageUrl(saved) ? saved : null;
+  });
   const [canTeach, setCanTeach] = useState<boolean>(() => localStorage.getItem('attendsure_can_teach') === 'true');
   const [isCompleteProfileModalOpen, setIsCompleteProfileModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -198,6 +266,16 @@ const AppContent: React.FC = () => {
   const [isCheckingServer, setIsCheckingServer] = useState(false);
 
   const userRole = (session?.role || '').toUpperCase();
+  const canViewSf4 = LEADERSHIP_ROLES.has(userRole);
+  const effectiveReport: 'sf1' | 'sf2' | 'sf4' =
+    !canViewSf4 && selectedReport === 'sf4' ? 'sf1' : selectedReport;
+
+  // Automatically reset selectedReport to 'sf1' if a non-leadership account is active
+  useEffect(() => {
+    if (!canViewSf4 && selectedReport === 'sf4') {
+      setSelectedReport('sf1');
+    }
+  }, [canViewSf4, selectedReport]);
 
   const allowedTabs = useMemo<NavItemKey[]>(() => {
     if (!userRole) return [];
@@ -212,8 +290,7 @@ const AppContent: React.FC = () => {
 
   const isAllowed = allowedTabs.includes(activeTab);
 
-  // Warm up primary endpoints & code chunks right after sign-in without blocking UI paint
-useEffect(() => {
+  useEffect(() => {
     if (!session?.token || !userRole) return;
     warmupRoleEndpoints(userRole, canTeach);
     const chunkTimer = setTimeout(() => {
@@ -225,19 +302,39 @@ useEffect(() => {
     return () => clearTimeout(chunkTimer);
   }, [session?.token, userRole, canTeach]);
 
+  useEffect(() => {
+    return () => {
+      if (hoverPrefetchTimer) {
+        clearTimeout(hoverPrefetchTimer);
+        hoverPrefetchTimer = null;
+      }
+    };
+  }, []);
+
   const handleAuthExpired = useCallback(() => {
-    localStorage.removeItem('attendsure_access');
-    localStorage.removeItem('attendsure_refresh');
-    localStorage.removeItem('attendsure_token');
-    localStorage.removeItem('attendsure_username');
-    localStorage.removeItem('attendsure_faculty_name');
-    localStorage.removeItem('attendsure_role');
-    localStorage.removeItem('attendsure_user_id');
-    localStorage.removeItem('attendsure_user_photo');
-    localStorage.removeItem('attendsure_can_teach');
+    if (hoverPrefetchTimer) {
+      clearTimeout(hoverPrefetchTimer);
+      hoverPrefetchTimer = null;
+    }
+    const keys = [
+      'attendsure_access',
+      'attendsure_refresh',
+      'attendsure_token',
+      'auth_token',
+      'token',
+      'attendsure_username',
+      'attendsure_faculty_name',
+      'attendsure_role',
+      'attendsure_user_id',
+      'attendsure_user_photo',
+      'attendsure_can_teach',
+    ];
+    keys.forEach((k) => localStorage.removeItem(k));
+    clearApiClientCache();
     setSession(null);
     setUserPhoto(null);
     setCanTeach(false);
+    setSelectedReport('sf1');
     setIsCompleteProfileModalOpen(false);
   }, []);
 
@@ -256,6 +353,17 @@ useEffect(() => {
     [allowedTabs]
   );
 
+  const handleSafeReportSelection = useCallback(
+    (reportId: string) => {
+      if (!['sf1', 'sf2', 'sf4'].includes(reportId)) return;
+      const safeTarget = reportId === 'sf4' && !canViewSf4 ? 'sf1' : (reportId as 'sf1' | 'sf2' | 'sf4');
+      startTransition(() => {
+        setSelectedReport(safeTarget);
+      });
+    },
+    [canViewSf4]
+  );
+
   useEffect(() => {
     const onNavigate = (e: Event) => {
       const detail = (e as CustomEvent<string | { tab: string; report?: string }>).detail;
@@ -264,27 +372,28 @@ useEffect(() => {
         handleTabSelection(detail as NavItemKey);
       } else if (detail.tab) {
         handleTabSelection(detail.tab as NavItemKey);
-        if (detail.report && ['sf1', 'sf2', 'sf4'].includes(detail.report)) {
-          startTransition(() => {
-            setSelectedReport(detail.report as 'sf1' | 'sf2' | 'sf4');
-          });
+        if (detail.report) {
+          handleSafeReportSelection(detail.report);
         }
       }
     };
     window.addEventListener('attendsure:navigate', onNavigate);
     return () => window.removeEventListener('attendsure:navigate', onNavigate);
-  }, [handleTabSelection]);
+  }, [handleTabSelection, handleSafeReportSelection]);
 
   useEffect(() => {
     if (!session?.token) return;
     let active = true;
+    const controller = new AbortController();
+    void refreshSchool();
     apiClient
-      .get(API_ROUTES.accounts.me)
+      .get(API_ROUTES.accounts.me, { params: { nocache: 1 }, signal: controller.signal })
       .then((res) => {
-        if (!active || !res.data) return;
+        if (!active || controller.signal.aborted || !res.data) return;
         setIsServerOnline(true);
         const d = res.data;
-        const photo = d.photo_url || d.photo || null;
+        const rawPhoto = d.photo_url || d.photo || null;
+        const photo = isSafeImageUrl(rawPhoto) ? rawPhoto : null;
         const name = String(d.full_name || d.username || '').trim();
         const role = String(d.role || d.system_role || session.role || 'FACULTY').toUpperCase();
         const userId = Number(d.id || d.user_id || 0);
@@ -300,6 +409,10 @@ useEffect(() => {
         setCanTeach(teachFlag);
         localStorage.setItem('attendsure_can_teach', String(teachFlag));
 
+        if (!LEADERSHIP_ROLES.has(role)) {
+          setSelectedReport((prev) => (prev === 'sf4' ? 'sf1' : prev));
+        }
+
         if (d.is_profile_completed === false) setIsCompleteProfileModalOpen(true);
 
         setSession((prev) =>
@@ -307,15 +420,20 @@ useEffect(() => {
         );
       })
       .catch((err) => {
-        if (!active) return;
-        if (!err.response) setIsServerOnline(false);
-        else if (err.response?.status === 401) handleAuthExpired();
+        if (!active || controller.signal.aborted) return;
+        const anyErr = err as { name?: string; code?: string; response?: { status?: number } };
+        if (anyErr?.name === 'CanceledError' || anyErr?.name === 'AbortError' || anyErr?.code === 'ERR_CANCELED') {
+          return;
+        }
+        if (!anyErr?.response) setIsServerOnline(false);
+        else if (anyErr.response?.status === 401) handleAuthExpired();
       });
 
     return () => {
       active = false;
+      controller.abort();
     };
-  }, [session?.token, handleAuthExpired]);
+  }, [session?.token, handleAuthExpired, refreshSchool]);
 
   const retryConnection = useCallback(async () => {
     setIsCheckingServer(true);
@@ -333,29 +451,49 @@ useEffect(() => {
     if (!isAllowed) return 'Access Restricted';
     const prefix = school.school_name ? `${school.school_name} • ` : '';
     switch (activeTab) {
-      case 'dashboard': return `${prefix}Dashboard`;
-      case 'classroom-scanner': return 'Classroom QR Attendance Scanner';
-      case 'my-classes': return 'My Classes & Student Lists';
-      case 'advisory-monitor': return 'Advisory Attendance & Cutting Matrix';
-      case 'students': return 'Student Directory & QR Cards';
-      case 'facultys': return 'Teachers & Staff Directory';
-      case 'users': return 'User Accounts & Roles';
-      case 'gate-passes': return 'Campus Exit Passes';
-      case 'schedules': return 'Sections & Class Schedules';
-      case 'dtr': return 'Monthly Time Records (CSC Form 48)';
-      case 'geofence': return 'Campus GPS Boundary';
-      case 'messages': return 'Parent & Teacher Direct Chat';
-      case 'push': return 'Mobile Push Alerts';
+      case 'dashboard':
+        return `${prefix}Dashboard`;
+      case 'impact':
+        return term(
+          'UN SDG Impact, Dropout Early-Warning & Campus Safety',
+          'UN SDG Impact, SARDO Early-Warning & Campus Safety'
+        );
+      case 'classroom-scanner':
+        return 'Classroom QR Attendance Scanner';
+      case 'my-classes':
+        return 'My Classes & Student Lists';
+      case 'advisory-monitor':
+        return 'Advisory Attendance & Cutting Matrix';
+      case 'students':
+        return 'Student Directory & QR Cards';
+      case 'facultys':
+        return 'Faculty & Staff Directory';
+      case 'users':
+        return 'User Accounts & Roles';
+      case 'gate-passes':
+        return 'Campus Exit Passes';
+      case 'schedules':
+        return 'Sections & Class Schedules';
+      case 'dtr':
+        return term('Verified Staff Timesheets (GPS)', 'Monthly Time Records (CSC Form 48)');
+      case 'geofence':
+        return 'Campus GPS Boundary';
+      case 'messages':
+        return 'Parent & Faculty Direct Chat';
+      case 'push':
+        return 'Mobile Push Alerts';
       case 'reports':
-        return selectedReport === 'sf1'
-          ? 'DepEd School Form 1 (Register)'
-          : selectedReport === 'sf2'
-          ? 'DepEd School Form 2 (Daily Attendance)'
-          : 'DepEd School Form 4 (Monthly Movement)';
-      case 'settings': return 'School Settings & Audit Logs';
-      default: return 'AttendSure Portal';
+        return effectiveReport === 'sf1'
+          ? term('Master Student Register (Ed-Fi / SF1)', 'DepEd School Form 1 (Register)')
+          : effectiveReport === 'sf2'
+            ? term('Daily Attendance Register (Ed-Fi / SF2)', 'DepEd School Form 2 (Daily Attendance)')
+            : term('Consolidated Enrollment & Attendance (SF4)', 'DepEd School Form 4 (Monthly Movement)');
+      case 'settings':
+        return 'School Settings & Audit Logs';
+      default:
+        return 'AttendSure Portal';
     }
-  }, [activeTab, isAllowed, school.school_name, selectedReport]);
+  }, [activeTab, isAllowed, school.school_name, effectiveReport, term]);
 
   const renderTab = () => {
     if (!isAllowed) {
@@ -367,7 +505,19 @@ useEffect(() => {
           <button
             type="button"
             onClick={() => handleTabSelection(allowedTabs[0] || 'dashboard')}
-            style={{ marginTop: 14, padding: '8px 16px', backgroundColor: brand.buttonBg, color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            style={{
+              marginTop: 14,
+              padding: '8px 16px',
+              backgroundColor: brand.buttonBg,
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
           >
             <ArrowLeft size={14} /> Back to Dashboard
           </button>
@@ -384,36 +534,68 @@ useEffect(() => {
             onManualRefresh={retryConnection}
             onNavigateTab={(tab, report) => {
               handleTabSelection(tab as NavItemKey);
-              if (report && ['sf1', 'sf2', 'sf4'].includes(report)) {
-                startTransition(() => setSelectedReport(report as 'sf1' | 'sf2' | 'sf4'));
+              if (report) {
+                handleSafeReportSelection(report);
               }
             }}
           />
         );
+      case 'impact':
+        return (
+          <div style={{ padding: 'clamp(12px, 2vw, 20px)', maxWidth: 1380, margin: '0 auto' }}>
+            <EnterpriseSDGWidget />
+          </div>
+        );
       case 'classroom-scanner':
-        return <div style={{ padding: 'clamp(12px, 2vw, 20px)' }}><ClassroomScanner /></div>;
-      case 'my-classes': return <MyAssignedClassesTab />;
+        return (
+          <div style={{ padding: 'clamp(12px, 2vw, 20px)' }}>
+            <ClassroomScanner />
+          </div>
+        );
+      case 'my-classes':
+        return <MyAssignedClassesTab />;
       case 'advisory-monitor':
-        return <div style={{ padding: 'clamp(12px, 2vw, 20px)' }}><AdvisorySubjectMonitor /></div>;
-      case 'students': return <StudentsTab />;
-      case 'facultys': return <FacultyTab />;
-      case 'users': return <UsersTab />;
-      case 'gate-passes': return <GatePassesTab />;
-      case 'schedules': return <SchedulesTab />;
-      case 'dtr': return <DTRTab />;
-      case 'geofence': return <GeofenceTab />;
-      case 'messages': return <ParentChatTab />;
-      case 'push': return <PushNotificationsTab />;
+        return (
+          <div style={{ padding: 'clamp(12px, 2vw, 20px)' }}>
+            <AdvisorySubjectMonitor />
+          </div>
+        );
+      case 'students':
+        return <StudentsTab />;
+      case 'facultys':
+        return <FacultyTab />;
+      case 'users':
+        return <UsersTab />;
+      case 'gate-passes':
+        return <GatePassesTab />;
+      case 'schedules':
+        return <SchedulesTab />;
+      case 'dtr':
+        return <DTRTab />;
+      case 'geofence':
+        return <GeofenceTab />;
+      case 'messages':
+        return <ParentChatTab />;
+      case 'push':
+        return <PushNotificationsTab />;
       case 'reports':
         return (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
-            {selectedReport === 'sf1' && <SF1ReportTab activeReportId={selectedReport} onSelectReport={(id) => startTransition(() => setSelectedReport(id as 'sf1' | 'sf2' | 'sf4'))} />}
-            {selectedReport === 'sf2' && <SF2ReportTab activeReportId={selectedReport} onSelectReport={(id) => startTransition(() => setSelectedReport(id as 'sf1' | 'sf2' | 'sf4'))} />}
-            {selectedReport === 'sf4' && <SF4ReportTab activeReportId={selectedReport} onSelectReport={(id) => startTransition(() => setSelectedReport(id as 'sf1' | 'sf2' | 'sf4'))} />}
+            {effectiveReport === 'sf1' && (
+              <SF1ReportTab activeReportId="sf1" onSelectReport={handleSafeReportSelection} />
+            )}
+            {effectiveReport === 'sf2' && (
+              <SF2ReportTab activeReportId="sf2" onSelectReport={handleSafeReportSelection} />
+            )}
+            {effectiveReport === 'sf4' && canViewSf4 && (
+              <SF4ReportTab activeReportId="sf4" onSelectReport={handleSafeReportSelection} />
+            )}
           </div>
         );
-      case 'settings': return <SettingsTab />;
-      default: return <DashboardView isServerOnline={isServerOnline} onManualRefresh={retryConnection} />;
+      case 'settings':
+        return <SettingsTab />;
+      default:
+        return <DashboardView isServerOnline={isServerOnline} onManualRefresh={retryConnection} />;
     }
   };
 
@@ -424,12 +606,27 @@ useEffect(() => {
       <SplashScreen loading={isSchoolLoading} minDurationMs={0} />
 
       {!session ? (
-        <LoginView
-          onLoginSuccess={(nextSession) => {
-            setSession(nextSession);
-            setActiveTab('dashboard');
-          }}
-        />
+        showStaffLogin ? (
+          <LoginView
+            onBackToShowcase={() => setShowStaffLogin(false)}
+            onLoginSuccess={(nextSession) => {
+              clearApiClientCache();
+              setSession(nextSession);
+              setActiveTab('dashboard');
+              setSelectedReport('sf1');
+            }}
+          />
+        ) : (
+          <StartupShowcasePage
+            onOpenSignIn={() => setShowStaffLogin(true)}
+            onDemoLoginSuccess={(nextSession, targetTab = 'dashboard') => {
+              clearApiClientCache();
+              setSession(nextSession);
+              setActiveTab(targetTab);
+              setSelectedReport('sf1');
+            }}
+          />
+        )
       ) : (
         <div
           style={{
@@ -443,7 +640,18 @@ useEffect(() => {
             boxSizing: 'border-box',
           }}
         >
-          <div style={{ height: '100%', borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderStyle: 'solid', borderColor: tokens.borderSubtle, boxShadow: tokens.cardShadow, flexShrink: 0 }}>
+          <div
+            style={{
+              height: '100%',
+              borderRadius: 16,
+              overflow: 'hidden',
+              borderWidth: 1,
+              borderStyle: 'solid',
+              borderColor: tokens.borderSubtle,
+              boxShadow: tokens.cardShadow,
+              flexShrink: 0,
+            }}
+          >
             <Sidebar
               activeTab={activeTab}
               onSelectTab={handleTabSelection}
@@ -460,7 +668,22 @@ useEffect(() => {
             />
           </div>
 
-          <div style={{ flex: 1, minWidth: 0, height: '100%', borderRadius: 16, backgroundColor: tokens.bgSurface, borderWidth: 1, borderStyle: 'solid', borderColor: tokens.borderSubtle, boxShadow: tokens.cardShadow, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              height: '100%',
+              borderRadius: 16,
+              backgroundColor: tokens.bgSurface,
+              borderWidth: 1,
+              borderStyle: 'solid',
+              borderColor: tokens.borderSubtle,
+              boxShadow: tokens.cardShadow,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
             <Header
               title={pageTitle}
               isSystemOnline={isServerOnline}
@@ -474,16 +697,47 @@ useEffect(() => {
               onOpenProfile={() => setIsProfileModalOpen(true)}
             />
 
-            <main style={{ flex: 1, minHeight: 0, overflowY: activeTab === 'dashboard' || activeTab === 'reports' ? 'hidden' : 'auto', overflowX: 'hidden', position: 'relative', backgroundColor: tokens.bgSurfaceSubtle }}>
-              <ErrorBoundary featureName={pageTitle} resetKeys={[activeTab, selectedReport]}>
-                <Suspense fallback={<SubtleSkeletonFallback />}>
-                  {renderTab()}
-                </Suspense>
+            <main
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: activeTab === 'dashboard' || activeTab === 'reports' ? 'hidden' : 'auto',
+                overflowX: 'hidden',
+                position: 'relative',
+                backgroundColor: tokens.bgSurfaceSubtle,
+              }}
+            >
+              <ErrorBoundary featureName={pageTitle} resetKeys={[activeTab, effectiveReport]}>
+                <Suspense fallback={<SubtleSkeletonFallback />}>{renderTab()}</Suspense>
               </ErrorBoundary>
 
               {!isServerOnline && (
-                <div onClick={retryConnection} style={{ position: 'absolute', inset: 0, zIndex: 35, backgroundColor: 'rgba(15,23,42,0.68)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, padding: '10px 20px', borderRadius: 9999, backgroundColor: '#0f172a', color: '#f8fafc', fontWeight: 700, fontSize: '0.82rem' }}>
+                <div
+                  onClick={retryConnection}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    zIndex: 35,
+                    backgroundColor: 'rgba(15,23,42,0.68)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '10px 20px',
+                      borderRadius: 9999,
+                      backgroundColor: '#0f172a',
+                      color: '#f8fafc',
+                      fontWeight: 700,
+                      fontSize: '0.82rem',
+                    }}
+                  >
                     <WifiOff size={16} color="#38bdf8" />
                     {isCheckingServer ? 'Reconnecting...' : 'Server offline. Click to reconnect.'}
                   </div>
@@ -504,14 +758,19 @@ useEffect(() => {
             isOpen={isProfileModalOpen}
             onClose={() => setIsProfileModalOpen(false)}
             onProfileUpdated={(updated: ProfileUpdatePayload) => {
-              const name = typeof updated.full_name === 'string' && updated.full_name.trim() ? updated.full_name.trim() : undefined;
+              const name =
+                typeof updated.full_name === 'string' && updated.full_name.trim()
+                  ? updated.full_name.trim()
+                  : undefined;
               if (name) {
                 localStorage.setItem('attendsure_faculty_name', name);
                 setSession((prev) => (prev ? { ...prev, faculty_name: name } : null));
               }
-              if (updated.photo !== undefined) {
-                setUserPhoto(updated.photo || null);
-                if (updated.photo) localStorage.setItem('attendsure_user_photo', updated.photo);
+              if (updated.photo !== undefined || updated.photo_url !== undefined) {
+                const candidate = (updated.photo_url as string | null) ?? updated.photo ?? null;
+                const nextPhoto = isSafeImageUrl(candidate) ? candidate : null;
+                setUserPhoto(nextPhoto);
+                if (nextPhoto) localStorage.setItem('attendsure_user_photo', nextPhoto);
                 else localStorage.removeItem('attendsure_user_photo');
               }
             }}
@@ -522,7 +781,11 @@ useEffect(() => {
             onCompleted={(updatedUser: CompletedProfileUser) => {
               setIsCompleteProfileModalOpen(false);
               const name = String(updatedUser.full_name || updatedUser.username || '').trim();
-              const photo = (typeof updatedUser.photo_url === 'string' && updatedUser.photo_url) || (typeof updatedUser.photo === 'string' && updatedUser.photo) || null;
+              const rawPhoto =
+                (typeof updatedUser.photo_url === 'string' && updatedUser.photo_url) ||
+                (typeof updatedUser.photo === 'string' && updatedUser.photo) ||
+                null;
+              const photo = isSafeImageUrl(rawPhoto) ? rawPhoto : null;
               if (name) {
                 localStorage.setItem('attendsure_faculty_name', name);
                 setSession((prev) => (prev ? { ...prev, faculty_name: name } : null));
@@ -541,11 +804,13 @@ useEffect(() => {
 
 export const App: React.FC = () => (
   <ThemeProvider>
-    <SchoolProvider>
-      <AlertProvider>
-        <AppContent />
-      </AlertProvider>
-    </SchoolProvider>
+    <ComplianceProvider>
+      <SchoolProvider>
+        <AlertProvider>
+          <AppContent />
+        </AlertProvider>
+      </SchoolProvider>
+    </ComplianceProvider>
   </ThemeProvider>
 );
 

@@ -35,9 +35,10 @@ import {
 interface AuthPageProps {
   onAuthSuccess?: (session: UserSession) => void;
   onLoginSuccess?: (session: UserSession) => void;
+  onBackToShowcase?: () => void;
 }
 
-const ALLOWED_WEB_ROLES = new Set(['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY']);
+const ALLOWED_WEB_ROLES = new Set(['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY']);
 
 const clearPreviousSessionStorage = (): void => {
   const keys = [
@@ -56,7 +57,7 @@ const clearPreviousSessionStorage = (): void => {
   keys.forEach((k) => localStorage.removeItem(k));
 };
 
-export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSuccess }) => {
+export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSuccess, onBackToShowcase }) => {
   const { school, updateSchoolInstantly, refreshSchool } = useSchool();
   const { mode, setThemeMode, tokens, brand, fonts } = useTheme();
 
@@ -69,10 +70,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
   const [loginForm, setLoginForm] = useState<LoginPayload>({ username: '', password: '' });
 
   const usernameInputRef = useRef<HTMLInputElement | null>(null);
+  const loginAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     usernameInputRef.current?.focus();
     return () => {
+      loginAbortRef.current?.abort();
       setLoginForm({ username: '', password: '' });
     };
   }, []);
@@ -93,22 +96,31 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
     e.preventDefault();
     if (loading || cooldownSeconds > 0) return;
 
-    const cleanUsername = loginForm.username.replace(/[\r\n\t<>]/g, '').trim().slice(0, 100);
-    const rawPassword = loginForm.password.slice(0, 128);
+    const cleanUsername = loginForm.username.replace(/[\u0000-\u001F\u007F<>]/g, '').trim().slice(0, 100);
+    const rawPassword = loginForm.password.replace(/[\u0000-\u001F\u007F]/g, '').slice(0, 128);
 
     if (!cleanUsername || !rawPassword) {
       setErrorMsg('Please enter both your username and password.');
       return;
     }
 
+    loginAbortRef.current?.abort();
+    const controller = new AbortController();
+    loginAbortRef.current = controller;
+
     setErrorMsg(null);
     setLoading(true);
 
     try {
-      const res = await apiClient.post(API_ROUTES.accounts.login, {
-        username: cleanUsername,
-        password: rawPassword,
-      });
+      const res = await apiClient.post(
+        API_ROUTES.accounts.login,
+        {
+          username: cleanUsername,
+          password: rawPassword,
+        },
+        { signal: controller.signal }
+      );
+      if (controller.signal.aborted) return;
 
       const data = res.data || {};
       const userObj = data.user || data;
@@ -119,7 +131,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
         clearApiClientCache();
         setLoginForm((prev) => ({ ...prev, password: '' }));
         setErrorMsg(
-          'Parent accounts sign in on the AttendSure Mobile App. Please use a teacher or admin account here.'
+          'Parent accounts sign in on the AttendSure Mobile App. Please use a faculty or admin account here.'
         );
         return;
       }
@@ -173,14 +185,25 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
       onAuthSuccess?.(session);
       onLoginSuccess?.(session);
     } catch (err: unknown) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
+      const anyErr = err as { name?: string; code?: string; response?: { status?: number } };
+      if (
+        controller.signal.aborted ||
+        anyErr?.name === 'CanceledError' ||
+        anyErr?.name === 'AbortError' ||
+        anyErr?.code === 'ERR_CANCELED'
+      ) {
+        return;
+      }
+      const status = anyErr?.response?.status;
       if (status === 429) {
         setCooldownSeconds(30);
       }
       setLoginForm((prev) => ({ ...prev, password: '' }));
       setErrorMsg(extractApiError(err, 'Wrong username or password. Please try again.'));
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
@@ -195,12 +218,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
     {
       icon: <QrCode size={16} color="#7dd3fc" />,
       title: 'Classroom QR Scan',
-      desc: 'Fast USB scanner or camera check-in, even offline.',
+      desc: 'Fast USB QR scanner check-in on classroom laptops, with automatic offline sync.',
     },
     {
       icon: <Smartphone size={16} color="#6ee7b7" />,
       title: 'Campus GPS Check-In',
-      desc: 'Teachers verify arrival via mobile camera and GPS.',
+      desc: 'Faculty verify arrival via on-device facial recognition and campus GPS.',
     },
     {
       icon: <FileSpreadsheet size={16} color="#fcd34d" />,
@@ -210,7 +233,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
     {
       icon: <BellRing size={16} color="#f9a8d4" />,
       title: 'Parent Mobile Alerts',
-      desc: 'Instant arrival, cutting, and exit pass notices.',
+      desc: 'Instant arrival, cutting, and exit pass push notices.',
     },
   ];
 
@@ -441,7 +464,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
             </div>
 
             <p style={{ margin: 0, fontSize: '0.84rem', color: '#e0f2fe', lineHeight: 1.5, maxWidth: 400 }}>
-              Real-time classroom QR attendance, teacher campus check-in, parent mobile alerts, and official DepEd reports.
+              Real-time classroom QR attendance, faculty campus check-in, parent mobile alerts, and official school reports.
             </p>
 
             {/* 2x2 Capability Grid */}
@@ -504,6 +527,27 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
         <div className="auth-form-pane" style={{ backgroundColor: tokens.bgSurface }}>
           <div>
             {/* Top Brand Emblem + Theme Switcher Header */}
+            {onBackToShowcase && (
+              <button
+                type="button"
+                onClick={onBackToShowcase}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  marginBottom: 12,
+                  color: brand.primary,
+                  fontSize: '0.74rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                }}
+              >
+                &larr; Back to Product Showcase &amp; 1-Click Judge Demo
+              </button>
+            )}
             <div
               style={{
                 display: 'flex',
@@ -604,7 +648,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
                     value={loginForm.username}
                     onFocus={() => setFocusedField('username')}
                     onBlur={() => setFocusedField(null)}
-                    onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
+                    onChange={(e) =>
+                      setLoginForm({
+                        ...loginForm,
+                        username: e.target.value.replace(/[\u0000-\u001F\u007F<>]/g, ''),
+                      })
+                    }
                     style={{
                       width: '100%',
                       padding: '10px 12px 10px 9px',

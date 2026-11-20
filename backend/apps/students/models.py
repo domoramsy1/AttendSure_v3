@@ -1,3 +1,6 @@
+# D:\AttendSure_V3\backend\apps\students\models.py
+
+from datetime import datetime
 import secrets
 from django.conf import settings
 from django.db import models
@@ -77,7 +80,7 @@ class Student(models.Model):
 
     def save(self, *args, **kwargs):
         if self.parent_contact:
-            self.parent_contact = normalize_ph_phone(self.parent_contact)
+            self.parent_contact = normalize_ph_phone(self.parent_contact)[:50]
         if not self.qr_token:
             self.qr_token = secrets.token_urlsafe(24)
         if not self.parent_user_id and self.parent_contact:
@@ -103,7 +106,8 @@ class Enrollment(models.Model):
     school_year = models.ForeignKey(
         "school.SchoolYear", on_delete=models.CASCADE, db_column="academic_year_id", related_name="enrollments"
     )
-    enrollment_date = models.DateField(default=timezone.now)
+    # Uses timezone.localdate so DRF DateField never fails AssertionError on datetime instances
+    enrollment_date = models.DateField(default=timezone.localdate)
     enrollment_type = models.CharField(max_length=20, choices=ENROLLMENT_TYPE_CHOICES, default="REGULAR")
     status = models.CharField(max_length=20, choices=ENROLLMENT_STATUS_CHOICES, default="ENROLLED")
     status_date = models.DateField(null=True, blank=True)
@@ -122,3 +126,12 @@ class Enrollment(models.Model):
         constraints = [
             UniqueConstraint(fields=["student", "school_year"], name="uq_student_school_year")
         ]
+
+    def save(self, *args, **kwargs):
+        if isinstance(self.enrollment_date, datetime):
+            self.enrollment_date = (
+                timezone.localtime(self.enrollment_date).date()
+                if timezone.is_aware(self.enrollment_date)
+                else self.enrollment_date.date()
+            )
+        super().save(*args, **kwargs)

@@ -1,113 +1,116 @@
-// mobile/src/services/soundService.ts
+/**
+ * AttendSure - Safe Tactile & Web Audio Feedback Service
+ * File: mobile/src/services/soundService.ts
+ *
+ * Uses built-in React Native Vibration on native devices and pure Web Audio
+ * tone synthesis on web with zero external CDN dependencies or missing packages.
+ */
 
 import { Vibration, Platform } from 'react-native';
 
-let AudioModule: any = null;
-let FileSystemModule: any = null;
-let isAudioAvailable = false;
+type FeedbackType = 'success' | 'warning' | 'error';
 
-try {
-  const expoAv = require('expo-av');
-  if (expoAv && expoAv.Audio) {
-    AudioModule = expoAv.Audio;
-    isAudioAvailable = true;
-  }
-} catch {
-  isAudioAvailable = false;
+interface MinimalOscillator {
+  type: string;
+  frequency: {
+    setValueAtTime: (frequency: number, startTime: number) => void;
+  };
+  connect: (destination: unknown) => void;
+  start: (when?: number) => void;
+  stop: (when?: number) => void;
 }
 
-try {
-  FileSystemModule = require('expo-file-system');
-} catch {
-  FileSystemModule = null;
+interface MinimalGainNode {
+  gain: {
+    setValueAtTime: (value: number, startTime: number) => void;
+    exponentialRampToValueAtTime: (value: number, endTime: number) => void;
+  };
+  connect: (destination: unknown) => void;
 }
 
-let isAudioConfigured = false;
+interface MinimalAudioContext {
+  currentTime: number;
+  destination: unknown;
+  createOscillator: () => MinimalOscillator;
+  createGain: () => MinimalGainNode;
+  close?: () => Promise<void> | void;
+}
 
-const configureAudio = async () => {
-  if (!isAudioAvailable || !AudioModule || isAudioConfigured) return;
+type AudioContextCtor = new () => MinimalAudioContext;
+
+const TONE_PROFILES: Record<
+  FeedbackType,
+  { notes: number[]; durationSec: number; wave: string }
+> = {
+  success: { notes: [880, 1175], durationSec: 0.09, wave: 'sine' },
+  warning: { notes: [520, 440], durationSec: 0.14, wave: 'triangle' },
+  error: { notes: [280, 210], durationSec: 0.16, wave: 'sawtooth' },
+};
+
+function playWebAudioTone(type: FeedbackType): void {
+  if (Platform.OS !== 'web') return;
+
   try {
-    await AudioModule.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false, // Forces audio to external speaker
-    });
-    isAudioConfigured = true;
-  } catch {
-    // Ignore audio config error
-  }
-};
+    const scope = globalThis as unknown as {
+      AudioContext?: AudioContextCtor;
+      webkitAudioContext?: AudioContextCtor;
+    };
+    const Ctor = scope.AudioContext || scope.webkitAudioContext;
+    if (!Ctor) return;
 
-// Reliable CDN Fallback Audio for Android MediaPlayer
-const SOUND_URLS = {
-  success: 'https://actions.google.com/sounds/v1/communication/beep_short.ogg',
-  warning: 'https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg',
-  error: 'https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg',
-};
+    const ctx = new Ctor();
+    const profile = TONE_PROFILES[type];
+    let offset = ctx.currentTime;
 
-// Base64 WAV buffers for offline local caching
-const BASE64_TONES = {
-  success:
-    'UklGRjQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRABAACAgICAgICAgICAgICAf39/f3+AgICAgIB/f39/f4CAgICAgH9/f39/gICAgICAf39/f3+AgICAgIB/f39/f4CAgICAgH9/f39/gICAgICAf39/f3+AgICAgIB/f39/f4CAgICAgH9/f39/gICAgICAf39/f3+AgICAgIB/f39/f4CAgICAgH9/f39/gICAgICA',
-  warning:
-    'UklGRjQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRABAADAwMDAwMDAwMDAwMC/v7+/v8DAwMDAwL+/v7+/wMDAwMDAv7+/v7/AwMDAwMC/v7+/v8DAwMDAwL+/v7+/wMDAwMDAv7+/v7/AwMDAwMC/v7+/v8DAwMDAwL+/v7+/wMDAwMDAv7+/v7/AwMDAwMC/v7+/v8DAwMDAwL+/v7+/wMDAwMDAv7+/v7/AwMDAwMA',
-  error:
-    'UklGRjQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRABAADg4ODg4ODg4ODg4ODg39/f39/g4ODg4ODf39/f3+Dg4ODg4N/f39/f4ODg4ODg39/f39/g4ODg4ODf39/f3+Dg4ODg4N/f39/f4ODg4ODg39/f39/g4ODg4ODf39/f3+Dg4ODg4N/f39/f4ODg4ODg39/f39/g4ODg4ODf39/f3+Dg4ODg4N/f39/f4ODg4ODg',
-};
+    for (const freq of profile.notes) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = profile.wave;
+      osc.frequency.setValueAtTime(freq, offset);
 
-const getPlayableUri = async (type: 'success' | 'warning' | 'error'): Promise<string> => {
-  if (FileSystemModule && FileSystemModule.cacheDirectory) {
-    try {
-      const fileUri = `${FileSystemModule.cacheDirectory}attendsure_${type}.wav`;
-      const fileInfo = await FileSystemModule.getInfoAsync(fileUri);
-      if (!fileInfo.exists) {
-        await FileSystemModule.writeAsStringAsync(fileUri, BASE64_TONES[type], {
-          encoding: FileSystemModule.EncodingType.Base64,
-        });
-      }
-      return fileUri;
-    } catch {
-      // Fallback to URL
+      gain.gain.setValueAtTime(0.08, offset);
+      gain.gain.exponentialRampToValueAtTime(0.001, offset + profile.durationSec);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(offset);
+      osc.stop(offset + profile.durationSec);
+      offset += profile.durationSec + 0.03;
     }
+
+    const totalMs = Math.ceil((profile.notes.length * (profile.durationSec + 0.03) + 0.1) * 1000);
+    setTimeout(() => {
+      try {
+        ctx.close?.();
+      } catch {}
+    }, totalMs);
+  } catch {
+    // Web Audio may be blocked before user gesture; ignore safely
   }
-  return SOUND_URLS[type];
-};
+}
 
-const playSoundSafely = async (
-  type: 'success' | 'warning' | 'error',
-  vibratePattern: number | number[]
-) => {
-  // Always trigger vibration as tactile backup
-  Vibration.vibrate(vibratePattern);
-
-  if (!isAudioAvailable || !AudioModule) return;
+function triggerFeedback(type: FeedbackType, vibratePattern: number | number[]): void {
+  if (Platform.OS === 'web') {
+    playWebAudioTone(type);
+    return;
+  }
 
   try {
-    await configureAudio();
-    const sourceUri = await getPlayableUri(type);
-    const { sound } = await AudioModule.Sound.createAsync(
-      { uri: sourceUri },
-      { shouldPlay: true, volume: 1.0 }
-    );
-    sound.setOnPlaybackStatusUpdate((status: any) => {
-      if (status.isLoaded && status.didJustFinish) {
-        sound.unloadAsync();
-      }
-    });
-  } catch (err) {
-    console.warn(`[Audio Notice] Sound playback skipped: ${err}`);
+    Vibration.vibrate(vibratePattern);
+  } catch {
+    // Ignore devices without vibration hardware or permission
   }
+}
+
+export const playScanSuccessSound = async (): Promise<void> => {
+  triggerFeedback('success', 70);
 };
 
-export const playScanSuccessSound = async () => {
-  await playSoundSafely('success', 70);
+export const playScanWarningSound = async (): Promise<void> => {
+  triggerFeedback('warning', [0, 150, 80, 150]);
 };
 
-export const playScanWarningSound = async () => {
-  await playSoundSafely('warning', [0, 150, 80, 150]);
-};
-
-export const playScanErrorSound = async () => {
-  await playSoundSafely('error', [0, 200, 100, 200]);
+export const playScanErrorSound = async (): Promise<void> => {
+  triggerFeedback('error', [0, 200, 100, 200]);
 };

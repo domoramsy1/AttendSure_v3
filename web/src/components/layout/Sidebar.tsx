@@ -5,11 +5,13 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { useTheme } from '../../context/ThemeContext';
+import { useCompliance } from '../../context/ComplianceContext';
 import { isSafeImageUrl } from '../../theme/tokens';
 import type { UserSession } from '../../types/section';
 import type { TabBadgeCounts } from './Header';
 import {
   LayoutDashboard,
+  Globe,
   Users,
   GraduationCap,
   CalendarDays,
@@ -30,6 +32,7 @@ import {
 
 export type NavItemKey =
   | 'dashboard'
+  | 'impact'
   | 'classroom-scanner'
   | 'my-classes'
   | 'advisory-monitor'
@@ -104,15 +107,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   allowedTabs,
   badgeCounts: propBadgeCounts,
 }) => {
-  const { tokens, brand } = useTheme();
+  const { mode, tokens, brand } = useTheme();
+  const { isGlobalMode, t } = useCompliance();
   const [liveBadges, setLiveBadges] = useState<TabBadgeCounts>({});
-  const [internalCollapsed, setInternalCollapsed] = useState<boolean>(
-    () => localStorage.getItem('attendsure_sidebar_collapsed') === 'true'
-  );
+  const [internalCollapsed, setInternalCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('attendsure_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
   const role = (session?.role || 'FACULTY').toUpperCase();
-  const isLeadership = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(role);
+  const isLeadership = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(role);
 
   useEffect(() => {
     const onSync = (e: Event) => {
@@ -126,7 +134,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleToggle = () => {
     const next = !isCollapsed;
     setInternalCollapsed(next);
-    localStorage.setItem('attendsure_sidebar_collapsed', String(next));
+    try {
+      localStorage.setItem('attendsure_sidebar_collapsed', String(next));
+    } catch {
+      // Ignore storage quota errors
+    }
     onToggleCollapse?.();
   };
 
@@ -136,40 +148,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const allGroups: NavGroup[] = useMemo(
     () => [
       {
-        groupTitle: 'OVERVIEW',
-        items: [{ key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={17} /> }],
-      },
-      {
-        groupTitle: 'CLASSROOM',
+        groupTitle: t('group_overview', 'OVERVIEW'),
         items: [
-          { key: 'classroom-scanner', label: 'QR Scanner', icon: <QrCode size={17} /> },
-          { key: 'my-classes', label: 'My Classes', icon: <BookOpen size={17} /> },
-          { key: 'advisory-monitor', label: 'Advisory Matrix', icon: <LayoutGrid size={17} /> },
-          { key: 'students', label: 'Students', icon: <GraduationCap size={17} /> },
-          { key: 'facultys', label: 'Teachers & Staff', icon: <Users size={17} /> },
-          { key: 'schedules', label: 'Schedules', icon: <CalendarDays size={17} /> },
+          { key: 'dashboard', label: t('nav_dashboard', 'Dashboard'), icon: <LayoutDashboard size={17} /> },
+          { key: 'impact', label: t('nav_impact', 'Impact & Safety'), icon: <Globe size={17} /> },
         ],
       },
       {
-        groupTitle: 'ATTENDANCE & ALERTS',
+        groupTitle: t('group_classroom', 'CLASSROOM'),
         items: [
-          { key: 'messages', label: 'Parent Chat', icon: <MessageSquare size={17} /> },
-          { key: 'push', label: 'Push Alerts', icon: <Bell size={17} /> },
-          { key: 'gate-passes', label: 'Exit Passes', icon: <Ticket size={17} /> },
-          { key: 'dtr', label: 'Monthly DTR', icon: <Clock size={17} /> },
-          { key: 'geofence', label: 'Campus GPS', icon: <MapPin size={17} /> },
+          { key: 'classroom-scanner', label: t('nav_scanner', 'QR Scanner'), icon: <QrCode size={17} /> },
+          { key: 'my-classes', label: t('nav_my_classes', 'My Classes'), icon: <BookOpen size={17} /> },
+          { key: 'advisory-monitor', label: t('nav_advisory', 'Advisory Matrix'), icon: <LayoutGrid size={17} /> },
+          { key: 'students', label: t('nav_students', 'Students'), icon: <GraduationCap size={17} /> },
+          { key: 'facultys', label: t('nav_faculty', 'Faculty & Staff'), icon: <Users size={17} /> },
+          { key: 'schedules', label: t('nav_schedules', 'Schedules'), icon: <CalendarDays size={17} /> },
         ],
       },
       {
-        groupTitle: 'ADMINISTRATION',
+        groupTitle: t('group_alerts', 'ATTENDANCE & ALERTS'),
         items: [
-          { key: 'reports', label: 'DepEd Reports', icon: <FileSpreadsheet size={19} /> },
-          { key: 'users', label: 'User Accounts', icon: <UserCheck size={17} /> },
-          { key: 'settings', label: 'School Settings', icon: <Settings size={17} /> },
+          { key: 'messages', label: t('nav_messages', 'Parent Chat'), icon: <MessageSquare size={17} /> },
+          { key: 'push', label: t('nav_push', 'Push Alerts'), icon: <Bell size={17} /> },
+          { key: 'gate-passes', label: t('nav_gate_passes', 'Exit Passes'), icon: <Ticket size={17} /> },
+          {
+            key: 'dtr',
+            label: isGlobalMode ? t('nav_dtr_global', 'Staff Timesheets') : t('nav_dtr_deped', 'Monthly DTR'),
+            icon: <Clock size={17} />,
+          },
+          { key: 'geofence', label: t('nav_geofence', 'Campus GPS'), icon: <MapPin size={17} /> },
+        ],
+      },
+      {
+        groupTitle: t('group_admin', 'ADMINISTRATION'),
+        items: [
+          {
+            key: 'reports',
+            label: isGlobalMode ? t('nav_reports_global', 'Compliance Reports') : t('nav_reports_deped', 'DepEd Reports'),
+            icon: <FileSpreadsheet size={19} />,
+          },
+          { key: 'users', label: t('nav_users', 'User Accounts'), icon: <UserCheck size={17} /> },
+          { key: 'settings', label: t('nav_settings', 'School Settings'), icon: <Settings size={17} /> },
         ],
       },
     ],
-    []
+    [isGlobalMode, t]
   );
 
   const visibleGroups = useMemo(() => {
@@ -178,9 +201,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ...group,
         items: group.items.filter((item) => {
           if (allowedTabs && allowedTabs.length > 0) return allowedTabs.includes(item.key);
-          if (item.key === 'users') return role === 'ADMIN' || role === 'SUPERADMIN';
+          if (item.key === 'users') return ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN'].includes(role);
           if (['settings', 'push', 'geofence'].includes(item.key)) {
-            return ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(role);
+            return ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL'].includes(role);
           }
           if (['facultys', 'schedules'].includes(item.key)) return isLeadership;
           if (item.key === 'my-classes') return canTeach || isLeadership;
@@ -351,7 +374,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {badge && (
                     <span
                       style={{
-                        backgroundColor: brand.danger,
+                        backgroundColor: mode === 'dark' ? '#dc2626' : brand.danger,
                         color: '#ffffff',
                         fontSize: '0.58rem',
                         fontWeight: 800,
