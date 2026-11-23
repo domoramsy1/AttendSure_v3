@@ -12,7 +12,7 @@ import hashlib
 from django.conf import settings
 from django.utils import timezone
 
-from apps.accounts.models import TeacherProfile
+from apps.accounts.models import FacultyProfile
 from apps.attendance.models import ClassAttendance, DailyAttendance
 from apps.school.models import SchoolYear, Section
 from apps.school.selectors import get_school_metadata
@@ -58,16 +58,21 @@ def build_edfi_v6_export(
 
     sections_qs = Section.objects.filter(is_active=True).select_related("grade_level", "adviser").order_by("id")
     students_qs = Student.objects.filter(is_active=True).order_by("id")[:2000]
-    enrollments_qs = (
+    enrollments_qs = list(
         Enrollment.objects.filter(status__in=["ENROLLED", "TRANSFERRED_IN"], student__is_active=True)
-        .select_related("student", "section", "section__grade_level", "school_year")
+        .select_related("student", "section", "section__grade_level", "section__school_year")
         .order_by("id")[:2000]
     )
-    teachers_qs = TeacherProfile.objects.filter(is_active=True).order_by("id")[:500]
+    student_section_map = {enr.student_id: enr.section_id for enr in enrollments_qs if enr.section_id}
+    teachers_qs = (
+        FacultyProfile.objects.filter(is_active=True)
+        .select_related("department_ref", "position_ref")
+        .order_by("id")[:500]
+    )
 
     daily_qs = (
         DailyAttendance.objects.filter(attendance_date__gte=start_date, attendance_date__lte=today)
-        .select_related("student", "section")
+        .select_related("student")
         .order_by("-attendance_date", "id")[:5000]
     )
     class_qs = (
@@ -80,7 +85,7 @@ def build_edfi_v6_export(
         raw = st.lrn or str(st.id)
         return _pseudonymize("STU", raw) if anonymize else raw
 
-    def staff_uid(t: TeacherProfile) -> str:
+    def staff_uid(t: FacultyProfile) -> str:
         raw = t.employee_id or str(t.id)
         return _pseudonymize("STF", raw) if anonymize else raw
 
@@ -145,7 +150,7 @@ def build_edfi_v6_export(
             "staffUniqueId": staff_uid(t),
             "positionTitle": t.position or "Faculty",
             "department": t.department or "",
-            "canTeach": bool(t.can_teach),
+            "canTeach": bool(t.can_handle_classes),
         }
         if not anonymize:
             entry["firstName"] = t.first_name
@@ -161,7 +166,9 @@ def build_edfi_v6_export(
                 str(row.status).upper(),
                 "uri://ed-fi.org/AttendanceEventCategoryDescriptor#In Attendance",
             ),
-            "sectionIdentifier": f"SEC-{row.section_id}" if row.section_id else "",
+            "sectionIdentifier": (
+                f"SEC-{student_section_map[row.student_id]}" if row.student_id in student_section_map else ""
+            ),
             "attendanceEventReason": row.remarks or "",
         }
         for row in daily_qs

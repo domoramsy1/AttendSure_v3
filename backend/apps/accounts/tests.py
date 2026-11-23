@@ -6,15 +6,24 @@ Run: python manage.py test apps.accounts.tests --verbosity=2
 import math
 from datetime import date, time
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from apps.accounts.models import TeacherProfile, UserProfile
-from apps.accounts.selectors import resolve_teacher_for_user
-from apps.attendance.models import DailyAttendance
-from apps.school.models import ClassPeriod, GradeLevel, SchoolSettings, SchoolYear, Section, Subject
+from apps.accounts.models import FacultyProfile, UserProfile
+from apps.accounts.selectors import resolve_faculty_for_user
+from apps.attendance.models import DailyAttendance, ExitPass
+from apps.school.models import (
+    AdministrativeDivision,
+    ClassPeriod,
+    GradeLevel,
+    SchoolSettings,
+    SchoolYear,
+    Section,
+    Subject,
+)
 from apps.students.models import Enrollment, Student
 from common.gps import calculate_distance_meters, verify_campus_gps
 from common.phone import normalize_international_phone, normalize_ph_phone
@@ -61,7 +70,7 @@ class SecurityAndUtilityUnitTests(APITestCase):
         self.assertIsNone(verify_student_qr("ATTENDSURE:127901269999:STU-TOKEN-999:FORGED000000"))
 
     def test_empty_email_parent_cannot_hijack_teacher_profile(self):
-        TeacherProfile.objects.create(
+        FacultyProfile.objects.create(
             employee_id="EMP-EMPTY-1",
             first_name="Real",
             last_name="Teacher",
@@ -71,7 +80,7 @@ class SecurityAndUtilityUnitTests(APITestCase):
         parent_user = User.objects.create_user(username="parent_empty", password="Password123!", email="")
         UserProfile.objects.create(user=parent_user, role="PARENT")
 
-        self.assertIsNone(resolve_teacher_for_user(parent_user))
+        self.assertIsNone(resolve_faculty_for_user(parent_user))
 
     def test_expired_lockout_resets_counter_on_next_failure(self):
         u = User.objects.create_user(username="lock_tester", password="Password123!")
@@ -90,17 +99,18 @@ class SecurityAndUtilityUnitTests(APITestCase):
 
 class CompetitionEndpointsAndRbacTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.admin_user = User.objects.create_user(
             username="demo_admin", password="AttendSure2026!", is_staff=True, is_superuser=True
         )
         UserProfile.objects.create(user=self.admin_user, role="ADMIN", is_profile_completed=True)
 
-        self.teacher_profile = TeacherProfile.objects.create(
+        self.teacher_profile = FacultyProfile.objects.create(
             employee_id="EMP-T1",
             first_name="Maria",
             last_name="Clara",
             email="maria@attendsure.edu",
-            can_teach=True,
+            can_handle_classes=True,
             is_active=True,
         )
         self.teacher_user = User.objects.create_user(
@@ -108,9 +118,8 @@ class CompetitionEndpointsAndRbacTests(APITestCase):
         )
         UserProfile.objects.create(
             user=self.teacher_user,
-            teacher=self.teacher_profile,
+            faculty=self.teacher_profile,
             role="FACULTY",
-            is_teaching=True,
             is_profile_completed=True,
         )
 
@@ -126,11 +135,12 @@ class CompetitionEndpointsAndRbacTests(APITestCase):
             end_date=date(2027, 3, 31),
             is_active=True,
         )
+        self.div = AdministrativeDivision.objects.create(division="Global Pilot Division")
         SchoolSettings.objects.create(
             school_id="304118",
             school_name="AttendSure International Pilot High School",
-            division="Global Pilot Division",
-            academic_year=self.sy.code,
+            division_ref=self.div,
+            active_school_year=self.sy,
         )
         self.grade = GradeLevel.objects.create(code="G7", name="Grade 7", level_order=7)
         self.section = Section.objects.create(
@@ -138,10 +148,10 @@ class CompetitionEndpointsAndRbacTests(APITestCase):
         )
         self.subject = Subject.objects.create(code="MATH7", title="Math 7", grade_level=self.grade)
         self.period = ClassPeriod.objects.create(
-            code="P1",
+            schedule_code="P1",
             section=self.section,
             subject=self.subject,
-            teacher=self.teacher_profile,
+            faculty=self.teacher_profile,
             start_time=time(8, 0),
             end_time=time(9, 0),
         )
@@ -158,13 +168,11 @@ class CompetitionEndpointsAndRbacTests(APITestCase):
         Enrollment.objects.create(
             student=self.student,
             section=self.section,
-            school_year=self.sy,
             status="ENROLLED",
             is_cct_recipient=True,
         )
         DailyAttendance.objects.create(
             student=self.student,
-            section=self.section,
             attendance_date=timezone.localdate(),
             status="PRESENT",
         )
@@ -240,3 +248,45 @@ class CompetitionEndpointsAndRbacTests(APITestCase):
         count_second = Student.objects.count()
         self.assertGreaterEqual(count_first, 24)
         self.assertEqual(count_first, count_second)
+
+    def test_exit_passes_sf2_and_sf4_3nf_regression(self):
+        now = timezone.now()
+        ExitPass.objects.create(
+            pass_number="EP-REG-001",
+            faculty=self.teacher_profile,
+            issued_by=self.teacher_profile,
+            pass_type="Official Travel",
+            reason="Division conference",
+            valid_from=now,
+            valid_until=now + timezone.timedelta(hours=3),
+            status="ACTIVE",
+        )
+        ExitPass.objects.create(
+            pass_number="EP-REG-002",
+            student=self.student,
+            issued_by=self.teacher_profile,
+            pass_type="Clinic Clearance",
+            reason="Medical checkup",
+            valid_from=now,
+            valid_until=now + timezone.timedelta(hours=2),
+            status="ACTIVE",
+        )
+
+        self.client.force_authenticate(user=self.admin_user)
+        ep_res = self.client.get("/api/v1/attendance/exit-passes/")
+        self.assertEqual(ep_res.status_code, 200)
+        results = ep_res.data.get("results", ep_res.data)
+        self.assertEqual(len(results), 2)
+        faculty_row = next(r for r in results if r["pass_number"] == "EP-REG-001")
+        self.assertEqual(faculty_row["bearer_type"], "FACULTY")
+        self.assertEqual(faculty_row["faculty"], self.teacher_profile.id)
+        self.assertEqual(faculty_row["teacher"], self.teacher_profile.id)
+        self.assertEqual(faculty_row["faculty_name"], self.teacher_profile.full_name)
+
+        sf2_res = self.client.get(f"/api/v1/reports/sf2/{self.section.id}/?month=November&year=2026")
+        self.assertEqual(sf2_res.status_code, 200)
+        self.assertEqual(sf2_res.data["section_name"], "Newton")
+
+        sf4_res = self.client.get("/api/v1/reports/sf4/?month=November&year=2026&school_year=2026-2027")
+        self.assertEqual(sf4_res.status_code, 200)
+        self.assertEqual(sf4_res.data["school_year"], "2026-2027")

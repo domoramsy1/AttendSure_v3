@@ -6,8 +6,8 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 
-from apps.accounts.models import TeacherProfile
-from apps.accounts.selectors import get_teacher_student_ids, resolve_teacher_for_user
+from apps.accounts.models import FacultyProfile
+from apps.accounts.selectors import get_faculty_student_ids, resolve_faculty_for_user
 from apps.messaging.services import notify_student_parent
 from common.exceptions import AppError
 from common.media import build_media_url, decode_uploaded_image
@@ -55,10 +55,10 @@ class ExitPassSerializer(serializers.ModelSerializer):
     bearer_type = serializers.SerializerMethodField()
     student_name = serializers.CharField(source="student.full_name", read_only=True, default="")
     student_lrn = serializers.CharField(source="student.lrn", read_only=True, default="")
-    teacher_name = serializers.CharField(source="teacher.full_name", read_only=True, default="")
-    faculty = serializers.IntegerField(source="teacher_id", read_only=True, allow_null=True)
-    faculty_name = serializers.CharField(source="teacher.full_name", read_only=True, default="")
-    faculty_emp_id = serializers.CharField(source="teacher.employee_id", read_only=True, default="")
+    teacher = serializers.IntegerField(source="faculty_id", read_only=True, allow_null=True)
+    teacher_name = serializers.CharField(source="faculty.full_name", read_only=True, default="")
+    faculty_name = serializers.CharField(source="faculty.full_name", read_only=True, default="")
+    faculty_emp_id = serializers.CharField(source="faculty.employee_id", read_only=True, default="")
     adviser_name = serializers.CharField(source="issued_by.full_name", read_only=True, default="School Staff")
     valid_to = serializers.DateTimeField(source="valid_until", required=False)
     attachment = ExitPassProofField(required=False, allow_null=True)
@@ -98,13 +98,18 @@ class ExitPassSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         mutable = {k: data.get(k) for k in data.keys()} if hasattr(data, "keys") else dict(data)
-        if "teacher" not in mutable:
-            for alias in ("faculty", "faculty_id", "teacher_id"):
-                if alias in mutable and str(mutable[alias]).strip() not in ("", "null", "undefined"):
-                    mutable["teacher"] = mutable[alias]
+        empty_vals = ("", "null", "none", "undefined")
+        if "faculty" in mutable and str(mutable["faculty"]).strip().lower() in empty_vals:
+            mutable["faculty"] = None
+        if not mutable.get("faculty"):
+            for alias in ("faculty_id", "teacher", "teacher_id"):
+                if alias in mutable and str(mutable[alias]).strip().lower() not in empty_vals:
+                    mutable["faculty"] = mutable[alias]
                     break
-        if "student" not in mutable and "student_id" in mutable:
-            if str(mutable["student_id"]).strip() not in ("", "null", "undefined"):
+        if "student" in mutable and str(mutable["student"]).strip().lower() in empty_vals:
+            mutable["student"] = None
+        if not mutable.get("student") and "student_id" in mutable:
+            if str(mutable["student_id"]).strip().lower() not in empty_vals:
                 mutable["student"] = mutable["student_id"]
         if "attachment" not in mutable and "proof_file" in mutable:
             mutable["attachment"] = mutable["proof_file"]
@@ -145,31 +150,32 @@ class ExitPassSerializer(serializers.ModelSerializer):
         if role == "PARENT":
             raise AppError("FORBIDDEN", "Parent accounts cannot issue exit passes.", 403)
 
-        own_teacher = resolve_teacher_for_user(user)
-        issuer = own_teacher or (TeacherProfile.objects.filter(is_active=True).first() if leader else None)
+        own_faculty = resolve_faculty_for_user(user)
+        issuer = own_faculty or (FacultyProfile.objects.filter(is_active=True).first() if leader else None)
         if not issuer:
             raise AppError(
-                "NO_TEACHER_PROFILE",
-                "A linked teacher profile is required to issue an exit pass.",
+                "NO_FACULTY_PROFILE",
+                "A linked faculty profile is required to issue an exit pass.",
                 403,
             )
 
         target_student = validated_data.get("student")
-        target_teacher = validated_data.get("teacher")
+        target_faculty = validated_data.get("faculty")
 
         if target_student:
-            if not leader and target_student.id not in get_teacher_student_ids(own_teacher):
+            if not leader and target_student.id not in get_faculty_student_ids(own_faculty):
                 raise AppError(
                     "FORBIDDEN",
                     "You can only issue exit passes for students in your assigned classes.",
                     403,
                 )
-            validated_data["teacher"] = None
+            validated_data["faculty"] = None
         else:
+            validated_data["student"] = None
             if not leader:
-                validated_data["teacher"] = own_teacher
-            elif not target_teacher:
-                validated_data["teacher"] = issuer
+                validated_data["faculty"] = own_faculty
+            elif not target_faculty:
+                validated_data["faculty"] = issuer
 
         is_student_pass = bool(validated_data.get("student"))
         initial_status = "ACTIVE" if (leader or is_student_pass) else "PENDING"
@@ -189,3 +195,10 @@ class ExitPassSerializer(serializers.ModelSerializer):
                 category="GATE_PASS",
             )
         return pass_obj
+
+    def update(self, instance, validated_data):
+        if validated_data.get("student") is not None:
+            validated_data["faculty"] = None
+        elif validated_data.get("faculty") is not None:
+            validated_data["student"] = None
+        return super().update(instance, validated_data)

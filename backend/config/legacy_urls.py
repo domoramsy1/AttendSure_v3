@@ -1,20 +1,16 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-import apps.accounts.views as account_views
-import apps.campus.views as campus_views
 from apps.accounts.views import (
     AuditLogListView,
-    AuditLogViewSet,
     CurrentProfileView,
-    DemoLoginView,
-    DemoStatusView,
+    FacultyProfileViewSet,
+    FieldAvailabilityView,
     LoginView,
-    ResetDeviceBindingView,
-    SavePushTokenView,
+    RegisterPushTokenView,
+    ResetBoundDeviceView,
     UnlockAccountsView,
     UserAccountViewSet,
-    ValidateFieldView,
 )
 from apps.attendance.views import (
     AdviserMatrixView,
@@ -30,6 +26,7 @@ from apps.campus.views import (
     CampusAnomalyListView,
     CampusBoundaryView,
     EmergencyRollCallView,
+    FacultyCheckInView,
 )
 from apps.messaging.views import (
     ChatMessageView,
@@ -65,20 +62,10 @@ from apps.school.views import (
 from apps.students.views import EnrollmentViewSet, ParentPortalView, StudentViewSet
 from common.security import clear_system_cache_view, database_health_view
 
-CampusCheckInView = next(
-    v for k, v in vars(campus_views).items() if k.endswith("CheckInView")
-)
-FacultyDirectoryViewSet = next(
-    v
-    for k, v in vars(account_views).items()
-    if k.endswith("ViewSet") and k not in ("UserAccountViewSet", "AuditLogViewSet")
-)
-
 router = DefaultRouter()
 router.register(r"students", StudentViewSet, basename="legacy-students")
-router.register(r"faculty", FacultyDirectoryViewSet, basename="legacy-faculty")
-router.register(r"faculties", FacultyDirectoryViewSet, basename="legacy-faculties")
-router.register(r"facultys", FacultyDirectoryViewSet, basename="legacy-facultys")
+router.register(r"faculty", FacultyProfileViewSet, basename="legacy-faculty")
+router.register(r"faculties", FacultyProfileViewSet, basename="legacy-faculties")
 router.register(r"users", UserAccountViewSet, basename="legacy-users")
 router.register(r"sections", SectionViewSet, basename="legacy-sections")
 router.register(r"grade-levels", GradeLevelViewSet, basename="legacy-grade-levels")
@@ -90,27 +77,28 @@ router.register(r"enrollments", EnrollmentViewSet, basename="legacy-enrollments"
 router.register(r"gate-passes", ExitPassViewSet, basename="legacy-gate-passes")
 router.register(r"exit-passes", ExitPassViewSet, basename="legacy-exit-passes")
 router.register(r"notifications", NotificationViewSet, basename="legacy-notifications")
-router.register(r"activity-logs", AuditLogViewSet, basename="legacy-activity-logs")
 router.register(r"calendar/exceptions", SchoolHolidayViewSet, basename="legacy-calendar-exceptions")
-router.register(r"settings/calendar-exceptions", SchoolHolidayViewSet, basename="legacy-settings-calendar-exceptions")
+router.register(
+    r"settings/calendar-exceptions",
+    SchoolHolidayViewSet,
+    basename="legacy-settings-calendar-exceptions",
+)
 
 student_qr_cards = StudentViewSet.as_view({"get": "qr_cards"})
 
 urlpatterns = [
     path("auth/login/", LoginView.as_view()),
     path("login/", LoginView.as_view()),
-    path("auth/demo-status/", DemoStatusView.as_view()),
-    path("auth/demo-login/", DemoLoginView.as_view()),
     path("auth/me/", CurrentProfileView.as_view()),
     path("me/", CurrentProfileView.as_view()),
     path("profile/", CurrentProfileView.as_view()),
-    path("auth/validate-field/", ValidateFieldView.as_view()),
-    path("auth/validate/", ValidateFieldView.as_view()),
-    path("validate-field/", ValidateFieldView.as_view()),
-    path("validate/", ValidateFieldView.as_view()),
-    path("auth/register-push-token/", SavePushTokenView.as_view()),
-    path("users/register-push-token/", SavePushTokenView.as_view()),
-    path("register-push-token/", SavePushTokenView.as_view()),
+    path("auth/validate-field/", FieldAvailabilityView.as_view()),
+    path("auth/validate/", FieldAvailabilityView.as_view()),
+    path("validate-field/", FieldAvailabilityView.as_view()),
+    path("validate/", FieldAvailabilityView.as_view()),
+    path("auth/register-push-token/", RegisterPushTokenView.as_view()),
+    path("users/register-push-token/", RegisterPushTokenView.as_view()),
+    path("register-push-token/", RegisterPushTokenView.as_view()),
     path("auth/unlock-accounts/", UnlockAccountsView.as_view()),
     path("core/maintenance/unlock-accounts/", UnlockAccountsView.as_view()),
 
@@ -147,11 +135,11 @@ urlpatterns = [
     path("geofence/", CampusBoundaryView.as_view()),
     path("geofence/status/", CampusBoundaryView.as_view()),
     path("geofence/manage/", CampusBoundaryView.as_view()),
-    path("geofence/check-in/", CampusCheckInView.as_view()),
-    path("geofence/checkin/", CampusCheckInView.as_view()),
-    path("telemetry/heartbeat/", CampusCheckInView.as_view()),
+    path("geofence/check-in/", FacultyCheckInView.as_view()),
+    path("geofence/checkin/", FacultyCheckInView.as_view()),
+    path("telemetry/heartbeat/", FacultyCheckInView.as_view()),
     path("geofence/audit/", BoundaryAuditView.as_view()),
-    path("geofence/reset-device/", ResetDeviceBindingView.as_view()),
+    path("geofence/reset-device/", ResetBoundDeviceView.as_view()),
     path("monitoring/loafing/", CampusAnomalyListView.as_view()),
 
     path("parent/portal/", ParentPortalView.as_view()),
@@ -172,6 +160,7 @@ urlpatterns = [
         "settings/calendar-exceptions/",
         SchoolHolidayViewSet.as_view({"get": "list", "post": "create", "patch": "partial_update_settings"}),
     ),
+    path("activity-logs/", AuditLogListView.as_view()),
     path("user-activity-logs/", AuditLogListView.as_view()),
     path("report-audit-logs/", ReportAuditLogView.as_view()),
     path("audit-logs/", AuditLogListView.as_view()),

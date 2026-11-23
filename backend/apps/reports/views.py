@@ -9,7 +9,7 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.selectors import get_teacher_section_ids, resolve_teacher_for_user
+from apps.accounts.selectors import get_faculty_section_ids, resolve_faculty_for_user
 from apps.accounts.services import unlock_all_locked_accounts
 from apps.messaging.services import retry_pending_push_notifications
 from common.audit import record_audit_log
@@ -50,8 +50,8 @@ def _parse_month_int(raw, default: int) -> int:
 def _authorize_section_access(user, section_id: int) -> bool:
     if is_school_leader(user):
         return True
-    teacher = resolve_teacher_for_user(user)
-    return bool(teacher and section_id in get_teacher_section_ids(teacher))
+    teacher = resolve_faculty_for_user(user)
+    return bool(teacher and section_id in get_faculty_section_ids(teacher))
 
 
 def _require_staff(user) -> None:
@@ -160,7 +160,7 @@ class MonthlyDtrView(APIView):
                 user=request.user,
                 month=month,
                 year=year,
-                teacher_id=t_id,
+                faculty_id=t_id,
                 list_only=list_only,
                 request=request,
             )
@@ -186,7 +186,7 @@ class MonthlyDtrView(APIView):
             action=str(request.data.get("action") or ""),
             month=month,
             year=year,
-            teacher_id=t_id,
+            faculty_id=t_id,
             data=request.data,
         )
         return Response(result, status=status.HTTP_200_OK)
@@ -289,7 +289,7 @@ class ReportExportView(APIView):
             month_num = _parse_month_int(params.get("month"), timezone.localdate().month)
             raw_tid = params.get("faculty_id") or params.get("teacher_id")
             t_id = int(raw_tid) if (raw_tid and str(raw_tid).isdigit()) else None
-            data = get_monthly_dtr_data(user=request.user, month=month_num, year=year, teacher_id=t_id, request=request)
+            data = get_monthly_dtr_data(user=request.user, month=month_num, year=year, faculty_id=t_id, request=request)
             rows_html = "".join(
                 f"<tr><td>{r['day']}</td><td>{escape(r['am_arrival'])}</td><td>{escape(r['am_departure'])}</td>"
                 f"<td>{escape(r['pm_arrival'])}</td><td>{escape(r['pm_departure'])}</td><td>{escape(r['status'])}</td></tr>"

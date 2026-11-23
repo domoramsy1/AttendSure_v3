@@ -1,6 +1,8 @@
+# backend/apps/campus/views.py
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
 from common.permissions import IsLeadershipOrReadOnly, IsStaffOrFaculty
 from .selectors import (
     get_campus_audit_history,
@@ -8,8 +10,8 @@ from .selectors import (
     get_emergency_roll_call,
     get_live_campus_anomalies,
 )
-from .serializers import CampusBoundaryInputSerializer, TeacherCheckInSerializer
-from .services import record_teacher_check_in, update_campus_boundary
+from .serializers import CampusBoundaryInputSerializer, FacultyCheckInSerializer
+from .services import record_faculty_check_in, update_campus_boundary
 
 
 class CampusBoundaryView(APIView):
@@ -38,13 +40,13 @@ class CampusBoundaryView(APIView):
         return self.put(request)
 
 
-class TeacherCheckInView(APIView):
+class FacultyCheckInView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsStaffOrFaculty]
 
     def post(self, request):
-        serializer = TeacherCheckInSerializer(data=request.data)
+        serializer = FacultyCheckInSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        result = record_teacher_check_in(
+        result = record_faculty_check_in(
             user=request.user,
             validated_data=serializer.validated_data,
             header_device_id=request.headers.get("X-Device-UUID", ""),

@@ -1,11 +1,14 @@
 # D:\AttendSure_V3\backend\apps\school\serializers.py
-
-from decimal import Decimal, InvalidOperation
 import math
+from django.db import transaction
 from rest_framework import serializers
 
+from apps.accounts.models import FacultyProfile
+from apps.campus.models import CampusBoundary
 from common.media import SchoolLogoField, build_media_url
 from .models import (
+    AdministrativeDivision,
+    Building,
     ClassPeriod,
     GradeLevel,
     Room,
@@ -20,9 +23,26 @@ from .services import sync_period_days, sync_uniform_subjects_for_section
 
 
 class RoomSerializer(serializers.ModelSerializer):
+    building = serializers.CharField(required=False, allow_blank=True, default="")
+
     class Meta:
         model = Room
         fields = ["id", "name", "building", "capacity", "room_type", "is_active"]
+
+    @transaction.atomic
+    def create(self, validated_data):
+        b_name = str(validated_data.pop("building", "") or "").strip()[:100]
+        if b_name:
+            b_obj, _ = Building.objects.get_or_create(name=b_name)
+            validated_data["building_ref"] = b_obj
+        return super().create(validated_data)
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        if "building" in validated_data:
+            b_name = str(validated_data.pop("building") or "").strip()[:100]
+            instance.building_ref = Building.objects.get_or_create(name=b_name)[0] if b_name else None
+        return super().update(instance, validated_data)
 
 
 class GradeLevelSerializer(serializers.ModelSerializer):
@@ -38,78 +58,46 @@ class SchoolYearSerializer(serializers.ModelSerializer):
 
 
 class SubjectSerializer(serializers.ModelSerializer):
+    tier = serializers.CharField(source="subject_category", required=False, allow_blank=True)
+    subject_type = serializers.CharField(source="subject_category", read_only=True)
+
     class Meta:
         model = Subject
-        fields = ["id", "code", "title", "grade_level", "tier", "subject_type", "units"]
+        fields = ["id", "code", "title", "grade_level", "subject_category", "tier", "subject_type", "units"]
 
 
 class SchoolHolidaySerializer(serializers.ModelSerializer):
     date = serializers.DateField(source="holiday_date")
-    reason = serializers.CharField(source="title", required=False, write_only=True)
-    type = serializers.CharField(required=False, write_only=True, default="HOLIDAY")
+    type = serializers.ChoiceField(
+        source="holiday_type",
+        choices=["HOLIDAY", "SUSPENSION", "EVENT"],
+        required=False,
+        default="HOLIDAY",
+    )
+    reason = serializers.CharField(source="title", required=False)
 
     class Meta:
         model = SchoolHoliday
-        fields = ["id", "date", "title", "reason", "type", "created_at"]
+        fields = ["id", "date", "type", "title", "reason", "created_at"]
         extra_kwargs = {"title": {"required": False}}
-
-    def _split_existing_title(self):
-        raw_title = str(self.instance.title or "") if self.instance else ""
-        exc_type = "HOLIDAY"
-        clean_reason = raw_title
-        for prefix in ("SUSPENSION", "HOLIDAY", "EVENT"):
-            tag = f"[{prefix}] "
-            if raw_title.upper().startswith(tag):
-                exc_type = prefix
-                clean_reason = raw_title[len(tag):]
-                break
-        return exc_type, clean_reason
 
     def to_internal_value(self, data):
         mutable = {k: data.get(k) for k in data.keys()} if hasattr(data, "keys") else dict(data)
-        has_title_or_reason = ("title" in mutable and mutable.get("title") is not None) or (
-            "reason" in mutable and mutable.get("reason") is not None
-        )
-        has_type = "type" in mutable and str(mutable.get("type") or "").strip() != ""
-
-        if not mutable.get("title") and mutable.get("reason"):
-            mutable["title"] = mutable["reason"]
-
-        existing_type, existing_reason = self._split_existing_title()
-        exc_type = str(mutable.get("type") or (existing_type if self.instance else "")).strip().upper()
-        raw_title = str(mutable.get("title") or (existing_reason if (self.instance and has_type and not has_title_or_reason) else "")).strip()
-
-        if has_title_or_reason or has_type:
-            if exc_type in ("SUSPENSION", "HOLIDAY", "EVENT") and raw_title and not raw_title.startswith("["):
-                mutable["title"] = f"[{exc_type}] {raw_title}"[:150]
-            elif raw_title:
-                mutable["title"] = raw_title[:150]
-
-        mutable.pop("reason", None)
+        if not mutable.get("reason") and mutable.get("title"):
+            mutable["reason"] = mutable["title"]
+        if "type" in mutable and mutable["type"]:
+            mutable["type"] = str(mutable["type"]).strip().upper()
         return super().to_internal_value(mutable)
 
     def validate(self, attrs):
-        if self.partial and "title" not in attrs:
-            attrs.pop("type", None)
-            return attrs
-        if not str(attrs.get("title") or "").strip():
-            raise serializers.ValidationError({"title": "A holiday or calendar title/reason is required."})
-        attrs.pop("type", None)
+        if not self.partial and not str(attrs.get("title") or "").strip():
+            raise serializers.ValidationError({"title": "Holiday or event title is required."})
         return attrs
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        raw_title = str(instance.title or "")
-        exc_type = "HOLIDAY"
-        clean_reason = raw_title
-        for prefix in ("SUSPENSION", "HOLIDAY", "EVENT"):
-            tag = f"[{prefix}] "
-            if raw_title.upper().startswith(tag):
-                exc_type = prefix
-                clean_reason = raw_title[len(tag):]
-                break
-        data["type"] = exc_type
-        data["reason"] = clean_reason
+        data["type"] = instance.holiday_type
+        data["reason"] = instance.title
         data["affects_all_grades"] = True
         return data
 
@@ -119,15 +107,19 @@ class SchoolSettingsSerializer(serializers.ModelSerializer):
     left_logo = SchoolLogoField(required=False, allow_null=True)
     right_logo = SchoolLogoField(required=False, allow_null=True)
 
+    region = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    division = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    district = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    academic_year = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    latitude = serializers.FloatField(required=False, write_only=True)
+    longitude = serializers.FloatField(required=False, write_only=True)
+    geofence_radius_meters = serializers.IntegerField(required=False, write_only=True)
+
     principal_faculty = serializers.PrimaryKeyRelatedField(
-        source="principal_teacher",
-        read_only=True,
+        queryset=FacultyProfile.objects.all(),
+        required=False,
+        allow_null=True,
     )
-    principal_photo_url = serializers.SerializerMethodField()
-    principal_employee_id = serializers.SerializerMethodField()
-    principal_department = serializers.SerializerMethodField()
-    principal_email = serializers.SerializerMethodField()
-    principal_contact_number = serializers.SerializerMethodField()
 
     class Meta:
         model = SchoolSettings
@@ -143,63 +135,53 @@ class SchoolSettingsSerializer(serializers.ModelSerializer):
             "contact_number",
             "email",
             "website",
-            "principal_teacher",
             "principal_faculty",
-            "principal_name",
-            "principal_title",
             "superintendent_name",
-            "principal_photo_url",
-            "principal_employee_id",
-            "principal_department",
-            "principal_email",
-            "principal_contact_number",
             "school_logo",
             "left_logo",
             "right_logo",
             "latitude",
             "longitude",
             "geofence_radius_meters",
+            "weekend_rest_enabled",
             "updated_at",
         ]
         extra_kwargs = {
             "school_id": {"required": False, "allow_blank": True},
             "school_name": {"required": False, "allow_blank": True},
-            "principal_teacher": {"required": False, "allow_null": True},
         }
 
     def to_internal_value(self, data):
         mutable = {k: data.get(k) for k in data.keys()} if hasattr(data, "keys") else dict(data)
-
         alias_map = {
             "school_address": "address",
             "school_contact": "contact_number",
             "school_email": "email",
-            "school_head": "principal_name",
             "radius_meters": "geofence_radius_meters",
             "geofence_radius": "geofence_radius_meters",
             "emblem": "school_logo",
             "main_logo": "school_logo",
-            "principal_faculty": "principal_teacher",
+            "principal_teacher": "principal_faculty",
         }
         for src_key, dest_key in alias_map.items():
             if src_key in mutable and dest_key not in mutable:
                 mutable[dest_key] = mutable[src_key]
-        mutable.pop("principal_faculty", None)
 
-        if "principal_teacher" in mutable and str(mutable["principal_teacher"]).strip().lower() in (
+        if "principal_faculty" in mutable and str(mutable["principal_faculty"]).strip().lower() in (
             "",
             "null",
             "none",
             "undefined",
         ):
-            mutable["principal_teacher"] = None
+            mutable["principal_faculty"] = None
 
         if "website" in mutable:
             raw_web = str(mutable.get("website") or "").strip()
-            if raw_web and not raw_web.startswith(("http://", "https://")):
-                mutable["website"] = f"https://{raw_web}"
-            else:
-                mutable["website"] = raw_web
+            mutable["website"] = (
+                f"https://{raw_web}"
+                if (raw_web and not raw_web.startswith(("http://", "https://")))
+                else raw_web
+            )
 
         for coord_key in ("latitude", "longitude"):
             if coord_key in mutable:
@@ -211,8 +193,8 @@ class SchoolSettingsSerializer(serializers.ModelSerializer):
                         parsed = float(raw_coord)
                         if not math.isfinite(parsed):
                             raise ValueError("non-finite")
-                        mutable[coord_key] = Decimal(f"{parsed:.7f}")
-                    except (TypeError, ValueError, InvalidOperation):
+                        mutable[coord_key] = round(parsed, 7)
+                    except (TypeError, ValueError):
                         raise serializers.ValidationError({coord_key: f"Invalid {coord_key} value."})
 
         if "geofence_radius_meters" in mutable:
@@ -226,46 +208,114 @@ class SchoolSettingsSerializer(serializers.ModelSerializer):
                         raise ValueError("non-finite")
                     mutable["geofence_radius_meters"] = max(20, min(5000, int(parsed_rad)))
                 except (TypeError, ValueError, OverflowError):
-                    raise serializers.ValidationError({"geofence_radius_meters": "Invalid radius in meters."})
+                    raise serializers.ValidationError(
+                        {"geofence_radius_meters": "Invalid radius in meters."}
+                    )
 
         return super().to_internal_value(mutable)
 
+    def _apply_3nf_relations(self, validated_data: dict, instance: SchoolSettings | None = None):
+        has_div = any(k in validated_data for k in ("region", "division", "district"))
+        curr_div = instance.division_ref if instance else None
+        region = validated_data.pop("region", curr_div.region if curr_div else "")
+        division = validated_data.pop("division", curr_div.division if curr_div else "")
+        district = validated_data.pop("district", curr_div.district if curr_div else "")
+        if has_div and (region or division or district):
+            div_obj, _ = AdministrativeDivision.objects.get_or_create(
+                region=str(region).strip()[:100],
+                division=str(division).strip()[:100],
+                district=str(district).strip()[:100],
+            )
+            validated_data["division_ref"] = div_obj
+
+        sy_code = str(validated_data.pop("academic_year", "") or "").strip()
+        if sy_code:
+            sy_obj = SchoolYear.objects.filter(code__iexact=sy_code).first()
+            if sy_obj:
+                validated_data["active_school_year"] = sy_obj
+        elif not instance and "active_school_year" not in validated_data:
+            active_sy = SchoolYear.objects.filter(is_active=True).first()
+            if active_sy:
+                validated_data["active_school_year"] = active_sy
+
+        has_gps = any(k in validated_data for k in ("latitude", "longitude", "geofence_radius_meters"))
+        curr_b = (instance.campus_boundary if instance and instance.campus_boundary else None) or (
+            CampusBoundary.objects.filter(is_active=True).first() or CampusBoundary.objects.first()
+        )
+        lat = validated_data.pop("latitude", curr_b.center_lat if curr_b else 8.4858)
+        lng = validated_data.pop("longitude", curr_b.center_lng if curr_b else 124.6567)
+        rad = validated_data.pop("geofence_radius_meters", curr_b.radius_meters if curr_b else 150)
+
+        if has_gps or not curr_b:
+            b_name = str(
+                validated_data.get("school_name")
+                or (instance.school_name if instance else "Main Campus")
+            )[:120]
+            if curr_b:
+                curr_b.name = b_name
+                curr_b.center_lat = float(lat)
+                curr_b.center_lng = float(lng)
+                curr_b.radius_meters = int(rad)
+                curr_b.is_active = True
+                curr_b.save()
+                validated_data["campus_boundary"] = curr_b
+            else:
+                validated_data["campus_boundary"] = CampusBoundary.objects.create(
+                    name=b_name,
+                    center_lat=float(lat),
+                    center_lng=float(lng),
+                    radius_meters=int(rad),
+                    is_active=True,
+                )
+
+    @transaction.atomic
+    def create(self, validated_data):
+        if not validated_data.get("school_id"):
+            validated_data["school_id"] = "304100"
+        self._apply_3nf_relations(validated_data, instance=None)
+        return super().create(validated_data)
+
+    @transaction.atomic
     def update(self, instance, validated_data):
-        instance = super().update(instance, validated_data)
-        if instance.principal_teacher:
-            if not instance.principal_name:
-                instance.principal_name = instance.principal_teacher.full_name
-            if not instance.principal_title and instance.principal_teacher.position:
-                instance.principal_title = instance.principal_teacher.position
-            instance.save(update_fields=["principal_name", "principal_title", "updated_at"])
-        return instance
+        self._apply_3nf_relations(validated_data, instance=instance)
+        return super().update(instance, validated_data)
 
-    def get_principal_photo_url(self, obj):
-        if obj.principal_teacher and obj.principal_teacher.photo:
-            return build_media_url(obj.principal_teacher.photo, self.context.get("request"))
-        return None
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        div = instance.division_ref
+        sy = instance.active_school_year or SchoolYear.objects.filter(is_active=True).first()
+        b = instance.campus_boundary or CampusBoundary.objects.filter(is_active=True).first()
+        p = instance.principal_faculty
 
-    def get_principal_employee_id(self, obj) -> str:
-        return obj.principal_teacher.employee_id if obj.principal_teacher else ""
-
-    def get_principal_department(self, obj) -> str:
-        return obj.principal_teacher.department if obj.principal_teacher else "Administration"
-
-    def get_principal_email(self, obj) -> str:
-        return obj.principal_teacher.email if obj.principal_teacher else ""
-
-    def get_principal_contact_number(self, obj) -> str:
-        return obj.principal_teacher.contact_number if obj.principal_teacher else ""
+        data["region"] = div.region if div else ""
+        data["division"] = div.division if div else ""
+        data["district"] = div.district if div else ""
+        data["academic_year"] = sy.code if sy else ""
+        data["latitude"] = float(b.center_lat) if b else 8.4858
+        data["longitude"] = float(b.center_lng) if b else 124.6567
+        data["geofence_radius_meters"] = int(b.radius_meters) if b else 150
+        data["principal_teacher"] = p.id if p else None
+        data["principal_name"] = p.full_name if p else ""
+        data["principal_title"] = p.position if (p and p.position) else "School Principal"
+        data["principal_employee_id"] = p.employee_id if p else ""
+        data["principal_department"] = p.department if p else "Administration"
+        data["principal_email"] = p.email if p else ""
+        data["principal_contact_number"] = p.contact_number if p else ""
+        data["principal_photo_url"] = (
+            build_media_url(p.photo, self.context.get("request")) if (p and p.photo) else None
+        )
+        return data
 
 
 class SectionSerializer(serializers.ModelSerializer):
     grade_level_name = serializers.CharField(source="grade_level.name", read_only=True)
     grade_level_code = serializers.CharField(source="grade_level.code", read_only=True)
     adviser_id = serializers.IntegerField(source="adviser.id", read_only=True, allow_null=True)
-    adviser_name = serializers.CharField(source="adviser.full_name", read_only=True)
+    adviser_name = serializers.CharField(source="adviser.full_name", read_only=True, default="")
     adviser_employee_id = serializers.CharField(source="adviser.employee_id", read_only=True, default="")
     adviser_photo_url = serializers.SerializerMethodField()
     school_year_code = serializers.CharField(source="school_year.code", read_only=True)
+    room_number = serializers.CharField(required=False, allow_blank=True, default="")
     display_label = serializers.SerializerMethodField()
     student_count = serializers.IntegerField(source="enrolled_count", read_only=True, default=0)
 
@@ -319,6 +369,7 @@ class SectionSerializer(serializers.ModelSerializer):
                     {"school_year": "Create an active School Year before adding sections."}
                 )
             attrs["school_year"] = sy
+
         grade_level = attrs.get("grade_level") or (self.instance.grade_level if self.instance else None)
         name = attrs.get("name") if "name" in attrs else (self.instance.name if self.instance else None)
         if sy and grade_level and name:
@@ -331,10 +382,23 @@ class SectionSerializer(serializers.ModelSerializer):
                 )
         return attrs
 
+    def _resolve_room(self, validated_data: dict):
+        room_num = str(validated_data.pop("room_number", "") or "").strip()[:100]
+        if room_num and not validated_data.get("room"):
+            room_obj, _ = Room.objects.get_or_create(name=room_num)
+            validated_data["room"] = room_obj
+
+    @transaction.atomic
     def create(self, validated_data):
+        self._resolve_room(validated_data)
         section = super().create(validated_data)
         sync_uniform_subjects_for_section(section)
         return section
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        self._resolve_room(validated_data)
+        return super().update(instance, validated_data)
 
 
 class ClassPeriodSerializer(serializers.ModelSerializer):
@@ -343,14 +407,17 @@ class ClassPeriodSerializer(serializers.ModelSerializer):
     subject_code = serializers.CharField(source="subject.code", read_only=True)
     subject_title = serializers.CharField(source="subject.title", read_only=True)
     room_name = serializers.CharField(source="room.name", read_only=True, default="")
-    teacher_id = serializers.IntegerField(read_only=True)
-    teacher_name = serializers.SerializerMethodField()
-    teacher_employee_id = serializers.SerializerMethodField()
-    teacher_photo_url = serializers.SerializerMethodField()
-    faculty_id = serializers.IntegerField(source="teacher_id", read_only=True)
+    room_number = serializers.CharField(required=False, allow_blank=True, default="")
+    days_of_week = serializers.CharField(required=False, default="MON-FRI")
+    faculty_id = serializers.IntegerField(read_only=True)
     faculty_name = serializers.SerializerMethodField()
     faculty_employee_id = serializers.SerializerMethodField()
     faculty_photo_url = serializers.SerializerMethodField()
+    teacher = serializers.IntegerField(source="faculty_id", read_only=True)
+    teacher_id = serializers.IntegerField(source="faculty_id", read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    teacher_employee_id = serializers.SerializerMethodField()
+    teacher_photo_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassPeriod
@@ -363,15 +430,16 @@ class ClassPeriodSerializer(serializers.ModelSerializer):
             "subject",
             "subject_code",
             "subject_title",
+            "faculty",
+            "faculty_id",
+            "faculty_name",
+            "faculty_employee_id",
+            "faculty_photo_url",
             "teacher",
             "teacher_id",
             "teacher_name",
             "teacher_employee_id",
             "teacher_photo_url",
-            "faculty_id",
-            "faculty_name",
-            "faculty_employee_id",
-            "faculty_photo_url",
             "room",
             "room_name",
             "room_number",
@@ -383,11 +451,10 @@ class ClassPeriodSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         mutable = {k: data.get(k) for k in data.keys()} if hasattr(data, "keys") else dict(data)
-        # Accept teacher, teacher_id, faculty, or faculty_id interchangeably
-        if "teacher" not in mutable:
-            for alias in ("teacher_id", "faculty", "faculty_id"):
+        if "faculty" not in mutable:
+            for alias in ("faculty_id", "teacher", "teacher_id"):
                 if alias in mutable:
-                    mutable["teacher"] = mutable[alias]
+                    mutable["faculty"] = mutable[alias]
                     break
         if "section" not in mutable and "section_id" in mutable:
             mutable["section"] = mutable["section_id"]
@@ -397,35 +464,45 @@ class ClassPeriodSerializer(serializers.ModelSerializer):
             mutable["room"] = mutable["room_id"]
         return super().to_internal_value(mutable)
 
-    def get_teacher_name(self, obj) -> str:
-        return obj.teacher.full_name if obj.teacher else "Unassigned"
-
     def get_faculty_name(self, obj) -> str:
-        return obj.teacher.full_name if obj.teacher else "Unassigned"
+        return obj.faculty.full_name if obj.faculty else "Unassigned"
+
+    def get_teacher_name(self, obj) -> str:
+        return self.get_faculty_name(obj)
 
     def get_faculty_employee_id(self, obj) -> str:
-        return obj.teacher.employee_id if obj.teacher else ""
-
-    def get_faculty_photo_url(self, obj):
-        if obj.teacher and obj.teacher.photo:
-            return build_media_url(obj.teacher.photo, self.context.get("request"))
-        return None
+        return obj.faculty.employee_id if obj.faculty else ""
 
     def get_teacher_employee_id(self, obj) -> str:
-        return obj.teacher.employee_id if obj.teacher else ""
+        return self.get_faculty_employee_id(obj)
 
-    def get_teacher_photo_url(self, obj):
-        if obj.teacher and obj.teacher.photo:
-            return build_media_url(obj.teacher.photo, self.context.get("request"))
+    def get_faculty_photo_url(self, obj):
+        if obj.faculty and obj.faculty.photo:
+            return build_media_url(obj.faculty.photo, self.context.get("request"))
         return None
 
+    def get_teacher_photo_url(self, obj):
+        return self.get_faculty_photo_url(obj)
+
+    def _resolve_room(self, validated_data: dict):
+        room_num = str(validated_data.pop("room_number", "") or "").strip()[:100]
+        if room_num and not validated_data.get("room"):
+            room_obj, _ = Room.objects.get_or_create(name=room_num)
+            validated_data["room"] = room_obj
+
+    @transaction.atomic
     def create(self, validated_data):
+        days_str = validated_data.pop("days_of_week", "MON-FRI")
+        self._resolve_room(validated_data)
         period = super().create(validated_data)
-        sync_period_days(period, validated_data.get("days_of_week", "MON-FRI"))
+        sync_period_days(period, days_str)
         return period
 
+    @transaction.atomic
     def update(self, instance, validated_data):
+        days_str = validated_data.pop("days_of_week", None)
+        self._resolve_room(validated_data)
         period = super().update(instance, validated_data)
-        if "days_of_week" in validated_data:
-            sync_period_days(period, validated_data["days_of_week"])
+        if days_str is not None:
+            sync_period_days(period, days_str)
         return period

@@ -1,10 +1,11 @@
-from django.db.models import Count, Q
+# backend/apps/students/selectors.py
+from django.db.models import Prefetch, Q
 from django.utils import timezone
+
 from common.media import build_media_url
 from common.permissions import get_user_role, is_school_leader
-from common.phone import normalize_ph_phone
 from common.qr_signer import sign_student_qr
-from apps.accounts.selectors import get_teacher_student_ids, resolve_teacher_for_user
+from apps.accounts.selectors import get_faculty_student_ids, resolve_faculty_for_user
 from apps.attendance.models import ClassAttendance, DailyAttendance, ExitPass
 from apps.messaging.models import Notification
 from apps.school.selectors import format_section_label
@@ -13,122 +14,169 @@ from .models import Enrollment, Student
 
 def get_students_for_user(*, user, search: str = "", section_id: int | None = None):
     role = get_user_role(user)
-    qs = Student.objects.prefetch_related("enrollments__section", "enrollments__school_year").order_by(
-        "last_name", "first_name"
+    active_enrollments = Prefetch(
+        "enrollments",
+        queryset=Enrollment.objects.select_related(
+            "section",
+            "section__grade_level",
+            "section__school_year",
+            "section__room",
+        ).order_by("-section__school_year__is_active", "-id"),
     )
+
+    qs = (
+        Student.objects.select_related("location", "parent_user")
+        .prefetch_related(active_enrollments)
+        .order_by("last_name", "first_name")
+    )
+
     if search:
-        qs = qs.filter(Q(lrn__icontains=search) | Q(first_name__icontains=search) | Q(last_name__icontains=search))
+        qs = qs.filter(
+            Q(lrn__icontains=search)
+            | Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+        )
     if section_id:
         qs = qs.filter(enrollments__section_id=section_id, enrollments__status="ENROLLED")
     if role == "PARENT":
         return qs.filter(parent_user=user, is_active=True).distinct()
     if not is_school_leader(user):
-        teacher = resolve_teacher_for_user(user)
-        qs = qs.filter(id__in=get_teacher_student_ids(teacher)) if teacher else qs.none()
+        faculty_member = resolve_faculty_for_user(user)
+        qs = qs.filter(id__in=get_faculty_student_ids(faculty_member)) if faculty_member else qs.none()
     return qs.distinct()
 
 
 def get_signed_qr_cards(*, section_id: int | None = None, request=None) -> list[dict]:
-    qs = Enrollment.objects.filter(status="ENROLLED", student__is_active=True).select_related(
+    enr_qs = Enrollment.objects.filter(status="ENROLLED", student__is_active=True).select_related(
         "student", "section", "section__grade_level"
     )
     if section_id:
-        qs = qs.filter(section_id=section_id)
-    return [
-        {
-            "student_id": enr.student.id,
-            "lrn": enr.student.lrn,
-            "full_name": enr.student.full_name,
-            "grade_section": format_section_label(
-                enr.section.grade_level.name if enr.section.grade_level else "", enr.section.name
-            ),
-            "qr_token": enr.student.qr_token,
-            "qr_payload": sign_student_qr(enr.student.lrn, enr.student.qr_token),
-            "photo_url": build_media_url(enr.student.photo, request),
-        }
-        for enr in qs.order_by("student__last_name", "student__first_name")[:500]
-    ]
+        enr_qs = enr_qs.filter(section_id=section_id)
+
+    cards = []
+    for enr in enr_qs.order_by("section__grade_level__level_order", "section__name", "student__last_name")[:500]:
+        st = enr.student
+        sec = enr.section
+        cards.append(
+            {
+                "id": st.id,
+                "student_id": st.id,
+                "lrn": st.lrn,
+                "full_name": st.full_name,
+                "sex": st.sex,
+                "section_id": sec.id if sec else None,
+                "section_name": sec.name if sec else "",
+                "grade_level": sec.grade_level.name if (sec and sec.grade_level) else "",
+                "section_label": format_section_label(
+                    sec.grade_level.name if (sec and sec.grade_level) else "",
+                    sec.name if sec else "",
+                ),
+                "photo_url": build_media_url(st.photo, request),
+                "parent_contact": st.parent_contact,
+                "qr_token": st.qr_token,
+                "qr_payload": sign_student_qr(st.lrn, st.qr_token),
+            }
+        )
+    return cards
 
 
 def get_parent_portal_data(*, user, request=None) -> dict:
     today = timezone.localdate()
-    profile = getattr(user, "profile", None)
-    phone = normalize_ph_phone(profile.phone_number if profile else "")
-    if phone:
-        Student.objects.filter(parent_contact=phone, parent_user__isnull=True).update(parent_user=user)
-
-    children = list(Student.objects.filter(parent_user=user, is_active=True).order_by("first_name"))
+    children_qs = (
+        Student.objects.filter(parent_user=user, is_active=True)
+        .select_related("location")
+        .prefetch_related(
+            Prefetch(
+                "enrollments",
+                queryset=Enrollment.objects.filter(status="ENROLLED")
+                .select_related("section", "section__grade_level", "section__adviser")
+                .order_by("-id"),
+            )
+        )
+        .order_by("first_name")
+    )
+    children = list(children_qs)
     child_ids = [c.id for c in children]
 
-    enrollments = {
-        e.student_id: e
-        for e in Enrollment.objects.filter(student_id__in=child_ids, status="ENROLLED").select_related(
-            "section", "section__grade_level", "section__adviser"
+    daily_map = dict(
+        DailyAttendance.objects.filter(student_id__in=child_ids, attendance_date=today).values_list(
+            "student_id", "status"
         )
-    }
-    daily_map = {
-        d.student_id: d for d in DailyAttendance.objects.filter(student_id__in=child_ids, attendance_date=today)
-    }
-
-    scans_by_child: dict[int, list] = {}
+    )
+    recent_scans_by_student: dict[int, list[dict]] = {}
     for log in (
-        ClassAttendance.objects.filter(student_id__in=child_ids, attendance_date=today)
-        .select_related("class_period__subject", "recorded_by")
-        .order_by("-scanned_at")
+        ClassAttendance.objects.filter(student_id__in=child_ids)
+        .select_related("class_period__subject")
+        .order_by("-scanned_at")[:60]
     ):
-        scans_by_child.setdefault(log.student_id, []).append({
-            "id": log.id,
-            "subject_code": log.class_period.subject.code if log.class_period else "CLASS",
-            "subject_title": log.class_period.subject.title if log.class_period else "Class",
-            "teacher_name": log.recorded_by.full_name if log.recorded_by else "",
-            "status": log.status,
-            "scanned_at": timezone.localtime(log.scanned_at).strftime("%I:%M %p"),
-        })
+        bucket = recent_scans_by_student.setdefault(log.student_id, [])
+        if len(bucket) < 10:
+            bucket.append(
+                {
+                    "id": log.id,
+                    "date": str(log.attendance_date),
+                    "time": timezone.localtime(log.scanned_at).strftime("%I:%M %p"),
+                    "subject": log.class_period.subject.title
+                    if (log.class_period and log.class_period.subject)
+                    else "Class",
+                    "status": log.status,
+                }
+            )
 
-    passes_by_child: dict[int, list] = {}
-    for ep in ExitPass.objects.filter(student_id__in=child_ids).select_related("issued_by").order_by("-created_at")[:20]:
-        passes_by_child.setdefault(ep.student_id, []).append({
-            "id": ep.id,
-            "pass_number": ep.pass_number,
-            "reason": ep.reason,
-            "status": ep.status,
-            "valid_until": timezone.localtime(ep.valid_until).strftime("%I:%M %p"),
-        })
+    active_passes_by_student: dict[int, list[dict]] = {}
+    for ep in ExitPass.objects.filter(student_id__in=child_ids).order_by("-created_at")[:30]:
+        active_passes_by_student.setdefault(ep.student_id, []).append(
+            {
+                "id": ep.id,
+                "pass_number": ep.pass_number,
+                "pass_type": ep.pass_type,
+                "reason": ep.reason,
+                "status": ep.status,
+                "valid_until": timezone.localtime(ep.valid_until).strftime("%Y-%m-%d %I:%M %p"),
+            }
+        )
 
     children_payload = []
     for child in children:
-        enr = enrollments.get(child.id)
+        enrs = list(child.enrollments.all())
+        enr = enrs[0] if enrs else None
         sec = enr.section if enr else None
-        daily = daily_map.get(child.id)
-        children_payload.append({
-            "id": child.id,
-            "lrn": child.lrn,
-            "full_name": child.full_name,
-            "photo_url": build_media_url(child.photo, request),
-            "section": format_section_label(sec.grade_level.name if (sec and sec.grade_level) else "", sec.name if sec else "Unassigned"),
-            "adviser_name": sec.adviser.full_name if (sec and sec.adviser) else "",
-            "today_status": daily.status if daily else "UNSCANNED",
-            "subject_scans_today": scans_by_child.get(child.id, []),
-            "exit_passes": passes_by_child.get(child.id, []),
-        })
-
-    alerts = list(
-        Notification.objects.filter(Q(recipient=user) | Q(student_id__in=child_ids)).order_by("-created_at")[:50]
-    )
-    return {
-        "parent_name": user.get_full_name() or user.username,
-        "children_count": len(children_payload),
-        "children": children_payload,
-        "unread_notifications": sum(1 for a in alerts if not a.is_read),
-        "notifications": [
+        children_payload.append(
             {
-                "id": a.id,
-                "title": a.title,
-                "message": a.message,
-                "category": a.category,
-                "is_read": a.is_read,
-                "created_at": timezone.localtime(a.created_at).strftime("%Y-%m-%d %I:%M %p"),
+                "id": child.id,
+                "lrn": child.lrn,
+                "full_name": child.full_name,
+                "first_name": child.first_name,
+                "sex": child.sex,
+                "photo_url": build_media_url(child.photo, request),
+                "section": format_section_label(
+                    sec.grade_level.name if (sec and sec.grade_level) else "",
+                    sec.name if sec else "",
+                ),
+                "adviser_name": sec.adviser.full_name if (sec and sec.adviser) else "Unassigned",
+                "adviser_id": sec.adviser_id if sec else None,
+                "today_status": daily_map.get(child.id, "UNSCANNED"),
+                "qr_payload": sign_student_qr(child.lrn, child.qr_token),
+                "recent_attendance": recent_scans_by_student.get(child.id, []),
+                "exit_passes": active_passes_by_student.get(child.id, []),
             }
-            for a in alerts
-        ],
+        )
+
+    notifications = [
+        {
+            "id": n.id,
+            "title": n.title,
+            "message": n.message,
+            "category": n.category,
+            "is_read": n.is_read,
+            "created_at": timezone.localtime(n.created_at).strftime("%Y-%m-%d %I:%M %p"),
+        }
+        for n in Notification.objects.filter(recipient=user).order_by("-created_at")[:40]
+    ]
+
+    return {
+        "children": children_payload,
+        "students": children_payload,
+        "notifications": notifications,
+        "unread_notifications": sum(1 for n in notifications if not n["is_read"]),
     }

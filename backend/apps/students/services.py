@@ -45,14 +45,16 @@ def _normalize_sex(raw_val: str) -> str:
 def sync_student_enrollment(*, student: Student, section_id: int | None) -> None:
     if not section_id:
         return
-    year = SchoolYear.objects.filter(is_active=True).first() or SchoolYear.objects.first()
-    if year:
-        Enrollment.objects.update_or_create(
-            student=student,
-            school_year=year,
-            defaults={"section_id": section_id, "status": "ENROLLED"},
-        )
-
+    sec = Section.objects.select_related("school_year").filter(id=section_id).first()
+    if not sec:
+        return
+    existing = Enrollment.objects.filter(student=student, section__school_year=sec.school_year).first()
+    if existing:
+        existing.section = sec
+        existing.status = "ENROLLED"
+        existing.save(update_fields=["section", "status", "updated_at"])
+    else:
+        Enrollment.objects.create(student=student, section=sec, status="ENROLLED")
 
 def bulk_import_students_csv(
     *,
@@ -224,6 +226,10 @@ def bulk_import_students_csv(
             })
             continue
 
+        barangay_val = _clean_cell(norm.get("barangay"), 100)
+        city_val = _clean_cell(norm.get("municipality_city") or norm.get("city"), 100)
+        province_val = _clean_cell(norm.get("province"), 100)
+
         student_fields = {
             "first_name": first_name,
             "middle_name": _clean_cell(norm.get("middle_name") or norm.get("middlename"), 100),
@@ -235,9 +241,6 @@ def bulk_import_students_csv(
             "ethnic_group": _clean_cell(norm.get("ethnic_group"), 100),
             "religion": _clean_cell(norm.get("religion"), 100),
             "house_street_sitio": _clean_cell(norm.get("house_street_sitio") or norm.get("house_street"), 255),
-            "barangay": _clean_cell(norm.get("barangay"), 100),
-            "municipality_city": _clean_cell(norm.get("municipality_city") or norm.get("city"), 100),
-            "province": _clean_cell(norm.get("province"), 100),
             "father_name": _clean_cell(norm.get("father_name"), 200),
             "mother_maiden_name": _clean_cell(norm.get("mother_maiden_name"), 200),
             "guardian_name": _clean_cell(norm.get("guardian_name"), 200),
@@ -253,6 +256,12 @@ def bulk_import_students_csv(
                     for attr, val in student_fields.items():
                         if val != "" or attr in ("first_name", "last_name", "sex", "birthdate", "parent_contact", "is_active"):
                             setattr(existing, attr, val)
+                    if barangay_val or city_val or province_val:
+                        existing.set_address_location(
+                            barangay=barangay_val or existing.barangay,
+                            municipality_city=city_val or existing.municipality_city,
+                            province=province_val or existing.province,
+                        )
                     if actor and getattr(actor, "is_authenticated", False):
                         existing.updated_by = actor
                     existing.save()
@@ -261,15 +270,17 @@ def bulk_import_students_csv(
                 else:
                     if actor and getattr(actor, "is_authenticated", False):
                         student_fields["created_by"] = actor
-                    student_obj = Student.objects.create(lrn=raw_lrn, **student_fields)
+                    student_obj = Student(lrn=raw_lrn, **student_fields)
+                    student_obj.set_address_location(
+                        barangay=barangay_val,
+                        municipality_city=city_val,
+                        province=province_val,
+                    )
+                    student_obj.save()
                     existing_students[raw_lrn] = student_obj
                     created_count += 1
 
-                Enrollment.objects.update_or_create(
-                    student=student_obj,
-                    school_year=school_year,
-                    defaults={"section": target_section, "status": "ENROLLED"},
-                )
+                sync_student_enrollment(student=student_obj, section_id=target_section.id)
         except Exception as exc:
             skipped_count += 1
             errors.append({

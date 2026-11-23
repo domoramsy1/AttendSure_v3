@@ -63,9 +63,13 @@ class StudentViewSet(AuditedModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="dropdown")
     def dropdown(self, request):
-        qs = self.get_queryset().filter(is_active=True).only(
-            "id", "lrn", "first_name", "middle_name", "last_name", "suffix", "sex"
-        )[:500]
+        qs = (
+            self.get_queryset()
+            .select_related(None)
+            .prefetch_related(None)
+            .filter(is_active=True)
+            .only("id", "lrn", "first_name", "middle_name", "last_name", "suffix", "sex")[:500]
+        )
         return Response([
             {
                 "id": st.id,
@@ -122,13 +126,13 @@ class StudentViewSet(AuditedModelViewSet):
             },
         )
         return Response(summary, status=status.HTTP_200_OK)
-
-
+        
 class EnrollmentViewSet(AuditedModelViewSet):
-    queryset = Enrollment.objects.select_related("student", "section", "school_year").order_by("-id")
+    queryset = Enrollment.objects.select_related(
+        "student", "section", "section__school_year"
+    ).order_by("-id")
     serializer_class = EnrollmentSerializer
     permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
-
 
 class ParentPortalView(APIView):
     permission_classes = [permissions.IsAuthenticated]

@@ -13,6 +13,7 @@ from apps.campus.selectors import get_active_campus_coords
 from apps.messaging.services import notify_student_parent
 from apps.school.models import ClassPeriod, Subject
 from apps.school.selectors import format_section_label
+from apps.school.services import sync_period_days
 from apps.students.models import Enrollment, Student
 from .models import ClassAttendance, DailyAttendance, ExitPass
 from .selectors import (
@@ -135,18 +136,16 @@ def record_student_qr_scan(
             },
         )
         target_period = ClassPeriod.objects.create(
-            code=f"HR-{section.id}",
             schedule_code=f"HR-{section.id}",
             section=section,
             subject=homeroom_subj,
             room=section.room,
-            room_number=section.room_number or "",
             start_time=dt_time(7, 30),
             end_time=dt_time(8, 30),
-            days_of_week="MON-FRI",
             is_active=True,
             **{PERIOD_FACULTY_FIELD: section.adviser or faculty_member},
         )
+        sync_period_days(target_period, "MON-FRI")
 
     now = timezone.now()
     today = timezone.localdate()
@@ -190,7 +189,7 @@ def record_student_qr_scan(
         DailyAttendance.objects.update_or_create(
             student=student,
             attendance_date=today,
-            defaults={"section": section, "status": arrival_status, "remarks": note[:255]},
+            defaults={"status": arrival_status, "remarks": note[:255]},
         )
         subject_name = target_period.subject.title if target_period.subject else "Class"
         time_display = timezone.localtime(now).strftime("%I:%M %p")
@@ -307,7 +306,7 @@ def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
         DailyAttendance.objects.update_or_create(
             student=st,
             attendance_date=scan_date,
-            defaults={"section": sec, "status": status_val, "remarks": "Synced from offline QR queue."},
+            defaults={"status": status_val, "remarks": "Synced from offline QR queue."},
         )
         synced += 1
 
@@ -371,12 +370,11 @@ def save_manual_attendance(
             "scanned_at": timezone.now(),
         },
     )
-    if sec:
-        DailyAttendance.objects.update_or_create(
-            student=student,
-            attendance_date=target_date,
-            defaults={"section": sec, "status": clean_status, "remarks": "Manual faculty update."},
-        )
+    DailyAttendance.objects.update_or_create(
+        student=student,
+        attendance_date=target_date,
+        defaults={"status": clean_status, "remarks": "Manual faculty update."},
+    )
     return log
 
 

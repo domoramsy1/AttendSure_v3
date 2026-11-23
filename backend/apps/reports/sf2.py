@@ -88,25 +88,26 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
     student_ids = [e.student_id for e in enrollments]
 
     records_by_st: dict[int, dict[int, str]] = {}
-    for row in DailyAttendance.objects.filter(
-        section=section, student_id__in=student_ids, attendance_date__range=(month_start, month_end)
-    ).values("student_id", "attendance_date", "status"):
-        day_val = row["attendance_date"].day
-        if day_val in school_day_set:
-            records_by_st.setdefault(row["student_id"], {})[day_val] = row["status"].lower()
+    if student_ids:
+        for row in DailyAttendance.objects.filter(
+            student_id__in=student_ids, attendance_date__range=(month_start, month_end)
+        ).values("student_id", "attendance_date", "status"):
+            day_val = row["attendance_date"].day
+            if day_val in school_day_set:
+                records_by_st.setdefault(row["student_id"], {})[day_val] = row["status"].lower()
 
-    for row in (
-        ClassAttendance.objects.filter(
-            class_period__section=section,
-            student_id__in=student_ids,
-            attendance_date__range=(month_start, month_end),
-        )
-        .order_by("scanned_at")
-        .values("student_id", "attendance_date", "status")
-    ):
-        day_val = row["attendance_date"].day
-        if day_val in school_day_set:
-            records_by_st.setdefault(row["student_id"], {}).setdefault(day_val, row["status"].lower())
+        for row in (
+            ClassAttendance.objects.filter(
+                class_period__section=section,
+                student_id__in=student_ids,
+                attendance_date__range=(month_start, month_end),
+            )
+            .order_by("scanned_at")
+            .values("student_id", "attendance_date", "status")
+        ):
+            day_val = row["attendance_date"].day
+            if day_val in school_day_set:
+                records_by_st.setdefault(row["student_id"], {}).setdefault(day_val, row["status"].lower())
 
     sy = section.school_year
     sy_start_year = year

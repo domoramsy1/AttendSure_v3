@@ -1,7 +1,6 @@
-# D:\AttendSure_V3\backend\apps\attendance\models.py
-
+# backend/apps/attendance/models.py
 from django.db import models
-from django.db.models import UniqueConstraint
+from django.db.models import CheckConstraint, Q, UniqueConstraint
 from django.utils import timezone
 
 ATTENDANCE_STATUS_CHOICES = [
@@ -33,10 +32,10 @@ class ClassAttendance(models.Model):
         "school.ClassPeriod", on_delete=models.CASCADE, db_column="schedule_id", related_name="attendance_records"
     )
     recorded_by = models.ForeignKey(
-        "accounts.TeacherProfile", on_delete=models.CASCADE, db_column="faculty_id", related_name="recorded_scans"
+        "accounts.FacultyProfile", on_delete=models.CASCADE, db_column="faculty_id", related_name="recorded_scans"
     )
     attendance_date = models.DateField(default=timezone.localdate, db_index=True)
-    scanned_at = models.DateTimeField(default=timezone.now)
+    scanned_at = models.DateTimeField(default=timezone.now, db_index=True)
     scan_method = models.CharField(max_length=10, choices=SCAN_METHOD_CHOICES, default="QR")
     status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default="PRESENT")
 
@@ -48,14 +47,23 @@ class ClassAttendance(models.Model):
                 name="uq_class_attendance_daily",
             )
         ]
+        indexes = [
+            models.Index(fields=["attendance_date", "student"], name="idx_clsatt_date_stu"),
+            models.Index(fields=["class_period", "attendance_date"], name="idx_clsatt_per_date"),
+        ]
 
 
 class DailyAttendance(models.Model):
+    """
+    3NF Daily Summary:
+    - Keyed strictly by (student, attendance_date).
+    - Section is resolved through Enrollment without storing redundant section_id.
+    """
+
     id = models.BigAutoField(primary_key=True)
     student = models.ForeignKey("students.Student", on_delete=models.CASCADE, related_name="daily_attendances")
-    section = models.ForeignKey("school.Section", on_delete=models.CASCADE, related_name="daily_attendances")
     attendance_date = models.DateField(default=timezone.localdate, db_index=True)
-    status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default="PRESENT")
+    status = models.CharField(max_length=10, choices=ATTENDANCE_STATUS_CHOICES, default="PRESENT", db_index=True)
     remarks = models.CharField(max_length=255, blank=True, default="")
     recorded_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
@@ -65,13 +73,16 @@ class DailyAttendance(models.Model):
         constraints = [
             UniqueConstraint(fields=["student", "attendance_date"], name="uq_daily_attendance_student_date")
         ]
+        indexes = [
+            models.Index(fields=["attendance_date", "status"], name="idx_dailyatt_date_status"),
+        ]
 
 
 class ExitPass(models.Model):
     id = models.BigAutoField(primary_key=True)
     pass_number = models.CharField(max_length=50, unique=True, db_index=True)
-    teacher = models.ForeignKey(
-        "accounts.TeacherProfile",
+    faculty = models.ForeignKey(
+        "accounts.FacultyProfile",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -82,7 +93,7 @@ class ExitPass(models.Model):
         "students.Student", on_delete=models.SET_NULL, null=True, blank=True, related_name="exit_passes"
     )
     issued_by = models.ForeignKey(
-        "accounts.TeacherProfile", on_delete=models.CASCADE, related_name="issued_exit_passes"
+        "accounts.FacultyProfile", on_delete=models.CASCADE, related_name="issued_exit_passes"
     )
     pass_type = models.CharField(max_length=50, default="Exit Permit")
     reason = models.TextField()
@@ -95,3 +106,15 @@ class ExitPass(models.Model):
 
     class Meta:
         db_table = "gate_passes"
+        constraints = [
+            CheckConstraint(
+                condition=(
+                    (Q(student__isnull=False) & Q(faculty__isnull=True))
+                    | (Q(student__isnull=True) & Q(faculty__isnull=False))
+                ),
+                name="ck_exitpass_single_bearer",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["status", "-created_at"], name="idx_exitpass_status_created"),
+        ]

@@ -65,14 +65,14 @@ export const Footer: React.FC<FooterProps> = ({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: isDatabaseConnected ? brand.success : brand.danger }}>
+        {/* <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: isDatabaseConnected ? brand.success : brand.danger }}>
           {isDatabaseConnected ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
           {isDatabaseConnected ? 'Database Connected' : 'Server Offline'}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: isGateSystemOnline ? brand.primary : brand.danger }}>
           <ShieldCheck size={13} />
           {isGateSystemOnline ? 'QR & Mobile Push Ready' : 'Standby'}
-        </span>
+        </span> */}
         <span style={{ color: tokens.textMuted, fontSize: '0.68rem' }}>&copy; 2026 AttendSure &bull; TechBlazer</span>
       </div>
     </footer>

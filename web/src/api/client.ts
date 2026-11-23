@@ -435,25 +435,48 @@ export const prefetchApiGet = (url: string, params?: Record<string, unknown>): v
 
 let lastWarmupUser = '';
 
-export const warmupRoleEndpoints = (role: string, canTeach: boolean): void => {
+export const warmupRoleEndpoints = (role: string, canHandleClasses: boolean): void => {
   const userScope = localStorage.getItem('attendsure_username') || '';
   if (!userScope || lastWarmupUser === userScope) return;
   lastWarmupUser = userScope;
 
   const upper = role.toUpperCase();
-  const isLeader = ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(upper);
+  const isLeader = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(upper);
+  const now = new Date();
 
   const queue: Array<[string, Record<string, unknown>?]> = [
+    [API_ROUTES.reports.dashboard, undefined],
     [API_ROUTES.students.metrics, undefined],
+    [API_ROUTES.students.list, { page: 1, page_size: 25 }],
     [API_ROUTES.school.sections, { page_size: 300 }],
+    [API_ROUTES.school.gradeLevels, { page_size: 200 }],
+    [API_ROUTES.attendance.exitPasses, undefined],
+    [API_ROUTES.reports.dtr, { month: now.getMonth() + 1, year: now.getFullYear() }],
+    [API_ROUTES.messaging.threads, undefined],
+    [API_ROUTES.reports.sdgImpact, undefined],
+    [API_ROUTES.reports.dropoutRisk, undefined],
   ];
-  if (canTeach || isLeader) {
+
+  if (canHandleClasses || isLeader) {
+    queue.push([API_ROUTES.attendance.classes, undefined]);
     queue.push([API_ROUTES.attendance.classes, { summary: 1 }]);
+    queue.push([API_ROUTES.attendance.adviserMatrix, undefined]);
+  }
+
+  if (isLeader) {
+    queue.push([API_ROUTES.accounts.faculty, { page: 1, page_size: 25 }]);
+    queue.push([API_ROUTES.accounts.facultyDropdown, undefined]);
+    queue.push([API_ROUTES.school.periods, { page_size: 500 }]);
+    queue.push([API_ROUTES.campus.boundary, undefined]);
+    queue.push([API_ROUTES.school.settings, undefined]);
+  }
+
+  if (['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN'].includes(upper)) {
+    queue.push([API_ROUTES.accounts.users, { page_size: 'ALL' }]);
   }
 
   queue.forEach(([endpoint, params], index) => {
-    setTimeout(() => prefetchApiGet(endpoint, params), 400 + index * 450);
+    setTimeout(() => prefetchApiGet(endpoint, params), 80 + index * 90);
   });
 };
-
 export default apiClient;

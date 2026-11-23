@@ -103,24 +103,31 @@ def retry_pending_push_notifications(limit: int = 100) -> int:
 
 
 @transaction.atomic
-def create_chat_message(*, sender, student, teacher, parent_user, body: str) -> ChatMessage:
+def create_chat_message(
+    *, sender, student, faculty=None, teacher=None, parent_user=None, body: str
+) -> ChatMessage:
     clean_body = str(body or "").strip()
     if not clean_body:
         raise AppError("EMPTY_MESSAGE", "Message text cannot be empty.", 400)
     if len(clean_body) > 1000:
         raise AppError("MESSAGE_TOO_LONG", "Message cannot exceed 1000 characters.", 400)
 
+    target_faculty = faculty or teacher
+    if not target_faculty:
+        raise AppError("FACULTY_NOT_FOUND", "Assigned faculty member is required.", 400)
+
+    resolved_parent = parent_user or student.parent_user
+
     msg = ChatMessage.objects.create(
         student=student,
-        teacher=teacher,
-        parent=parent_user,
+        faculty=target_faculty,
         sender=sender,
         body=clean_body,
     )
 
-    linked_account = getattr(teacher, "account", None)
-    teacher_user = linked_account.user if linked_account else None
-    recipient = teacher_user if sender.id == parent_user.id else parent_user
+    linked_account = getattr(target_faculty, "account", None)
+    faculty_user = linked_account.user if linked_account else None
+    recipient = faculty_user if (resolved_parent and sender.id == resolved_parent.id) else resolved_parent
     sender_name = sender.get_full_name() or sender.username
 
     if recipient:

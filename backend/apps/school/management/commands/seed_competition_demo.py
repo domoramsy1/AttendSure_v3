@@ -17,11 +17,13 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
-from apps.accounts.models import AuditLog, TeacherProfile, UserProfile
+from apps.accounts.models import AuditLog, Department, FacultyProfile, PositionTitle, UserProfile
 from apps.attendance.models import ClassAttendance, DailyAttendance, ExitPass
-from apps.campus.models import BoundaryAlert, CampusBoundary, MonthlyTimeRecord, TeacherLocationLog
+from apps.campus.models import BoundaryAlert, CampusBoundary, FacultyAttendanceLog, MonthlyTimeRecord
 from apps.messaging.models import ChatMessage, Notification
 from apps.school.models import (
+    AdministrativeDivision,
+    Building,
     ClassPeriod,
     ClassPeriodDay,
     GradeLevel,
@@ -31,7 +33,7 @@ from apps.school.models import (
     Section,
     Subject,
 )
-from apps.students.models import Enrollment, Student
+from apps.students.models import AddressLocation, Enrollment, Student
 
 User = get_user_model()
 
@@ -88,68 +90,78 @@ class Command(BaseCommand):
         )
 
         # 2. Demo Staff Profiles & Judge Demo User Accounts
-        principal_teacher, _ = TeacherProfile.objects.update_or_create(
+        dept_admin, _ = Department.objects.get_or_create(name="Administration")
+        dept_stem, _ = Department.objects.get_or_create(name="STEM & Mathematics")
+        dept_sci, _ = Department.objects.get_or_create(name="Science & ICT")
+        dept_it, _ = Department.objects.get_or_create(name="Information Technology")
+
+        pos_principal, _ = PositionTitle.objects.get_or_create(title="Secondary School Principal IV")
+        pos_master, _ = PositionTitle.objects.get_or_create(title="Master Teacher I")
+        pos_head, _ = PositionTitle.objects.get_or_create(title="Head Teacher III")
+        pos_ict, _ = PositionTitle.objects.get_or_create(title="ICT Systems Coordinator")
+
+        principal_teacher, _ = FacultyProfile.objects.update_or_create(
             employee_id="EMP-2026-001",
             defaults={
                 "first_name": "Elena",
                 "middle_name": "M.",
                 "last_name": "Reyes",
-                "position": "Secondary School Principal IV",
-                "department": "Administration",
+                "position_ref": pos_principal,
+                "department_ref": dept_admin,
                 "contact_number": "+639171000001",
                 "email": "principal@attendsure.edu",
-                "can_teach": False,
+                "can_handle_classes": False,
                 "is_active": True,
                 "device_model": "iPhone 15 Pro",
             },
         )
-        adviser_teacher, _ = TeacherProfile.objects.update_or_create(
+        adviser_teacher, _ = FacultyProfile.objects.update_or_create(
             employee_id="EMP-2026-002",
             defaults={
                 "first_name": "Marco",
                 "middle_name": "L.",
                 "last_name": "Santos",
-                "position": "Master Teacher I",
-                "department": "STEM & Mathematics",
+                "position_ref": pos_master,
+                "department_ref": dept_stem,
                 "contact_number": "+639171000002",
                 "email": "teacher@attendsure.edu",
-                "can_teach": True,
+                "can_handle_classes": True,
                 "is_active": True,
                 "device_model": "Samsung Galaxy A55",
             },
         )
-        dept_head_teacher, _ = TeacherProfile.objects.update_or_create(
+        dept_head_teacher, _ = FacultyProfile.objects.update_or_create(
             employee_id="EMP-2026-003",
             defaults={
                 "first_name": "Clarissa",
                 "middle_name": "D.",
                 "last_name": "Villanueva",
-                "position": "Head Teacher III",
-                "department": "Science & ICT",
+                "position_ref": pos_head,
+                "department_ref": dept_sci,
                 "contact_number": "+639171000003",
                 "email": "depthead@attendsure.edu",
-                "can_teach": True,
+                "can_handle_classes": True,
                 "is_active": True,
                 "device_model": "Google Pixel 8",
             },
         )
-        admin_teacher, _ = TeacherProfile.objects.update_or_create(
+        admin_teacher, _ = FacultyProfile.objects.update_or_create(
             employee_id="EMP-2026-000",
             defaults={
                 "first_name": "Alex",
                 "middle_name": "R.",
                 "last_name": "Mercer",
-                "position": "ICT Systems Coordinator",
-                "department": "Information Technology",
+                "position_ref": pos_ict,
+                "department_ref": dept_it,
                 "contact_number": "+639171000000",
                 "email": "admin@attendsure.edu",
-                "can_teach": False,
+                "can_handle_classes": False,
                 "is_active": True,
                 "device_model": "Samsung Galaxy S24",
             },
         )
 
-        def ensure_account(username, first, last, email, role, teacher=None, phone="", superuser=False):
+        def ensure_account(username, first, last, email, role, faculty=None, phone="", superuser=False):
             user, created = User.objects.get_or_create(
                 username=username,
                 defaults={
@@ -174,10 +186,9 @@ class Command(BaseCommand):
             profile, _ = UserProfile.objects.update_or_create(
                 user=user,
                 defaults={
-                    "teacher": teacher,
+                    "faculty": faculty,
                     "role": role,
                     "phone_number": phone,
-                    "is_teaching": role in ("FACULTY", "DEPT_HEAD"),
                     "is_profile_completed": True,
                     "failed_attempts": 0,
                     "locked_until": None,
@@ -202,11 +213,28 @@ class Command(BaseCommand):
         )
 
         # School settings & campus boundary
+        boundary = CampusBoundary.objects.first()
+        if not boundary:
+            boundary = CampusBoundary.objects.create(
+                name="Macasandig National High School — AttendSure Global Pilot",
+                center_lat=8.4858,
+                center_lng=124.6567,
+                radius_meters=150,
+                is_active=True,
+            )
+
+        div_obj, _ = AdministrativeDivision.objects.get_or_create(
+            region="Region X — Northern Mindanao",
+            division="Cagayan de Oro City",
+            district="South District",
+        )
+
         school_obj = SchoolSettings.objects.first()
         if school_obj:
-            school_obj.principal_teacher = principal_teacher
-            school_obj.principal_name = principal_teacher.full_name
-            school_obj.academic_year = sy.code
+            school_obj.principal_faculty = principal_teacher
+            school_obj.active_school_year = sy
+            school_obj.division_ref = school_obj.division_ref or div_obj
+            school_obj.campus_boundary = school_obj.campus_boundary or boundary
             if not school_obj.school_name:
                 school_obj.school_name = "Macasandig National High School — AttendSure Global Pilot"
             school_obj.save()
@@ -214,30 +242,14 @@ class Command(BaseCommand):
             school_obj = SchoolSettings.objects.create(
                 school_id="304118",
                 school_name="Macasandig National High School — AttendSure Global Pilot",
-                region="Region X — Northern Mindanao",
-                division="Cagayan de Oro City",
-                district="South District",
-                academic_year=sy.code,
+                division_ref=div_obj,
+                active_school_year=sy,
+                campus_boundary=boundary,
                 address="Macasandig, Cagayan de Oro City, 9000",
                 contact_number="+63888571234",
                 email="pilot@attendsure.edu",
-                principal_teacher=principal_teacher,
-                principal_name=principal_teacher.full_name,
-                principal_title="Secondary School Principal IV",
+                principal_faculty=principal_teacher,
                 superintendent_name="Dr. Cherry Mae L. Limbaco-Reyes",
-                latitude=Decimal("8.4858000"),
-                longitude=Decimal("124.6567000"),
-                geofence_radius_meters=150,
-            )
-
-        boundary = CampusBoundary.objects.first()
-        if not boundary:
-            CampusBoundary.objects.create(
-                name=school_obj.school_name[:100],
-                latitude=school_obj.latitude,
-                longitude=school_obj.longitude,
-                radius_meters=school_obj.geofence_radius_meters or 150,
-                is_active=True,
             )
 
         # 3. Grade Levels, Rooms, Sections, Subjects, Schedules
@@ -245,28 +257,31 @@ class Command(BaseCommand):
         g8, _ = GradeLevel.objects.update_or_create(code="G8", defaults={"name": "Grade 8", "stage": "JHS", "level_order": 8})
         g10, _ = GradeLevel.objects.update_or_create(code="G10", defaults={"name": "Grade 10", "stage": "JHS", "level_order": 10})
 
-        r101, _ = Room.objects.update_or_create(name="Room 101 - STEM Lab", defaults={"building": "Main Wing", "capacity": 45})
-        r102, _ = Room.objects.update_or_create(name="Room 102 - Rizal Hall", defaults={"building": "Main Wing", "capacity": 45})
-        r204, _ = Room.objects.update_or_create(name="Room 204 - ICT Center", defaults={"building": "Innovation Wing", "capacity": 40})
+        bldg_main, _ = Building.objects.get_or_create(name="Main Wing")
+        bldg_innov, _ = Building.objects.get_or_create(name="Innovation Wing")
+
+        r101, _ = Room.objects.update_or_create(name="Room 101 - STEM Lab", defaults={"building_ref": bldg_main, "capacity": 45})
+        r102, _ = Room.objects.update_or_create(name="Room 102 - Rizal Hall", defaults={"building_ref": bldg_main, "capacity": 45})
+        r204, _ = Room.objects.update_or_create(name="Room 204 - ICT Center", defaults={"building_ref": bldg_innov, "capacity": 40})
 
         sec_newton, _ = Section.objects.update_or_create(
             school_year=sy, grade_level=g7, name="Newton",
-            defaults={"adviser": adviser_teacher, "room": r101, "room_number": "101", "code": "G7-NEWTON", "is_active": True},
+            defaults={"adviser": adviser_teacher, "room": r101, "code": "G7-NEWTON", "is_active": True},
         )
         sec_rizal, _ = Section.objects.update_or_create(
             school_year=sy, grade_level=g8, name="Rizal",
-            defaults={"adviser": dept_head_teacher, "room": r102, "room_number": "102", "code": "G8-RIZAL", "is_active": True},
+            defaults={"adviser": dept_head_teacher, "room": r102, "code": "G8-RIZAL", "is_active": True},
         )
         sec_curie, _ = Section.objects.update_or_create(
             school_year=sy, grade_level=g10, name="Curie",
-            defaults={"adviser": adviser_teacher, "room": r204, "room_number": "204", "code": "G10-CURIE", "is_active": True},
+            defaults={"adviser": adviser_teacher, "room": r204, "code": "G10-CURIE", "is_active": True},
         )
         section_map = {"newton": sec_newton, "rizal": sec_rizal, "curie": sec_curie}
 
-        sub_math, _ = Subject.objects.update_or_create(code="MATH-07", defaults={"title": "Mathematics 7", "grade_level": g7, "tier": "Core"})
-        sub_sci, _ = Subject.objects.update_or_create(code="SCI-08", defaults={"title": "Integrated Science 8", "grade_level": g8, "tier": "Core"})
-        sub_ict, _ = Subject.objects.update_or_create(code="ICT-10", defaults={"title": "Applied Computing & AI Literacy", "grade_level": g10, "tier": "Applied"})
-        sub_eng, _ = Subject.objects.update_or_create(code="ENG-07", defaults={"title": "English Communication 7", "grade_level": g7, "tier": "Core"})
+        sub_math, _ = Subject.objects.update_or_create(code="MATH-07", defaults={"title": "Mathematics 7", "grade_level": g7, "subject_category": "Core"})
+        sub_sci, _ = Subject.objects.update_or_create(code="SCI-08", defaults={"title": "Integrated Science 8", "grade_level": g8, "subject_category": "Core"})
+        sub_ict, _ = Subject.objects.update_or_create(code="ICT-10", defaults={"title": "Applied Computing & AI Literacy", "grade_level": g10, "subject_category": "Applied"})
+        sub_eng, _ = Subject.objects.update_or_create(code="ENG-07", defaults={"title": "English Communication 7", "grade_level": g7, "subject_category": "Core"})
 
         periods_spec = [
             ("DEMO-P1", sec_newton, sub_math, adviser_teacher, r101, time(7, 30), time(8, 30)),
@@ -277,17 +292,14 @@ class Command(BaseCommand):
         periods_by_section = {}
         for code, sec, subj, tch, room, st_t, en_t in periods_spec:
             cp, _ = ClassPeriod.objects.update_or_create(
-                code=code,
+                schedule_code=code,
                 defaults={
-                    "schedule_code": code,
                     "section": sec,
                     "subject": subj,
-                    "teacher": tch,
+                    "faculty": tch,
                     "room": room,
-                    "room_number": room.name[:50],
                     "start_time": st_t,
                     "end_time": en_t,
-                    "days_of_week": "MON-FRI",
                     "is_active": True,
                 },
             )
@@ -296,6 +308,11 @@ class Command(BaseCommand):
             periods_by_section.setdefault(sec.id, []).append(cp)
 
         # 4. Students & Enrollments
+        default_loc, _ = AddressLocation.objects.get_or_create(
+            barangay="Macasandig",
+            municipality_city="Cagayan de Oro City",
+            province="Misamis Oriental",
+        )
         seeded_students = []
         for idx, (lrn, first, mid, last, sex, by, bm, bd, sec_key, is_cct, pattern) in enumerate(STUDENTS_SEED):
             sec = section_map[sec_key]
@@ -311,9 +328,7 @@ class Command(BaseCommand):
                     "mother_tongue": "Cebuano / English",
                     "religion": "Roman Catholic" if idx % 3 else "Islam",
                     "house_street_sitio": f"Zone {(idx % 6) + 1}, Macasandig",
-                    "barangay": "Macasandig",
-                    "municipality_city": "Cagayan de Oro City",
-                    "province": "Misamis Oriental",
+                    "location": default_loc,
                     "father_name": f"Roberto {last}",
                     "mother_maiden_name": f"Elena {mid}",
                     "guardian_name": "Rosa Alvarez" if idx in (0, 2) else f"Elena {last}",
@@ -325,9 +340,8 @@ class Command(BaseCommand):
             )
             Enrollment.objects.update_or_create(
                 student=student,
-                school_year=sy,
+                section=sec,
                 defaults={
-                    "section": sec,
                     "enrollment_date": date(2026, 6, 2),
                     "enrollment_type": "REGULAR",
                     "status": "ENROLLED",
@@ -372,7 +386,6 @@ class Command(BaseCommand):
                     student=student,
                     attendance_date=att_date,
                     defaults={
-                        "section": sec,
                         "status": st_status,
                         "remarks": "Flagged for home visit" if pattern == "critical_sardo" and st_status == "ABSENT" else "",
                     },
@@ -390,7 +403,7 @@ class Command(BaseCommand):
                         class_period=period,
                         attendance_date=att_date,
                         defaults={
-                            "recorded_by": period.teacher or adviser_teacher,
+                            "recorded_by": period.faculty or adviser_teacher,
                             "scanned_at": scanned_dt,
                             "scan_method": "QR" if st_status != "ABSENT" else "MANUAL",
                             "status": st_status,
@@ -398,21 +411,30 @@ class Command(BaseCommand):
                     )
 
         # 6. Teacher Campus GPS Telemetry & DTR
+        ping_slots = [
+            (time(7, 42), "TIME_IN_AM"),
+            (time(12, 3), "TIME_OUT_AM"),
+            (time(13, 5), "TIME_IN_PM"),
+            (time(16, 48), "TIME_OUT_PM"),
+        ]
         for teacher in (principal_teacher, adviser_teacher, dept_head_teacher, admin_teacher):
             for att_date in school_days[:10]:
-                for ping_time in (time(7, 42), time(12, 3), time(13, 5), time(16, 48)):
+                for ping_time, action_code in ping_slots:
                     ts = timezone.make_aware(datetime.combine(att_date, ping_time))
-                    if not TeacherLocationLog.objects.filter(teacher=teacher, recorded_at=ts).exists():
-                        TeacherLocationLog.objects.create(
-                            teacher=teacher,
-                            latitude=Decimal("8.4858120"),
-                            longitude=Decimal("124.6567150"),
-                            battery_level=86,
-                            is_inside_geofence=True,
+                    if not FacultyAttendanceLog.objects.filter(faculty=teacher, recorded_at=ts).exists():
+                        FacultyAttendanceLog.objects.create(
+                            faculty=teacher,
+                            log_date=att_date,
+                            action=action_code,
+                            latitude=8.485812,
+                            longitude=124.656715,
+                            distance_meters=0.0,
+                            is_within_boundary=True,
+                            face_verified=True,
                             recorded_at=ts,
                         )
             MonthlyTimeRecord.objects.update_or_create(
-                teacher=teacher,
+                faculty=teacher,
                 month=today.month,
                 year=today.year,
                 defaults={
@@ -424,12 +446,12 @@ class Command(BaseCommand):
             )
 
         BoundaryAlert.objects.get_or_create(
-            teacher=dept_head_teacher,
+            faculty=dept_head_teacher,
             incident_date=today - timedelta(days=2),
             defaults={
-                "trigger_reason": "Division Office Official Curriculum Briefing (Excused)",
+                "left_at": now - timedelta(days=2),
                 "status": "EXCUSED",
-                "remarks": "Verified against Division Memorandum No. 2026-114.",
+                "remarks": "Division Office Official Curriculum Briefing (Excused) — Verified against Division Memorandum No. 2026-114.",
             },
         )
 
@@ -439,6 +461,7 @@ class Command(BaseCommand):
             pass_number="GP-DEMO-2026-001",
             defaults={
                 "student": first_student,
+                "faculty": None,
                 "issued_by": adviser_teacher,
                 "pass_type": "Medical / Clinic Clearance",
                 "reason": "Scheduled pediatric dental follow-up with guardian escort.",
@@ -450,7 +473,8 @@ class Command(BaseCommand):
         ExitPass.objects.update_or_create(
             pass_number="GP-DEMO-2026-002",
             defaults={
-                "teacher": adviser_teacher,
+                "student": None,
+                "faculty": adviser_teacher,
                 "issued_by": adviser_teacher,
                 "pass_type": "Official Travel Order",
                 "reason": "Regional STEM Robotics Coaches Orientation at Division Office.",
@@ -481,19 +505,17 @@ class Command(BaseCommand):
                 is_read=False,
             )
 
-        if not ChatMessage.objects.filter(student=first_student, teacher=adviser_teacher, parent=parent_user).exists():
+        if not ChatMessage.objects.filter(student=first_student, faculty=adviser_teacher).exists():
             ChatMessage.objects.create(
                 student=first_student,
-                teacher=adviser_teacher,
-                parent=parent_user,
+                faculty=adviser_teacher,
                 sender=teacher_user,
                 body="Good morning Ms. Alvarez! Mateo checked in on time for Mathematics 7 and scored 98% on today's quiz.",
                 is_read=False,
             )
             ChatMessage.objects.create(
                 student=first_student,
-                teacher=adviser_teacher,
-                parent=parent_user,
+                faculty=adviser_teacher,
                 sender=parent_user,
                 body="Thank you Sir Marco! We really appreciate the real-time arrival notifications on AttendSure.",
                 is_read=True,

@@ -104,9 +104,11 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
         sections_qs = sections_qs.filter(Q(school_year=target_sy) | Q(school_year__isnull=True))
     sections = list(sections_qs.order_by("grade_level__level_order", "name"))
 
-    enr_qs = Enrollment.objects.filter(section__in=sections, student__is_active=True).select_related("student")
+    enr_qs = Enrollment.objects.filter(section__in=sections, student__is_active=True).select_related(
+        "student", "section__school_year"
+    )
     if target_sy:
-        enr_qs = enr_qs.filter(Q(school_year=target_sy) | Q(school_year__isnull=True))
+        enr_qs = enr_qs.filter(Q(section__school_year=target_sy) | Q(section__school_year__isnull=True))
 
     enr_by_sec: dict[int, list] = {}
     all_student_ids = set()
@@ -119,7 +121,6 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
     if all_student_ids:
         present_pairs.update(
             DailyAttendance.objects.filter(
-                section__in=sections,
                 student_id__in=all_student_ids,
                 attendance_date__range=(start_dt, end_dt),
                 status__in=present_codes,

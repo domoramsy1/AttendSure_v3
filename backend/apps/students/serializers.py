@@ -1,10 +1,9 @@
-# D:\AttendSure_V3\backend\apps\students\serializers.py
-
+# backend/apps/students/serializers.py
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
-from apps.school.models import SchoolYear, Section
+from apps.school.models import Section
 from common.media import FlexibleImageField, build_media_url
 from common.qr_signer import sign_student_qr
 from .models import Enrollment, Student
@@ -13,6 +12,9 @@ from .services import sync_student_enrollment
 
 class StudentSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(read_only=True)
+    barangay = serializers.CharField(required=False, allow_blank=True, default="")
+    municipality_city = serializers.CharField(required=False, allow_blank=True, default="")
+    province = serializers.CharField(required=False, allow_blank=True, default="")
     photo = FlexibleImageField(required=False, allow_null=True)
     photo_url = serializers.SerializerMethodField()
     remove_photo = serializers.BooleanField(required=False, write_only=True, default=False)
@@ -82,7 +84,7 @@ class StudentSerializer(serializers.ModelSerializer):
         fallback = None
         for enr in obj.enrollments.all():
             if enr.section:
-                if enr.school_year and enr.school_year.is_active:
+                if enr.section.school_year and enr.section.school_year.is_active:
                     return enr
                 fallback = fallback or enr
         return fallback
@@ -99,7 +101,13 @@ class StudentSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         section_id = validated_data.pop("section_id", None)
         validated_data.pop("remove_photo", None)
-        student = super().create(validated_data)
+        barangay = validated_data.pop("barangay", "")
+        city = validated_data.pop("municipality_city", "")
+        province = validated_data.pop("province", "")
+
+        student = Student(**validated_data)
+        student.set_address_location(barangay=barangay, municipality_city=city, province=province)
+        student.save()
         sync_student_enrollment(student=student, section_id=section_id)
         return student
 
@@ -109,15 +117,26 @@ class StudentSerializer(serializers.ModelSerializer):
         remove_photo = bool(validated_data.pop("remove_photo", False))
         if remove_photo:
             validated_data["photo"] = None
-        student = super().update(instance, validated_data)
-        sync_student_enrollment(student=student, section_id=section_id)
-        return student
+
+        has_loc_change = any(k in validated_data for k in ("barangay", "municipality_city", "province"))
+        barangay = validated_data.pop("barangay", instance.barangay)
+        city = validated_data.pop("municipality_city", instance.municipality_city)
+        province = validated_data.pop("province", instance.province)
+
+        for attr, val in validated_data.items():
+            setattr(instance, attr, val)
+        if has_loc_change:
+            instance.set_address_location(barangay=barangay, municipality_city=city, province=province)
+        instance.save()
+        sync_student_enrollment(student=instance, section_id=section_id)
+        return instance
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source="student.full_name", read_only=True)
     lrn = serializers.CharField(source="student.lrn", read_only=True)
     section_name = serializers.CharField(source="section.name", read_only=True)
+    school_year = serializers.PrimaryKeyRelatedField(source="section.school_year", read_only=True)
 
     class Meta:
         model = Enrollment
@@ -135,22 +154,15 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             "remarks",
         ]
         extra_kwargs = {
-            "school_year": {"required": False},
             "enrollment_date": {"required": False},
         }
         validators = []
 
     def validate(self, attrs):
-        sy = attrs.get("school_year") or (self.instance.school_year if self.instance else None)
-        if not sy:
-            sy = SchoolYear.objects.filter(is_active=True).first() or SchoolYear.objects.first()
-            if not sy:
-                raise serializers.ValidationError({"school_year": "No School Year is configured."})
-            attrs["school_year"] = sy
-
         student = attrs.get("student") or (self.instance.student if self.instance else None)
-        if student and sy:
-            dup = Enrollment.objects.filter(student=student, school_year=sy)
+        section = attrs.get("section") or (self.instance.section if self.instance else None)
+        if student and section:
+            dup = Enrollment.objects.filter(student=student, section__school_year=section.school_year)
             if self.instance:
                 dup = dup.exclude(pk=self.instance.pk)
             if dup.exists():
@@ -161,7 +173,3 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         if not self.instance and not attrs.get("enrollment_date"):
             attrs["enrollment_date"] = timezone.localdate()
         return attrs
-
-    def create(self, validated_data):
-        validated_data.setdefault("enrollment_date", timezone.localdate())
-        return super().create(validated_data)

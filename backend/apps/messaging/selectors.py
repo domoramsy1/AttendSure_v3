@@ -3,15 +3,15 @@ from django.utils import timezone
 from common.exceptions import AppError
 from common.media import build_media_url
 from common.permissions import get_user_role, is_school_leader
-from apps.accounts.models import TeacherProfile
-from apps.accounts.selectors import get_teacher_student_ids, resolve_teacher_for_user
+from apps.accounts.models import FacultyProfile
+from apps.accounts.selectors import get_faculty_student_ids, resolve_faculty_for_user
 from apps.school.models import ClassPeriod
 from apps.school.selectors import format_section_label
 from apps.students.models import Enrollment, Student
 from .models import ChatMessage
 
 
-def resolve_default_teacher_for_student(student: Student) -> TeacherProfile | None:
+def resolve_default_faculty_for_student(student: Student) -> FacultyProfile | None:
     enr = (
         Enrollment.objects.filter(student=student, status="ENROLLED")
         .select_related("section", "section__adviser")
@@ -22,40 +22,47 @@ def resolve_default_teacher_for_student(student: Student) -> TeacherProfile | No
         if enr.section.adviser:
             return enr.section.adviser
         period = (
-            ClassPeriod.objects.filter(section=enr.section, is_active=True, teacher__isnull=False)
-            .select_related("teacher")
+            ClassPeriod.objects.filter(section=enr.section, is_active=True, faculty__isnull=False)
+            .select_related("faculty")
             .first()
         )
-        if period and period.teacher:
-            return period.teacher
-    return TeacherProfile.objects.filter(is_active=True).order_by("id").first()
+        if period and period.faculty:
+            return period.faculty
+    return FacultyProfile.objects.filter(is_active=True).order_by("id").first()
 
 
-def authorize_chat_thread(*, user, student_id: int, teacher_id: int | None = None):
+def authorize_chat_thread(
+    *, user, student_id: int, faculty_id: int | None = None, teacher_id: int | None = None
+):
     student = Student.objects.select_related("parent_user").filter(id=student_id, is_active=True).first()
     if not student:
         raise AppError("STUDENT_NOT_FOUND", "Student not found.", 404)
 
-    teacher = TeacherProfile.objects.filter(id=teacher_id, is_active=True).first() if teacher_id else None
-    teacher = teacher or resolve_default_teacher_for_student(student)
-    if not teacher:
-        raise AppError("TEACHER_NOT_FOUND", "Assigned teacher not found.", 404)
+    resolved_faculty_id = faculty_id or teacher_id
+    faculty = (
+        FacultyProfile.objects.filter(id=resolved_faculty_id, is_active=True).first()
+        if resolved_faculty_id
+        else None
+    )
+    faculty = faculty or resolve_default_faculty_for_student(student)
+    if not faculty:
+        raise AppError("FACULTY_NOT_FOUND", "Assigned faculty member not found.", 404)
 
     role = get_user_role(user)
     if role == "PARENT":
         if student.parent_user_id != user.id:
             raise AppError("FORBIDDEN", "This student is not linked to your parent account.", 403)
-        return student, teacher, user
+        return student, faculty, user
 
     if not student.parent_user:
         raise AppError("NO_PARENT_LINKED", "This student has no linked parent account yet.", 400)
 
     if not is_school_leader(user):
-        own_teacher = resolve_teacher_for_user(user)
-        if not own_teacher or student.id not in get_teacher_student_ids(own_teacher):
+        own_faculty = resolve_faculty_for_user(user)
+        if not own_faculty or student.id not in get_faculty_student_ids(own_faculty):
             raise AppError("FORBIDDEN", "Student is not in your assigned classes.", 403)
 
-    return student, teacher, student.parent_user
+    return student, faculty, student.parent_user
 
 
 def get_chat_threads_for_user(*, user, request=None) -> list[dict]:
@@ -65,12 +72,12 @@ def get_chat_threads_for_user(*, user, request=None) -> list[dict]:
     if role == "PARENT":
         base_qs = Student.objects.filter(parent_user=user, is_active=True)
     else:
-        own_teacher = resolve_teacher_for_user(user)
+        own_teacher = resolve_faculty_for_user(user)
         if is_school_leader(user) and not own_teacher:
             base_qs = Student.objects.filter(is_active=True, parent_user__isnull=False)
         elif own_teacher:
             base_qs = Student.objects.filter(
-                id__in=get_teacher_student_ids(own_teacher),
+                id__in=get_faculty_student_ids(own_teacher),
                 is_active=True,
                 parent_user__isnull=False,
             )
@@ -96,12 +103,12 @@ def get_chat_threads_for_user(*, user, request=None) -> list[dict]:
         .select_related("section", "section__grade_level", "section__adviser")
     }
 
-    own_teacher = resolve_teacher_for_user(user) if role != "PARENT" else None
+    own_teacher = resolve_faculty_for_user(user) if role != "PARENT" else None
     threads = []
 
     for st in students:
         sec = enrollments.get(st.id)
-        teacher = own_teacher or (sec.adviser if (sec and sec.adviser) else None) or resolve_default_teacher_for_student(st)
+        teacher = own_teacher or (sec.adviser if (sec and sec.adviser) else None) or resolve_default_faculty_for_student(st)
         if not teacher or not st.parent_user:
             continue
 
@@ -131,23 +138,28 @@ def get_chat_threads_for_user(*, user, request=None) -> list[dict]:
     return threads
 
 
-def get_thread_messages(*, user, student_id: int, teacher_id: int | None = None) -> dict:
-    student, teacher, parent_user = authorize_chat_thread(
-        user=user, student_id=student_id, teacher_id=teacher_id
+def get_thread_messages(
+    *, user, student_id: int, faculty_id: int | None = None, teacher_id: int | None = None
+) -> dict:
+    resolved_faculty_id = faculty_id or teacher_id
+    student, faculty, _ = authorize_chat_thread(
+        user=user, student_id=student_id, faculty_id=resolved_faculty_id
     )
-    qs = ChatMessage.objects.filter(
-        student=student, teacher=teacher, parent=parent_user
-    ).select_related("sender").order_by("created_at")
+    qs = (
+        ChatMessage.objects.filter(student=student, faculty=faculty)
+        .select_related("sender")
+        .order_by("created_at")
+    )
 
     qs.filter(is_read=False).exclude(sender=user).update(is_read=True)
 
     return {
         "student_id": student.id,
         "student_name": student.full_name,
-        "teacher_id": teacher.id,
-        "faculty_id": teacher.id,
-        "teacher_name": teacher.full_name,
-        "faculty_name": teacher.full_name,
+        "teacher_id": faculty.id,
+        "faculty_id": faculty.id,
+        "teacher_name": faculty.full_name,
+        "faculty_name": faculty.full_name,
         "messages": [
             {
                 "id": m.id,

@@ -5,11 +5,24 @@ Run: python manage.py test apps.accounts.test_full_crud --verbosity=2
 
 from datetime import date, time, timedelta
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from apps.accounts.models import TeacherProfile, UserProfile
-from apps.school.models import ClassPeriod, GradeLevel, Room, SchoolSettings, SchoolYear, Section, Subject
+from apps.accounts.models import Department, FacultyProfile, PositionTitle, UserProfile
+from apps.campus.models import CampusBoundary
+from apps.school.models import (
+    AdministrativeDivision,
+    Building,
+    ClassPeriod,
+    GradeLevel,
+    Room,
+    SchoolSettings,
+    SchoolYear,
+    Section,
+    Subject,
+)
+from apps.school.services import sync_period_days
 from apps.students.models import Enrollment, Student
 from common.qr_signer import sign_student_qr
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -19,14 +32,20 @@ User = get_user_model()
 
 class FullSystemCrudAndFeaturesTestSuite(APITestCase):
     def setUp(self):
-        self.admin_teacher = TeacherProfile.objects.create(
+        cache.clear()
+        dept_admin, _ = Department.objects.get_or_create(name="Administration")
+        dept_math, _ = Department.objects.get_or_create(name="Mathematics")
+        pos_admin, _ = PositionTitle.objects.get_or_create(title="School Administrator")
+        pos_fac, _ = PositionTitle.objects.get_or_create(title="Faculty I")
+
+        self.admin_teacher = FacultyProfile.objects.create(
             employee_id="EMP-ADM-01",
             first_name="System",
             last_name="Admin",
             email="admin@attendsure.edu",
-            department="Administration",
-            position="School Administrator",
-            can_teach=True,
+            department_ref=dept_admin,
+            position_ref=pos_admin,
+            can_handle_classes=True,
             is_active=True,
         )
         self.admin_user = User.objects.create_user(
@@ -40,20 +59,19 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         )
         UserProfile.objects.create(
             user=self.admin_user,
-            teacher=self.admin_teacher,
+            faculty=self.admin_teacher,
             role="ADMIN",
-            is_teaching=True,
             is_profile_completed=True,
         )
 
-        self.faculty_profile = TeacherProfile.objects.create(
+        self.faculty_profile = FacultyProfile.objects.create(
             employee_id="EMP-FAC-01",
             first_name="Elena",
             last_name="Reyes",
             email="elena@attendsure.edu",
-            department="Mathematics",
-            position="Faculty I",
-            can_teach=True,
+            department_ref=dept_math,
+            position_ref=pos_fac,
+            can_handle_classes=True,
             is_active=True,
             bound_device_id="DEV-ORIG-001",
         )
@@ -66,9 +84,8 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         )
         UserProfile.objects.create(
             user=self.faculty_user,
-            teacher=self.faculty_profile,
+            faculty=self.faculty_profile,
             role="FACULTY",
-            is_teaching=True,
             is_profile_completed=True,
         )
 
@@ -83,7 +100,6 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
             user=self.parent_user,
             role="PARENT",
             phone_number="+639171112222",
-            is_teaching=False,
             is_profile_completed=True,
         )
 
@@ -95,27 +111,26 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
             is_active=True,
         )
         self.grade = GradeLevel.objects.create(code="G7", name="Grade 7", stage="JHS", level_order=1)
-        self.room = Room.objects.create(name="Room 101", building="Main Building", capacity=45)
+        bldg, _ = Building.objects.get_or_create(name="Main Building")
+        self.room = Room.objects.create(name="Room 101", building_ref=bldg, capacity=45)
         self.subject = Subject.objects.create(code="MATH7", title="Mathematics 7", grade_level=self.grade, units=1)
         self.section = Section.objects.create(
             school_year=self.school_year,
             grade_level=self.grade,
             adviser=self.faculty_profile,
             room=self.room,
-            room_number="Room 101",
             name="Diamond",
             capacity=45,
         )
         self.period = ClassPeriod.objects.create(
             section=self.section,
             subject=self.subject,
-            teacher=self.faculty_profile,
+            faculty=self.faculty_profile,
             room=self.room,
-            room_number="Room 101",
             start_time=time(7, 30),
             end_time=time(8, 30),
-            days_of_week="MON-FRI",
         )
+        sync_period_days(self.period, "MON-FRI")
         self.student = Student.objects.create(
             lrn="127901260001",
             first_name="Juan",
@@ -129,22 +144,29 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         self.enrollment = Enrollment.objects.create(
             student=self.student,
             section=self.section,
-            school_year=self.school_year,
             status="ENROLLED",
+        )
+        div_obj, _ = AdministrativeDivision.objects.get_or_create(
+            region="Region X",
+            division="Cagayan de Oro City",
+            district="Central District",
+        )
+        boundary = CampusBoundary.objects.create(
+            name="AttendSure National High School",
+            center_lat=8.4858,
+            center_lng=124.6567,
+            radius_meters=200,
+            is_active=True,
         )
         self.school_settings = SchoolSettings.objects.create(
             school_id="304100",
             school_name="AttendSure National High School",
-            region="Region X",
-            division="Cagayan de Oro City",
-            district="Central District",
-            academic_year="2026-2027",
+            division_ref=div_obj,
+            active_school_year=self.school_year,
+            campus_boundary=boundary,
             address="Main Campus Avenue",
             contact_number="+639170000000",
             email="office@attendsure.edu",
-            latitude=8.4858,
-            longitude=124.6567,
-            geofence_radius_meters=200,
         )
 
     def test_01_auth_profile_validation_device_reset_and_unlock(self):
@@ -481,8 +503,13 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         self.assertEqual(ep_p.data["reason"], "Updated Seminar Location")
         self.assertEqual(ep_p.data["valid_until"], orig_valid_until)
 
+        # List exit passes works cleanly for both faculty & leadership
+        ep_list = self.client.get("/api/v1/attendance/exit-passes/")
+        self.assertEqual(ep_list.status_code, 200)
+
         # Admin approves & marks used
         self.client.force_authenticate(user=self.admin_user)
+        self.assertEqual(self.client.get("/api/v1/attendance/exit-passes/").status_code, 200)
         self.assertEqual(self.client.post(f"/api/v1/attendance/exit-passes/{ep_id}/approve/").status_code, 200)
         self.assertEqual(self.client.post(f"/api/v1/attendance/exit-passes/{ep_id}/mark-used/").status_code, 200)
         self.assertEqual(self.client.delete(f"/api/v1/attendance/exit-passes/{ep_id}/").status_code, 204)
@@ -601,7 +628,8 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         self.assertEqual(self.client.get("/api/v1/reports/dashboard/").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/reports/sf1/", {"section_id": self.section.id}).status_code, 200)
         self.assertEqual(self.client.get("/api/v1/reports/sf2/", {"section_id": self.section.id, "month": now.month, "year": now.year}).status_code, 200)
-        self.assertEqual(self.client.get("/api/v1/reports/sf4/", {"month": now.month, "year": now.year}).status_code, 200)
+        self.assertEqual(self.client.get(f"/api/v1/reports/sf2/{self.section.id}/", {"month": "November", "year": 2026}).status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/reports/sf4/", {"month": now.month, "year": now.year, "school_year": "2026-2027"}).status_code, 200)
         self.assertEqual(self.client.get("/api/v1/reports/dtr/", {"faculty_id": self.faculty_profile.id, "month": now.month, "year": now.year}).status_code, 200)
 
         # DTR submit & approve actions
@@ -636,7 +664,7 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         self.assertEqual(self.client.get("/api/v1/health/db/").status_code, 200)
         self.assertEqual(self.client.post("/api/v1/cache/flush/").status_code, 200)
 
-def test_07_students_bulk_csv_class_list_import_and_unsigned_qr_defense(self):
+    def test_07_students_bulk_csv_class_list_import_and_unsigned_qr_defense(self):
         csv_body = (
             "lrn,first_name,middle_name,last_name,suffix,sex,birthdate,section_name,grade_level,parent_contact,barangay,municipality_city,province\n"
             "127901260501,Miguel,Reyes,Navarro,,Male,2013-03-12,Diamond,Grade 7,09171234501,Macasandig,Cagayan de Oro City,Misamis Oriental\n"
@@ -660,44 +688,6 @@ def test_07_students_bulk_csv_class_list_import_and_unsigned_qr_defense(self):
             format="json",
         )
         self.assertEqual(unsigned_scan.status_code, 400)
-
-        # School leadership imports valid rows, auto-creates Sapphire, and skips invalid LRN
-        self.client.force_authenticate(user=self.admin_user)
-        res1 = self.client.post(
-            "/api/v1/students/bulk-import/",
-            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
-            format="multipart",
-        )
-        self.assertEqual(res1.status_code, 200)
-        self.assertEqual(res1.data["created_count"], 2)
-        self.assertEqual(res1.data["skipped_count"], 1)
-
-        # Re-uploading updates existing LRNs cleanly without duplicating students
-        res2 = self.client.post(
-            "/api/v1/students/bulk-import/",
-            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
-            format="multipart",
-        )
-        self.assertEqual(res2.status_code, 200)
-        self.assertEqual(res2.data["created_count"], 0)
-        self.assertEqual(res2.data["updated_count"], 2)
-        from django.core.files.uploadedfile import SimpleUploadedFile
-
-        csv_body = (
-            "lrn,first_name,middle_name,last_name,suffix,sex,birthdate,section_name,grade_level,parent_contact,barangay,municipality_city,province\n"
-            "127901260501,Miguel,Reyes,Navarro,,Male,2013-03-12,Diamond,Grade 7,09171234501,Macasandig,Cagayan de Oro City,Misamis Oriental\n"
-            "127901260502,Angela,Cruz,Ramos,,Female,2013-08-24,Sapphire,Grade 8,09171234502,Nazareth,Cagayan de Oro City,Misamis Oriental\n"
-            "BADLRN,Invalid,Row,Test,,Male,2013-01-01,Diamond,Grade 7,09171234503,Carmen,Cagayan de Oro City,Misamis Oriental\n"
-        ).encode("utf-8")
-
-        # Non-leadership faculty must be blocked (403)
-        self.client.force_authenticate(user=self.faculty_user)
-        denied = self.client.post(
-            "/api/v1/students/bulk-import/",
-            {"file": SimpleUploadedFile("class_list.csv", csv_body, content_type="text/csv")},
-            format="multipart",
-        )
-        self.assertEqual(denied.status_code, 403)
 
         # School leadership imports valid rows, auto-creates Sapphire, and skips invalid LRN
         self.client.force_authenticate(user=self.admin_user)

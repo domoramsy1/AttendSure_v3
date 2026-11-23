@@ -24,7 +24,7 @@ def generate_sf1_report(*, section_id: int, school_year: str | None = None, requ
 
     enrollments = (
         Enrollment.objects.filter(section=section, status="ENROLLED", student__is_active=True)
-        .select_related("student")
+        .select_related("student", "student__location")
         .order_by("student__last_name", "student__first_name")
     )
 
