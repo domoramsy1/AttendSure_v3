@@ -1,11 +1,12 @@
 /**
- * AttendSure - Reusable User & Faculty Avatar
- * Replaces duplicate implementations across FacultyTab, AttendanceLogsTab, DTRTab, and MyAssignedClassesTab.
+ * AttendSure - Reusable User & Teacher Avatar
+ * Replaces duplicate implementations across TeachersTab, DTRTab, and MyAssignedClassesTab.
  * File: web/src/components/common/ProfileAvatar.tsx
  */
 
 import React, { useState, useEffect } from 'react';
 import { User } from 'lucide-react';
+import { useTheme } from '../../context/ThemeContext';
 import { isSafeImageUrl } from '../../theme/tokens';
 
 interface ProfileAvatarProps {
@@ -21,6 +22,7 @@ export const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   size = 38,
   iconSize = 19,
 }) => {
+  const { tokens } = useTheme();
   const [imageFailed, setImageFailed] = useState(false);
 
   useEffect(() => {
@@ -35,8 +37,8 @@ export const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
         width: size,
         height: size,
         borderRadius: '50%',
-        backgroundColor: 'var(--bg-surface-subtle, #f1f5f9)',
-        border: '1px solid var(--border-subtle, #e2e8f0)',
+        backgroundColor: tokens.bgSurfaceSubtle,
+        border: `1px solid ${tokens.borderSubtle}`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -53,7 +55,7 @@ export const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
           onError={() => setImageFailed(true)}
         />
       ) : (
-        <User size={iconSize} color="var(--text-muted, #94a3b8)" />
+        <User size={iconSize} color={tokens.textMuted} />
       )}
     </div>
   );

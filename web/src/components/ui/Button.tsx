@@ -19,14 +19,14 @@ export const Button: React.FC<ButtonProps> = ({
   style,
   ...props
 }) => {
-  const { mode, tokens, brand, radius } = useTheme();
+  const { tokens, brand, radius } = useTheme();
 
   const getVariantStyles = (): React.CSSProperties => {
     switch (variant) {
       case 'primary':
         return {
           backgroundColor: brand.buttonBg,
-          color: '#ffffff',
+          color: tokens.onPrimary,
           borderWidth: 1,
           borderStyle: 'solid',
           borderColor: brand.buttonBg,
@@ -42,19 +42,19 @@ export const Button: React.FC<ButtonProps> = ({
         };
       case 'danger':
         return {
-          backgroundColor: mode === 'dark' ? '#dc2626' : brand.danger,
-          color: '#ffffff',
+          backgroundColor: brand.danger,
+          color: tokens.onPrimary,
           borderWidth: 1,
           borderStyle: 'solid',
-          borderColor: mode === 'dark' ? '#ef4444' : brand.danger,
+          borderColor: brand.danger,
         };
       case 'dark':
         return {
-          backgroundColor: '#1e293b',
-          color: '#ffffff',
+          backgroundColor: tokens.darkSurfaceElevated,
+          color: tokens.darkText,
           borderWidth: 1,
           borderStyle: 'solid',
-          borderColor: '#334155',
+          borderColor: tokens.darkBorder,
         };
       case 'ghost':
         return {

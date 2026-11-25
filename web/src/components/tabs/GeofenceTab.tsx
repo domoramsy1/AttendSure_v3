@@ -1,5 +1,5 @@
 /**
- * AttendSure - Campus GPS Boundary & Location Audit (Local Bundled Leaflet)
+ * AttendSure - Campus GPS Boundary, Loafing Monitor & Location Audit (Local Bundled Leaflet)
  * File: web/src/components/tabs/GeofenceTab.tsx
  */
 
@@ -8,13 +8,15 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, escapeHtml, extractApiError } from '../../api/routes';
-import { isSafeImageUrl } from '../../theme/tokens';
+import { isSafeImageUrl, MAP_STATUS_COLORS, SEAL_COLORS } from '../../theme/tokens';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
 import { useTheme } from '../../context/ThemeContext';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
 import { exportToCsv } from '../common/Pagination';
+import { LoafingMonitorPanel } from './LoafingMonitorPanel';
+import { canEditGeofence, canResetBoundDevice, getCurrentUserFromStorage } from '../../utils/permissions';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -29,7 +31,6 @@ import {
   Building2,
   Wifi,
   WifiOff,
-  BatteryCharging,
   RotateCcw,
   Radio,
   Check,
@@ -41,76 +42,63 @@ import {
   Network,
 } from 'lucide-react';
 
-export interface FacultyListItem {
+export interface TeacherBoundaryStatus {
   id: number;
-  faculty_name: string;
+  teacher_id?: number;
+  teacher_name: string;
+  full_name?: string;
   employee_id: string;
   position: string | null;
-  status:
-    | 'VERIFIED_INSIDE'
-    | 'AUTHORIZED_LEAVE'
-    | 'HEARTBEAT_LOST'
-    | 'PERIMETER_BREACH'
-    | 'NOT_ON_DUTY'
-    | 'OFF_CAMPUS'
-    | 'OFFLINE'
-    | 'SPOOF_ATTEMPT';
+  department?: string | null;
+  zone_status?: 'INSIDE' | 'AUTHORIZED_OUTSIDE' | 'LOAFING_ALERT' | 'OFF_DUTY';
+  status: string;
   is_online?: boolean;
   is_inside?: boolean;
   is_inside_geofence?: boolean;
-  online_status?: 'ONLINE' | 'OFFLINE';
-  status_duration?: string | null;
-  connection_label?: string | null;
   distance: string | number | null;
-  battery: string | number | null;
-  battery_level?: number | null;
+  distance_meters?: number | null;
+  accuracy_meters?: number | null;
   last_seen: string | null;
   device_model?: string | null;
   bound_device_id?: string | null;
-  device_bound_at?: string | null;
   photo?: string | null;
   photo_url?: string | null;
-  is_mock_location?: boolean;
-  gps_accuracy_meters?: number | null;
-  accuracy?: number | null;
-  signal_strength?: string | null;
-  signal_percentage?: number | null;
-  ip_address?: string | null;
-  mac_address?: string | null;
   latitude?: number | null;
   longitude?: number | null;
 }
 
-export interface GeofenceData {
-  zone_id?: string | null;
+export interface GeofenceOverviewData {
+  campus_name?: string | null;
   name: string | null;
   latitude: number | null;
   longitude: number | null;
+  center_latitude?: number | null;
+  center_longitude?: number | null;
   radius_meters: number | null;
-  is_configured?: boolean;
+  loafing_grace_minutes?: number;
+  duty_start_time?: string;
+  duty_end_time?: string;
+  enforce_geofence_checkin?: boolean;
   verified_inside: number;
   online_users_count?: number;
   offline_users_count?: number;
-  missing_heartbeats?: number;
-  spoof_attempts_blocked?: number;
   incidents_today: number;
-  faculty_list: FacultyListItem[];
-  faculty_class_list?: FacultyListItem[];
-  recent_breaches: Array<{
+  open_incidents_count?: number;
+  teacher_list: TeacherBoundaryStatus[];
+  loafing_incidents?: Array<{
     id: number;
-    faculty_name: string;
-    reason: string;
-    trigger_reason?: string;
+    person_name: string;
+    incident_type: string;
+    remarks: string;
     status: string;
-    time?: string;
-    created_at?: string;
+    detected_at?: string;
   }>;
 }
 
 export interface AuditRecord {
   id: number | string;
-  faculty_id?: number;
-  faculty_name: string;
+  teacher_id?: number;
+  teacher_name: string;
   employee_id?: string;
   timestamp: string;
   time_only: string;
@@ -119,17 +107,12 @@ export interface AuditRecord {
   longitude?: number;
   distance?: string | number | null;
   distance_meters?: number | null;
-  verdict?: string;
+  accuracy_meters?: number | null;
+  status?: string;
   is_inside: boolean;
   is_inside_geofence?: boolean;
-  signal_strength?: string | null;
-  signal_percentage?: number | null;
-  ip_address?: string | null;
-  mac_address?: string | null;
-  battery?: string | number | null;
-  battery_level?: number | null;
-  device_model?: string | null;
-  bound_device_id?: string | null;
+  device_id?: string | null;
+  details?: string;
 }
 
 const sanitizeInput = (raw: string, maxLength = 80): string =>
@@ -140,51 +123,55 @@ const sanitizeInput = (raw: string, maxLength = 80): string =>
 
 const formatMeters = (val: unknown): string => {
   if (val === null || val === undefined || val === '') return '—';
-  if (typeof val === 'number') {
-    return Number.isFinite(val) ? `${Math.round(val)}m` : '—';
+  const rawStr = typeof val === 'string' ? val.trim() : '';
+  if (typeof val === 'string' && (!rawStr || rawStr === 'null' || rawStr === 'undefined')) {
+    return '—';
   }
-  const str = String(val).trim();
-  if (!str || str === 'null' || str === 'undefined') return '—';
-  return str.endsWith('m') ? str : `${str}m`;
-};
-
-const formatBattery = (val: unknown): string => {
-  if (val === null || val === undefined || val === '') return '—';
-  const str = String(val).trim();
-  if (!str || str === 'null' || str === 'undefined') return '—';
-  return str.endsWith('%') ? str : `${str}%`;
+  const numeric =
+    typeof val === 'number'
+      ? val
+      : Number(rawStr.replace(/\s*m$/i, ''));
+  if (Number.isFinite(numeric)) {
+    if (numeric >= 1000) {
+      return `${(numeric / 1000).toFixed(2)} km`;
+    }
+    return `${Math.round(numeric)}m`;
+  }
+  return rawStr || '—';
 };
 
 export const GeofenceTab: React.FC = () => {
   const { school, refreshSchool } = useSchool();
   const { showAlert, showConfirm } = useAlert();
-  const { mode, tokens, brand, ui } = useTheme();
-  const successBtnBg = mode === 'dark' ? '#059669' : brand.success;
+  const { tokens, brand, ui } = useTheme();
+  const successBtnBg = brand.success;
 
-  const [activeScreen, setActiveScreen] = useState<'LIVE_MAP' | 'AUDIT_SCREEN'>('LIVE_MAP');
+  const [activeScreen, setActiveScreen] = useState<'LIVE_MAP' | 'LOAFING_ALERTS' | 'AUDIT_SCREEN'>('LIVE_MAP');
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const circleInstanceRef = useRef<L.Circle | null>(null);
+  const innerCircleInstanceRef = useRef<L.Circle | null>(null);
   const markerInstanceRef = useRef<L.Marker | null>(null);
+  const hasFittedCircleRef = useRef<boolean>(false);
   const userMarkersLayerRef = useRef<L.LayerGroup | null>(null);
   const tileLayerRef = useRef<(L.TileLayer & { _layerType?: string }) | null>(null);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const geoAbortRef = useRef<AbortController | null>(null);
   const auditAbortRef = useRef<AbortController | null>(null);
 
-  const cachedGeo = peekApiCache<GeofenceData>(API_ROUTES.campus.boundary);
+  const cachedGeo = peekApiCache<GeofenceOverviewData>(API_ROUTES.campus.overview);
   const [loading, setLoading] = useState(!cachedGeo);
   const [saving, setSaving] = useState(false);
   const [resettingId, setResettingId] = useState<number | null>(null);
   const [mapLayer, setMapLayer] = useState<'streets' | 'satellite'>('streets');
-  const [geoData, setGeoData] = useState<GeofenceData | null>(cachedGeo ?? null);
+  const [geoData, setGeoData] = useState<GeofenceOverviewData | null>(cachedGeo ?? null);
 
   const [auditRecords, setAuditRecords] = useState<AuditRecord[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [totalDatabaseRecords, setTotalDatabaseRecords] = useState<number>(0);
   const [auditSearchQuery, setAuditSearchQuery] = useState<string>('');
-  const [auditFacultyFilter, setAuditFacultyFilter] = useState<string>('ALL');
+  const [auditTeacherFilter, setAuditTeacherFilter] = useState<string>('ALL');
   const [auditVerdictFilter, setAuditVerdictFilter] = useState<'ALL' | 'INSIDE' | 'OUTSIDE'>('ALL');
   const [dateFilterMode, setDateFilterMode] = useState<'ALL_LOGS' | 'SPECIFIC_DATE'>('ALL_LOGS');
   const [auditDate, setAuditDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
@@ -216,8 +203,9 @@ export const GeofenceTab: React.FC = () => {
   const isInteracting = useRef(false);
   isInteracting.current = saving || resettingId !== null;
 
-  const userRole = (localStorage.getItem('attendsure_role') || '').toUpperCase();
-  const isAdmin = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL'].includes(userRole);
+  const currentUser = getCurrentUserFromStorage();
+  const isAdmin = canEditGeofence(currentUser);
+  const canResetPhone = canResetBoundDevice(currentUser);
 
   useEffect(() => {
     return () => {
@@ -234,6 +222,10 @@ export const GeofenceTab: React.FC = () => {
           // Ignore teardown error
         }
         mapInstanceRef.current = null;
+        circleInstanceRef.current = null;
+        innerCircleInstanceRef.current = null;
+        markerInstanceRef.current = null;
+        hasFittedCircleRef.current = false;
       }
     };
   }, []);
@@ -244,7 +236,7 @@ export const GeofenceTab: React.FC = () => {
       const controller = new AbortController();
       geoAbortRef.current = controller;
 
-      const warmHit = !bypassCache ? peekApiCache<GeofenceData>(API_ROUTES.campus.boundary) : undefined;
+      const warmHit = !bypassCache ? peekApiCache<GeofenceOverviewData>(API_ROUTES.campus.overview) : undefined;
       if (warmHit) {
         setGeoData(warmHit);
         setLoading(false);
@@ -253,7 +245,7 @@ export const GeofenceTab: React.FC = () => {
       }
 
       try {
-        const res = await apiClient.get<GeofenceData>(API_ROUTES.campus.boundary, {
+        const res = await apiClient.get<GeofenceOverviewData>(API_ROUTES.campus.overview, {
           timeout: 8000,
           params: bypassCache || silent ? { nocache: 1 } : undefined,
           signal: controller.signal,
@@ -262,10 +254,18 @@ export const GeofenceTab: React.FC = () => {
         if (res.data) {
           setGeoData(res.data);
           if (!isDirtyRef.current) {
-            const recLat = res.data.latitude !== null ? parseFloat(String(res.data.latitude)) : null;
-            const recLng = res.data.longitude !== null ? parseFloat(String(res.data.longitude)) : null;
+            const recLat =
+              res.data.latitude !== null && res.data.latitude !== undefined
+                ? parseFloat(String(res.data.latitude))
+                : null;
+            const recLng =
+              res.data.longitude !== null && res.data.longitude !== undefined
+                ? parseFloat(String(res.data.longitude))
+                : null;
             const recRad =
-              res.data.radius_meters !== null ? parseInt(String(res.data.radius_meters), 10) : null;
+              res.data.radius_meters !== null && res.data.radius_meters !== undefined
+                ? parseInt(String(res.data.radius_meters), 10)
+                : null;
 
             if (recLat !== null && !isNaN(recLat)) setLat(recLat);
             if (recLng !== null && !isNaN(recLng)) setLng(recLng);
@@ -306,15 +306,11 @@ export const GeofenceTab: React.FC = () => {
           params.date_from = auditDate;
           params.date_to = auditDate;
         }
-        if (auditFacultyFilter !== 'ALL') {
-          params.faculty_id = auditFacultyFilter;
+        if (auditTeacherFilter !== 'ALL') {
+          params.teacher_id = auditTeacherFilter;
         }
         if (auditVerdictFilter !== 'ALL') {
           params.status = auditVerdictFilter;
-        }
-        const cleanQuery = sanitizeInput(auditSearchQuery, 80);
-        if (cleanQuery) {
-          params.search = cleanQuery;
         }
 
         const res = await apiClient.get(API_ROUTES.campus.audit, {
@@ -323,10 +319,18 @@ export const GeofenceTab: React.FC = () => {
           signal: controller.signal,
         });
         if (controller.signal.aborted) return;
-        if (res.data?.records) {
-          setAuditRecords(res.data.records);
-          setTotalDatabaseRecords(res.data.count ?? res.data.total_heartbeats ?? res.data.records.length);
-        }
+        const rawRecords: AuditRecord[] = Array.isArray(res.data?.records) ? res.data.records : [];
+        const cleanQuery = sanitizeInput(auditSearchQuery, 80).toLowerCase();
+        const filtered = cleanQuery
+          ? rawRecords.filter(
+              (r) =>
+                (r.teacher_name || '').toLowerCase().includes(cleanQuery) ||
+                (r.employee_id || '').toLowerCase().includes(cleanQuery) ||
+                (r.device_id || '').toLowerCase().includes(cleanQuery)
+            )
+          : rawRecords;
+        setAuditRecords(filtered);
+        setTotalDatabaseRecords(res.data?.count ?? filtered.length);
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
         if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
@@ -345,7 +349,7 @@ export const GeofenceTab: React.FC = () => {
         }
       }
     },
-    [dateFilterMode, auditDate, auditFacultyFilter, auditVerdictFilter, auditSearchQuery, showAlert]
+    [dateFilterMode, auditDate, auditTeacherFilter, auditVerdictFilter, auditSearchQuery, showAlert]
   );
 
   useEffect(() => {
@@ -361,7 +365,7 @@ export const GeofenceTab: React.FC = () => {
           void fetchAuditHistory(true);
         }
       }
-    }, 6000);
+    }, 10000);
     return () => clearInterval(liveInterval);
   }, [fetchGeofenceData, fetchAuditHistory, activeScreen]);
 
@@ -371,7 +375,7 @@ export const GeofenceTab: React.FC = () => {
     }
   }, [activeScreen, fetchAuditHistory]);
 
-  // Local Bundled Leaflet Initialization (works offline even when tile servers are unreachable)
+  // Local Bundled Leaflet Initialization
   useEffect(() => {
     if (activeScreen !== 'LIVE_MAP' || !mapContainerRef.current) return;
     if (lat === null || lng === null) return;
@@ -392,6 +396,8 @@ export const GeofenceTab: React.FC = () => {
       mapInstanceRef.current = null;
       markerInstanceRef.current = null;
       circleInstanceRef.current = null;
+      innerCircleInstanceRef.current = null;
+      hasFittedCircleRef.current = false;
       userMarkersLayerRef.current = null;
       tileLayerRef.current = null;
     }
@@ -445,26 +451,43 @@ export const GeofenceTab: React.FC = () => {
       tileLayerRef.current = nextTile;
     }
 
+    const safeCampusTitle = escapeHtml(
+      geoData?.campus_name || geoData?.name || school?.school_name || 'School Campus'
+    );
+    const radiusDisplay = radius !== null ? formatMeters(radius) : '—';
+
     const campusCenterIcon = L.divIcon({
       className: 'campus-center-beacon',
       html: `
-        <div style="width: 36px; height: 36px; background-color: #004b87; border: 3px solid #ffffff; border-radius: 50%; box-shadow: 0 4px 12px rgba(0,75,135,0.5); display: flex; align-items: center; justify-content: center; color: #ffffff;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
-            <circle cx="12" cy="10" r="3"/>
-          </svg>
+        <div style="position: relative; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;">
+          <div style="position: absolute; inset: 0; border-radius: 50%; background-color: ${MAP_STATUS_COLORS.authorizedOutside}; opacity: 0.25;"></div>
+          <div style="width: 34px; height: 34px; background-color: ${MAP_STATUS_COLORS.perimeterStroke}; border: 3px solid ${MAP_STATUS_COLORS.pinRing}; border-radius: 50%; box-shadow: 0 4px 14px rgba(0,75,135,0.55); display: flex; align-items: center; justify-content: center; color: ${MAP_STATUS_COLORS.pinRing}; position: relative; z-index: 2;">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"/>
+              <circle cx="12" cy="12" r="3" fill="currentColor"/>
+              <line x1="12" y1="2" x2="12" y2="5"/>
+              <line x1="12" y1="19" x2="12" y2="22"/>
+              <line x1="2" y1="12" x2="5" y2="12"/>
+              <line x1="19" y1="12" x2="22" y2="12"/>
+            </svg>
+          </div>
+          <div style="position: absolute; top: 50px; left: 50%; transform: translateX(-50%); background-color: rgba(15, 23, 42, 0.94); color: ${MAP_STATUS_COLORS.pinRing}; font-size: 10px; font-weight: 800; padding: 3px 9px; border-radius: 999px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.32); border: 1px solid rgba(255,255,255,0.18); pointer-events: none; z-index: 4;">
+            SCHOOL CENTER &bull; ${safeCampusTitle} (${escapeHtml(radiusDisplay)})
+          </div>
         </div>
       `,
-      iconSize: [36, 36],
-      iconAnchor: [18, 36],
+      iconSize: [48, 48],
+      iconAnchor: [24, 24],
     });
 
     if (markerInstanceRef.current) {
       markerInstanceRef.current.setLatLng([lat, lng]);
+      markerInstanceRef.current.setIcon(campusCenterIcon);
     } else {
       markerInstanceRef.current = L.marker([lat, lng], {
         icon: campusCenterIcon,
         draggable: isAdmin,
+        zIndexOffset: 500,
       }).addTo(currentMap);
 
       markerInstanceRef.current.on('dragend', (e: L.DragEndEvent) => {
@@ -482,78 +505,74 @@ export const GeofenceTab: React.FC = () => {
       } else {
         circleInstanceRef.current = L.circle([lat, lng], {
           radius,
-          color: '#0284c7',
-          weight: 2.5,
-          fillColor: '#38bdf8',
-          fillOpacity: 0.14,
-          dashArray: '6, 6',
+          color: MAP_STATUS_COLORS.perimeterStroke,
+          weight: 4,
+          fillColor: MAP_STATUS_COLORS.authorizedOutside,
+          fillOpacity: 0.22,
         }).addTo(currentMap);
       }
+
+      const halfRadius = Math.max(10, Math.round(radius * 0.5));
+      if (innerCircleInstanceRef.current) {
+        innerCircleInstanceRef.current.setLatLng([lat, lng]);
+        innerCircleInstanceRef.current.setRadius(halfRadius);
+      } else {
+        innerCircleInstanceRef.current = L.circle([lat, lng], {
+          radius: halfRadius,
+          color: MAP_STATUS_COLORS.perimeterStroke,
+          weight: 1.5,
+          opacity: 0.45,
+          fillOpacity: 0,
+          dashArray: '6, 8',
+          interactive: false,
+        }).addTo(currentMap);
+      }
+
+      if (!hasFittedCircleRef.current && circleInstanceRef.current) {
+        hasFittedCircleRef.current = true;
+        try {
+          currentMap.fitBounds(circleInstanceRef.current.getBounds(), {
+            padding: [48, 48],
+            maxZoom: 18,
+          });
+        } catch {
+          currentMap.setView([lat, lng], 17);
+        }
+      }
     }
-  }, [activeScreen, lat, lng, radius, mapLayer, isAdmin]);
-
-  const renderSignalBars = (percentage: number | null | undefined) => {
-    if (percentage === null || percentage === undefined) {
-      return <span style={{ color: tokens.textMuted, fontSize: '0.68rem' }}>—</span>;
-    }
-
-    const bars = [25, 50, 75, 100];
-    const color = percentage >= 75 ? brand.success : percentage >= 45 ? brand.warning : brand.danger;
-
-    return (
-      <div style={{ display: 'inline-flex', alignItems: 'flex-end', gap: 2, height: 14 }}>
-        {bars.map((thresh, idx) => {
-          const isActive = percentage >= thresh;
-          const height = 4 + idx * 3;
-          return (
-            <span
-              key={idx}
-              style={{
-                width: 3,
-                height,
-                backgroundColor: isActive ? color : tokens.borderStrong,
-                borderRadius: 1,
-              }}
-            />
-          );
-        })}
-      </div>
-    );
-  };
+  }, [activeScreen, lat, lng, radius, mapLayer, isAdmin, geoData?.campus_name, geoData?.name, school?.school_name]);
 
   useEffect(() => {
     if (activeScreen !== 'LIVE_MAP' || !mapInstanceRef.current || !userMarkersLayerRef.current) return;
     const layer = userMarkersLayerRef.current;
     layer.clearLayers();
 
-    const faculty = geoData?.faculty_list || [];
+    const teachers = geoData?.teacher_list || [];
 
-    faculty.forEach((user: FacultyListItem) => {
-      const userLat = parseFloat(String(user.latitude));
-      const userLng = parseFloat(String(user.longitude));
+    teachers.forEach((teacher: TeacherBoundaryStatus) => {
+      const userLat = parseFloat(String(teacher.latitude));
+      const userLng = parseFloat(String(teacher.longitude));
 
       if (isNaN(userLat) || isNaN(userLng) || userLat === 0 || userLng === 0) return;
 
-      const isOnline = Boolean(user.is_online);
-      const insideFlag = user.is_inside ?? user.is_inside_geofence ?? user.status === 'VERIFIED_INSIDE';
-      const isBreach =
-        user.status === 'PERIMETER_BREACH' || user.status === 'OFF_CAMPUS' || insideFlag === false;
-      const isSpoof = Boolean(user.is_mock_location || user.status === 'SPOOF_ATTEMPT');
+      const isOnline = Boolean(teacher.is_online);
+      const insideFlag = teacher.is_inside ?? teacher.is_inside_geofence ?? teacher.zone_status === 'INSIDE';
+      const isLoafing = teacher.zone_status === 'LOAFING_ALERT' || teacher.status === 'PERIMETER_BREACH';
+      const isAuthorizedPass =
+        teacher.zone_status === 'AUTHORIZED_OUTSIDE' || teacher.status === 'AUTHORIZED_LEAVE';
+      const isOutsideOffDuty = !isLoafing && !isAuthorizedPass && insideFlag === false;
+      const isOutside = isLoafing || isOutsideOffDuty;
 
-      const safeName = escapeHtml(user.faculty_name);
-      const safeEmpId = escapeHtml(user.employee_id);
-      const safePos = escapeHtml(user.position || '—');
-      const safeConn = escapeHtml(user.connection_label || (isOnline ? 'Online' : 'Offline'));
-      const safeSignal = escapeHtml(user.signal_strength || '—');
-      const safeDist = escapeHtml(formatMeters(user.distance));
-      const safeBat = escapeHtml(formatBattery(user.battery ?? user.battery_level));
-      const safeIp = escapeHtml(user.ip_address || '—');
-      const safeDev = escapeHtml(user.mac_address || user.bound_device_id || '—');
+      const safeName = escapeHtml(teacher.teacher_name || teacher.full_name || 'Teacher');
+      const safeEmpId = escapeHtml(teacher.employee_id);
+      const safePos = escapeHtml(teacher.position || '—');
+      const safeDist = escapeHtml(formatMeters(teacher.distance ?? teacher.distance_meters));
+      const safeDev = escapeHtml(teacher.device_model || teacher.bound_device_id || 'Unbound');
 
-      const rawAvatar = user.photo_url || user.photo;
+      const rawAvatar = teacher.photo_url || teacher.photo;
       const safeAvatar = isSafeImageUrl(rawAvatar) ? escapeHtml(rawAvatar!.trim()) : '';
       const safeInitials = escapeHtml(
-        (user.faculty_name || '')
+        (teacher.teacher_name || 'T')
           .split(' ')
           .map((n) => n[0] || '')
           .slice(0, 2)
@@ -561,14 +580,19 @@ export const GeofenceTab: React.FC = () => {
           .toUpperCase()
       );
 
-      if ((isBreach || isSpoof) && lat !== null && lng !== null) {
+      if (isOutside && lat !== null && lng !== null) {
+        const lineColor = isLoafing
+          ? MAP_STATUS_COLORS.loafingAlert
+          : isOnline
+            ? brand.warning
+            : SEAL_COLORS.mutedBorder;
         const connectingLine = L.polyline(
           [
             [lat, lng],
             [userLat, userLng],
           ],
           {
-            color: isSpoof ? '#dc2626' : isOnline ? '#e11d48' : '#94a3b8',
+            color: lineColor,
             weight: 2.5,
             opacity: isOnline ? 0.85 : 0.45,
             dashArray: '6, 8',
@@ -579,26 +603,43 @@ export const GeofenceTab: React.FC = () => {
         connectingLine.bindTooltip(
           `
             <div style="font-family: inherit; font-size: 11px; padding: 2px;">
-              <strong style="color: #991b1b;">${safeName}</strong><br/>
-              <span>Distance to School: <strong>${safeDist}</strong></span>
+              <strong style="color: ${lineColor};">${safeName}</strong><br/>
+              <span>Distance to Campus: <strong>${safeDist}</strong></span>
             </div>
           `,
           { sticky: true, opacity: 0.95 }
         );
       }
 
-      const pinColor = isOnline ? (isBreach ? '#dc2626' : '#16a34a') : '#64748b';
-      const ringBg = isOnline ? 'rgba(22, 163, 74, 0.35)' : 'rgba(100, 116, 139, 0.15)';
-      const statusLabel = isSpoof
-        ? 'Fake GPS Blocked'
-        : isBreach
-          ? 'Outside School Grounds'
-          : 'Inside School Grounds';
+      const pinColor = isAuthorizedPass
+        ? MAP_STATUS_COLORS.authorizedOutside
+        : isOnline
+          ? isLoafing
+            ? MAP_STATUS_COLORS.loafingAlert
+            : isOutsideOffDuty
+              ? brand.warning
+              : MAP_STATUS_COLORS.inside
+          : MAP_STATUS_COLORS.offDuty;
+      const ringBg = isOnline ? 'rgba(5, 150, 105, 0.35)' : 'rgba(100, 116, 139, 0.15)';
+      const statusLabel = isAuthorizedPass
+        ? 'Official Exit Pass'
+        : isLoafing
+          ? 'Teacher Loafing Alert'
+          : isOutsideOffDuty
+            ? 'Outside Campus (Off Duty)'
+            : 'On Campus';
+      const statusColor = isAuthorizedPass
+        ? MAP_STATUS_COLORS.authorizedOutside
+        : isLoafing
+          ? MAP_STATUS_COLORS.loafingAlert
+          : isOutsideOffDuty
+            ? brand.warning
+            : MAP_STATUS_COLORS.inside;
       const onlineTag = isOnline ? '● Online' : '○ Offline';
 
       const avatarInnerHtml = safeAvatar
-        ? `<img src="${safeAvatar}" alt="${safeName}" style="width: 100%; height: 100%; object-fit: cover; display: block;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" /><div style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center; background-color: #f1f5f9; color: ${pinColor}; font-weight: 800; font-size: 14px;">${safeInitials}</div>`
-        : `<div style="display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; background-color: #f1f5f9; color: ${pinColor}; font-weight: 800; font-size: 14px;">${safeInitials}</div>`;
+        ? `<img src="${safeAvatar}" alt="${safeName}" style="width: 100%; height: 100%; object-fit: cover; display: block;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" /><div style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center; background-color: ${SEAL_COLORS.surface}; color: ${pinColor}; font-weight: 800; font-size: 14px;">${safeInitials}</div>`
+        : `<div style="display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; background-color: ${SEAL_COLORS.surface}; color: ${pinColor}; font-weight: 800; font-size: 14px;">${safeInitials}</div>`;
 
       const userLocationPinIcon = L.divIcon({
         className: 'user-location-pin-marker',
@@ -611,14 +652,14 @@ export const GeofenceTab: React.FC = () => {
             }
             <svg width="50" height="60" viewBox="0 0 50 60" fill="none" style="position: absolute; top: 0; left: 0; z-index: 1;">
               <path d="M25 0C11.193 0 0 11.193 0 25C0 41.5 25 60 25 60C25 60 50 41.5 50 25C50 11.193 38.807 0 25 0Z" fill="${pinColor}"/>
-              <circle cx="25" cy="25" r="21" fill="#ffffff"/>
+              <circle cx="25" cy="25" r="21" fill="${MAP_STATUS_COLORS.pinRing}"/>
             </svg>
-            <div style="position: absolute; top: 4px; left: 4px; width: 42px; height: 42px; border-radius: 50%; overflow: hidden; background-color: #ffffff; z-index: 2;">
+            <div style="position: absolute; top: 4px; left: 4px; width: 42px; height: 42px; border-radius: 50%; overflow: hidden; background-color: ${MAP_STATUS_COLORS.pinRing}; z-index: 2;">
               ${avatarInnerHtml}
             </div>
-            <div style="position: absolute; top: 32px; right: 4px; width: 12px; height: 12px; border-radius: 50%; background-color: ${pinColor}; border: 2px solid #ffffff; z-index: 4;"></div>
-            <div style="position: absolute; top: 64px; z-index: 3; background-color: rgba(15, 23, 42, 0.94); color: #ffffff; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.30); border: 1px solid rgba(255, 255, 255, 0.15); pointer-events: none;">
-              ${safeName} &bull; <span style="color: ${isOnline ? '#4ade80' : '#cbd5e1'}; font-weight: 800;">${onlineTag}</span> (${safeDist})
+            <div style="position: absolute; top: 32px; right: 4px; width: 12px; height: 12px; border-radius: 50%; background-color: ${pinColor}; border: 2px solid ${MAP_STATUS_COLORS.pinRing}; z-index: 4;"></div>
+            <div style="position: absolute; top: 64px; z-index: 3; background-color: rgba(15, 23, 42, 0.94); color: ${MAP_STATUS_COLORS.pinRing}; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.30); border: 1px solid rgba(255, 255, 255, 0.15); pointer-events: none;">
+              ${safeName} &bull; <span style="color: ${isOnline ? MAP_STATUS_COLORS.inside : SEAL_COLORS.border}; font-weight: 800;">${onlineTag}</span> (${safeDist})
             </div>
           </div>
         `,
@@ -630,30 +671,18 @@ export const GeofenceTab: React.FC = () => {
 
       const tooltipContent = `
         <div style="font-family: inherit; font-size: 11px; line-height: 1.4; min-width: 210px; padding: 4px;">
-          <div style="font-weight: 800; font-size: 12px; color: #0f172a; margin-bottom: 2px;">${safeName}</div>
-          <div style="color: #64748b; font-size: 10px; margin-bottom: 6px;">ID: ${safeEmpId} &bull; ${safePos}</div>
-          <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-            <span>Connection:</span>
-            <strong style="color: ${isOnline ? '#16a34a' : '#64748b'};">${safeConn}</strong>
-          </div>
-          <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-            <span>Signal Strength:</span>
-            <strong style="color: #004b87;">${safeSignal}</strong>
-          </div>
+          <div style="font-weight: 800; font-size: 12px; color: ${SEAL_COLORS.ink}; margin-bottom: 2px;">${safeName}</div>
+          <div style="color: ${MAP_STATUS_COLORS.offDuty}; font-size: 10px; margin-bottom: 6px;">ID: ${safeEmpId} &bull; ${safePos}</div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
             <span>Campus Boundary:</span>
-            <strong style="color: ${isBreach ? '#dc2626' : '#16a34a'};">${escapeHtml(statusLabel)}</strong>
+            <strong style="color: ${statusColor};">${escapeHtml(statusLabel)}</strong>
           </div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-            <span>Distance from School:</span>
+            <span>Distance from Campus:</span>
             <strong>${safeDist}</strong>
           </div>
-          <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-            <span>Device Battery:</span>
-            <strong>${safeBat}</strong>
-          </div>
-          <div style="color: #004b87; font-size: 9px; font-family: monospace; margin-top: 4px; border-top: 1px solid #e2e8f0; padding-top: 3px;">
-            IP: ${safeIp} &bull; Device ID: ${safeDev}
+          <div style="color: ${SEAL_COLORS.navy}; font-size: 9px; font-family: monospace; margin-top: 4px; border-top: 1px solid ${SEAL_COLORS.subtleBorder}; padding-top: 3px;">
+            Device: ${safeDev}
           </div>
         </div>
       `;
@@ -664,13 +693,13 @@ export const GeofenceTab: React.FC = () => {
         opacity: 0.98,
       });
     });
-  }, [activeScreen, geoData, lat, lng, radius]);
+  }, [activeScreen, geoData, lat, lng, radius, brand.warning]);
 
   const handleFitAllOnMap = () => {
     if (!mapInstanceRef.current || lat === null || lng === null) return;
     const bounds = L.latLngBounds([[lat, lng]]);
 
-    (geoData?.faculty_list || []).forEach((u) => {
+    (geoData?.teacher_list || []).forEach((u) => {
       const uLat = parseFloat(String(u.latitude));
       const uLng = parseFloat(String(u.longitude));
       if (!isNaN(uLat) && !isNaN(uLng) && uLat !== 0) {
@@ -683,7 +712,7 @@ export const GeofenceTab: React.FC = () => {
 
   const handleDetectGPS = () => {
     if (!navigator.geolocation) {
-      showAlert({ title: 'Hardware Error', message: 'GPS location is not supported by this browser.', type: 'error' });
+      showAlert({ title: 'Location Unavailable', message: 'GPS location is not supported by this browser.', type: 'error' });
       return;
     }
 
@@ -713,12 +742,22 @@ export const GeofenceTab: React.FC = () => {
   const handleSavePerimeter = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin || lat === null || lng === null || radius === null) return;
+    if (!Number.isFinite(radius) || radius < 20 || radius > 5000) {
+      showAlert({
+        title: 'Invalid Boundary Radius',
+        message: 'Campus boundary radius must be between 20 and 5000 meters.',
+        type: 'error',
+      });
+      return;
+    }
 
     setSaving(true);
     try {
       const res = await apiClient.put(
         API_ROUTES.campus.boundary,
         {
+          center_latitude: lat,
+          center_longitude: lng,
           latitude: lat,
           longitude: lng,
           radius_meters: radius,
@@ -729,7 +768,7 @@ export const GeofenceTab: React.FC = () => {
       isDirtyRef.current = false;
       showAlert({
         title: 'Boundary Saved',
-        message: res.data?.message || 'School boundary updated successfully.',
+        message: res.data?.message || 'Campus boundary updated successfully.',
         type: 'success',
       });
       await refreshSchool();
@@ -737,7 +776,7 @@ export const GeofenceTab: React.FC = () => {
     } catch (err: unknown) {
       showAlert({
         title: 'Save Failed',
-        message: extractApiError(err, 'Could not update boundary settings.'),
+        message: extractApiError(err, 'Could not update campus boundary settings.'),
         type: 'error',
       });
     } finally {
@@ -745,21 +784,21 @@ export const GeofenceTab: React.FC = () => {
     }
   };
 
-  const handleResetDevice = (facultyId: number, facultyName: string) => {
-    if (!isAdmin) return;
+  const handleResetDevice = (teacherId: number, teacherName: string) => {
+    if (!canResetPhone) return;
 
     showConfirm({
       title: 'Reset Phone Device Lock',
-      message: `Unbind the registered phone for ${facultyName}? This clears their 1-to-1 device lock so they can register a replacement phone on their next check-in.`,
+      message: `Unbind the registered phone for ${teacherName}? This clears their 1-to-1 phone lock so they can pair a replacement phone on their next Time In.`,
       confirmLabel: 'Reset Device Lock',
       isDestructive: true,
       onConfirm: async () => {
-        setResettingId(facultyId);
+        setResettingId(teacherId);
         try {
-          const res = await apiClient.post(`${API_ROUTES.accounts.faculty}${facultyId}/reset-device/`);
+          const res = await apiClient.post(`${API_ROUTES.accounts.teachers}${teacherId}/reset-device/`);
           showAlert({
             title: 'Device Lock Cleared',
-            message: res.data?.message || `Phone binding for ${facultyName} has been cleared.`,
+            message: res.data?.message || `Phone binding for ${teacherName} has been cleared.`,
             type: 'success',
           });
           await fetchGeofenceData(true, true);
@@ -784,31 +823,22 @@ export const GeofenceTab: React.FC = () => {
 
     const headers = [
       'Timestamp',
-      'Faculty Member',
+      'Teacher',
       'Employee ID',
-      'Presence Status',
-      'Distance from School',
-      'Signal Strength',
-      'IP Address',
+      'Zone Status',
+      'Distance from Campus',
+      'Accuracy (m)',
       'Device ID',
-      'Battery',
-      'Device Model',
     ];
-    const rows = auditRecords.map((r) => {
-      const inside = Boolean(r.is_inside ?? r.is_inside_geofence);
-      return [
-        r.timestamp,
-        r.faculty_name,
-        r.employee_id || '—',
-        inside ? 'Inside School Grounds' : 'Outside School Grounds',
-        formatMeters(r.distance),
-        r.signal_strength || '—',
-        r.ip_address || '—',
-        r.mac_address || r.bound_device_id || '—',
-        formatBattery(r.battery ?? r.battery_level),
-        r.device_model || '—',
-      ];
-    });
+    const rows = auditRecords.map((r) => [
+      r.timestamp,
+      r.teacher_name,
+      r.employee_id || '—',
+      r.status || (r.is_inside ? 'INSIDE' : 'OUTSIDE'),
+      formatMeters(r.distance ?? r.distance_meters),
+      r.accuracy_meters !== null && r.accuracy_meters !== undefined ? `${Math.round(r.accuracy_meters)}m` : '—',
+      r.device_id || '—',
+    ]);
 
     exportToCsv(
       `AttendSure_Campus_GPS_Logs_${dateFilterMode === 'ALL_LOGS' ? 'All_Logs' : auditDate}.csv`,
@@ -830,35 +860,31 @@ export const GeofenceTab: React.FC = () => {
     letterSpacing: '0.3px',
   });
 
-  const getStatusBadge = (s: FacultyListItem) => {
-    if (s.is_mock_location || s.status === 'SPOOF_ATTEMPT') {
-      return (
-        <span style={badgePill(tokens.dangerLight, brand.danger, brand.danger)}>
-          <ShieldAlert size={11} style={{ marginRight: 3 }} /> Fake GPS Blocked
-        </span>
-      );
-    }
-
-    const inside = s.is_inside ?? s.is_inside_geofence;
-    const hasCoords = s.latitude !== null && s.latitude !== undefined;
-
-    if (s.status === 'VERIFIED_INSIDE' || (hasCoords && inside === true)) {
-      return (
-        <span style={badgePill(tokens.successLight, brand.success, brand.success)}>
-          <Check size={11} style={{ marginRight: 3 }} /> Inside School Grounds
-        </span>
-      );
-    }
-    if (s.status === 'AUTHORIZED_LEAVE') {
+  const getStatusBadge = (s: TeacherBoundaryStatus) => {
+    if (s.zone_status === 'AUTHORIZED_OUTSIDE' || s.status === 'AUTHORIZED_LEAVE') {
       return <span style={badgePill(tokens.primaryLight, brand.primary, brand.primary)}>Official Exit Pass</span>;
     }
-    if (s.status === 'PERIMETER_BREACH' || s.status === 'OFF_CAMPUS' || (hasCoords && inside === false)) {
-      return <span style={badgePill(tokens.dangerLight, brand.danger, brand.danger)}>Outside School Grounds</span>;
+    const inside = s.is_inside ?? s.is_inside_geofence;
+    const hasCoordsToday = s.latitude !== null && s.latitude !== undefined;
+
+    if (s.zone_status === 'INSIDE' || s.status === 'VERIFIED_INSIDE' || (hasCoordsToday && inside === true)) {
+      return (
+        <span style={badgePill(tokens.successLight, brand.success, brand.success)}>
+          <Check size={11} style={{ marginRight: 3 }} /> On Campus
+        </span>
+      );
     }
-    if (s.status === 'HEARTBEAT_LOST') {
-      return <span style={badgePill(tokens.bgSurfaceSubtle, tokens.textSecondary, tokens.borderStrong)}>Signal Lost</span>;
+    if (s.zone_status === 'LOAFING_ALERT' || s.status === 'PERIMETER_BREACH') {
+      return <span style={badgePill(tokens.dangerLight, brand.danger, brand.danger)}>Teacher Loafing</span>;
     }
-    return <span style={badgePill(tokens.bgSurfaceSubtle, tokens.textMuted, tokens.borderSubtle)}>No Signal Today</span>;
+    if (hasCoordsToday && inside === false) {
+      return (
+        <span style={badgePill(tokens.warningLight, brand.warning, brand.warning)}>
+          Outside Campus (Off Duty)
+        </span>
+      );
+    }
+    return <span style={badgePill(tokens.bgSurfaceSubtle, tokens.textMuted, tokens.borderSubtle)}>Off Duty</span>;
   };
 
   const screenSwitchBtn = (active: boolean): React.CSSProperties => ({
@@ -869,7 +895,7 @@ export const GeofenceTab: React.FC = () => {
     borderRadius: 5,
     border: 'none',
     backgroundColor: active ? brand.buttonBg : 'transparent',
-    color: active ? '#ffffff' : tokens.textSecondary,
+    color: active ? tokens.onPrimary : tokens.textSecondary,
     fontWeight: active ? 800 : 600,
     fontSize: '0.72rem',
     cursor: 'pointer',
@@ -897,6 +923,9 @@ export const GeofenceTab: React.FC = () => {
     overflow: 'hidden',
   };
 
+  const teacherList = geoData?.teacher_list || [];
+  const openIncidentsCount = geoData?.open_incidents_count ?? 0;
+
   return (
     <div style={{ padding: 'clamp(12px, 2.5vw, 20px)', display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
@@ -913,15 +942,23 @@ export const GeofenceTab: React.FC = () => {
             }}
           >
             <Building2 size={20} color={brand.primary} />
-            <span>Campus GPS Boundary &amp; Location Audit</span>
+            <span>Geofence &amp; Loafing Monitor</span>
           </h2>
           <p style={{ fontSize: '0.76rem', color: tokens.textSecondary, margin: '3px 0 0 0' }}>
-            Live faculty mobile GPS check-ins, 1-to-1 device locks, and campus boundary tracking.
+            Protects teacher duty records with clear campus boundary checks, 1-to-1 phone pairing, and fair loafing &amp; cutting review.
           </p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', backgroundColor: tokens.bgSurfaceSubtle, borderRadius: 8, padding: 3, border: `1px solid ${tokens.borderSubtle}` }}>
+          <div
+            style={{
+              display: 'flex',
+              backgroundColor: tokens.bgSurfaceSubtle,
+              borderRadius: 8,
+              padding: 3,
+              border: `1px solid ${tokens.borderSubtle}`,
+            }}
+          >
             <button
               type="button"
               onClick={() => setActiveScreen('LIVE_MAP')}
@@ -933,22 +970,35 @@ export const GeofenceTab: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => setActiveScreen('LOAFING_ALERTS')}
+              style={screenSwitchBtn(activeScreen === 'LOAFING_ALERTS')}
+            >
+              <ShieldAlert size={12} />
+              <span>Loafing &amp; Cutting Alerts {openIncidentsCount > 0 ? `(${openIncidentsCount})` : ''}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveScreen('AUDIT_SCREEN')}
               style={screenSwitchBtn(activeScreen === 'AUDIT_SCREEN')}
             >
               <History size={12} />
-              <span>Location Logs</span>
+              <span>Location History</span>
             </button>
           </div>
 
           <button
             type="button"
-            onClick={() => (activeScreen === 'LIVE_MAP' ? void fetchGeofenceData(false, true) : void fetchAuditHistory(false))}
+            onClick={() =>
+              activeScreen === 'AUDIT_SCREEN'
+                ? void fetchAuditHistory(false)
+                : void fetchGeofenceData(false, true)
+            }
             disabled={loading || auditLoading}
             style={ui.btnSecondary}
           >
             <RefreshCw size={13} className={loading || auditLoading ? 'animate-spin' : ''} />
-            <span>{activeScreen === 'LIVE_MAP' ? 'Refresh Map' : 'Refresh Logs'}</span>
+            <span>Refresh</span>
           </button>
         </div>
       </div>
@@ -957,32 +1007,32 @@ export const GeofenceTab: React.FC = () => {
       <div style={{ display: activeScreen === 'LIVE_MAP' ? 'flex' : 'none', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>
           <StatsCard
-            label="ONLINE FACULTY"
+            label="ONLINE TEACHERS"
             value={geoData?.online_users_count ?? 0}
             valueColor={brand.success}
-            helpText="Active GPS signal"
+            helpText="Active in app within last 5 min"
             badge={<Wifi size={18} color={brand.success} />}
           />
           <StatsCard
-            label="OFFLINE FACULTY"
+            label="OFFLINE TEACHERS"
             value={geoData?.offline_users_count ?? 0}
             valueColor={tokens.textSecondary}
-            helpText="No recent GPS check-in"
+            helpText="Not currently active in app"
             badge={<WifiOff size={18} color={tokens.textMuted} />}
           />
           <StatsCard
-            label="INSIDE SCHOOL GROUNDS"
+            label="ON CAMPUS TODAY"
             value={geoData?.verified_inside ?? 0}
             valueColor={brand.success}
-            helpText={radius !== null ? `Within ${radius}m boundary` : 'Boundary not set'}
+            helpText={radius !== null ? `Inside ${radius}m school boundary` : 'Boundary not set'}
             badge={<ShieldCheck size={18} color={brand.success} />}
           />
           <StatsCard
-            label="BOUNDARY ALERTS TODAY"
-            value={geoData?.incidents_today ?? 0}
-            valueColor={geoData?.incidents_today ? brand.danger : tokens.textPrimary}
-            helpText="Beyond allowed campus area"
-            badge={<AlertTriangle size={18} color={geoData?.incidents_today ? brand.danger : tokens.textMuted} />}
+            label="OPEN LOAFING & CUTTING ALERTS"
+            value={openIncidentsCount}
+            valueColor={openIncidentsCount > 0 ? brand.danger : tokens.textPrimary}
+            helpText={`${geoData?.incidents_today ?? 0} incident(s) logged today`}
+            badge={<AlertTriangle size={18} color={openIncidentsCount > 0 ? brand.danger : tokens.textMuted} />}
           />
         </div>
 
@@ -1002,7 +1052,7 @@ export const GeofenceTab: React.FC = () => {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.80rem', fontWeight: 700, color: tokens.textPrimary }}>
                 <Compass size={15} color={brand.primary} />
-                <span>Campus Boundary Map</span>
+                <span>{geoData?.campus_name || geoData?.name || 'Campus Boundary Map'}</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -1010,7 +1060,7 @@ export const GeofenceTab: React.FC = () => {
                   type="button"
                   onClick={handleFitAllOnMap}
                   style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: '0.70rem', color: brand.primary }}
-                  title="Zoom out to show school boundary and all faculty pins"
+                  title="Zoom out to show campus boundary and all teacher pins"
                 >
                   <Maximize2 size={11} />
                   <span>Show All</span>
@@ -1040,7 +1090,7 @@ export const GeofenceTab: React.FC = () => {
                     type="button"
                     onClick={handleDetectGPS}
                     style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: '0.70rem', color: brand.primary }}
-                    title="Center map to your computer's GPS"
+                    title="Center map to your browser GPS"
                   >
                     <Navigation size={11} />
                     <span>Center</span>
@@ -1073,11 +1123,13 @@ export const GeofenceTab: React.FC = () => {
               </div>
             </div>
 
-            <div style={{ padding: '8px 16px', backgroundColor: tokens.bgSurface, borderTop: `1px solid ${tokens.borderSubtle}`, fontSize: '0.72rem', color: tokens.textSecondary }}>
+            <div style={{ padding: '8px 16px', backgroundColor: tokens.bgSurface, borderTop: `1px solid ${tokens.borderSubtle}`, fontSize: '0.72rem', color: tokens.textSecondary, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
               <strong>Map Legend:</strong>
-              <span style={{ color: brand.success, marginLeft: 8, fontWeight: 700 }}>&bull; Green Pin = Online</span>
-              <span style={{ color: tokens.textMuted, marginLeft: 10, fontWeight: 700 }}>&bull; Gray Pin = Offline</span>
-              <span style={{ marginLeft: 10, color: brand.danger, fontWeight: 600 }}>&bull; Dashed line = Outside school grounds</span>
+              <span style={{ color: brand.success, fontWeight: 700 }}>&bull; Green = On Campus</span>
+              <span style={{ color: brand.primary, fontWeight: 700 }}>&bull; Blue = Official Exit Pass</span>
+              <span style={{ color: brand.warning, fontWeight: 700 }}>&bull; Amber = Outside (Off Duty)</span>
+              <span style={{ color: tokens.textMuted, fontWeight: 700 }}>&bull; Gray = Offline</span>
+              <span style={{ color: brand.danger, fontWeight: 700 }}>&bull; Red = Loafing Alert (On Duty)</span>
             </div>
           </div>
 
@@ -1096,7 +1148,8 @@ export const GeofenceTab: React.FC = () => {
                 <div>
                   <div style={{ fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>Boundary Settings</div>
                   <div style={{ fontSize: '0.70rem', color: tokens.textSecondary }}>
-                    Official school boundary coordinates saved in database.
+                    Duty window: {geoData?.duty_start_time || '07:30'} – {geoData?.duty_end_time || '17:00'} &bull; Grace:{' '}
+                    {geoData?.loafing_grace_minutes ?? 10} min
                   </div>
                 </div>
                 {!isAdmin && (
@@ -1106,65 +1159,80 @@ export const GeofenceTab: React.FC = () => {
                 )}
               </div>
 
-              <form onSubmit={handleSavePerimeter} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
-                  <div>
-                    <label style={ui.label}>Center Latitude (°N)</label>
-                    <input
-                      type="number"
-                      step="any"
-                      disabled={!isAdmin}
-                      required
-                      value={lat ?? ''}
-                      onChange={(e) => {
-                        isDirtyRef.current = true;
-                        const parsed = parseFloat(e.target.value);
-                        setLat(isNaN(parsed) ? null : parsed);
-                      }}
-                      style={ui.input}
-                    />
+              {isAdmin ? (
+                <form onSubmit={handleSavePerimeter} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
+                    <div>
+                      <label style={ui.label}>Center Latitude (°N)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        required
+                        value={lat ?? ''}
+                        onChange={(e) => {
+                          isDirtyRef.current = true;
+                          const parsed = parseFloat(e.target.value);
+                          setLat(isNaN(parsed) ? null : parsed);
+                        }}
+                        style={ui.input}
+                      />
+                    </div>
+                    <div>
+                      <label style={ui.label}>Center Longitude (°E)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        required
+                        value={lng ?? ''}
+                        onChange={(e) => {
+                          isDirtyRef.current = true;
+                          const parsed = parseFloat(e.target.value);
+                          setLng(isNaN(parsed) ? null : parsed);
+                        }}
+                        style={ui.input}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label style={ui.label}>Center Longitude (°E)</label>
-                    <input
-                      type="number"
-                      step="any"
-                      disabled={!isAdmin}
-                      required
-                      value={lng ?? ''}
-                      onChange={(e) => {
-                        isDirtyRef.current = true;
-                        const parsed = parseFloat(e.target.value);
-                        setLng(isNaN(parsed) ? null : parsed);
-                      }}
-                      style={ui.input}
-                    />
-                  </div>
-                </div>
 
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <label style={ui.label}>Boundary Radius</label>
-                    <span style={{ fontSize: '0.80rem', fontWeight: 800, color: brand.primary, fontFamily: 'monospace' }}>
-                      {radius !== null ? `${radius} meters` : 'Not set'}
-                    </span>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <label style={ui.label}>Boundary Radius (20–5000m)</label>
+                      <span style={{ fontSize: '0.80rem', fontWeight: 800, color: brand.primary, fontFamily: 'monospace' }}>
+                        {radius !== null ? `${radius} meters` : 'Not set'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <input
+                        type="range"
+                        aria-label="Boundary radius slider"
+                        min={20}
+                        max={5000}
+                        step={10}
+                        value={Math.min(5000, Math.max(20, radius ?? 150))}
+                        onChange={(e) => {
+                          isDirtyRef.current = true;
+                          setRadius(Number(e.target.value));
+                        }}
+                        style={{ flex: 1, accentColor: brand.buttonBg, cursor: 'pointer' }}
+                      />
+                      <input
+                        type="number"
+                        aria-label="Boundary radius in meters"
+                        min={20}
+                        max={5000}
+                        required
+                        value={radius ?? ''}
+                        onChange={(e) => {
+                          isDirtyRef.current = true;
+                          const parsed = parseInt(e.target.value, 10);
+                          setRadius(Number.isNaN(parsed) ? null : parsed);
+                        }}
+                        placeholder="150"
+                        style={{ ...ui.input, width: 92, textAlign: 'right', fontFamily: 'monospace' }}
+                      />
+                    </div>
                   </div>
-                  <input
-                    type="range"
-                    min="50"
-                    max="500"
-                    step="25"
-                    disabled={!isAdmin}
-                    value={radius ?? 150}
-                    onChange={(e) => {
-                      isDirtyRef.current = true;
-                      setRadius(Number(e.target.value));
-                    }}
-                    style={{ width: '100%', accentColor: brand.buttonBg, cursor: isAdmin ? 'pointer' : 'not-allowed' }}
-                  />
-                </div>
 
-                {isAdmin && (
                   <button
                     type="submit"
                     disabled={saving || lat === null || lng === null || radius === null}
@@ -1173,51 +1241,78 @@ export const GeofenceTab: React.FC = () => {
                     <Save size={13} />
                     <span>{saving ? 'Saving...' : 'Save Boundary'}</span>
                   </button>
-                )}
-              </form>
+                </form>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.76rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: tokens.textSecondary }}>
+                    <span>Center Coordinates</span>
+                    <strong style={{ color: tokens.textPrimary, fontFamily: 'monospace' }}>
+                      {lat !== null && lng !== null ? `${lat.toFixed(5)}°N, ${lng.toFixed(5)}°E` : 'Not set'}
+                    </strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: tokens.textSecondary }}>
+                    <span>Allowed Campus Radius</span>
+                    <strong style={{ color: brand.primary, fontFamily: 'monospace' }}>
+                      {radius !== null ? `${radius} meters` : 'Not set'}
+                    </strong>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div style={{ ...panelCard, padding: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <div style={{ fontSize: '0.80rem', fontWeight: 700, color: tokens.textPrimary }}>Boundary Alerts</div>
-                <span style={{ fontSize: '0.66rem', color: tokens.textMuted }}>Automated Verification</span>
+                <div style={{ fontSize: '0.80rem', fontWeight: 700, color: tokens.textPrimary }}>Recent Teacher Loafing &amp; Student Cutting Alerts</div>
+                <button
+                  type="button"
+                  onClick={() => setActiveScreen('LOAFING_ALERTS')}
+                  style={{ background: 'none', border: 'none', color: brand.primary, fontSize: '0.70rem', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  Review All &rarr;
+                </button>
               </div>
 
-              {geoData?.recent_breaches && geoData.recent_breaches.length > 0 ? (
+              {geoData?.loafing_incidents && geoData.loafing_incidents.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {geoData.recent_breaches.map((b, idx) => (
+                  {geoData.loafing_incidents.slice(0, 4).map((b) => (
                     <div
-                      key={`${b.id}-${idx}`}
+                      key={b.id}
                       style={{
                         padding: '7px 10px',
                         borderRadius: 6,
-                        backgroundColor: tokens.dangerLight,
-                        border: `1px solid ${brand.danger}`,
+                        backgroundColor: b.status === 'OPEN' ? tokens.dangerLight : tokens.bgSurfaceSubtle,
+                        border: `1px solid ${b.status === 'OPEN' ? brand.danger : tokens.borderSubtle}`,
                         fontSize: '0.70rem',
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
+                        gap: 8,
                       }}
                     >
                       <div>
-                        <strong style={{ color: brand.danger }}>{b.faculty_name}</strong>
+                        <strong style={{ color: b.status === 'OPEN' ? brand.danger : tokens.textPrimary }}>{b.person_name}</strong>
                         <div style={{ fontSize: '0.64rem', color: tokens.textSecondary, marginTop: 1 }}>
-                          {b.reason || b.trigger_reason}
+                          {b.remarks || b.incident_type}
                         </div>
                       </div>
-                      <span style={badgePill(tokens.bgSurface, brand.danger, brand.danger)}>{b.status}</span>
+                      <span style={badgePill(tokens.bgSurface, b.status === 'OPEN' ? brand.danger : brand.success, b.status === 'OPEN' ? brand.danger : brand.success)}>
+                        {b.status}
+                      </span>
                     </div>
                   ))}
                 </div>
               ) : (
                 <div style={{ padding: '10px 0', textAlign: 'center', color: tokens.textMuted, fontSize: '0.72rem' }}>
                   <CheckCircle2 size={16} color={brand.success} style={{ margin: '0 auto 4px auto', display: 'block' }} />
-                  No boundary alerts or fake GPS attempts recorded today.
+                  No teacher loafing or student cutting alerts recorded today.
                 </div>
               )}
             </div>
           </div>
         </div>
+
+        {/* Live Loafing Monitor embedded below the map */}
+        <LoafingMonitorPanel onIncidentUpdated={() => void fetchGeofenceData(true, true)} />
 
         <div style={panelCard}>
           <div
@@ -1233,36 +1328,33 @@ export const GeofenceTab: React.FC = () => {
           >
             <div>
               <div style={{ fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
-                Faculty Live Status &amp; Bound Devices
+                Teachers Live Status &amp; Bound Devices
               </div>
               <div style={{ fontSize: '0.70rem', color: tokens.textSecondary }}>
-                Connection status, GPS distance, signal quality, and 1-to-1 phone lock details.
+                Live GPS distance, boundary verdict, and 1-to-1 phone lock details.
               </div>
             </div>
             <span style={{ fontSize: '0.72rem', color: tokens.textSecondary }}>
-              Total Faculty: <strong style={{ color: tokens.textPrimary }}>{geoData?.faculty_list?.length || 0}</strong>
+              Total Teachers: <strong style={{ color: tokens.textPrimary }}>{teacherList.length}</strong>
             </span>
           </div>
 
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', minWidth: 840, borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
+            <table style={{ width: '100%', minWidth: 800, borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
               <thead>
                 <tr>
-                  <th style={ui.th}>Faculty Member</th>
-                  <th style={ui.th}>Connection</th>
-                  <th style={ui.th}>Signal Strength</th>
-                  <th style={ui.th}>School Boundary</th>
+                  <th style={ui.th}>Teacher</th>
+                  <th style={ui.th}>Status</th>
+                  <th style={ui.th}>Campus Boundary</th>
                   <th style={ui.th}>Distance / GPS</th>
                   <th style={ui.th}>Bound Phone</th>
-                  <th style={ui.th}>Battery</th>
-                  {isAdmin && <th style={{ ...ui.th, textAlign: 'right' }}>Device Lock Action</th>}
+                  {canResetPhone && <th style={{ ...ui.th, textAlign: 'right' }}>Device Lock Action</th>}
                 </tr>
               </thead>
               <tbody>
-                {(geoData?.faculty_list || []).length > 0 ? (
-                  geoData!.faculty_list.map((s) => {
+                {teacherList.length > 0 ? (
+                  teacherList.map((s) => {
                     const isOnline = Boolean(s.is_online);
-
                     return (
                       <tr key={s.id}>
                         <td style={ui.td}>
@@ -1270,7 +1362,7 @@ export const GeofenceTab: React.FC = () => {
                             <div style={{ position: 'relative', width: 36, height: 36, flexShrink: 0 }}>
                               <ProfileAvatar
                                 photoUrl={s.photo_url || s.photo}
-                                name={s.faculty_name}
+                                name={s.teacher_name}
                                 size={36}
                                 iconSize={16}
                               />
@@ -1288,7 +1380,7 @@ export const GeofenceTab: React.FC = () => {
                               />
                             </div>
                             <div>
-                              <div style={{ fontWeight: 800, color: tokens.textPrimary, fontSize: '0.82rem' }}>{s.faculty_name}</div>
+                              <div style={{ fontWeight: 800, color: tokens.textPrimary, fontSize: '0.82rem' }}>{s.teacher_name}</div>
                               <div style={{ fontSize: '0.66rem', color: tokens.textMuted, fontFamily: 'monospace' }}>
                                 ID: {s.employee_id} &bull; {s.position || '—'}
                               </div>
@@ -1312,16 +1404,7 @@ export const GeofenceTab: React.FC = () => {
                               )}
                             </div>
                             <span style={{ fontSize: '0.68rem', color: isOnline ? brand.success : tokens.textMuted, fontWeight: 600 }}>
-                              {s.status_duration || s.last_seen || '—'}
-                            </span>
-                          </div>
-                        </td>
-
-                        <td style={ui.td}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            {renderSignalBars(s.signal_percentage)}
-                            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: isOnline ? tokens.textPrimary : tokens.textMuted }}>
-                              {s.signal_strength || '—'}
+                              {s.last_seen === 'No ping yet' ? 'Not checked in yet' : s.last_seen || 'Not checked in yet'}
                             </span>
                           </div>
                         </td>
@@ -1329,24 +1412,24 @@ export const GeofenceTab: React.FC = () => {
                         <td style={ui.td}>{getStatusBadge(s)}</td>
 
                         <td style={{ ...ui.td, fontFamily: 'monospace', color: tokens.textPrimary }}>
-                          <div>{formatMeters(s.distance)}</div>
-                          {s.gps_accuracy_meters !== undefined && s.gps_accuracy_meters !== null && (
+                          <div>{formatMeters(s.distance ?? s.distance_meters)}</div>
+                          {s.accuracy_meters !== undefined && s.accuracy_meters !== null && (
                             <div
                               style={{
                                 fontSize: '0.64rem',
-                                color: s.gps_accuracy_meters > 25 ? brand.warning : brand.success,
+                                color: s.accuracy_meters > 25 ? brand.warning : brand.success,
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: 3,
                               }}
                             >
-                              <Radio size={9} /> &plusmn;{Math.round(s.gps_accuracy_meters)}m
+                              <Radio size={9} /> &plusmn;{Math.round(s.accuracy_meters)}m
                             </div>
                           )}
                         </td>
 
                         <td style={ui.td}>
-                          {s.bound_device_id || s.ip_address ? (
+                          {s.bound_device_id ? (
                             <div>
                               {s.device_model && (
                                 <div style={{ fontSize: '0.72rem', fontWeight: 600, color: tokens.textPrimary, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1354,7 +1437,7 @@ export const GeofenceTab: React.FC = () => {
                                 </div>
                               )}
                               <div style={{ fontSize: '0.64rem', color: tokens.textMuted, fontFamily: 'monospace' }}>
-                                {s.mac_address || s.bound_device_id || '—'}
+                                {s.bound_device_id}
                               </div>
                             </div>
                           ) : (
@@ -1362,20 +1445,13 @@ export const GeofenceTab: React.FC = () => {
                           )}
                         </td>
 
-                        <td style={{ ...ui.td, color: tokens.textSecondary }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            <BatteryCharging size={12} color={brand.primary} />
-                            {formatBattery(s.battery ?? s.battery_level)}
-                          </span>
-                        </td>
-
-                        {isAdmin && (
+                        {canResetPhone && (
                           <td style={{ ...ui.td, textAlign: 'right' }}>
                             {s.bound_device_id ? (
                               <button
                                 type="button"
                                 disabled={resettingId === s.id}
-                                onClick={() => handleResetDevice(s.id, s.faculty_name)}
+                                onClick={() => handleResetDevice(s.id, s.teacher_name)}
                                 title="Unbind phone device lock"
                                 style={{
                                   display: 'inline-flex',
@@ -1404,8 +1480,8 @@ export const GeofenceTab: React.FC = () => {
                   })
                 ) : (
                   <tr>
-                    <td colSpan={isAdmin ? 8 : 7} style={{ textAlign: 'center', padding: '24px', color: tokens.textMuted }}>
-                      No faculty records found in database.
+                    <td colSpan={canResetPhone ? 6 : 5} style={{ textAlign: 'center', padding: '24px', color: tokens.textMuted }}>
+                      No active teachers are listed yet. Add teachers under Teachers to view live campus status.
                     </td>
                   </tr>
                 )}
@@ -1415,17 +1491,22 @@ export const GeofenceTab: React.FC = () => {
         </div>
       </div>
 
-      {/* VIEW 2: LOCATION LOGS */}
+      {/* VIEW 2: DEDICATED LOAFING ALERTS PANEL */}
+      {activeScreen === 'LOAFING_ALERTS' && (
+        <LoafingMonitorPanel onIncidentUpdated={() => void fetchGeofenceData(true, true)} />
+      )}
+
+      {/* VIEW 3: LOCATION LOGS */}
       <div style={{ display: activeScreen === 'AUDIT_SCREEN' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
         <div style={{ ...panelCard, padding: 14 }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap', flex: 1 }}>
               <div style={{ minWidth: 200, flex: 1 }}>
-                <label style={ui.label}>Search Faculty Name or ID</label>
+                <label style={ui.label}>Search Teacher Name or ID</label>
                 <input
                   type="text"
                   maxLength={80}
-                  placeholder="Search name, ID, or GPS..."
+                  placeholder="Search name, Employee ID, or Device..."
                   value={auditSearchQuery}
                   onChange={(e) => setAuditSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && void fetchAuditHistory(false)}
@@ -1434,16 +1515,16 @@ export const GeofenceTab: React.FC = () => {
               </div>
 
               <div>
-                <label style={ui.label}>Filter Faculty</label>
+                <label style={ui.label}>Filter Teacher</label>
                 <select
-                  value={auditFacultyFilter}
-                  onChange={(e) => setAuditFacultyFilter(e.target.value)}
+                  value={auditTeacherFilter}
+                  onChange={(e) => setAuditTeacherFilter(e.target.value)}
                   style={{ ...ui.input, width: 170 }}
                 >
-                  <option value="ALL">All Faculty Members</option>
-                  {(geoData?.faculty_list || []).map((f) => (
-                    <option key={f.id} value={String(f.id)}>
-                      {f.faculty_name}
+                  <option value="ALL">All Teachers</option>
+                  {teacherList.map((t) => (
+                    <option key={t.id} value={String(t.id)}>
+                      {t.teacher_name}
                     </option>
                   ))}
                 </select>
@@ -1460,7 +1541,7 @@ export const GeofenceTab: React.FC = () => {
                       borderRadius: 6,
                       border: `1px solid ${dateFilterMode === 'ALL_LOGS' ? brand.buttonBg : tokens.borderStrong}`,
                       backgroundColor: dateFilterMode === 'ALL_LOGS' ? brand.buttonBg : tokens.bgSurface,
-                      color: dateFilterMode === 'ALL_LOGS' ? '#ffffff' : tokens.textSecondary,
+                      color: dateFilterMode === 'ALL_LOGS' ? tokens.onPrimary : tokens.textSecondary,
                       fontWeight: dateFilterMode === 'ALL_LOGS' ? 800 : 600,
                       fontSize: '0.74rem',
                       cursor: 'pointer',
@@ -1476,7 +1557,7 @@ export const GeofenceTab: React.FC = () => {
                       borderRadius: 6,
                       border: `1px solid ${dateFilterMode === 'SPECIFIC_DATE' ? brand.buttonBg : tokens.borderStrong}`,
                       backgroundColor: dateFilterMode === 'SPECIFIC_DATE' ? brand.buttonBg : tokens.bgSurface,
-                      color: dateFilterMode === 'SPECIFIC_DATE' ? '#ffffff' : tokens.textSecondary,
+                      color: dateFilterMode === 'SPECIFIC_DATE' ? tokens.onPrimary : tokens.textSecondary,
                       fontWeight: dateFilterMode === 'SPECIFIC_DATE' ? 800 : 600,
                       fontSize: '0.74rem',
                       cursor: 'pointer',
@@ -1507,8 +1588,8 @@ export const GeofenceTab: React.FC = () => {
                   style={{ ...ui.input, width: 170 }}
                 >
                   <option value="ALL">All Statuses</option>
-                  <option value="INSIDE">Inside School Grounds</option>
-                  <option value="OUTSIDE">Outside School Grounds</option>
+                  <option value="INSIDE">Inside Campus</option>
+                  <option value="OUTSIDE">Outside Campus</option>
                 </select>
               </div>
             </div>
@@ -1533,7 +1614,6 @@ export const GeofenceTab: React.FC = () => {
                   backgroundColor: successBtnBg,
                   opacity: auditRecords.length === 0 ? 0.55 : 1,
                 }}
-                title="Export location logs as CSV"
               >
                 <FileSpreadsheet size={13} />
                 <span>Export CSV</span>
@@ -1544,53 +1624,49 @@ export const GeofenceTab: React.FC = () => {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>
           <StatsCard
-            label="TOTAL LOCATION RECORDS"
+            label="LOCATION CHECKS"
             value={totalDatabaseRecords}
-            helpText={dateFilterMode === 'ALL_LOGS' ? 'Historical records' : `Records on ${auditDate}`}
+            helpText={dateFilterMode === 'ALL_LOGS' ? 'Recent campus location checks' : `Records on ${auditDate}`}
           />
           <StatsCard
-            label="INSIDE SCHOOL GROUNDS"
+            label="INSIDE CAMPUS"
             value={auditRecords.filter((r) => Boolean(r.is_inside ?? r.is_inside_geofence)).length}
             valueColor={brand.success}
             helpText={radius !== null ? `Within ${radius}m boundary` : 'Boundary not set'}
           />
           <StatsCard
-            label="OUTSIDE SCHOOL GROUNDS"
+            label="OUTSIDE CAMPUS"
             value={auditRecords.filter((r) => !Boolean(r.is_inside ?? r.is_inside_geofence)).length}
             valueColor={brand.danger}
-            helpText="Beyond allowed campus area"
+            helpText="Beyond campus boundary"
           />
         </div>
 
         <div style={panelCard}>
           <div style={{ padding: '12px 16px', borderBottom: `1px solid ${tokens.borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
             <div>
-              <div style={{ fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>Campus Location Logs</span>
-                <span style={badgePill(tokens.successLight, brand.success, brand.success)}>Live Auto-Updating</span>
+              <div style={{ fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
+                Campus GPS Location Logs
               </div>
               <div style={{ fontSize: '0.70rem', color: tokens.textSecondary, marginTop: 2 }}>
-                Timestamped GPS check-ins, boundary status, distance, client IP, and battery level.
+                Timestamped teacher GPS pings with dynamically computed distance from campus center.
               </div>
             </div>
             <span style={{ fontSize: '0.72rem', color: tokens.textSecondary }}>
-              Showing <strong style={{ color: tokens.textPrimary }}>{auditRecords.length}</strong> of{' '}
-              <strong style={{ color: tokens.textPrimary }}>{totalDatabaseRecords}</strong> record(s)
+              Showing <strong style={{ color: tokens.textPrimary }}>{auditRecords.length}</strong> record(s)
             </span>
           </div>
 
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
+            <table style={{ width: '100%', minWidth: 780, borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
               <thead>
                 <tr>
-                  <th style={ui.th}>Check-In Time</th>
-                  <th style={ui.th}>Faculty Member</th>
-                  <th style={ui.th}>Boundary Status</th>
-                  <th style={ui.th}>Signal Strength</th>
-                  <th style={ui.th}>Distance from School</th>
-                  <th style={ui.th}>IP Address</th>
+                  <th style={ui.th}>Timestamp</th>
+                  <th style={ui.th}>Teacher</th>
+                  <th style={ui.th}>Zone Status</th>
+                  <th style={ui.th}>Distance from Campus</th>
+                  <th style={ui.th}>GPS Accuracy</th>
                   <th style={ui.th}>Device ID</th>
-                  <th style={ui.th}>Battery</th>
                 </tr>
               </thead>
               <tbody>
@@ -1604,7 +1680,7 @@ export const GeofenceTab: React.FC = () => {
                           <div style={{ fontSize: '0.64rem', color: tokens.textMuted }}>{r.date_only || ''}</div>
                         </td>
                         <td style={ui.td}>
-                          <strong style={{ color: tokens.textPrimary }}>{r.faculty_name}</strong>
+                          <strong style={{ color: tokens.textPrimary }}>{r.teacher_name}</strong>
                           {r.employee_id && (
                             <div style={{ fontSize: '0.64rem', color: tokens.textMuted, fontFamily: 'monospace' }}>
                               ID: {r.employee_id}
@@ -1614,40 +1690,29 @@ export const GeofenceTab: React.FC = () => {
                         <td style={ui.td}>
                           {inside ? (
                             <span style={badgePill(tokens.successLight, brand.success, brand.success)}>
-                              <Check size={10} style={{ marginRight: 3 }} /> Inside School Grounds
+                              <Check size={10} style={{ marginRight: 3 }} /> {r.status || 'INSIDE'}
                             </span>
                           ) : (
                             <span style={badgePill(tokens.dangerLight, brand.danger, brand.danger)}>
-                              <AlertTriangle size={10} style={{ marginRight: 3 }} /> Outside School Grounds
+                              <AlertTriangle size={10} style={{ marginRight: 3 }} /> {r.status || 'OUTSIDE'}
                             </span>
                           )}
                         </td>
-                        <td style={ui.td}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                            {renderSignalBars(r.signal_percentage)}
-                            <span style={{ fontSize: '0.72rem', color: tokens.textPrimary, fontWeight: 600 }}>
-                              {r.signal_strength || '—'}
-                            </span>
-                          </div>
-                        </td>
                         <td style={{ ...ui.td, fontFamily: 'monospace', fontWeight: 700, color: inside ? brand.success : brand.danger }}>
-                          {formatMeters(r.distance)}
+                          {formatMeters(r.distance ?? r.distance_meters)}
                         </td>
-                        <td style={{ ...ui.td, fontFamily: 'monospace', color: brand.primary, fontSize: '0.72rem' }}>
-                          {r.ip_address || '—'}
+                        <td style={{ ...ui.td, fontFamily: 'monospace', color: tokens.textSecondary }}>
+                          {r.accuracy_meters !== null && r.accuracy_meters !== undefined ? `±${Math.round(r.accuracy_meters)}m` : '—'}
                         </td>
                         <td style={{ ...ui.td, fontFamily: 'monospace', color: tokens.textSecondary, fontSize: '0.72rem' }}>
-                          {r.mac_address || r.bound_device_id || '—'}
-                        </td>
-                        <td style={{ ...ui.td, color: tokens.textSecondary }}>
-                          {formatBattery(r.battery ?? r.battery_level)}
+                          {r.device_id || '—'}
                         </td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={8} style={{ textAlign: 'center', padding: '30px', color: tokens.textMuted }}>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '30px', color: tokens.textMuted }}>
                       {auditLoading ? 'Loading location logs...' : 'No location logs found matching your filters.'}
                     </td>
                   </tr>

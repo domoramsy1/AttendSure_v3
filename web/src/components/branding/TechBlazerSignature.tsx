@@ -5,7 +5,7 @@
 
 import React, { memo } from 'react';
 import { useTheme } from '../../context/ThemeContext';
-import { sanitizeText } from '../../theme/tokens';
+import { sanitizeText, SEAL_COLORS } from '../../theme/tokens';
 
 export interface TechBlazerSignatureProps {
   size?: number;
@@ -56,8 +56,8 @@ export const TechBlazerSignature: React.FC<TechBlazerSignatureProps> = memo(
       mode === 'dark'
         ? 'rgba(56, 189, 248, 0.45)'
         : mode === 'high-contrast'
-        ? '#002b4d'
-        : '#e2e8f0';
+        ? SEAL_COLORS.navyDeep
+        : SEAL_COLORS.subtleBorder;
 
     return (
       <div
@@ -96,7 +96,7 @@ export const TechBlazerSignature: React.FC<TechBlazerSignatureProps> = memo(
               width: `${tileSize}px`,
               height: `${tileSize}px`,
               borderRadius: Math.max(6, Math.round(tileSize * 0.26)),
-              background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+              background: `linear-gradient(180deg, ${SEAL_COLORS.white} 0%, ${SEAL_COLORS.surface} 100%)`,
               borderWidth: 1,
               borderStyle: 'solid',
               borderColor: tileBorderColor,
@@ -114,8 +114,8 @@ export const TechBlazerSignature: React.FC<TechBlazerSignatureProps> = memo(
               fill="none"
               aria-hidden="true"
             >
-              <path d="M4 5.5H20V9H13.8V19H10.2V9H4V5.5Z" fill="#004b87" />
-              <path d="M15.2 12.5L20 19H15.8L12.8 14.8L15.2 12.5Z" fill="#0284c7" />
+              <path d="M4 5.5H20V9H13.8V19H10.2V9H4V5.5Z" fill={SEAL_COLORS.navy} />
+              <path d="M15.2 12.5L20 19H15.8L12.8 14.8L15.2 12.5Z" fill={SEAL_COLORS.sky} />
             </svg>
           </div>
 

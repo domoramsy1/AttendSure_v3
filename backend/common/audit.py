@@ -2,19 +2,14 @@ import logging
 from django.db import transaction
 from rest_framework import viewsets
 
+from common.request_logger import extract_client_ip
+
 logger = logging.getLogger(__name__)
 
 
 def get_client_ip(request) -> str:
-    if not request:
-        return "127.0.0.1"
-    cf_ip = request.META.get("HTTP_CF_CONNECTING_IP")
-    if cf_ip:
-        return cf_ip.strip()
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "127.0.0.1")
+    """Returns a validated client IP, honoring forwarded headers only from trusted proxies."""
+    return extract_client_ip(request)
 
 
 def record_audit_log(

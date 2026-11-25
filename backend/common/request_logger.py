@@ -63,11 +63,8 @@ SENSITIVE_KEY_SEGMENTS = {
 HIDDEN_POLL_PARAMS = {"silent", "nocache", "_t"}
 
 QUIET_POLL_PATHS = {
-    "/api/notifications/",
-    "/api/v1/messaging/notifications/",
     "/api/system/status/",
     "/api/v1/reports/system-status/",
-    "/api/core/maintenance/db-check/",
     "/api/health/db/",
     "/api/v1/health/db/",
     "/api/v1/school/public-branding/",
@@ -176,11 +173,24 @@ def _validate_ip(raw_ip: str) -> str | None:
         return None
 
 
-def _extract_client_ip(request) -> str:
-    """Honors forwarded headers only when REMOTE_ADDR is a trusted local reverse proxy."""
-    remote_addr = str(request.META.get("REMOTE_ADDR") or "127.0.0.1").strip()
+def _get_trusted_proxies() -> set[str]:
+    normalized: set[str] = set()
+    for raw in TRUSTED_PROXIES:
+        valid = _validate_ip(raw)
+        normalized.add(valid or raw.strip())
+    return normalized
 
-    if remote_addr in TRUSTED_PROXIES:
+
+def extract_client_ip(request) -> str:
+    """Honors forwarded headers only when REMOTE_ADDR is a trusted reverse proxy."""
+    if not request or not hasattr(request, "META"):
+        return "127.0.0.1"
+
+    raw_remote = str(request.META.get("REMOTE_ADDR") or "").strip()
+    validated_remote = _validate_ip(raw_remote)
+    trusted = _get_trusted_proxies()
+
+    if validated_remote and (validated_remote in trusted or raw_remote in trusted):
         cf_ip = _validate_ip(str(request.META.get("HTTP_CF_CONNECTING_IP") or ""))
         if cf_ip:
             return cf_ip
@@ -191,7 +201,10 @@ def _extract_client_ip(request) -> str:
             if forwarded_ip:
                 return forwarded_ip
 
-    return _validate_ip(remote_addr) or "127.0.0.1"
+    return validated_remote or "127.0.0.1"
+
+
+_extract_client_ip = extract_client_ip
 
 
 def _resolve_authenticated_username(request, response) -> str | None:

@@ -7,14 +7,13 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import apiClient, { peekApiCache, subscribeApiCache } from '../../api/client';
 import { API_ROUTES } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
-import { useCompliance } from '../../context/ComplianceContext';
+import { canViewTab, getCurrentUserFromStorage } from '../../utils/permissions';
 import { StatsCard } from '../common/StatsCard';
 import {
   UserCheck,
   UserX,
   Clock,
   Globe,
-  Radio,
   RefreshCw,
   Scan,
   TrendingUp,
@@ -22,14 +21,14 @@ import {
   Database,
   Ticket,
   CalendarCheck,
-  Send,
   Users,
   ChevronLeft,
   ChevronRight,
-  Bell,
   Sparkles,
   QrCode,
   BookOpen,
+  MapPin,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -53,42 +52,34 @@ interface RecentScanItem {
   scan_time: string;
 }
 
-interface NoticeItem {
-  id: number | string;
-  title: string;
-  details: string;
-}
-
 interface DashboardState {
   total_students: number;
   students_present: number;
   students_absent: number;
+  students_cutting: number;
   attendance_rate: number;
-  faculty_on_duty: number;
-  total_faculty: number;
+  teachers_on_duty: number;
+  total_teachers: number;
   classroom_scans_today: number;
   active_exit_passes: number;
-  push_alerts_today: number;
-  mobile_parents_connected: number;
+  open_loafing_incidents: number;
   hourly_scans: HourlyBar[];
   recent_scans: RecentScanItem[];
-  notices: NoticeItem[];
 }
 
 const EMPTY_DASHBOARD: DashboardState = {
   total_students: 0,
   students_present: 0,
   students_absent: 0,
+  students_cutting: 0,
   attendance_rate: 0,
-  faculty_on_duty: 0,
-  total_faculty: 0,
+  teachers_on_duty: 0,
+  total_teachers: 0,
   classroom_scans_today: 0,
   active_exit_passes: 0,
-  push_alerts_today: 0,
-  mobile_parents_connected: 0,
+  open_loafing_incidents: 0,
   hourly_scans: [],
   recent_scans: [],
-  notices: [],
 };
 
 const normalizeDashboardPayload = (d: Record<string, any> | undefined): DashboardState => {
@@ -102,13 +93,13 @@ const normalizeDashboardPayload = (d: Record<string, any> | undefined): Dashboar
     total_students: total,
     students_present: present,
     students_absent: Number(d.students_absent) || Math.max(0, total - present),
+    students_cutting: Number(d.students_cutting) || 0,
     attendance_rate: total > 0 ? Math.round((present / total) * 100) : Number(d.attendance_rate) || 0,
-    faculty_on_duty: Number(d.faculty_on_duty) || 0,
-    total_faculty: Number(d.total_faculty) || 0,
-    classroom_scans_today: Number(d.classroom_scans_today ?? d.gate_scans_today) || 0,
-    active_exit_passes: Number(d.active_exit_passes ?? d.active_gate_passes) || 0,
-    push_alerts_today: Number(d.push_alerts_today ?? d.push_sent_today) || 0,
-    mobile_parents_connected: Number(d.mobile_parents_connected) || 0,
+    teachers_on_duty: Number(d.teachers_on_duty) || 0,
+    total_teachers: Number(d.total_teachers) || 0,
+    classroom_scans_today: Number(d.classroom_scans_today) || 0,
+    active_exit_passes: Number(d.active_exit_passes) || 0,
+    open_loafing_incidents: Number(d.open_loafing_incidents) || 0,
     hourly_scans: rawHourly.map((h: any) => {
       const c = Number(h.count) || 0;
       return {
@@ -119,7 +110,6 @@ const normalizeDashboardPayload = (d: Record<string, any> | undefined): Dashboar
       };
     }),
     recent_scans: Array.isArray(d.recent_scans) ? d.recent_scans : [],
-    notices: Array.isArray(d.notices) ? d.notices : [],
   };
 };
 
@@ -131,7 +121,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigateTab,
 }) => {
   const { tokens, brand, fonts, ui } = useTheme();
-  const { term } = useCompliance();
 
   const warmPayload = useMemo(
     () => peekApiCache<Record<string, any>>(API_ROUTES.reports.dashboard),
@@ -145,14 +134,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
   const [fetchFailed, setFetchFailed] = useState<boolean>(false);
   const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
-  const [data, setData] = useState<DashboardState>(() =>
-    normalizeDashboardPayload(warmPayload)
-  );
+  const [data, setData] = useState<DashboardState>(() => normalizeDashboardPayload(warmPayload));
 
   const abortRef = useRef<AbortController | null>(null);
-  const role = (userRole || localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
-  const isAdmin = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL'].includes(role);
-  const isFaculty = role === 'FACULTY';
+  const currentUser = { ...getCurrentUserFromStorage(), ...(userRole ? { role: userRole } : {}) };
+  const role = (currentUser.role || 'TEACHER').toUpperCase();
+  const isTeacher = role === 'TEACHER';
   const isOnline = isServerOnline && !fetchFailed;
 
   useEffect(() => {
@@ -218,12 +205,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   useEffect(() => {
     void fetchDashboardData(warmPayload !== undefined, false);
+    const handleAttendanceUpdated = () => {
+      void fetchDashboardData(true, true);
+    };
+    window.addEventListener('attendsure:attendance-updated', handleAttendanceUpdated);
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') {
         void fetchDashboardData(true, true);
       }
     }, 20000);
     return () => {
+      window.removeEventListener('attendsure:attendance-updated', handleAttendanceUpdated);
       clearInterval(timer);
       abortRef.current?.abort();
     };
@@ -245,24 +237,56 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [calendarDate]);
 
   const quickActions = [
-    { label: 'UN SDG Impact & Safety', desc: 'Early-warning, Ed-Fi & Roll-Call', icon: <Globe size={19} />, onClick: () => navigateTo('impact') },
-    { label: 'QR Scanner', desc: 'Scan signed student QR ID card', icon: <QrCode size={19} />, onClick: () => navigateTo('classroom-scanner') },
-    { label: isFaculty ? 'Student Exit Permit' : 'Exit Passes', desc: 'Student exit & faculty travel', icon: <Ticket size={19} />, onClick: () => navigateTo('gate-passes') },
     {
-      label: term('Daily Attendance Register', 'Daily Attendance (SF2)'),
-      desc: term('Exportable attendance register', 'Official DepEd register'),
+      tab: 'classroom-scanner',
+      label: 'QR Scanner',
+      desc: 'Scan student QR IDs via webcam',
+      icon: <QrCode size={19} />,
+      onClick: () => navigateTo('classroom-scanner'),
+    },
+    {
+      tab: 'geofence',
+      label: 'Geofence & Loafing',
+      desc: 'Campus boundary & loafing logs',
+      icon: <MapPin size={19} />,
+      onClick: () => navigateTo('geofence'),
+    },
+    {
+      tab: 'gate-passes',
+      label: 'Exit & Travel Passes',
+      desc: 'Student exit & teacher locator slips',
+      icon: <Ticket size={19} />,
+      onClick: () => navigateTo('gate-passes'),
+    },
+    {
+      tab: 'reports',
+      label: 'Daily Attendance (SF2)',
+      desc: 'Official DepEd attendance register',
       icon: <CalendarCheck size={19} />,
       onClick: () => navigateTo('reports', 'sf2'),
     },
     {
-      label: term('Staff Timesheets', 'Monthly DTR'),
-      desc: term('GPS-verified faculty hours', 'CSC Form 48 work hours'),
+      tab: 'dtr',
+      label: isTeacher ? 'My DTR' : 'Teachers & DTR',
+      desc: 'CSC Form 48 work hours',
       icon: <Clock size={19} />,
       onClick: () => navigateTo('dtr'),
     },
-    { label: isFaculty ? 'My Classes' : 'Class Lists', desc: 'Enrolled students by section', icon: isFaculty ? <BookOpen size={19} /> : <Users size={19} />, onClick: () => navigateTo(isFaculty ? 'my-classes' : 'students') },
-    ...(isAdmin ? [{ label: 'Push Alerts', desc: 'Send mobile alerts to parents', icon: <Send size={19} />, onClick: () => navigateTo('push') }] : []),
-  ];
+    {
+      tab: isTeacher ? 'my-classes' : 'students',
+      label: isTeacher ? 'My Classes' : 'Class Lists',
+      desc: 'Enrolled learners by section',
+      icon: isTeacher ? <BookOpen size={19} /> : <Users size={19} />,
+      onClick: () => navigateTo(isTeacher ? 'my-classes' : 'students'),
+    },
+    {
+      tab: 'impact',
+      label: 'SARDO & Campus Safety',
+      desc: 'Dropout early-warning & roll-call',
+      icon: <Globe size={19} />,
+      onClick: () => navigateTo('impact'),
+    },
+  ].filter((item) => canViewTab(currentUser, item.tab));
 
   if (loading) {
     return (
@@ -281,16 +305,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span style={ui.badge(isOnline ? tokens.successLight : tokens.dangerLight, isOnline ? brand.success : brand.danger)}>
               ● {isOnline ? 'ONLINE' : 'OFFLINE'}
             </span>
-            {isAdmin && (
-              <>
-                <span style={{ fontSize: fonts.size.sm, fontWeight: 700, color: tokens.textSecondary, display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <Database size={13} color={brand.primary} /> Database: {isOnline ? 'Connected' : 'Offline'}
-                </span>
-                <span style={{ fontSize: fonts.size.sm, fontWeight: 700, color: tokens.textSecondary, display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <Radio size={13} color={brand.primary} /> Push Alerts Today: {data.push_alerts_today.toLocaleString()} &bull; Parents Linked: {data.mobile_parents_connected.toLocaleString()}
-                </span>
-              </>
-            )}
+            <span style={{ fontSize: fonts.size.sm, fontWeight: 700, color: tokens.textSecondary, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Database size={13} color={brand.primary} /> Database: {isOnline ? 'Connected' : 'Offline'}
+            </span>
+            <span style={{ fontSize: fonts.size.sm, fontWeight: 700, color: data.open_loafing_incidents > 0 ? brand.danger : tokens.textSecondary, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <ShieldAlert size={13} color={data.open_loafing_incidents > 0 ? brand.danger : brand.success} />
+              Open Loafing &amp; Cutting Alerts: {data.open_loafing_incidents} &bull; Active Exit Passes: {data.active_exit_passes}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {lastSyncTime && <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted, fontFamily: fonts.mono }}>Updated: {lastSyncTime}</span>}
@@ -316,16 +337,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             badge={<UserCheck size={18} color={brand.success} />}
           />
           <StatsCard
-            label="NOT SCANNED TODAY"
+            label="NOT SCANNED YET TODAY"
             value={isOnline ? data.students_absent.toLocaleString() : '—'}
-            valueColor={data.students_absent > 0 ? brand.danger : tokens.textPrimary}
-            helpText="No classroom scan yet today"
-            badge={<UserX size={18} color={brand.danger} />}
+            valueColor={data.students_absent > 0 ? brand.warning : tokens.textPrimary}
+            helpText="Waiting for first classroom QR scan"
+            badge={<UserX size={18} color={brand.warning} />}
           />
           <StatsCard
-            label="FACULTY ON CAMPUS"
-            value={isOnline ? `${data.faculty_on_duty}/${data.total_faculty}` : '—'}
-            helpText="Verified via mobile face & GPS check-in"
+            label="TEACHERS ON CAMPUS"
+            value={isOnline ? `${data.teachers_on_duty}/${data.total_teachers}` : '—'}
+            helpText="Verified on campus via phone check-in (zero face photos saved)"
             badge={<Clock size={18} color={brand.success} />}
           />
           <StatsCard
@@ -379,8 +400,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   ))}
                 </div>
               ) : (
-                <div style={{ padding: 24, textAlign: 'center', color: tokens.textMuted }}>
-                  <Inbox size={22} style={{ margin: '0 auto 4px', display: 'block' }} /> No classroom scans recorded today
+                <div style={{ padding: 24, textAlign: 'center', color: tokens.textMuted, fontSize: fonts.size.sm }}>
+                  <Inbox size={22} style={{ margin: '0 auto 6px', display: 'block' }} />
+                  No student QR scans yet today. Open QR Scanner to start recording classroom attendance.
                 </div>
               )}
             </div>
@@ -400,7 +422,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   ))}
                 </div>
               ) : (
-                <div style={{ padding: 20, textAlign: 'center', color: tokens.textMuted }}>No scans recorded yet</div>
+                <div style={{ padding: 20, textAlign: 'center', color: tokens.textMuted, fontSize: fonts.size.sm }}>
+                  Scanned students will appear here live as classes begin.
+                </div>
               )}
             </div>
           </div>
@@ -422,7 +446,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span key={d} style={{ fontSize: fonts.size.xs, fontWeight: 800, color: tokens.textMuted }}>{d}</span>
                 ))}
                 {calendarDays.map((item, idx) => (
-                  <div key={idx} style={{ height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, fontSize: fonts.size.sm, fontWeight: item.isToday ? 800 : 500, backgroundColor: item.isToday ? brand.buttonBg : 'transparent', color: item.isToday ? '#fff' : tokens.textPrimary }}>
+                  <div key={idx} style={{ height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, fontSize: fonts.size.sm, fontWeight: item.isToday ? 800 : 500, backgroundColor: item.isToday ? brand.buttonBg : 'transparent', color: item.isToday ? tokens.onPrimary : tokens.textPrimary }}>
                     {item.day || ''}
                   </div>
                 ))}
@@ -430,20 +454,35 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
 
             <div style={ui.card}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <Bell size={15} color={brand.primary} />
-                <h3 style={{ margin: 0, fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>School Bulletin</h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <ShieldAlert size={15} color={data.open_loafing_incidents > 0 ? brand.danger : brand.success} />
+                  <h3 style={{ margin: 0, fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>Teacher Loafing &amp; Student Cutting Summary</h3>
+                </div>
+                {canViewTab(currentUser, 'geofence') && (
+                  <button type="button" onClick={() => navigateTo('geofence')} style={ui.btnSecondary}>
+                    Open Monitor
+                  </button>
+                )}
               </div>
-              {data.notices.length === 0 ? (
-                <div style={{ padding: 18, textAlign: 'center', color: tokens.textMuted, fontSize: fonts.size.sm }}>No announcements posted</div>
-              ) : (
-                data.notices.map((n) => (
-                  <div key={n.id} style={{ ...ui.subtleBox, marginBottom: 8 }}>
-                    <div style={{ fontSize: fonts.size.base, fontWeight: 800, color: tokens.textPrimary }}>{n.title}</div>
-                    <div style={{ fontSize: fonts.size.xs, color: tokens.textSecondary }}>{n.details}</div>
-                  </div>
-                ))
-              )}
+              <div style={{ display: 'grid', gap: 8 }}>
+                <div style={{ ...ui.subtleBox, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: fonts.size.sm, color: tokens.textSecondary }}>Open Loafing &amp; Cutting Alerts</span>
+                  <strong style={{ color: data.open_loafing_incidents > 0 ? brand.danger : brand.success }}>
+                    {data.open_loafing_incidents}
+                  </strong>
+                </div>
+                <div style={{ ...ui.subtleBox, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: fonts.size.sm, color: tokens.textSecondary }}>Student Cutting Class Alerts Today</span>
+                  <strong style={{ color: data.students_cutting > 0 ? brand.warning : brand.success }}>
+                    {data.students_cutting}
+                  </strong>
+                </div>
+                <div style={{ ...ui.subtleBox, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: fonts.size.sm, color: tokens.textSecondary }}>Active Exit &amp; Travel Passes</span>
+                  <strong style={{ color: brand.primary }}>{data.active_exit_passes}</strong>
+                </div>
+              </div>
             </div>
           </div>
         </div>

@@ -8,7 +8,7 @@ import apiClient, { clearApiClientCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
-import { isSafeImageUrl, type ThemeMode } from '../../theme/tokens';
+import { isSafeImageUrl, SEAL_COLORS, type ThemeMode } from '../../theme/tokens';
 import { AttendSureBrandBadge } from '../branding/BrandAssets';
 import { Button } from '../ui/Button';
 import { ControlSwitch } from '../ui/ControlSwitch';
@@ -20,7 +20,7 @@ import {
   QrCode,
   Smartphone,
   FileSpreadsheet,
-  BellRing,
+  MapPin,
   LogIn,
   Eye,
   EyeOff,
@@ -38,7 +38,7 @@ interface AuthPageProps {
   onBackToShowcase?: () => void;
 }
 
-const ALLOWED_WEB_ROLES = new Set(['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'FACULTY']);
+const ALLOWED_WEB_ROLES = new Set(['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER']);
 
 const clearPreviousSessionStorage = (): void => {
   const keys = [
@@ -48,9 +48,11 @@ const clearPreviousSessionStorage = (): void => {
     'auth_token',
     'token',
     'attendsure_username',
-    'attendsure_faculty_name',
+    'attendsure_teacher_name',
     'attendsure_role',
     'attendsure_user_id',
+    'attendsure_teacher_id',
+    'attendsure_is_superuser',
     'attendsure_user_photo',
     'attendsure_can_teach',
   ];
@@ -124,14 +126,14 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
 
       const data = res.data || {};
       const userObj = data.user || data;
-      const role = String(userObj.role || userObj.system_role || 'FACULTY').toUpperCase();
+      const role = String(userObj.role || userObj.system_role || 'TEACHER').toUpperCase();
 
       if (!ALLOWED_WEB_ROLES.has(role)) {
         clearPreviousSessionStorage();
         clearApiClientCache();
         setLoginForm((prev) => ({ ...prev, password: '' }));
         setErrorMsg(
-          'Parent accounts sign in on the AttendSure Mobile App. Please use a faculty or admin account here.'
+          'Access is restricted to authorized teachers and school administrators.'
         );
         return;
       }
@@ -140,11 +142,16 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
       const access = String(data.access || '').trim();
       const refresh = String(data.refresh || '').trim();
       const username = String(userObj.username || cleanUsername).trim();
-      const facultyName = String(userObj.faculty_name || userObj.full_name || username).trim();
+      const teacherName = String(userObj.teacher_name || userObj.full_name || username).trim();
       const userId = Number(userObj.id || userObj.user_id || 0);
-      const canTeach = Boolean(
-        userObj.can_teach || userObj.is_teaching || Number(userObj.assigned_class_count) > 0 || role === 'FACULTY'
-      );
+      const teacherId = userObj.teacher_id ? Number(userObj.teacher_id) : null;
+      const isSuperuser = Boolean(userObj.is_superuser);
+      const canTeach =
+        userObj.can_handle_classes !== undefined && userObj.can_handle_classes !== null
+          ? Boolean(userObj.can_handle_classes)
+          : userObj.can_teach !== undefined && userObj.can_teach !== null
+            ? Boolean(userObj.can_teach)
+            : role === 'TEACHER';
       const rawPhoto = (userObj.photo_url || userObj.photo) as string | null | undefined;
       const safeUserPhoto = isSafeImageUrl(rawPhoto) ? rawPhoto! : null;
 
@@ -155,10 +162,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
       if (access) localStorage.setItem('attendsure_access', access);
       if (refresh) localStorage.setItem('attendsure_refresh', refresh);
       localStorage.setItem('attendsure_username', username);
-      localStorage.setItem('attendsure_faculty_name', facultyName);
+      localStorage.setItem('attendsure_teacher_name', teacherName);
       localStorage.setItem('attendsure_role', role);
       localStorage.setItem('attendsure_can_teach', String(canTeach));
+      localStorage.setItem('attendsure_is_superuser', String(isSuperuser));
       if (userId) localStorage.setItem('attendsure_user_id', String(userId));
+      if (teacherId) localStorage.setItem('attendsure_teacher_id', String(teacherId));
       if (safeUserPhoto) localStorage.setItem('attendsure_user_photo', safeUserPhoto);
 
       if (userObj.school_name || userObj.school_id) {
@@ -178,7 +187,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
         user_id: userId,
         token,
         username,
-        faculty_name: facultyName,
+        teacher_name: teacherName,
         role,
       };
 
@@ -216,24 +225,24 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
 
   const features = [
     {
-      icon: <QrCode size={16} color="#7dd3fc" />,
-      title: 'Classroom QR Scan',
-      desc: 'Fast USB QR scanner check-in on classroom laptops, with automatic offline sync.',
+      icon: <QrCode size={16} color={tokens.onPrimary} />,
+      title: 'Camera QR Scan',
+      desc: 'Fast built-in webcam and phone camera QR student attendance with offline sync.',
     },
     {
-      icon: <Smartphone size={16} color="#6ee7b7" />,
-      title: 'Campus GPS Check-In',
-      desc: 'Faculty verify arrival via on-device facial recognition and campus GPS.',
+      icon: <Smartphone size={16} color={brand.success} />,
+      title: 'Teacher Time In / Out',
+      desc: 'Teachers verify Time In and Time Out via Phone Fingerprint / Biometric & Campus GPS.',
     },
     {
-      icon: <FileSpreadsheet size={16} color="#fcd34d" />,
+      icon: <FileSpreadsheet size={16} color={brand.warning} />,
       title: 'Official DepEd Forms',
       desc: 'Ready-to-print SF1, SF2, SF4, and CSC Form 48.',
     },
     {
-      icon: <BellRing size={16} color="#f9a8d4" />,
-      title: 'Parent Mobile Alerts',
-      desc: 'Instant arrival, cutting, and exit pass push notices.',
+      icon: <MapPin size={16} color={brand.secondary} />,
+      title: 'Teacher Loafing & Student Cutting',
+      desc: 'Detects teacher loafing outside campus and students cutting class.',
     },
   ];
 
@@ -243,26 +252,20 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
     { value: 'high-contrast', title: 'Daylight High-Contrast Mode', icon: <Eye size={13} /> },
   ];
 
-  // Theme-harmonized outer viewport & hero gradients so Light, Dark, and Daylight all feel cohesive
   const viewportBackground =
     mode === 'dark'
-      ? 'radial-gradient(circle at 18% 18%, rgba(2, 132, 199, 0.20) 0%, transparent 45%), radial-gradient(circle at 84% 82%, rgba(16, 185, 129, 0.12) 0%, transparent 45%), linear-gradient(155deg, #060b16 0%, #0a1324 55%, #050912 100%)'
+      ? `radial-gradient(circle at 18% 18%, rgba(2, 132, 199, 0.20) 0%, transparent 45%), radial-gradient(circle at 84% 82%, rgba(16, 185, 129, 0.12) 0%, transparent 45%), linear-gradient(155deg, ${tokens.bgApp} 0%, ${tokens.bgCanvas} 55%, ${tokens.darkSurface} 100%)`
       : mode === 'high-contrast'
-      ? 'linear-gradient(155deg, #dce4ee 0%, #cbd5e1 100%)'
-      : 'radial-gradient(circle at 15% 15%, rgba(2, 132, 199, 0.12) 0%, transparent 45%), radial-gradient(circle at 85% 85%, rgba(0, 75, 135, 0.10) 0%, transparent 45%), linear-gradient(155deg, #edf2f7 0%, #e2e8f0 100%)';
+      ? `linear-gradient(155deg, ${tokens.bgApp} 0%, ${tokens.bgSurfaceSubtle} 100%)`
+      : `radial-gradient(circle at 15% 15%, rgba(2, 132, 199, 0.12) 0%, transparent 45%), radial-gradient(circle at 85% 85%, rgba(0, 75, 135, 0.10) 0%, transparent 45%), linear-gradient(155deg, ${tokens.bgCanvas} 0%, ${tokens.bgApp} 100%)`;
 
-  const heroBackground =
-    mode === 'dark'
-      ? 'linear-gradient(155deg, #0c2d52 0%, #071d36 56%, #051324 100%)'
-      : mode === 'high-contrast'
-      ? 'linear-gradient(155deg, #003865 0%, #002342 100%)'
-      : 'linear-gradient(155deg, #0369a1 0%, #004b87 54%, #06284b 100%)';
+  const heroBackground = `linear-gradient(155deg, ${tokens.heroBgStart} 0%, ${tokens.heroBgEnd} 100%)`;
 
   const shellShadow =
     mode === 'dark'
       ? '0 28px 65px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(148, 163, 184, 0.16)'
       : mode === 'high-contrast'
-      ? '0 18px 40px rgba(15, 23, 42, 0.18), 0 0 0 2px #0f172a'
+      ? `0 18px 40px rgba(15, 23, 42, 0.18), 0 0 0 2px ${SEAL_COLORS.ink}`
       : '0 24px 56px -8px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.08)';
 
   const inputWrapStyle = (isFocused: boolean): React.CSSProperties => ({
@@ -315,7 +318,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
           flex-direction: column;
           justify-content: space-between;
           gap: 20px;
-          color: #ffffff;
+          color: var(--on-primary);
           position: relative;
         }
         .auth-hero-pattern {
@@ -400,10 +403,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
                 <img
                   src={safeSchoolLogo}
                   alt="School Seal"
-                  style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'contain', backgroundColor: '#ffffff', padding: 1, flexShrink: 0 }}
+                  style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'contain', backgroundColor: tokens.porcelainBg, padding: 1, flexShrink: 0 }}
                 />
               ) : (
-                <School size={15} color="#7dd3fc" style={{ flexShrink: 0 }} />
+                <School size={15} color={tokens.onPrimary} style={{ flexShrink: 0 }} />
               )}
               <span
                 style={{
@@ -421,7 +424,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
                   style={{
                     fontSize: '0.68rem',
                     fontWeight: 800,
-                    color: '#bae6fd',
+                    color: tokens.onPrimary,
+                    opacity: 0.9,
                     borderLeftWidth: 1,
                     borderLeftStyle: 'solid',
                     borderLeftColor: 'rgba(255, 255, 255, 0.28)',
@@ -442,12 +446,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
                   fontSize: '0.66rem',
                   fontWeight: 800,
                   letterSpacing: '0.12em',
-                  color: '#7dd3fc',
+                  color: tokens.onPrimary,
+                  opacity: 0.85,
                   textTransform: 'uppercase',
                   marginBottom: 4,
                 }}
               >
-                ATTENDANCE &amp; CAMPUS MANAGEMENT
+                DEPED ATTENDANCE &amp; CAMPUS MONITORING
               </div>
               <h1
                 style={{
@@ -463,8 +468,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
               </h1>
             </div>
 
-            <p style={{ margin: 0, fontSize: '0.84rem', color: '#e0f2fe', lineHeight: 1.5, maxWidth: 400 }}>
-              Real-time classroom QR attendance, faculty campus check-in, parent mobile alerts, and official school reports.
+            <p style={{ margin: 0, fontSize: '0.84rem', color: tokens.onPrimary, opacity: 0.9, lineHeight: 1.5, maxWidth: 400 }}>
+              Real-time camera QR student attendance, student cutting detection, teacher geofencing Time In / Time Out, teacher loafing detection, and official DepEd school reports.
             </p>
 
             {/* 2x2 Capability Grid */}
@@ -491,7 +496,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
                     </div>
                     <div style={{ fontWeight: 800, fontSize: '0.80rem', lineHeight: 1.2 }}>{feat.title}</div>
                   </div>
-                  <div style={{ fontSize: '0.72rem', color: '#cbd5e1', lineHeight: 1.38 }}>{feat.desc}</div>
+                  <div style={{ fontSize: '0.72rem', color: tokens.onPrimary, opacity: 0.82, lineHeight: 1.38 }}>{feat.desc}</div>
                 </div>
               ))}
             </div>
@@ -511,11 +516,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
               flexWrap: 'wrap',
               gap: 8,
               fontSize: '0.72rem',
-              color: '#bae6fd',
+              color: tokens.onPrimary,
+              opacity: 0.9,
             }}
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
-              <ShieldCheck size={14} color="#34d399" /> Authorized School Personnel
+              <ShieldCheck size={14} color={brand.success} /> Authorized School Personnel
             </span>
             <span style={{ fontWeight: 800, letterSpacing: '0.05em', fontSize: '0.68rem', opacity: 0.9 }}>
               TECHBLAZER
@@ -526,7 +532,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
         {/* Right Sign-In Workspace Pane */}
         <div className="auth-form-pane" style={{ backgroundColor: tokens.bgSurface }}>
           <div>
-            {/* Top Brand Emblem + Theme Switcher Header */}
             {onBackToShowcase && (
               <button
                 type="button"
@@ -545,7 +550,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
                   gap: 5,
                 }}
               >
-                &larr; Back to Product Showcase &amp; 1-Click Judge Demo
+                &larr; Back to School Portal Overview
               </button>
             )}
             <div

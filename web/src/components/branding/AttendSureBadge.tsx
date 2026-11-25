@@ -5,7 +5,7 @@
 
 import React, { memo, useState } from 'react';
 import { useTheme } from '../../context/ThemeContext';
-import { sanitizeText, type ThemeMode } from '../../theme/tokens';
+import { sanitizeText, SEAL_COLORS, type ThemeMode } from '../../theme/tokens';
 import { BRAND_ASSETS } from './BrandAssets';
 
 export interface AttendSureBadgeProps {
@@ -50,15 +50,15 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = memo(
       activeMode === 'dark'
         ? 'rgba(56, 189, 248, 0.55)'
         : activeMode === 'high-contrast'
-        ? '#002b4d'
-        : '#cbd5e1';
+        ? SEAL_COLORS.navyDeep
+        : SEAL_COLORS.border;
 
     const badgeShadow =
       activeMode === 'dark'
-        ? '0 8px 24px -4px rgba(2, 132, 199, 0.35), inset 0 1px 0 #ffffff'
+        ? `0 8px 24px -4px rgba(2, 132, 199, 0.35), inset 0 1px 0 ${SEAL_COLORS.white}`
         : activeMode === 'high-contrast'
-        ? '0 0 0 1.5px #002b4d'
-        : '0 8px 22px -4px rgba(0, 75, 135, 0.16), inset 0 1px 0 #ffffff';
+        ? `0 0 0 1.5px ${SEAL_COLORS.navyDeep}`
+        : `0 8px 22px -4px rgba(0, 75, 135, 0.16), inset 0 1px 0 ${SEAL_COLORS.white}`;
 
     return (
       <div
@@ -69,7 +69,7 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = memo(
           width: `${safeSize}px`,
           height: `${safeSize}px`,
           borderRadius: radiusValue,
-          background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+          background: `linear-gradient(180deg, ${SEAL_COLORS.white} 0%, ${SEAL_COLORS.surface} 100%)`,
           borderWidth: activeMode === 'high-contrast' ? 2 : 1.5,
           borderStyle: 'solid',
           borderColor,
@@ -108,8 +108,8 @@ export const AttendSureBadge: React.FC<AttendSureBadgeProps> = memo(
             fill="none"
             aria-hidden="true"
           >
-            <path d="M32 8L12 52H22.5L32 30.5L41.5 52H52L32 8Z" fill="#004b87" />
-            <rect x="14" y="42" width="36" height="10" rx="3" fill="#0284c7" />
+            <path d="M32 8L12 52H22.5L32 30.5L41.5 52H52L32 8Z" fill={SEAL_COLORS.navy} />
+            <rect x="14" y="42" width="36" height="10" rx="3" fill={SEAL_COLORS.sky} />
           </svg>
         )}
 

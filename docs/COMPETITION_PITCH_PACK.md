@@ -1,105 +1,103 @@
-# AttendSure — International Startup Competition Pitch Pack
+# AttendSure v3 — School Rollout & Presentation Pack
 
-Prepared for Global EdTech & Social Impact Competitions (Imagine Cup, Hult Prize, UNESCO Digital Learning Week, Global Student Entrepreneur Awards).
-
----
-
-## 10-Slide Pitch Deck Blueprint
-
-### Slide 1 — Title & Hook
-- **Name:** AttendSure — *The Zero-Hardware Campus Operating System*
-- **Tagline:** Every Student Accounted For. \$0 Gate Hardware.
-- **Proof Point:** Live, production-engineered full-stack platform (Django 6 + React 19 + React Native/Expo + Ed-Fi v6.0) proven on real public high school workflows.
-
-### Slide 2 — The Problem (Global Scale, Acute Pain)
-- **250M+ out-of-school children** worldwide (UNESCO) and millions more silently slipping into chronic absenteeism before anyone notices.
-- **The Hardware Trap:** Legacy RFID turnstiles and biometric gate kiosks cost **\$5,500–\$18,000+ per campus** plus **\$0.02–\$0.05 per SMS alert**, locking out **85%+ of public and low-income private schools** globally.
-- **The Classroom Blind Spot:** Gate-only systems fail to detect period-by-period cutting classes, leave teachers spending **4+ hours/month** compiling statutory registers manually, and offer zero emergency evacuation headcounts.
-
-### Slide 3 — The Solution (AttendSure Pure-Software Campus OS)
-- **Classroom-First Signed QR:** Works with any teacher laptop webcam or \$15 USB scanner. HMAC-SHA256 signed student QR IDs prevent badge forgery and sync seamlessly after Wi-Fi outages.
-- **Hardware-Bound Faculty GPS & DTR:** Eliminates proxy clock-ins via hardware UUID binding, Haversine campus perimeter checks, and mock-GPS rejection.
-- **Free Real-Time Parent Safety Loop:** Zero-cost Expo push notifications + direct parent-teacher chat replace expensive SMS gateways.
-- **Proactive Protection:** 30-day behavioral Dropout Early-Warning scoring + 1-click SDG 11 Emergency Evacuation Campus Roll-Call.
-
-### Slide 4 — Why Now? (Global Catalysts)
-- **Smartphone & Laptop Ubiquity:** Even rural teachers already own smartphones and school laptops; dedicated gate hardware is now obsolete.
-- **Ed-Fi & Open Education Data Mandate:** Ministries of Education, NGOs, and school districts increasingly require open JSON interoperability (**Ed-Fi v6.0**) and privacy-by-design (**GDPR Art. 25 / FERPA / COPPA**).
-- **Post-Pandemic Chronic Absenteeism Crisis:** Attendance recovery is now the #1 KPI for UNESCO, UNICEF, and national education ministries.
-
-### Slide 5 — Live Product & Technical Moat
-- **Dual Compliance Engine:** Toggle live between **Global Ed-Fi v6.0 (GDPR Pseudonymized)** and **DepEd Philippines Statutory Forms (SF1/SF2/SF4/CSC Form 48)** — proving AttendSure handles complex real-world government compliance while scaling globally out of the box.
-- **Anti-Fraud Engineering:** HMAC-signed QR payloads, server-side device locking, anti-mock GPS enforcement, brute-force account lockouts, RBAC section isolation, and tamper-evident audit logs.
-- **Offline-First & Zero-Downtime:** Built for emerging-market bandwidth with automatic retry queues and Docker Blue-Green zero-downtime deployment.
-
-### Slide 6 — UN SDG Measurable Social Impact
-Every metric in the AttendSure Impact Command Center is computed live from PostgreSQL:
-- **SDG 4 (Quality Education):** Real-time verified attendance & 30-day early-warning risk scoring before students drop out.
-- **SDG 5 & 10 (Gender Equality & Reduced Inequalities):** Live Gender Parity Index (Male vs Female daily attendance rates) and 4Ps/CCT vulnerable-student tracking.
-- **SDG 8 (Decent Work):** Reclaims ~4 clerical hours per teacher per month via automated statutory registers and timesheets.
-- **SDG 11 (Safe Resilient Communities):** 1-click Emergency Evacuation Campus Roll-Call with live assembly-point safety checkboxes.
-- **SDG 12 & 13 (Climate Action):** Avoids ~18.5 kg of turnstile e-waste per school and thousands of printed paper register sheets annually.
-- **SDG 16 (Accountable Institutions):** Tamper-evident audit trails and verifiable digital governance.
-
-### Slide 7 — Market Opportunity (TAM / SAM / SOM)
-- **TAM (Global K–12 Schools):** ~4.5M K–12 schools globally × \$960/yr avg SaaS = **\$4.3B/year** campus attendance & safety software market.
-- **SAM (Emerging Asia, LATAM, MENA & Low-Cost Private/Public Schools):** ~680,000 schools across ASEAN, India, LATAM, and Africa = **\$650M/year**.
-- **SOM (Years 1–3 Beachhead — Philippines & ASEAN Pilot Districts):** 2,500 schools (public division contracts + private K–12 SaaS) at \$480–\$1,200/school/year = **\$1.8M ARR**.
-
-### Slide 8 — Business Model & Unit Economics
-| Tier | Target Buyer | Pricing | Included Value |
-|---|---|---|---|
-| **Community Pilot** | Rural public schools / NGO pilots | **Free** (up to 300 students) | Core QR attendance, Parent Push, SF1/SF2 |
-| **School Pro SaaS** | Private K–12 & Charter Schools | **\$0.20 / student / mo** (~\$99–\$249/mo) | Unlimited classes, Dropout Early-Warning, GPS DTR, Parent Chat, Priority Support |
-| **District / Ministry Enterprise** | LGU / School Divisions / NGOs | **\$0.12 / student / mo** (volume) | Multi-school Ed-Fi v6.0 ODS sync, GDPR pseudonymized analytics, Blue-Green hosting, SLA |
-
-- **Gross Margin:** **84%+** (zero hardware COGS, zero SMS fees, lightweight PostgreSQL + Redis footprint).
-- **LTV : CAC Ratio:** **> 8.5×** (bottom-up teacher adoption + district-level batch procurement; estimated payback < 3.5 months).
-
-### Slide 9 — Competitive Landscape
-- **RFID Hardware Vendors:** Expensive (\$5.5k+ CapEx), gate-only blind spot, high maintenance failure rate.
-- **Legacy Western SIS (PowerSchool, Infinite Campus):** \$8–\$15/student/year — unaffordable for emerging markets, no offline QR scanning or mobile GPS faculty DTR.
-- **Generic Attendance Apps:** No cryptographic QR signing, no Ed-Fi v6.0 GDPR pseudonymization, no statutory ministry forms, no emergency evacuation roll-call.
-- **AttendSure:** Combines **\$0 hardware economics**, **enterprise cybersecurity**, **offline-first resilience**, and **dual global/national compliance**.
-
-### Slide 10 — 18-Month Global Expansion Roadmap & Ask
-- **Months 1–4 (Pilot Proof):** Deploy across 10 partner high schools in Region X (15,000+ learners); publish verified 90-day chronic absenteeism reduction impact report.
-- **Months 5–10 (National & ASEAN Scale):** Launch multi-tenant cloud SaaS with regional compliance packs (DepEd PH, Indonesia Dapodik, Ed-Fi v6.0 international districts).
-- **Months 11–18 (Global Impact Partnerships):** Partner with UNESCO/UNICEF education resilience grants and EdTech resellers across ASEAN & LATAM; reach 150+ paying institutions.
+A practical, plain-English presentation blueprint and live demonstration guide built around the real features running in `AttendSure_V3`.
 
 ---
 
-## Timed 3-Minute Live Competition Demo Script
+## 10-Slide Presentation Outline
 
-> **Pre-Demo Prep (60 seconds before stepping on stage):**  
-> Run `python manage.py seed_competition_demo` and open `http://localhost:5173` in full-screen dark or light mode.
+### Slide 1 — Title & Promise
+- **Name:** AttendSure v3 — *Pure-Software School Attendance, Campus Safety & SARDO Early-Warning*
+- **Tagline:** Every Teacher On Duty. Every Student Accounted For. Zero Extra Devices Required.
+- **Built & Working Today:** Full-stack Django 6 + React 19 + Expo React Native platform tailored for DepEd school operations.
 
-1. **[0:00 – 0:30] The Hook on the Public Showcase Landing Page**
-   - Point out the **$0 Gate Hardware CapEx** vs **$5,500+ RFID turnstiles** comparison and **5 UN SDG Pillars**.
-   - Toggle the top-right **Global Ed-Fi v6 / DepEd PH** switch and language selector (`EN` / `FIL` / `ES` / `FR`) to prove instant global localization.
-2. **[0:30 – 1:15] 1-Click Judge Demo → UN SDG Impact & Safety Command Center**
-   - Click **"Open Live UN SDG & AI Early-Warning Demo"** (signs into `demo_admin` via `/api/v1/accounts/demo-login/` and lands directly on the `Impact & Safety` tab).
-   - Walk through live PostgreSQL metrics across **SDG 4, 5/10 (Gender Parity Index), 8 (Hours Saved), 12/13 (CO2e & E-Waste Avoided), and 16 (Faculty GPS & Audit Logs)**.
-   - Scroll to the **30-Day Dropout Early-Warning Roster** showing automatically flagged `CRITICAL RISK` and `EARLY WARNING` students with tailored intervention prompts.
-3. **[1:15 – 1:55] Life-Saving Moment — SDG 11 Emergency Evacuation Roll-Call**
-   - Click the red **"Emergency Campus Roll-Call"** button.
-   - Show the instant verified headcount of students and faculty on campus today, search a learner, and check them off as **SAFE** at the assembly point while **Unaccounted For** decrements in real time.
-4. **[1:55 – 2:30] Global Privacy & Interoperability — GDPR Pseudonymized Ed-Fi v6.0 Export**
-   - Point to the **"GDPR Anonymize"** checkbox (checked by default) and click **"Export Ed-Fi v6.0 JSON"**.
-   - Open the downloaded JSON briefly to show `edFiVersion: "6.0"`, `privacyMode: "GDPR_PSEUDONYMIZED"`, SHA-256 pseudonymized `STU-...` unique IDs, and standard Ed-Fi attendance descriptors — zero raw student PII exposed.
-5. **[2:30 – 3:00] Dual Compliance Proof & Closing**
-   - Toggle the header compliance switch to **DepEd PH**, click **DepEd Reports (SF2)** or **Dashboard** to show live hourly classroom scans and statutory report automation.
-   - **Close:** *"With zero turnstiles, zero SMS costs, and open Ed-Fi v6.0 standards, AttendSure makes real-time student safety and dropout prevention accessible to every school on earth."*
+### Slide 2 — The Real Everyday Problem in Schools
+- **Paper Logbooks Hide Cutting Classes:** When attendance lives in separate paper notebooks, an adviser may not learn until days later that a student attended first period and skipped afternoon classes.
+- **Late Support for At-Risk Students (SARDO):** Without live 30-day absence and cutting tracking, schools notice chronic absenteeism only when a learner is already close to dropping out.
+- **Heavy Monthly Paperwork:** Teachers and advisers spend hours every month tallying DepEd **SF1**, **SF2**, **SF4**, and **CSC Form 48 (DTR)** sheets by hand.
+- **Slow Emergency Headcounts:** During earthquakes, typhoons, or campus drills, searching through paper binders delays confirming who is safely accounted for.
+
+### Slide 3 — The Pure-Software Solution
+- **Built-In Camera Student QR Scanning:** Teachers scan cryptographically signed student QR ID cards using the built-in webcam on their laptop/PC (`jsqr`) or the back camera on their phone (`expo-camera`). Works offline with automatic local queue sync when Wi-Fi returns.
+- **Phone Lock + Campus GPS Teacher Check-In:** Teachers clock in and out inside the AttendSure mobile app using their phone's built-in face unlock, fingerprint, or PIN lock — paired with 1-to-1 phone binding and campus GPS boundary checks. Zero raw face photos are ever stored on the server.
+- **Automated Weekday-Aware Monitoring:** Flags students who miss a scheduled later class on that weekday without an active Exit Pass, and tracks outside-campus teacher movement unless covered by an approved Official Locator Slip.
+- **Official DepEd Reports & Safety Tools:** Generates print-ready **SF1**, **SF2**, **SF4**, **CSC Form 48 (DTR)**, **30-Day SARDO Risk** lists, and **1-Click Emergency Roll-Call**.
+
+### Slide 4 — Why Schools Can Adopt It Immediately
+- **Zero Extra Equipment Budget:** No special devices to buy, install, wire, or repair — schools use the laptops, webcams, and smartphones staff already carry every day.
+- **Built for Campus Wi-Fi Gaps:** Both the web webcam scanner and the mobile app store scans locally when offline and upload them cleanly once reconnected.
+- **Clear Roles for Every Staff Member:** Supports all 5 school staff profiles — System Admin, School Principal, Department Head, Teaching Teacher / Adviser, and Non-Teaching Staff — with `EN` and `FIL` language support.
+
+### Slide 5 — Built-In Anti-Fraud & Privacy Engineering
+- **Signed Student QR IDs:** Every student QR code is signed with HMAC-SHA256 (`ATTENDSURE:...`), so photocopied or guessed LRN strings cannot forge attendance.
+- **Anti-Proxy Teacher Verification:** 1-to-1 phone binding (`bound_device_id`), hardware-stored check-in key verification (`biometric_key_id`), mock-GPS rejection, weak-signal (> 250 m) rejection, and travel-speed checks stop buddy punching and fake GPS apps.
+- **Privacy by Design (RA 10173):** Zero raw face photos or biometric templates ever leave the teacher's phone. Role scoping keeps teachers inside their own assigned sections, audit logs track every change and export, and Division Data Exports support optional personal ID masking.
+
+### Slide 6 — Measurable School Impact
+Every number shown on the AttendSure dashboard and safety panel comes live from the school database:
+- **Faster Early Intervention (30-Day SARDO Risk):** Automatically highlights `CRITICAL_SARDO` and `EARLY_WARNING` learners so advisers and guidance staff can reach out early.
+- **Hours Saved Every Month:** Eliminates manual end-of-month counting for DepEd **SF1**, **SF2**, **SF4**, and **CSC Form 48 (DTR)** submission and approval.
+- **Live Campus Safety:** **1-Click Emergency Roll-Call** displays every student and teacher verified on campus today with live assembly-point safety checkboxes.
+- **Cleaner Paperless Workflows:** Cuts repetitive printed daily sheets while keeping official print-ready DepEd forms one click away.
+
+### Slide 7 — Clean, Maintainable Architecture
+- **6 Focused Backend Apps (`accounts`, `school`, `students`, `attendance`, `campus`, `reports`):** Strict 3NF database design with zero duplicated columns, XOR database constraints on exit passes, and automated weekday schedule checks.
+- **Consistent Web & Mobile Experience:** Synchronized 5-role permission checks across Django, React 19, and React Native, plus Light, Dark, and High-Contrast themes.
+- **Zero-Downtime Updates:** Docker Blue-Green deployment (`web_blue` / `web_green` behind Nginx) updates the server without interrupting active classes.
+
+### Slide 8 — Sustainable Deployment Model
+| Plan | Designed For | What Is Included |
+|---|---|---|
+| **School Pilot** | Single public high school or pilot campus | Full built-in camera QR attendance, teacher phone check-in & GPS boundary, Exit Passes, SF1/SF2/SF4, CSC Form 48 (DTR), SARDO Risk, and Emergency Roll-Call. |
+| **Division Rollout** | City or provincial school divisions | Multi-campus hosting, Division Data Export (`JSON` / `CSV` with optional ID masking), central onboarding, and zero-downtime server maintenance. |
+| **Private K–12 Subscription** | Private schools & academies | Managed cloud hosting, automated backups, staff training, and priority technical support. |
+
+- **Low Operating Cost:** Because AttendSure is pure software with zero extra hardware supply chain, school budgets go straight into reliable cloud or on-campus hosting and staff support.
+
+### Slide 9 — Planned Next Steps (Roadmap)
+- **Phase 1 (Current Release — Live Today):** Complete 5-role staff web portal & mobile app, signed camera QR scanning with offline sync, on-device phone lock & campus GPS teacher check-in, weekday-aware cutting detection, official DepEd SF1/SF2/SF4/DTR, 30-Day SARDO Risk, and 1-Click Emergency Roll-Call.
+- **Phase 2 (Division Pilot & Scale):** Multi-school pilot across Region X public high schools, division analytics dashboards, and fine-tuned attendance trend reports.
+- **Phase 3 (Planned Parent Mobile Alerts):** Optional **real-time mobile app push notifications** for parents/guardians when a student checks in for class or receives an approved campus Exit Pass — keeping communication instant and zero-cost.
+
+### Slide 10 — Summary & Call to Action
+- **Proven Codebase:** Verified by automated Django unit tests and an 8-gate repository audit covering migrations, API routes, 184 web/mobile permission checks, UI token consistency, vocabulary standards, and schedule conflict checks.
+- **Ready for Campus Pilot:** Deployable on a school server or Docker cloud host in minutes using devices teachers already own.
 
 ---
 
-## Rapid Judge Q&A Defense Guide
+## Timed 3-Minute Live Walkthrough Script
 
-- **Q: What happens when a rural school loses internet?**  
-  *A:* Both the web scanner and React Native mobile app maintain local offline queues (`offlineQueue.ts` + `/api/v1/attendance/offline-sync/`) that automatically batch-upload scans and GPS heartbeats once connectivity returns.
-- **Q: Can students photocopy a friend's QR code or teachers fake GPS?**  
-  *A:* Every student QR code is cryptographically signed with HMAC-SHA256 (`common/qr_signer.py`), scanned live by the classroom teacher per period (visual presence check), and rejected if scanned in the wrong section. Teachers' phones are bound to a hardware-backed device UUID (`deviceService.ts`) with mock-GPS detection (`loc.mocked`) and Haversine radius validation.
-- **Q: How do you protect children's personal data under GDPR / FERPA / COPPA?**  
-  *A:* Strict Role-Based Access Control isolates teachers to only their assigned sections, blocks parent accounts from accessing staff or other children's data, logs every data read/export in `AuditLog`, and offers deterministic SHA-256 pseudonymization (`?anonymize=1`) on Ed-Fi v6.0 exports.
-- **Q: Is the 1-Click Judge Demo a security hole in production?**  
-  *A:* No — `DemoLoginView` strictly checks `settings.DEBUG or settings.ENABLE_JUDGE_DEMO` and returns `HTTP 404` when disabled in production deployments, verified by automated Django tests.
+> **Before Starting:**  
+> Run `python manage.py seed_competition_demo` inside `backend/`, start the Django server (`python manage.py runserver 0.0.0.0:8000`) and Web Portal (`npm run dev` inside `web/`), and open `http://localhost:5173`.
+
+1. **[0:00 – 0:30] Landing Page & Language Switch**
+   - Introduce AttendSure's core value: pure software running on existing teacher laptops, webcams, and phones — zero extra equipment to buy.
+   - Toggle the header language switch (`EN` / `FIL`) and theme mode (`Light` / `Dark` / `High-Contrast`) to show everyday accessibility for Philippine school staff.
+2. **[0:30 – 1:10] Live Dashboard, 30-Day SARDO Risk & 1-Click Emergency Roll-Call**
+   - Sign in as `demo_admin` or `demo_principal` (password `AttendSure2026!`, or use the environment-gated preview button in local development).
+   - Open **SARDO & Safety** to show students automatically grouped into `CRITICAL_SARDO` and `EARLY_WARNING` from real 30-day attendance patterns.
+   - Click **Emergency Campus Roll-Call** to show the live headcount of every student and teacher verified on campus today, and mark students as **SAFE** at the assembly area in real time.
+3. **[1:10 – 1:55] Classroom QR Scanner, Adviser Matrix & Weekday Schedule Filtering**
+   - Open **QR Scanner** to show built-in laptop/PC webcam scanning (`jsqr`) with HMAC-signed student QR IDs and automatic offline local queue sync.
+   - Open **Advisory** to show the daily subject monitoring matrix filtered to today's scheduled class periods (`ALL_WEEKDAYS`, `MWF`, `TTH`), spotting students present in Period 1 who missed a later scheduled period without an active Exit Pass.
+4. **[1:55 – 2:30] Campus GPS Boundary, Teacher Check-In & Exit Passes**
+   - Open **Geofence & Loafing** to show the campus GPS circle, live teacher check-in status, and outside-campus alerts (auto-resolved when teachers return or excused when an approved **Official Locator Slip** is active).
+   - Emphasize privacy: teachers verify identity using their own phone's face/fingerprint/PIN lock with 1-to-1 phone binding and zero raw face photos sent to the server.
+5. **[2:30 – 3:00] Official DepEd Forms & Division Export**
+   - Open **DepEd Reports** to show print-ready **SF1**, **SF2**, **SF4**, and **DTR (CSC Form 48)** with teacher submission and Department Head approval.
+   - Click **Division Export** with personal ID masking enabled to show privacy-safe reporting ready for school division offices.
+
+---
+
+## Common Reviewer Questions & Clear Answers
+
+- **Q: What happens when campus internet goes down during morning attendance?**  
+  *A:* Both the web webcam scanner (`localStorage`) and the mobile phone camera scanner (`AsyncStorage`) store signed QR scans in a local offline queue with unique scan IDs (`client_scan_uuid`). Once internet reconnects, they sync cleanly to `/api/v1/attendance/offline-sync/` without creating duplicates.
+- **Q: Can someone copy a student's LRN or fake a teacher's location?**  
+  *A:* Student QR cards are signed with HMAC-SHA256 (`common/qr_signer.py`), so plain LRNs or edited codes are rejected immediately. Teacher check-ins require their bound phone (`bound_device_id`), on-device face/fingerprint/PIN confirmation (`biometric_key_id`), real non-mocked GPS coordinates inside the campus boundary, and accurate GPS readings (≤ 250 m).
+- **Q: Do you store teacher face photos or fingerprints on the server?**  
+  *A:* Never. Face unlock, fingerprint, and PIN checks stay entirely inside the phone's operating system via `expo-local-authentication` and `expo-secure-store`. The server only stores a non-reversible SHA-256 key identifier (`biometric_key_id`) to confirm check-ins came from the teacher's bound phone.
+- **Q: How does AttendSure handle non-teaching school staff?**  
+  *A:* Non-teaching staff have `role="TEACHER"` with `can_handle_classes=False`. Both the web portal and mobile app hide classroom QR scanning, student class lists, and SF1/SF2 for them, showing only their personal dashboard, campus GPS check-in, official locator slips, and CSC Form 48 DTR.
+- **Q: Are the preview login buttons safe for real production schools?**  
+  *A:* Yes. `/api/v1/accounts/demo-login/` checks `DEBUG or ENABLE_JUDGE_DEMO` on the server and returns `HTTP 404` when disabled in production, verified by automated tests.

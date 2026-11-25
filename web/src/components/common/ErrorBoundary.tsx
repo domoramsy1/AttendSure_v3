@@ -8,6 +8,7 @@
 import React, { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, RefreshCw, Copy, Check, RotateCcw } from 'lucide-react';
+import { copyTextToClipboard } from '../../utils/clipboard';
 
 export interface ErrorBoundaryProps {
   children: ReactNode;
@@ -90,33 +91,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
       lines.push(`Stack: ${this.state.error?.stack || 'None'}`);
     }
     const errorText = lines.join('\n');
-
-    let success = false;
-    if (navigator.clipboard && window.isSecureContext) {
-      try {
-        await navigator.clipboard.writeText(errorText);
-        success = true;
-      } catch {
-        success = false;
-      }
-    }
-
-    if (!success) {
-      try {
-        const textArea = document.createElement('textarea');
-        textArea.value = errorText;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        success = document.execCommand('copy');
-        textArea.remove();
-      } catch {
-        success = false;
-      }
-    }
+    const success = await copyTextToClipboard(errorText);
 
     if (success) {
       this.setState({ copied: true });
@@ -147,14 +122,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
         <div style={errorContainerStyle}>
           <div style={errorCardStyle}>
             <div style={iconBadgeStyle}>
-              <AlertTriangle size={24} color="var(--danger, #dc2626)" />
+              <AlertTriangle size={24} color="var(--danger)" />
             </div>
 
             <div style={{ textAlign: 'center', width: '100%' }}>
-              <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary, #0f172a)' }}>
+              <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
                 {featureTitle} Temporarily Unavailable
               </h3>
-              <p style={{ margin: '0 0 14px 0', fontSize: '0.82rem', color: 'var(--text-secondary, #64748b)', lineHeight: 1.45 }}>
+              <p style={{ margin: '0 0 14px 0', fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                 A temporary problem occurred while displaying this section. Other AttendSure tabs, classroom QR scanning, and background tasks are still running normally.
               </p>
 
@@ -190,7 +165,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
                 style={secondaryBtnStyle}
                 title="Copy report reference"
               >
-                {this.state.copied ? <Check size={14} color="var(--success, #059669)" /> : <Copy size={14} />}
+                {this.state.copied ? <Check size={14} color="var(--success)" /> : <Copy size={14} />}
                 <span>{this.state.copied ? 'Copied' : 'Copy Details'}</span>
               </button>
 
@@ -233,16 +208,16 @@ const errorContainerStyle: React.CSSProperties = {
   minHeight: '280px',
   padding: '24px 16px',
   boxSizing: 'border-box',
-  backgroundColor: 'var(--bg-app, #f8fafc)',
+  backgroundColor: 'var(--bg-app)',
 };
 
 const errorCardStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
-  backgroundColor: 'var(--bg-surface, #ffffff)',
+  backgroundColor: 'var(--bg-surface)',
   borderRadius: 12,
-  border: '1px solid var(--border-subtle, #e2e8f0)',
+  border: '1px solid var(--border-subtle)',
   boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.12)',
   padding: '28px 32px',
   maxWidth: 540,
@@ -254,31 +229,31 @@ const iconBadgeStyle: React.CSSProperties = {
   width: 48,
   height: 48,
   borderRadius: '50%',
-  backgroundColor: 'var(--danger-bg, #fef2f2)',
+  backgroundColor: 'var(--danger-bg)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   marginBottom: 14,
-  border: '1px solid var(--border-subtle, #fee2e2)',
+  border: '1px solid var(--border-subtle)',
 };
 
 const debugCodeStyle: React.CSSProperties = {
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   fontSize: '0.74rem',
-  color: 'var(--danger, #991b1b)',
-  backgroundColor: 'var(--danger-bg, #fef2f2)',
+  color: 'var(--danger)',
+  backgroundColor: 'var(--danger-bg)',
   padding: '8px 12px',
   borderRadius: 6,
   marginBottom: 16,
   wordBreak: 'break-word',
-  border: '1px solid var(--border-subtle, #fee2e2)',
+  border: '1px solid var(--border-subtle)',
   textAlign: 'left',
 };
 
 const stackTraceContainerStyle: React.CSSProperties = {
   maxHeight: '140px',
   overflowY: 'auto',
-  backgroundColor: '#0f172a',
+  backgroundColor: 'var(--dark-surface)',
   borderRadius: 6,
   padding: '8px 12px',
   marginBottom: 16,
@@ -289,7 +264,7 @@ const stackTracePreStyle: React.CSSProperties = {
   margin: 0,
   fontSize: '0.68rem',
   fontFamily: 'ui-monospace, monospace',
-  color: '#e2e8f0',
+  color: 'var(--dark-text)',
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-all',
 };
@@ -310,8 +285,8 @@ const primaryBtnStyle: React.CSSProperties = {
   padding: '8px 16px',
   borderRadius: 6,
   border: 'none',
-  backgroundColor: 'var(--brand-button-bg, #0284c7)',
-  color: '#ffffff',
+  backgroundColor: 'var(--brand-button-bg)',
+  color: 'var(--on-primary)',
   fontWeight: 700,
   fontSize: '0.78rem',
   cursor: 'pointer',
@@ -323,9 +298,9 @@ const secondaryBtnStyle: React.CSSProperties = {
   gap: 6,
   padding: '8px 12px',
   borderRadius: 6,
-  border: '1px solid var(--border-input, #cbd5e1)',
-  backgroundColor: 'var(--bg-surface-subtle, #ffffff)',
-  color: 'var(--text-primary, #475569)',
+  border: '1px solid var(--border-input)',
+  backgroundColor: 'var(--bg-surface-subtle)',
+  color: 'var(--text-primary)',
   fontWeight: 600,
   fontSize: '0.78rem',
   cursor: 'pointer',

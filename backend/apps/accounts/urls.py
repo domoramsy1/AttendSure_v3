@@ -10,22 +10,25 @@ from .views import (
     CurrentUserView,
     DemoLoginView,
     DemoStatusView,
-    FacultyDropdownView,
-    FacultyProfileViewSet,
+    DepartmentViewSet,
     FieldAvailabilityView,
     LoginView,
-    RegisterPushTokenView,
+    LogoutView,
     ResetBoundDeviceView,
+    TeacherDropdownView,
+    TeacherProfileViewSet,
     UnlockAccountsView,
     UserAccountViewSet,
 )
 
 router = DefaultRouter()
-router.register(r"faculty", FacultyProfileViewSet, basename="faculty")
+router.register(r"teachers", TeacherProfileViewSet, basename="teachers")
 router.register(r"users", UserAccountViewSet, basename="users")
+router.register(r"departments", DepartmentViewSet, basename="departments")
 
 urlpatterns = [
     path("login/", LoginView.as_view(), name="auth-login"),
+    path("logout/", LogoutView.as_view(), name="auth-logout"),
     path("token/", LoginView.as_view(), name="auth-token"),
     path("token/refresh/", TokenRefreshView.as_view(), name="auth-token-refresh"),
     path("refresh/", TokenRefreshView.as_view(), name="auth-refresh"),
@@ -36,10 +39,8 @@ urlpatterns = [
     path("change-password/", ChangePasswordView.as_view(), name="auth-change-password"),
     path("check-availability/", FieldAvailabilityView.as_view(), name="auth-check-availability"),
     path("validate-field/", FieldAvailabilityView.as_view(), name="auth-validate-field"),
-    path("push-token/", RegisterPushTokenView.as_view(), name="auth-push-token"),
-    path("register-push-token/", RegisterPushTokenView.as_view(), name="auth-register-push-token"),
-    path("faculty/dropdown/", FacultyDropdownView.as_view(), name="faculty-dropdown"),
-    path("faculty-dropdown/", FacultyDropdownView.as_view(), name="faculty-dropdown-alt"),
+    path("teachers/dropdown/", TeacherDropdownView.as_view(), name="teachers-dropdown"),
+    path("teacher-dropdown/", TeacherDropdownView.as_view(), name="teacher-dropdown-alt"),
     path("reset-device/<int:pk>/", ResetBoundDeviceView.as_view(), name="auth-reset-device"),
     path("reset-device/", ResetBoundDeviceView.as_view(), name="auth-reset-device-body"),
     path("unlock-accounts/", UnlockAccountsView.as_view(), name="auth-unlock-accounts"),

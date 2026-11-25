@@ -35,7 +35,7 @@ interface SubjectHeader {
   schedule_id: number;
   subject_code: string;
   subject_name: string;
-  faculty_name: string;
+  teacher_name: string;
   time_window: string;
 }
 
@@ -182,12 +182,19 @@ export const AdvisorySubjectMonitor: React.FC = () => {
   }, [fetchMatrixData, warmData]);
 
   useEffect(() => {
+    const handleAttendanceUpdated = () => {
+      void fetchMatrixData(selectedSectionRef.current, true, true);
+    };
+    window.addEventListener('attendsure:attendance-updated', handleAttendanceUpdated);
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') {
         fetchMatrixData(selectedSectionRef.current, true, true);
       }
     }, 20000);
-    return () => clearInterval(timer);
+    return () => {
+      window.removeEventListener('attendsure:attendance-updated', handleAttendanceUpdated);
+      clearInterval(timer);
+    };
   }, [fetchMatrixData]);
 
   const handleSectionChange = (nextSectionId: number) => {
@@ -365,7 +372,7 @@ export const AdvisorySubjectMonitor: React.FC = () => {
             margin: '6px auto 16px',
           }}
         >
-          Your profile is not yet assigned as a Class Adviser or subject faculty for an active
+          Your profile is not yet assigned as a Class Adviser or subject teacher for an active
           section. Contact your school administrator to link your schedule.
         </p>
         <button
@@ -562,7 +569,7 @@ export const AdvisorySubjectMonitor: React.FC = () => {
                     {sched.time_window || 'Scheduled'}
                   </div>
                   <div style={{ fontSize: '0.62rem', color: tokens.textSecondary, fontWeight: 500 }}>
-                    {sched.faculty_name}
+                    {sched.teacher_name}
                   </div>
                 </th>
               ))}

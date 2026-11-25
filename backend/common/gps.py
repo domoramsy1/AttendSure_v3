@@ -1,5 +1,7 @@
 import math
 
+MAX_ALLOWED_GPS_ACCURACY_METERS = 250.0
+
 
 def calculate_distance_meters(lat1, lon1, lat2, lon2) -> float:
     try:
@@ -36,7 +38,7 @@ def verify_campus_gps(
             "is_inside": False,
             "distance_meters": None,
             "allowed_radius": radius_meters,
-            "reason": "Fake or mock GPS location detected.",
+            "reason": "A mock location setting appears to be turned on. Please disable mock locations in your phone settings and try again.",
         }
 
     try:
@@ -48,7 +50,7 @@ def verify_campus_gps(
             "is_inside": False,
             "distance_meters": None,
             "allowed_radius": radius_meters,
-            "reason": "Invalid or missing GPS coordinates.",
+            "reason": "We could not read your phone's GPS location. Turn on Location Services and try again.",
         }
 
     if (
@@ -62,16 +64,42 @@ def verify_campus_gps(
             "is_inside": False,
             "distance_meters": None,
             "allowed_radius": radius_meters,
-            "reason": "GPS coordinates are outside valid earth bounds.",
+            "reason": "Your phone sent an unclear GPS reading. Step near a window or outdoors and try again.",
         }
 
+    acc_val = 0.0
+    if accuracy_meters is not None and str(accuracy_meters).strip() != "":
+        try:
+            acc_val = float(accuracy_meters)
+        except (TypeError, ValueError):
+            return {
+                "is_valid": False,
+                "is_inside": False,
+                "distance_meters": None,
+                "allowed_radius": radius_meters,
+                "reason": "Invalid GPS accuracy value.",
+            }
+        if not math.isfinite(acc_val) or acc_val < 0.0:
+            return {
+                "is_valid": False,
+                "is_inside": False,
+                "distance_meters": None,
+                "allowed_radius": radius_meters,
+                "reason": "GPS accuracy value is invalid.",
+            }
+        if acc_val > MAX_ALLOWED_GPS_ACCURACY_METERS:
+            return {
+                "is_valid": False,
+                "is_inside": False,
+                "distance_meters": None,
+                "allowed_radius": radius_meters,
+                "reason": (
+                    f"Your GPS signal is weak right now (±{round(acc_val)}m). "
+                    f"Step near a window or outdoors for a clearer signal (within {int(MAX_ALLOWED_GPS_ACCURACY_METERS)}m)."
+                ),
+            }
+
     distance = calculate_distance_meters(u_lat, u_lon, c_lat, c_lon)
-    try:
-        acc_val = float(accuracy_meters) if accuracy_meters is not None else 0.0
-    except (TypeError, ValueError):
-        acc_val = 0.0
-    if not math.isfinite(acc_val):
-        acc_val = 0.0
     drift_buffer = min(max(acc_val, 0.0), 35.0)
     is_inside = math.isfinite(distance) and distance <= (radius_meters + drift_buffer)
 
@@ -80,5 +108,9 @@ def verify_campus_gps(
         "is_inside": is_inside,
         "distance_meters": distance if math.isfinite(distance) else None,
         "allowed_radius": radius_meters,
-        "reason": "Within campus boundary." if is_inside else f"Outside campus ({round(distance)}m away).",
+        "reason": (
+            "On campus — inside the school boundary."
+            if is_inside
+            else f"Outside the school boundary ({round(distance)}m from campus center). Step inside the school boundary to Time In or Time Out."
+        ),
     }

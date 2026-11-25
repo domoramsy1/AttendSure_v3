@@ -10,65 +10,26 @@ import {
   Text,
   View,
   TextInput,
-  Alert,
-  Platform,
   TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import {
+  cleanUrl,
   getServerBaseUrl,
+  isValidServerUrl,
   setServerBaseUrl,
   resetServerBaseUrl,
+  testServerConnection,
 } from '../services/configService';
 import { Button } from './common/Button';
 import { useThemeMode } from '../context/ThemeContext';
-import {
-  cleanText,
-  isSafeUrl,
-  getFriendlyErrorMessage,
-} from '../constants/theme';
+import { cleanText, getFriendlyErrorMessage } from '../constants/theme';
+import { showNotice } from '../utils/helpers';
 
 export interface ServerConfigModalProps {
   visible: boolean;
   onClose: () => void;
-}
-
-const showNotice = (title: string, message: string) => {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.alert(`${title}: ${message}`);
-  } else {
-    Alert.alert(title, message);
-  }
-};
-
-function parseStrictHttpServerUrl(rawInput: string): string | null {
-  const sanitized = cleanText(rawInput, 300);
-  if (!sanitized) return null;
-
-  const lower = sanitized.toLowerCase();
-  if (
-    lower.startsWith('javascript:') ||
-    lower.startsWith('data:') ||
-    lower.startsWith('file:') ||
-    lower.startsWith('vbscript:')
-  ) {
-    return null;
-  }
-
-  if (!isSafeUrl(sanitized)) return null;
-
-  try {
-    const parsed = new URL(sanitized);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return null;
-    }
-    if (!parsed.hostname) {
-      return null;
-    }
-    return sanitized.replace(/\/+$/, '');
-  } catch {
-    return null;
-  }
 }
 
 export function ServerConfigModal({ visible, onClose }: ServerConfigModalProps) {
@@ -107,24 +68,31 @@ export function ServerConfigModal({ visible, onClose }: ServerConfigModalProps) 
 
   const handleSave = async () => {
     if (busy) return;
-    const validUrl = parseStrictHttpServerUrl(url);
-    if (!validUrl) {
+    const rawInput = cleanText(url, 300);
+    if (!rawInput || !isValidServerUrl(rawInput)) {
       showNotice(
         'Invalid Address',
-        'Please enter a valid school server web address starting with http:// or https://.'
+        'Enter a valid school server address (for example: http://192.168.100.9:8000).'
       );
       return;
     }
 
+    const normalizedUrl = cleanUrl(rawInput);
     setBusy(true);
     try {
-      await setServerBaseUrl(validUrl);
-      if (isMountedRef.current) {
-        setUrl(validUrl);
-      }
-      showNotice('Saved', 'School server address updated.');
+      await setServerBaseUrl(normalizedUrl);
+      const check = await testServerConnection(normalizedUrl);
+      if (!isMountedRef.current) return;
+      setUrl(normalizedUrl);
+      showNotice(
+        check.ok ? 'Connected & Saved' : 'Address Saved',
+        check.ok
+          ? check.message
+          : `${check.message} Make sure your phone and server are on the same network.`
+      );
       onClose();
     } catch (err: unknown) {
+      if (!isMountedRef.current) return;
       showNotice(
         'Unable to Save',
         getFriendlyErrorMessage(err, 'Could not save the school server address. Please try again.')
@@ -147,6 +115,7 @@ export function ServerConfigModal({ visible, onClose }: ServerConfigModalProps) 
       }
       showNotice('Reset Complete', 'Default school server address restored.');
     } catch (err: unknown) {
+      if (!isMountedRef.current) return;
       showNotice(
         'Unable to Reset',
         getFriendlyErrorMessage(err, 'Could not restore the default server address.')
@@ -210,7 +179,7 @@ export function ServerConfigModal({ visible, onClose }: ServerConfigModalProps) 
               },
             ]}
           >
-            Enter the web address of your AttendSure school server so this app can connect safely.
+            Enter the Wi-Fi IP or web address of your AttendSure school server.
           </Text>
 
           <Text
@@ -223,7 +192,7 @@ export function ServerConfigModal({ visible, onClose }: ServerConfigModalProps) 
               },
             ]}
           >
-            Server Web Address
+            Server Address
           </Text>
           <TextInput
             style={[
@@ -239,7 +208,7 @@ export function ServerConfigModal({ visible, onClose }: ServerConfigModalProps) 
             ]}
             value={url}
             onChangeText={setUrl}
-            placeholder="https://school.example.edu"
+            placeholder="http://192.168.100.9:8000"
             placeholderTextColor={palette.textMuted}
             autoCapitalize="none"
             autoCorrect={false}
@@ -252,7 +221,7 @@ export function ServerConfigModal({ visible, onClose }: ServerConfigModalProps) 
             <Button
               title="Reset Default"
               variant="outline"
-              onPress={handleReset}
+              onPress={() => void handleReset()}
               disabled={busy}
               style={styles.btnFlex}
             />
@@ -265,18 +234,22 @@ export function ServerConfigModal({ visible, onClose }: ServerConfigModalProps) 
                   opacity: busy ? 0.6 : 1,
                 },
               ]}
-              onPress={handleSave}
+              onPress={() => void handleSave()}
               disabled={busy}
               activeOpacity={0.8}
             >
-              <Text
-                style={[
-                  styles.saveBtnText,
-                  { color: palette.onPrimary, fontSize: fonts.size.sm },
-                ]}
-              >
-                Save &amp; Apply
-              </Text>
+              {busy ? (
+                <ActivityIndicator size="small" color={palette.onPrimary} />
+              ) : (
+                <Text
+                  style={[
+                    styles.saveBtnText,
+                    { color: palette.onPrimary, fontSize: fonts.size.sm },
+                  ]}
+                >
+                  Save &amp; Apply
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
 

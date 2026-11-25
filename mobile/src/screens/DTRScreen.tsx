@@ -12,20 +12,20 @@ import {
   RefreshControl,
   ActivityIndicator,
   TouchableOpacity,
-  Alert,
   Share,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
 import {
   getFriendlyErrorMessage,
   type ThemePalette,
 } from '../constants/theme';
+import { isCanceledError, showNotice } from '../utils/helpers';
 import DTRReportView, { DTRReportData } from '../components/reports/DTRReportView';
 
 const MONTH_NAMES = [
@@ -34,23 +34,10 @@ const MONTH_NAMES = [
 ];
 
 interface DTRScreenProps {
-  facultyId?: string;
+  teacherId?: string;
 }
 
-const isCanceledError = (err: unknown): boolean => {
-  const e = err as { code?: string; name?: string };
-  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
-};
-
-const showNotice = (title: string, message: string): void => {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.alert(`${title}: ${message}`);
-  } else {
-    Alert.alert(title, message);
-  }
-};
-
-export const DTRScreen: React.FC<DTRScreenProps> = ({ facultyId = '' }) => {
+export const DTRScreen: React.FC<DTRScreenProps> = ({ teacherId = '' }) => {
   const { user } = useAuth();
   const { palette, fonts } = useThemeMode();
   const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
@@ -59,10 +46,10 @@ export const DTRScreen: React.FC<DTRScreenProps> = ({ facultyId = '' }) => {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const currentUser = user as Record<string, any> | null;
-  const userRole = String(currentUser?.role || currentUser?.system_role || 'FACULTY')
+  const userRole = String(currentUser?.role || currentUser?.system_role || 'TEACHER')
     .trim()
     .toUpperCase();
-  const isFaculty = userRole === 'FACULTY';
+  const isTeacher = userRole === 'TEACHER';
 
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth() + 1);
@@ -80,13 +67,13 @@ export const DTRScreen: React.FC<DTRScreenProps> = ({ facultyId = '' }) => {
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
-      const cleanTargetId = facultyId.trim();
+      const cleanTargetId = teacherId.trim();
       const endpoint =
-        isFaculty && !cleanTargetId
-          ? '/reports/dtr/'
+        isTeacher && !cleanTargetId
+          ? ENDPOINTS.EMPLOYEE_DTR
           : cleanTargetId
-          ? `/reports/dtr/${encodeURIComponent(cleanTargetId)}/`
-          : '/reports/dtr/';
+          ? `${ENDPOINTS.EMPLOYEE_DTR}${encodeURIComponent(cleanTargetId)}/`
+          : ENDPOINTS.EMPLOYEE_DTR;
 
       const cacheKey = `attendsure_dtr_${cleanTargetId || 'self'}_${selectedMonth}_${selectedYear}`;
 
@@ -121,7 +108,7 @@ export const DTRScreen: React.FC<DTRScreenProps> = ({ facultyId = '' }) => {
         }
       }
     },
-    [isFaculty, facultyId, selectedMonth, selectedYear]
+    [isTeacher, teacherId, selectedMonth, selectedYear]
   );
 
   useEffect(() => {
@@ -144,10 +131,10 @@ export const DTRScreen: React.FC<DTRScreenProps> = ({ facultyId = '' }) => {
 
     setSubmittingDtr(true);
     try {
-      const encodedId = encodeURIComponent(String(dtrData.faculty_id));
-      await apiClient.post(`/reports/dtr/${encodedId}/`, {
+      const encodedId = encodeURIComponent(String(dtrData.teacher_id));
+      await apiClient.post(`${ENDPOINTS.EMPLOYEE_DTR}${encodedId}/`, {
         action: 'SUBMIT_DTR',
-        faculty_id: dtrData.faculty_id,
+        teacher_id: dtrData.teacher_id,
         month: dtrData.month_number,
         year: dtrData.year,
         regular_days_hours: dtrData.regular_days_hours,
@@ -177,10 +164,10 @@ export const DTRScreen: React.FC<DTRScreenProps> = ({ facultyId = '' }) => {
 
     setExportingDoc(true);
     try {
-      const res = await apiClient.get('/reports/export/', {
+      const res = await apiClient.get(ENDPOINTS.REPORT_EXPORT, {
         params: {
           report_type: 'DTR',
-          faculty_id: dtrData.faculty_id,
+          teacher_id: dtrData.teacher_id,
           month: dtrData.month_number,
           year: dtrData.year,
         },
@@ -188,7 +175,7 @@ export const DTRScreen: React.FC<DTRScreenProps> = ({ facultyId = '' }) => {
 
       const title =
         res.data?.title ||
-        `CSC_Form_48_${dtrData.faculty_name}_${dtrData.month}_${dtrData.year}`;
+        `CSC_Form_48_${dtrData.teacher_name}_${dtrData.month}_${dtrData.year}`;
       await Share.share({
         title,
         message: `${title}\nCivil Service Form No. 48 verified in AttendSure.`,

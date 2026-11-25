@@ -6,28 +6,12 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
-import { exportToCsv } from '../common/Pagination';
 import { PageSetupModal } from '../common/PageSetupModal';
 import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
-import {
-  ReportViewerShell,
-  ReportHeaderBar,
-  DEFAULT_DEPED_LANDSCAPE_SETUP,
-  resolvePaperDimensionsInches,
-} from '../reports/ReportViewerShell';
-import {
-  buildAuditStamp,
-  exportElementToExcel,
-  exportElementToLocalPdf,
-  exportElementToWord,
-  exportReportJson,
-  logOfficialReportAudit,
-  saveBlobWithOptionalPicker,
-} from '../../utils/reportExporters';
+import { ReportViewerShell, ReportHeaderBar } from '../reports/ReportViewerShell';
+import { useOfficialReportExport } from '../../hooks/useOfficialReportExport';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
-import { useAlert } from '../../context/AlertContext';
-import type { PageSetupConfig } from '../../types/pageSetup';
 import { Calendar, RefreshCw, Search } from 'lucide-react';
 
 export interface MetricTriplet {
@@ -127,7 +111,6 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
 }) => {
   const { tokens, brand } = useTheme();
   const { school: globalSchool } = useSchool();
-  const { showAlert } = useAlert();
 
   const now = useMemo(() => new Date(), []);
   const yearOptions = useMemo(() => {
@@ -149,26 +132,102 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
-  const [isPrinting, setIsPrinting] = useState<boolean>(false);
-
-  const [auditMeta, setAuditMeta] = useState(() => buildAuditStamp('SF4'));
-  const [pageConfig, setPageConfig] = useState<PageSetupConfig>(DEFAULT_DEPED_LANDSCAPE_SETUP);
-  const [isPageSetupOpen, setIsPageSetupOpen] = useState<boolean>(false);
 
   const reportRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const { widthIn: pageWidthInches, heightIn: pageHeightInches } = useMemo(
-    () => resolvePaperDimensionsInches(pageConfig),
-    [pageConfig]
+  const filteredGradeGroups = useMemo(() => {
+    const groups = Array.isArray(reportData?.grade_groups) ? reportData!.grade_groups : [];
+    const q = sanitizeSearchText(searchQuery).toLowerCase();
+    if (!q) return groups;
+
+    return groups
+      .map((g) => ({
+        ...g,
+        sections: (g.sections || []).filter(
+          (s) =>
+            s.section_name.toLowerCase().includes(q) ||
+            s.adviser_name.toLowerCase().includes(q) ||
+            s.grade_level.toLowerCase().includes(q)
+        ),
+      }))
+      .filter((g) => g.sections.length > 0 || g.grade_level.toLowerCase().includes(q));
+  }, [reportData, searchQuery]);
+
+  const getBaseFilename = useCallback(
+    () => `DepEd_SF4_${reportData?.month || selectedMonth}_${selectedYear}`,
+    [reportData?.month, selectedMonth, selectedYear]
   );
 
-  const refreshAuditMeta = useCallback(() => {
-    const next = buildAuditStamp('SF4', reportData?.school_id || globalSchool.school_id);
-    setAuditMeta(next);
-    return next;
-  }, [reportData?.school_id, globalSchool.school_id]);
+  const buildCsvData = useCallback(() => {
+    if (!reportData) return { headers: [] as string[], rows: [] as Array<Array<string | number>> };
+    const headers = [
+      'Name of Adviser',
+      'Grade Level',
+      'Section',
+      'Registered End M',
+      'Registered End F',
+      'Registered End T',
+      'Daily Avg M',
+      'Daily Avg F',
+      'Daily Avg T',
+      'Attendance % M',
+      'Attendance % F',
+      'Attendance % T',
+      'Dropped Out Cum T',
+      'Transferred Out Cum T',
+      'Transferred In Cum T',
+    ];
+    const rows: Array<Array<string | number>> = [];
+    filteredGradeGroups.forEach((grp) => {
+      grp.sections.forEach((s) => {
+        rows.push([
+          s.adviser_name,
+          s.grade_level,
+          s.section_name,
+          s.registered_end.m,
+          s.registered_end.f,
+          s.registered_end.total,
+          s.daily_average.m,
+          s.daily_average.f,
+          s.daily_average.total,
+          s.attendance_percentage.m,
+          s.attendance_percentage.f,
+          s.attendance_percentage.total,
+          s.dropped_out_cumulative.total,
+          s.transferred_out_cumulative.total,
+          s.transferred_in_cumulative.total,
+        ]);
+      });
+    });
+    return { headers, rows };
+  }, [reportData, filteredGradeGroups]);
+
+  const {
+    auditMeta,
+    isExportingPdf,
+    isPrinting,
+    pageConfig,
+    setPageConfig,
+    isPageSetupOpen,
+    setIsPageSetupOpen,
+    pageWidthInches,
+    pageHeightInches,
+    stampView,
+    handleDirectPrint,
+    handleExportPdf,
+    handleExportCsv,
+    handleExportExcel,
+    handleExportWord,
+    handleExportJson,
+  } = useOfficialReportExport({
+    formCode: 'SF4',
+    reportData,
+    reportRef,
+    schoolId: reportData?.school_id || globalSchool.school_id,
+    getBaseFilename,
+    buildCsvData,
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -235,14 +294,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         });
         if (controller.signal.aborted) return;
         setReportData(res.data);
-        const stamp = buildAuditStamp('SF4', res.data?.school_id || globalSchool.school_id);
-        setAuditMeta(stamp);
-        void logOfficialReportAudit({
-          reportName: 'SF4',
-          trackingId: stamp.trackingId,
-          printedAt: stamp.printedAt,
-          action: 'VIEW',
-        });
+        stampView(res.data?.school_id || globalSchool.school_id);
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
         if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
@@ -258,7 +310,7 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
         }
       }
     },
-    [selectedMonth, selectedYear, selectedAcademicYear, globalSchool.school_id]
+    [selectedMonth, selectedYear, selectedAcademicYear, globalSchool.school_id, stampView]
   );
 
   useEffect(() => {
@@ -267,40 +319,6 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       abortRef.current?.abort();
     };
   }, [fetchSF4]);
-
-  useEffect(() => {
-    const handleBeforePrint = () => {
-      refreshAuditMeta();
-      setIsPrinting(true);
-    };
-    const handleAfterPrint = () => {
-      setIsPrinting(false);
-    };
-    window.addEventListener('beforeprint', handleBeforePrint);
-    window.addEventListener('afterprint', handleAfterPrint);
-    return () => {
-      window.removeEventListener('beforeprint', handleBeforePrint);
-      window.removeEventListener('afterprint', handleAfterPrint);
-    };
-  }, [refreshAuditMeta]);
-
-  const filteredGradeGroups = useMemo(() => {
-    const groups = Array.isArray(reportData?.grade_groups) ? reportData!.grade_groups : [];
-    const q = sanitizeSearchText(searchQuery).toLowerCase();
-    if (!q) return groups;
-
-    return groups
-      .map((g) => ({
-        ...g,
-        sections: (g.sections || []).filter(
-          (s) =>
-            s.section_name.toLowerCase().includes(q) ||
-            s.adviser_name.toLowerCase().includes(q) ||
-            s.grade_level.toLowerCase().includes(q)
-        ),
-      }))
-      .filter((g) => g.sections.length > 0 || g.grade_level.toLowerCase().includes(q));
-  }, [reportData, searchQuery]);
 
   const paginatedPages = useMemo<SF4PageChunk[]>(() => {
     if (pageConfig.layoutMode === 'pageless' || filteredGradeGroups.length === 0) {
@@ -350,163 +368,6 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
       isFinalPage: idx === total - 1,
     }));
   }, [filteredGradeGroups, pageConfig, pageHeightInches]);
-
-  const getBaseFilename = () => `DepEd_SF4_${reportData?.month || selectedMonth}_${selectedYear}`;
-
-  const handleDirectPrint = () => {
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF4',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'PRINT',
-    });
-    setIsPrinting(true);
-    setTimeout(() => {
-      window.print();
-      setTimeout(() => setIsPrinting(false), 400);
-    }, 180);
-  };
-
-  const handleExportPdf = async (usePicker = false) => {
-    if (!reportData || !reportRef.current) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF4',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'PDF',
-    });
-
-    setIsExportingPdf(true);
-    setIsPrinting(true);
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      await exportElementToLocalPdf({
-        element: reportRef.current,
-        filename: `${getBaseFilename()}.pdf`,
-        pageWidthInches,
-        pageHeightInches,
-        orientation: pageConfig.orientation,
-        pageColor: pageConfig.pageColor,
-        pageless: pageConfig.layoutMode === 'pageless',
-        usePicker,
-      });
-    } catch {
-      showAlert({
-        title: 'Opening Print Dialog',
-        message: 'Choose "Save as PDF" in your browser print dialog.',
-        type: 'info',
-      });
-      handleDirectPrint();
-    } finally {
-      setIsPrinting(false);
-      setIsExportingPdf(false);
-    }
-  };
-
-  const buildCsvData = () => {
-    if (!reportData) return { headers: [] as string[], rows: [] as Array<Array<string | number>> };
-    const headers = [
-      'Name of Adviser',
-      'Grade Level',
-      'Section',
-      'Registered End M',
-      'Registered End F',
-      'Registered End T',
-      'Daily Avg M',
-      'Daily Avg F',
-      'Daily Avg T',
-      'Attendance % M',
-      'Attendance % F',
-      'Attendance % T',
-      'Dropped Out Cum T',
-      'Transferred Out Cum T',
-      'Transferred In Cum T',
-    ];
-    const rows: Array<Array<string | number>> = [];
-    filteredGradeGroups.forEach((grp) => {
-      grp.sections.forEach((s) => {
-        rows.push([
-          s.adviser_name,
-          s.grade_level,
-          s.section_name,
-          s.registered_end.m,
-          s.registered_end.f,
-          s.registered_end.total,
-          s.daily_average.m,
-          s.daily_average.f,
-          s.daily_average.total,
-          s.attendance_percentage.m,
-          s.attendance_percentage.f,
-          s.attendance_percentage.total,
-          s.dropped_out_cumulative.total,
-          s.transferred_out_cumulative.total,
-          s.transferred_in_cumulative.total,
-        ]);
-      });
-    });
-    return { headers, rows };
-  };
-
-  const handleExportCsv = async (usePicker = false) => {
-    if (!reportData) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF4',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'CSV',
-    });
-    const { headers, rows } = buildCsvData();
-    const filename = `${getBaseFilename()}.csv`;
-
-    if (usePicker) {
-      const escapeCell = (val: unknown) => `"${String(val ?? '').replace(/"/g, '""')}"`;
-      const csvString =
-        '\uFEFF' + [headers.map(escapeCell).join(','), ...rows.map((r) => r.map(escapeCell).join(','))].join('\r\n');
-      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-      await saveBlobWithOptionalPicker(blob, filename, 'text/csv', 'csv', 'CSV Spreadsheet (*.csv)');
-    } else {
-      exportToCsv(filename, headers, rows);
-    }
-  };
-
-  const handleExportExcel = async (usePicker = false) => {
-    if (!reportData || !reportRef.current) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF4',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'EXCEL',
-    });
-    await exportElementToExcel(reportRef.current, getBaseFilename(), meta, usePicker);
-  };
-
-  const handleExportWord = async (usePicker = false) => {
-    if (!reportData || !reportRef.current) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF4',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'WORD',
-    });
-    await exportElementToWord(reportRef.current, getBaseFilename(), meta, usePicker);
-  };
-
-  const handleExportJson = async (usePicker = false) => {
-    if (!reportData) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF4',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'JSON',
-    });
-    await exportReportJson(getBaseFilename(), meta, reportData, usePicker);
-  };
 
   const renderTripletCells = (triplet?: MetricTriplet) => (
     <>
@@ -719,11 +580,17 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
             <div
               key={`sf4-page-${page.pageNumber}`}
               className="sf4-sheet-page"
+              data-print-page="true"
               style={{
                 backgroundColor: pageConfig.pageColor || '#ffffff',
                 color: '#000000',
                 width: isPrinting ? '100%' : `${pageWidthInches}in`,
-                minHeight: pageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
+                minHeight:
+                  pageConfig.layoutMode === 'pageless'
+                    ? 'auto'
+                    : isExportingPdf
+                      ? `${Math.max(1, pageHeightInches - 0.08)}in`
+                      : `${pageHeightInches}in`,
                 paddingTop: `${pageConfig.margins.top}in`,
                 paddingRight: `${pageConfig.margins.right}in`,
                 paddingBottom: `${pageConfig.margins.bottom}in`,
@@ -873,9 +740,9 @@ export const SF4ReportTab: React.FC<SF4ReportTabProps> = ({
                     >
                       <div style={{ border: '1px solid #000', padding: '5px 8px', lineHeight: 1.25 }}>
                         <div style={{ fontWeight: 800, marginBottom: 2 }}>GUIDELINES:</div>
-                        <div>1. This form shall be accomplished every end of the month using the summary box of SF2 submitted by the faculty/advisers.</div>
+                        <div>1. This form shall be accomplished every end of the month using the summary box of SF2 submitted by the teachers/advisers.</div>
                         <div>2. Furnish copy to Division Office a week after June 30, October 30 &amp; March 31.</div>
-                        <div>3. Only faculty handling advisory classes shall be reported.</div>
+                        <div>3. Only teachers handling advisory classes shall be reported.</div>
                       </div>
 
                       <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>

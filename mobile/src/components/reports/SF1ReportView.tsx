@@ -15,6 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import { apiClient } from '../../api/client';
+import { ENDPOINTS } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { useThemeMode } from '../../context/ThemeContext';
 import { cleanText, getFriendlyErrorMessage } from '../../constants/theme';
@@ -39,7 +40,7 @@ export interface Learner {
   mother_maiden_name: string;
   guardian_name: string;
   guardian_relationship: string;
-  parent_contact: string;
+  guardian_contact: string;
   remarks: string;
 }
 
@@ -103,7 +104,7 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners, se
     setLoadError(null);
 
     apiClient
-      .get(`reports/sf1/${encodeURIComponent(String(sectionId))}/`, {
+      .get(`${ENDPOINTS.REPORT_SF1}${encodeURIComponent(String(sectionId))}/`, {
         signal: controller.signal,
       })
       .then((res) => {
@@ -136,15 +137,15 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners, se
   const activeUserFullName =
     user?.full_name ||
     `${user?.first_name || ''} ${user?.last_name || ''}`.trim() ||
-    user?.faculty_name ||
+    user?.teacher_name ||
     user?.username ||
     '';
 
-  const userRole = String(user?.role || user?.system_role || 'EMPLOYEE')
+  const userRole = String(user?.role || user?.system_role || 'TEACHER')
     .trim()
     .toUpperCase();
 
-  const isFacultyRole = ['FACULTY', 'ADVISER', 'EMPLOYEE'].includes(userRole);
+  const isTeacherRole = userRole === 'TEACHER';
 
   // 1. Memoized Combined Learner List (respects parent search-filtered learners prop)
   const sortedCombinedLearners = useMemo(() => {
@@ -204,7 +205,7 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners, se
   if (!activeData) return null;
 
   const resolvedAdviserName =
-    (isFacultyRole && activeUserFullName.length > 0 ? activeUserFullName : null) ||
+    (isTeacherRole && activeUserFullName.length > 0 ? activeUserFullName : null) ||
     activeData.adviser_name ||
     activeUserFullName ||
     'Class Adviser';
@@ -296,7 +297,7 @@ export const SF1ReportView: React.FC<SF1ReportViewProps> = ({ data, learners, se
           {gName || 'N/A'}
         </Text>
         <Text style={[styles.td, { width: SF1_COLS.contact }]}>
-          {cleanText(learner.parent_contact, 40) || 'N/A'}
+          {cleanText(learner.guardian_contact, 40) || 'N/A'}
         </Text>
         <Text style={[styles.td, styles.lastCell, { width: SF1_COLS.remarks }]}>
           {cleanText(learner.remarks, 120)}

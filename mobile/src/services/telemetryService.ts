@@ -1,31 +1,36 @@
 /**
- * AttendSure - Live Campus GPS Check-In Service
+ * AttendSure - Live Campus GPS Geofence Ping Service
  * File: mobile/src/services/telemetryService.ts
  */
 
 import { Platform } from 'react-native';
 import * as Location from 'expo-location';
-import * as Battery from 'expo-battery';
+import type * as BatteryType from 'expo-battery';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { getFriendlyErrorMessage } from '../constants/theme';
 import { getOrCreateDeviceUuid, getHardwareDeviceUuid } from './deviceService';
-import { enqueueOfflineHeartbeat, QueuedTelemetryPayload } from './offlineQueue';
+import {
+  enqueueOfflineHeartbeat,
+  syncOfflineQueue,
+  QueuedCampusPingPayload,
+} from './offlineQueue';
+import type { CampusPingResponse } from '../types';
+
+function getBatteryModule(): typeof BatteryType | null {
+  try {
+    return require('expo-battery') as typeof BatteryType;
+  } catch {
+    return null;
+  }
+}
 
 let lastSentTimestamp = 0;
-const ONE_MINUTE_MS = 60000;
+export const ADAPTIVE_PING_INTERVAL_MS = 45000;
 
 export { getOrCreateDeviceUuid, getHardwareDeviceUuid };
 
-export interface HeartbeatResponse {
-  status?: string;
-  device_bound?: boolean;
-  distance?: string;
-  distance_meters?: number;
-  verified_inside?: boolean;
-  is_inside_perimeter?: boolean;
-  server_time?: string;
-  isQueuedOffline?: boolean;
-}
+export type HeartbeatResponse = CampusPingResponse;
 
 export interface CoordinatesPayload {
   latitude: number;
@@ -38,16 +43,18 @@ export interface CoordinatesPayload {
 export const getRealDeviceModel = (): string | null => {
   if (Platform.OS === 'android') {
     const constants = Platform.constants as unknown as Record<string, unknown>;
-    const brand = typeof constants?.Brand === 'string'
-      ? constants.Brand
-      : typeof constants?.brand === 'string'
-      ? constants.brand
-      : '';
-    const model = typeof constants?.Model === 'string'
-      ? constants.Model
-      : typeof constants?.model === 'string'
-      ? constants.model
-      : '';
+    const brand =
+      typeof constants?.Brand === 'string'
+        ? constants.Brand
+        : typeof constants?.brand === 'string'
+        ? constants.brand
+        : '';
+    const model =
+      typeof constants?.Model === 'string'
+        ? constants.Model
+        : typeof constants?.model === 'string'
+        ? constants.model
+        : '';
     const full = `${brand} ${model}`.trim();
     return full.length > 0 ? full : null;
   }
@@ -59,6 +66,10 @@ export const getRealDeviceModel = (): string | null => {
 
 export const getRealBatteryPercentage = async (): Promise<number | null> => {
   try {
+    const Battery = getBatteryModule();
+    if (!Battery || typeof Battery.getBatteryLevelAsync !== 'function') {
+      return null;
+    }
     const level = await Battery.getBatteryLevelAsync();
     if (typeof level === 'number' && level >= 0 && !Number.isNaN(level)) {
       return Math.round(level * 100);
@@ -78,15 +89,9 @@ export const evaluateRealSignal = (
   ) {
     return { label: null, percentage: null };
   }
-  if (accuracyMeters <= 15) {
-    return { label: 'Strong', percentage: 95 };
-  }
-  if (accuracyMeters <= 30) {
-    return { label: 'Good', percentage: 75 };
-  }
-  if (accuracyMeters <= 60) {
-    return { label: 'Fair', percentage: 50 };
-  }
+  if (accuracyMeters <= 15) return { label: 'Strong', percentage: 95 };
+  if (accuracyMeters <= 30) return { label: 'Good', percentage: 75 };
+  if (accuracyMeters <= 60) return { label: 'Fair', percentage: 50 };
   return { label: 'Weak', percentage: 25 };
 };
 
@@ -95,18 +100,18 @@ export const format12HourTime = (date: Date = new Date()): string => {
   const minutes = String(date.getMinutes()).padStart(2, '0');
   const seconds = String(date.getSeconds()).padStart(2, '0');
   const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12;
-  hours = hours ? hours : 12;
+  hours = hours % 12 || 12;
   const strHours = String(hours).padStart(2, '0');
   return `${strHours}:${minutes}:${seconds} ${ampm}`;
 };
 
 export const sendLiveHeartbeat = async (
-  coordsOrIdentifier?: CoordinatesPayload | string
+  coordsOrOptions?: CoordinatesPayload,
+  force = false
 ): Promise<HeartbeatResponse> => {
   const now = Date.now();
-  if (now - lastSentTimestamp < ONE_MINUTE_MS && lastSentTimestamp !== 0) {
-    return { status: 'THROTTLED' };
+  if (!force && now - lastSentTimestamp < ADAPTIVE_PING_INTERVAL_MS && lastSentTimestamp !== 0) {
+    return { zone_status: 'THROTTLED' };
   }
 
   let lat: number | undefined;
@@ -114,23 +119,41 @@ export const sendLiveHeartbeat = async (
   let acc: number | null = null;
   let isMock = false;
 
-  if (coordsOrIdentifier && typeof coordsOrIdentifier === 'object') {
-    lat = coordsOrIdentifier.latitude;
-    lng = coordsOrIdentifier.longitude;
-    acc = coordsOrIdentifier.accuracy ?? null;
-    isMock = Boolean(coordsOrIdentifier.mocked);
+  if (coordsOrOptions && typeof coordsOrOptions === 'object') {
+    lat = coordsOrOptions.latitude;
+    lng = coordsOrOptions.longitude;
+    acc = coordsOrOptions.accuracy ?? null;
+    isMock = Boolean(coordsOrOptions.mocked);
   }
 
   if (lat === undefined || lng === undefined) {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      throw new Error('Location permission is required to verify campus presence.');
+      throw new Error('Location permission is required to check campus boundaries.');
     }
-    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+    let loc: Location.LocationObject | null = null;
+    try {
+      loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+    } catch {
+      loc = await Location.getLastKnownPositionAsync({
+        maxAge: 120000,
+        requiredAccuracy: 250,
+      }).catch(() => null);
+    }
+    if (!loc || !loc.coords) {
+      throw new Error('Waiting for GPS satellite fix. Move near a window or open area.');
+    }
     lat = loc.coords.latitude;
     lng = loc.coords.longitude;
     acc = loc.coords.accuracy ?? null;
     isMock = Boolean(loc.mocked);
+  }
+
+  // Strictly reject mocked / fake GPS locations before hitting the API
+  if (isMock) {
+    throw new Error(
+      'Fake GPS or mock location detected. Turn off mock location apps before pinging campus.'
+    );
   }
 
   if (
@@ -141,54 +164,32 @@ export const sendLiveHeartbeat = async (
     lng < -180 ||
     lng > 180
   ) {
-    throw new Error('Unable to read valid campus location coordinates.');
+    throw new Error('Unable to read valid campus GPS coordinates.');
   }
 
-  const [uuidRes, batteryRes] = await Promise.allSettled([
-    getHardwareDeviceUuid(),
-    getRealBatteryPercentage(),
-  ]);
+  if (acc !== null && acc > 250) {
+    throw new Error(
+      `GPS signal is too weak (${Math.round(acc)}m accuracy). Move to an open area and try again.`
+    );
+  }
 
-  const hardwareUuid = uuidRes.status === 'fulfilled' ? uuidRes.value : '';
-  const batteryLevel = batteryRes.status === 'fulfilled' ? batteryRes.value : null;
-
+  const hardwareUuid = await getHardwareDeviceUuid();
   const deviceModel = getRealDeviceModel();
-  const signal = evaluateRealSignal(acc);
 
-  const payload: QueuedTelemetryPayload = {
-    client_device_id: hardwareUuid,
-    latitude: lat,
-    longitude: lng,
-    accuracy: acc,
-    battery_level: batteryLevel,
-    is_mock_location: isMock,
-    mac_address: hardwareUuid,
-    signal_strength: signal.label,
-    signal_percentage: signal.percentage,
-    device_model: deviceModel,
+  const pingPayload = {
+    latitude: Number(lat.toFixed(6)),
+    longitude: Number(lng.toFixed(6)),
+    accuracy_meters: acc !== null ? Number(acc.toFixed(1)) : 15,
+    device_id: hardwareUuid,
+    is_mock_location: false,
   };
 
   try {
-    const res = await apiClient.post(
-      'geofence/check-in/',
-      {
-        client_device_id: hardwareUuid,
-        device_id: hardwareUuid,
-        mac_address: hardwareUuid,
-        device_model: deviceModel,
-        latitude: lat,
-        longitude: lng,
-        accuracy: acc,
-        accuracy_meters: acc,
-        battery_level: batteryLevel,
-        is_mock_location: isMock,
-        signal_strength: signal.label,
-        signal_percentage: signal.percentage,
-      },
-      { timeout: 8000 }
-    );
-
+    const res = await apiClient.post<CampusPingResponse>(ENDPOINTS.CAMPUS_PING, pingPayload, {
+      timeout: 8000,
+    });
     lastSentTimestamp = now;
+    void syncOfflineQueue().catch(() => {});
     return {
       ...res.data,
       isQueuedOffline: false,
@@ -202,15 +203,24 @@ export const sendLiveHeartbeat = async (
       );
     }
 
-    if (httpStatus === 403) {
+    if (httpStatus === 400 || httpStatus === 403) {
       throw new Error(
-        getFriendlyErrorMessage(err, 'Device lock mismatch or fake location detected.')
+        getFriendlyErrorMessage(
+          err,
+          'Phone binding mismatch or GPS verification blocked by school server.'
+        )
       );
     }
 
-    await enqueueOfflineHeartbeat(payload);
-    return {
-      isQueuedOffline: true,
+    const offlinePayload: QueuedCampusPingPayload = {
+      device_id: hardwareUuid,
+      latitude: pingPayload.latitude,
+      longitude: pingPayload.longitude,
+      accuracy_meters: pingPayload.accuracy_meters,
+      is_mock_location: false,
+      device_model: deviceModel,
     };
+    await enqueueOfflineHeartbeat(offlinePayload);
+    return { isQueuedOffline: true };
   }
 };

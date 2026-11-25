@@ -1,6 +1,6 @@
 r"""
-AttendSure - PostgreSQL Composite Index Optimizer
-Creates composite indexes on high-frequency lookup columns for sub-10ms API reads.
+AttendSure - PostgreSQL Composite Index Optimizer (3NF Schema)
+Creates composite indexes on high-frequency lookup columns for fast API reads.
 """
 
 import os
@@ -29,14 +29,14 @@ if not apps.ready:
 from django.db import connection  # noqa: E402
 
 INDEX_SPECS = [
-    ("attendance", "ClassAttendance", "idx_classatt_date_student", ["attendance_date", "student"]),
+    ("attendance", "ClassAttendance", "idx_classatt_date_enrollment", ["attendance_date", "enrollment"]),
     ("attendance", "ClassAttendance", "idx_classatt_period_date", ["class_period", "attendance_date"]),
     ("attendance", "DailyAttendance", "idx_dailyatt_date_status", ["attendance_date", "status"]),
-    ("attendance", "ExitPass", "idx_exitpass_status_created", ["status", "created_at"]),
+    ("attendance", "ExitPass", "idx_exitpass_state_window", ["is_cancelled", "returned_at", "valid_until"]),
     ("students", "Enrollment", "idx_enroll_section_status", ["section", "status"]),
     ("students", "Student", "idx_student_active_name", ["is_active", "last_name", "first_name"]),
-    ("campus", "TeacherLocationLog", "idx_loclog_teacher_time", ["teacher", "recorded_at"]),
-    ("messaging", "Notification", "idx_notif_read_created", ["is_read", "created_at"]),
+    ("campus", "TeacherLocationPing", "idx_locping_teacher_time", ["teacher", "recorded_at"]),
+    ("campus", "LoafingIncident", "idx_loafing_status_detected", ["status", "detected_at"]),
 ]
 
 
@@ -62,6 +62,7 @@ def main() -> None:
             print("[ANALYZE] Updated PostgreSQL query planner statistics.")
 
     print(f"\n[OK] Verified {created} composite database indexes.")
+
 
 if __name__ == "__main__":
     main()

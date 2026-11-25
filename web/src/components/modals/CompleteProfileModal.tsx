@@ -10,8 +10,9 @@ import { useTheme } from '../../context/ThemeContext';
 import { isSafeImageUrl } from '../../theme/tokens';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { AvatarUploadField } from '../common/AvatarUploadField';
 import { useAlert } from '../../context/AlertContext';
-import { UserCheck, ShieldCheck, Loader2, Camera, X } from 'lucide-react';
+import { UserCheck, ShieldCheck, Loader2 } from 'lucide-react';
 
 export interface CompletedProfileUser {
   full_name?: string;
@@ -45,20 +46,19 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
     suffix: '',
     contact_number: '',
     department: 'Junior High School',
+    current_password: '',
     password: '',
     photo: null as string | null,
   });
 
   const mountedRef = useRef(true);
   const submitAbortRef = useRef<AbortController | null>(null);
-  const fileReaderRef = useRef<FileReader | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       submitAbortRef.current?.abort();
-      fileReaderRef.current?.abort();
     };
   }, []);
 
@@ -80,6 +80,7 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
           suffix: sanitizeField(u.suffix || '', 12),
           contact_number: sanitizeField(u.contact_number || '', 13),
           department: sanitizeField(u.department || 'Junior High School', 100) || 'Junior High School',
+          current_password: '',
           password: '',
           photo: null,
         }));
@@ -109,30 +110,6 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
     };
   }, [isOpen, showAlert]);
 
-  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 2.5 * 1024 * 1024) {
-      showAlert({ title: 'Invalid Image', message: 'Use JPG, PNG, or WebP under 2.5 MB.', type: 'error' });
-      e.target.value = '';
-      return;
-    }
-    fileReaderRef.current?.abort();
-    const reader = new FileReader();
-    fileReaderRef.current = reader;
-    reader.onloadend = () => {
-      if (!mountedRef.current || reader.readyState !== FileReader.DONE) return;
-      const b64 = typeof reader.result === 'string' ? reader.result : '';
-      if (!isSafeImageUrl(b64)) {
-        showAlert({ title: 'Invalid Image', message: 'Could not verify the selected image file.', type: 'error' });
-        return;
-      }
-      setPhotoPreview(b64);
-      setFormData((p) => ({ ...p, photo: b64 }));
-    };
-    reader.readAsDataURL(file);
-  };
-
   const cleanPhone = formData.contact_number.trim().replace(/[\s-]/g, '');
   const isPhoneValid = /^(09|\+639)\d{9}$/.test(cleanPhone);
   const isPasswordValid =
@@ -145,7 +122,10 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
     isPasswordValid;
 
   const setField = (key: Exclude<keyof typeof formData, 'photo'>, val: string) => {
-    const clean = key === 'password' ? sanitizePassword(val) : sanitizeField(val, key === 'contact_number' ? 13 : 100);
+    const clean =
+      key === 'password' || key === 'current_password'
+        ? sanitizePassword(val)
+        : sanitizeField(val, key === 'contact_number' ? 13 : 100);
     setFormData((p) => ({ ...p, [key]: clean }));
   };
 
@@ -153,13 +133,36 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
     e.preventDefault();
     if (!isFormValid || saving) return;
 
+    const cleanPw = sanitizePassword(formData.password).trim();
+    const cleanCurrentPw = sanitizePassword(formData.current_password).trim();
+    if (cleanPw && !cleanCurrentPw) {
+      showAlert({
+        title: 'Current Password Required',
+        message: 'Enter your current password to update your password.',
+        type: 'warning',
+      });
+      return;
+    }
+
     submitAbortRef.current?.abort();
     const controller = new AbortController();
     submitAbortRef.current = controller;
 
     setSaving(true);
     try {
-      const payload: Record<string, string | null> = {
+      if (cleanPw && cleanCurrentPw) {
+        const pwRes = await apiClient.post(
+          API_ROUTES.accounts.changePassword,
+          { current_password: cleanCurrentPw, new_password: cleanPw },
+          { signal: controller.signal }
+        );
+        if (controller.signal.aborted || !mountedRef.current) return;
+        if (pwRes.data?.token) {
+          localStorage.setItem('attendsure_token', pwRes.data.token);
+        }
+      }
+
+      const payload: Record<string, unknown> = {
         first_name: sanitizeField(formData.first_name, 100).trim(),
         middle_name: sanitizeField(formData.middle_name, 100).trim(),
         last_name: sanitizeField(formData.last_name, 100).trim(),
@@ -167,15 +170,18 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
         contact_number: cleanPhone,
         department: sanitizeField(formData.department, 100).trim(),
       };
-      const cleanPw = sanitizePassword(formData.password).trim();
-      if (cleanPw.length >= 8) payload.password = cleanPw;
       if (formData.photo !== null) {
-        payload.photo = formData.photo === '' ? null : isSafeImageUrl(formData.photo) ? formData.photo : null;
+        if (formData.photo === '') {
+          payload.photo = null;
+          payload.remove_photo = true;
+        } else if (isSafeImageUrl(formData.photo)) {
+          payload.photo = formData.photo;
+        }
       }
 
       const res = await apiClient.put(API_ROUTES.accounts.me, payload, { signal: controller.signal });
       if (controller.signal.aborted || !mountedRef.current) return;
-      showAlert({ title: 'Profile Completed', message: 'Your faculty record is now active.', type: 'success' });
+      showAlert({ title: 'Profile Completed', message: 'Your teacher profile is now active.', type: 'success' });
       onCompleted(res.data);
     } catch (err: unknown) {
       const anyErr = err as { name?: string; code?: string };
@@ -227,56 +233,22 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
             </span>
           </div>
 
-          <div style={{ ...ui.subtleBox, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-            <div
-              style={{
-                width: 48,
-                height: 48,
-                borderRadius: '50%',
-                overflow: 'hidden',
-                backgroundColor: tokens.bgSurface,
-                border: `1px solid ${tokens.borderSubtle}`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            >
-              {photoPreview && isSafeImageUrl(photoPreview) ? (
-                <img src={photoPreview} alt="Profile preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                <span style={{ fontSize: '0.68rem', color: tokens.textMuted }}>No Pic</span>
-              )}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <label style={ui.btnPrimary}>
-                <Camera size={12} /> Upload Photo (Optional)
-                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoSelect} style={{ display: 'none' }} />
-              </label>
-              {photoPreview && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPhotoPreview(null);
-                    setFormData((p) => ({ ...p, photo: '' }));
-                  }}
-                  style={{
-                    color: brand.danger,
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontWeight: 700,
-                    fontSize: '0.74rem',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 3,
-                  }}
-                >
-                  <X size={12} /> Remove
-                </button>
-              )}
-            </div>
-          </div>
+          <AvatarUploadField
+            previewUrl={photoPreview}
+            displayName={`${formData.first_name} ${formData.last_name}`.trim() || 'Teacher'}
+            label="Profile Photo (Optional)"
+            size={54}
+            disabled={saving}
+            onSelectPhoto={(_file, dataUri) => {
+              setPhotoPreview(dataUri);
+              setFormData((p) => ({ ...p, photo: dataUri }));
+            }}
+            onRemovePhoto={() => {
+              setPhotoPreview(null);
+              setFormData((p) => ({ ...p, photo: '' }));
+            }}
+            onValidationError={(msg) => showAlert({ title: 'Invalid Image', message: msg, type: 'error' })}
+          />
 
           <div style={responsiveGrid}>
             <div>
@@ -347,21 +319,36 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
             </div>
           </div>
 
-          <div>
-            <label style={ui.label}>New Password (Optional, min 8 chars with letters &amp; numbers)</label>
-            <input
-              type="password"
-              maxLength={128}
-              autoComplete="new-password"
-              style={ui.input}
-              value={formData.password}
-              onChange={(e) => setField('password', e.target.value)}
-            />
-            {!isPasswordValid && (
-              <span style={{ fontSize: '0.72rem', color: brand.danger, marginTop: 4, display: 'block' }}>
-                Password must be at least 8 characters and contain both letters and numbers.
-              </span>
-            )}
+          <div style={responsiveGrid}>
+            <div>
+              <label style={ui.label}>Current Password (If changing)</label>
+              <input
+                type="password"
+                maxLength={128}
+                autoComplete="current-password"
+                placeholder="Current password"
+                style={ui.input}
+                value={formData.current_password}
+                onChange={(e) => setField('current_password', e.target.value)}
+              />
+            </div>
+            <div>
+              <label style={ui.label}>New Password (Optional)</label>
+              <input
+                type="password"
+                maxLength={128}
+                autoComplete="new-password"
+                placeholder="Min 8 chars, letters & numbers"
+                style={ui.input}
+                value={formData.password}
+                onChange={(e) => setField('password', e.target.value)}
+              />
+              {!isPasswordValid && (
+                <span style={{ fontSize: '0.72rem', color: brand.danger, marginTop: 4, display: 'block' }}>
+                  Password must be at least 8 characters and contain both letters and numbers.
+                </span>
+              )}
+            </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>

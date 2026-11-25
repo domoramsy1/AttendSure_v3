@@ -10,8 +10,10 @@ import { useTheme } from '../../context/ThemeContext';
 import { isSafeImageUrl } from '../../theme/tokens';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { AvatarUploadField } from '../common/AvatarUploadField';
 import { useAlert } from '../../context/AlertContext';
-import { Camera, X, Loader2 } from 'lucide-react';
+import { useFieldAvailability } from '../../hooks/useFieldAvailability';
+import { Loader2 } from 'lucide-react';
 
 export interface ProfileUpdatePayload {
   full_name?: string;
@@ -41,6 +43,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [profileIds, setProfileIds] = useState<{ userId?: number; teacherId?: number }>({});
   const [formData, setFormData] = useState({
     first_name: '',
     middle_name: '',
@@ -57,14 +60,12 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
 
   const mountedRef = useRef(true);
   const submitAbortRef = useRef<AbortController | null>(null);
-  const fileReaderRef = useRef<FileReader | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       submitAbortRef.current?.abort();
-      fileReaderRef.current?.abort();
     };
   }, []);
 
@@ -78,6 +79,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
         if (controller.signal.aborted || !mountedRef.current || !res.data) return;
         const u = res.data;
         const pic = u.photo_url || u.photo || null;
+        setProfileIds({
+          userId: u.id ? Number(u.id) : undefined,
+          teacherId: u.teacher_id ? Number(u.teacher_id) : undefined,
+        });
         setFormData({
           first_name: sanitizeField(u.first_name || '', 100),
           middle_name: sanitizeField(u.middle_name || '', 100),
@@ -117,33 +122,54 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
     };
   }, [isOpen, showAlert]);
 
-  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 2.5 * 1024 * 1024) {
-      showAlert({ title: 'Invalid Image', message: 'Use JPG, PNG, or WebP under 2.5 MB.', type: 'error' });
-      e.target.value = '';
-      return;
-    }
-    fileReaderRef.current?.abort();
-    const reader = new FileReader();
-    fileReaderRef.current = reader;
-    reader.onloadend = () => {
-      if (!mountedRef.current || reader.readyState !== FileReader.DONE) return;
-      const b64 = typeof reader.result === 'string' ? reader.result : '';
-      if (!isSafeImageUrl(b64)) {
-        showAlert({ title: 'Invalid Image', message: 'Could not verify the selected image file.', type: 'error' });
-        return;
-      }
-      setPhotoPreview(b64);
-      setFormData((p) => ({ ...p, photo: b64 }));
-    };
-    reader.readAsDataURL(file);
+  const cleanEmailCheck = sanitizeField(formData.email, 150).trim().toLowerCase();
+  const emailFormatErr =
+    cleanEmailCheck && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmailCheck)
+      ? 'Please enter a valid email address.'
+      : '';
+  const emailAvail = useFieldAvailability({
+    enabled: isOpen && !loading && Boolean(cleanEmailCheck),
+    field: 'email',
+    value: cleanEmailCheck,
+    formatError: emailFormatErr,
+    fallbackMessage: 'This email address is already in use.',
+    excludeId: profileIds.userId,
+    excludeUserId: profileIds.userId,
+  });
+
+  const cleanPhoneCheck = sanitizeField(formData.contact_number, 30).trim();
+  const phoneAvail = useFieldAvailability({
+    enabled: isOpen && !loading && cleanPhoneCheck.replace(/\D/g, '').length >= 10,
+    field: 'contact_number',
+    value: cleanPhoneCheck,
+    minLength: 10,
+    fallbackMessage: 'This mobile number is already assigned to another staff account.',
+    excludeTeacherId: profileIds.teacherId,
+    excludeUserId: profileIds.userId,
+  });
+
+  const liveErrors = {
+    email: emailAvail.error || undefined,
+    contact_number: phoneAvail.error || undefined,
   };
+  const fieldVerified = {
+    email: emailAvail.verified,
+    contact_number: phoneAvail.verified,
+  };
+  const checkingCount = (emailAvail.checking ? 1 : 0) + (phoneAvail.checking ? 1 : 0);
+  const hasLiveErrors = Boolean(liveErrors.email || liveErrors.contact_number);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (saving) return;
+    if (hasLiveErrors) {
+      showAlert({
+        title: 'Duplicate Information',
+        message: liveErrors.email || liveErrors.contact_number || 'Please fix the highlighted errors first.',
+        type: 'warning',
+      });
+      return;
+    }
 
     const cleanFirst = sanitizeField(formData.first_name, 100).trim();
     const cleanLast = sanitizeField(formData.last_name, 100).trim();
@@ -167,6 +193,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
       });
       return;
     }
+    if (cleanPw && !cleanCurrentPw) {
+      showAlert({
+        title: 'Current Password Required',
+        message: 'Please enter your current password to set a new password.',
+        type: 'warning',
+      });
+      return;
+    }
 
     submitAbortRef.current?.abort();
     const controller = new AbortController();
@@ -181,24 +215,42 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
       email: cleanEmail,
       contact_number: sanitizeField(formData.contact_number, 30).trim(),
     };
-    if (cleanPw) {
-      payload.password = cleanPw;
-      if (cleanCurrentPw) {
-        payload.current_password = cleanCurrentPw;
-      }
-    }
     if (formData.photo !== null) {
-      payload.photo = formData.photo === '' ? null : isSafeImageUrl(formData.photo) ? formData.photo : null;
+      if (formData.photo === '') {
+        payload.photo = null;
+        payload.remove_photo = true;
+      } else if (isSafeImageUrl(formData.photo)) {
+        payload.photo = formData.photo;
+      }
     }
 
     try {
+      let rotatedToken: string | undefined;
+      if (cleanPw) {
+        const pwRes = await apiClient.post(
+          API_ROUTES.accounts.changePassword,
+          { current_password: cleanCurrentPw, new_password: cleanPw },
+          { signal: controller.signal }
+        );
+        if (controller.signal.aborted || !mountedRef.current) return;
+        if (pwRes.data?.token) {
+          rotatedToken = pwRes.data.token;
+          localStorage.setItem('attendsure_token', pwRes.data.token);
+        }
+      }
+
       const res = await apiClient.put(API_ROUTES.accounts.me, payload, { signal: controller.signal });
       if (controller.signal.aborted || !mountedRef.current) return;
       if (res.data?.token) {
         localStorage.setItem('attendsure_token', res.data.token);
       }
-      showAlert({ title: 'Saved', message: 'Profile updated.', type: 'success' });
-      onProfileUpdated?.(res.data);
+      const mergedData = rotatedToken && !res.data?.token ? { ...res.data, token: rotatedToken } : res.data;
+      showAlert({
+        title: 'Saved',
+        message: cleanPw ? 'Profile and password updated.' : 'Profile updated.',
+        type: 'success',
+      });
+      onProfileUpdated?.(mergedData);
       onClose();
     } catch (err: unknown) {
       const anyErr = err as { name?: string; code?: string };
@@ -248,56 +300,22 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
         </div>
       ) : (
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ ...ui.subtleBox, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-            <div
-              style={{
-                width: 52,
-                height: 52,
-                borderRadius: '50%',
-                overflow: 'hidden',
-                backgroundColor: tokens.bgSurface,
-                border: `1px solid ${tokens.borderSubtle}`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            >
-              {photoPreview && isSafeImageUrl(photoPreview) ? (
-                <img src={photoPreview} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                <span style={{ fontSize: '0.7rem', color: tokens.textMuted }}>No Pic</span>
-              )}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <label style={ui.btnPrimary}>
-                <Camera size={12} /> Change Photo
-                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoSelect} style={{ display: 'none' }} />
-              </label>
-              {photoPreview && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPhotoPreview(null);
-                    setFormData((p) => ({ ...p, photo: '' }));
-                  }}
-                  style={{
-                    color: brand.danger,
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontWeight: 700,
-                    fontSize: '0.74rem',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 3,
-                  }}
-                >
-                  <X size={12} /> Remove
-                </button>
-              )}
-            </div>
-          </div>
+          <AvatarUploadField
+            previewUrl={photoPreview}
+            displayName={`${formData.first_name} ${formData.last_name}`.trim() || 'My Profile'}
+            label="Profile Photo"
+            size={56}
+            disabled={saving}
+            onSelectPhoto={(_file, dataUri) => {
+              setPhotoPreview(dataUri);
+              setFormData((p) => ({ ...p, photo: dataUri }));
+            }}
+            onRemovePhoto={() => {
+              setPhotoPreview(null);
+              setFormData((p) => ({ ...p, photo: '' }));
+            }}
+            onValidationError={(msg) => showAlert({ title: 'Invalid Image', message: msg, type: 'error' })}
+          />
 
           <div style={responsiveGrid}>
             <div>
@@ -330,11 +348,46 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
           <div style={responsiveGrid}>
             <div>
               <label style={ui.label}>Email</label>
-              <input type="email" maxLength={150} style={ui.input} value={formData.email} onChange={(e) => setField('email', e.target.value)} />
+              <input
+                type="email"
+                maxLength={150}
+                style={{
+                  ...ui.input,
+                  borderColor: liveErrors.email
+                    ? brand.danger
+                    : fieldVerified.email
+                      ? brand.success
+                      : tokens.borderStrong,
+                }}
+                value={formData.email}
+                onChange={(e) => setField('email', e.target.value)}
+              />
+              {liveErrors.email && (
+                <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', fontWeight: 700, color: brand.danger }}>
+                  {liveErrors.email}
+                </span>
+              )}
             </div>
             <div>
               <label style={ui.label}>Contact Number</label>
-              <input maxLength={30} style={ui.input} value={formData.contact_number} onChange={(e) => setField('contact_number', e.target.value)} />
+              <input
+                maxLength={30}
+                style={{
+                  ...ui.input,
+                  borderColor: liveErrors.contact_number
+                    ? brand.danger
+                    : fieldVerified.contact_number
+                      ? brand.success
+                      : tokens.borderStrong,
+                }}
+                value={formData.contact_number}
+                onChange={(e) => setField('contact_number', e.target.value)}
+              />
+              {liveErrors.contact_number && (
+                <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', fontWeight: 700, color: brand.danger }}>
+                  {liveErrors.contact_number}
+                </span>
+              )}
             </div>
           </div>
 
@@ -369,7 +422,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
             <Button variant="secondary" size="md" type="button" onClick={onClose}>
               Cancel
             </Button>
-            <Button variant="primary" size="md" type="submit" disabled={saving}>
+            <Button variant="primary" size="md" type="submit" disabled={saving || hasLiveErrors || checkingCount > 0}>
               {saving ? <Loader2 size={16} className="animate-spin" /> : 'Save Changes'}
             </Button>
           </div>

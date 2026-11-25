@@ -12,19 +12,24 @@ import {
   TextInput,
   ActivityIndicator,
   RefreshControl,
+  DeviceEventEmitter,
+  Platform,
+  Share,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { useThemeMode } from '../context/ThemeContext';
 import { getServerBaseUrl } from '../services/configService';
 import {
-  isSafeUrl,
   cleanText,
   getFriendlyErrorMessage,
 } from '../constants/theme';
+import { getInitials, isCanceledError, resolveMediaUrl } from '../utils/helpers';
 
 const CLASS_LIST_CACHE_KEY = 'attendsure_cached_advisory_class_list';
 
@@ -41,8 +46,8 @@ interface AdviseeRow {
   student_name: string;
   lrn: string;
   photo_url?: string | null;
-  gate_status: string;
-  gate_direction: 'IN' | 'OUT' | 'NONE';
+  campus_status?: string;
+  presence_state?: 'IN' | 'OUT' | 'NONE';
   attended_count: number;
   cutting_count: number;
   total_subjects: number;
@@ -57,9 +62,37 @@ interface CachedClassListPayload {
   matrix: AdviseeRow[];
 }
 
-const isCanceledError = (err: unknown): boolean => {
-  const e = err as { code?: string; name?: string };
-  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
+const triggerSafeWebPrint = (rawHtml: string): void => {
+  if (typeof document === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
+    return;
+  }
+  const safeHtml = String(rawHtml || '')
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/javascript:/gi, '');
+  const blob = new Blob([safeHtml], { type: 'text/html;charset=utf-8' });
+  const blobUrl = URL.createObjectURL(blob);
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-modals allow-same-origin');
+  iframe.style.position = 'fixed';
+  iframe.style.top = '-10000px';
+  iframe.style.left = '-10000px';
+  iframe.style.width = '1200px';
+  iframe.style.height = '900px';
+  iframe.style.border = '0';
+  iframe.onload = () => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } finally {
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      }, 1500);
+    }
+  };
+  iframe.src = blobUrl;
+  document.body.appendChild(iframe);
 };
 
 export const AdvisoryMatrixScreen: React.FC = () => {
@@ -74,6 +107,8 @@ export const AdvisoryMatrixScreen: React.FC = () => {
   const [gradeLevel, setGradeLevel] = useState('');
   const [matrix, setMatrix] = useState<AdviseeRow[]>([]);
   const [serverBase, setServerBase] = useState('');
+  const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+  const [exportingPack, setExportingPack] = useState<'CLASS_LIST' | 'CLASS_SCHEDULE' | null>(null);
 
   const isMountedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
@@ -103,7 +138,7 @@ export const AdvisoryMatrixScreen: React.FC = () => {
     }
 
     try {
-      const res = await apiClient.get<CachedClassListPayload>('classroom/adviser-matrix/', {
+      const res = await apiClient.get<CachedClassListPayload>(ENDPOINTS.ADVISER_MATRIX, {
         signal: controller.signal,
       });
       if (!isMountedRef.current || controller.signal.aborted) return;
@@ -139,29 +174,17 @@ export const AdvisoryMatrixScreen: React.FC = () => {
   useEffect(() => {
     isMountedRef.current = true;
     void fetchClassListData(true);
+    const sub = DeviceEventEmitter.addListener('attendsure:attendance-updated', () => {
+      if (isMountedRef.current) {
+        void fetchClassListData(false);
+      }
+    });
     return () => {
       isMountedRef.current = false;
       abortRef.current?.abort();
+      sub.remove();
     };
   }, [fetchClassListData]);
-
-  const resolveSafePhoto = useCallback(
-    (url?: string | null): string | undefined => {
-      if (!url || typeof url !== 'string') return undefined;
-      const trimmed = url.trim();
-      if (!trimmed) return undefined;
-      const candidate =
-        trimmed.startsWith('http://') ||
-        trimmed.startsWith('https://') ||
-        trimmed.startsWith('data:')
-          ? trimmed
-          : serverBase
-          ? `${serverBase.replace(/\/+$/, '')}/${trimmed.replace(/^\/+/, '')}`
-          : '';
-      return isSafeUrl(candidate) ? candidate : undefined;
-    },
-    [serverBase]
-  );
 
   const cleanSearch = cleanText(search, 80).toLowerCase();
 
@@ -181,15 +204,70 @@ export const AdvisoryMatrixScreen: React.FC = () => {
     [matrix]
   );
 
-  const getInitials = (name: string) => {
-    const parts = String(name || '')
-      .replace(/,/g, '')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-    return parts.length >= 2
-      ? `${parts[0][0]}${parts[1][0]}`.toUpperCase()
-      : String(name || 'ST').slice(0, 2).toUpperCase();
+  const toggleStudentPick = (studentId: number) => {
+    setSelectedStudentIds((prev) =>
+      prev.includes(studentId) ? prev.filter((id) => id !== studentId) : [...prev, studentId]
+    );
+  };
+
+  const handleExportAdvisoryPack = async (packType: 'CLASS_LIST' | 'CLASS_SCHEDULE') => {
+    setExportingPack(packType);
+    try {
+      const useSelected = packType === 'CLASS_LIST' && selectedStudentIds.length > 0;
+      const body: Record<string, unknown> = {
+        pack_type: packType,
+        scope: useSelected ? 'SELECTED' : 'ALL',
+        export_format: Platform.OS === 'web' ? 'html' : 'json',
+        wrap_json: Platform.OS === 'web',
+        action_mode: Platform.OS === 'web' ? 'PRINT' : 'EXPORT',
+      };
+      if (useSelected) {
+        body.student_ids = selectedStudentIds;
+      }
+
+      const res = await apiClient.post(ENDPOINTS.REPORT_PRINT_PACK, body);
+      if (Platform.OS === 'web') {
+        const html = typeof res.data === 'string' ? res.data : res.data?.html || '';
+        if (html) triggerSafeWebPrint(html);
+      } else if (packType === 'CLASS_LIST') {
+        const lists = Array.isArray(res.data?.class_lists) ? res.data.class_lists : [];
+        const lines: string[] = [
+          `AttendSure Class List — ${[gradeLevel, sectionName].filter(Boolean).join(' - ')}`,
+          '',
+        ];
+        lists.forEach((cl: any) => {
+          (cl.students || []).forEach((st: any, idx: number) => {
+            lines.push(`${idx + 1}. ${st.full_name} (LRN: ${st.lrn}) [${st.today_status}]`);
+          });
+        });
+        await Share.share({
+          title: `Class_List_${sectionName || 'Advisory'}`,
+          message: lines.join('\n'),
+        });
+      } else {
+        const periods = Array.isArray(res.data?.periods) ? res.data.periods : [];
+        const lines: string[] = [
+          `AttendSure Teaching Schedule — ${res.data?.generated_by || ''}`,
+          '',
+          ...periods.map(
+            (p: any) => `• ${p.time_range} (${p.day_label}) | ${p.subject_code} | ${p.section_label} | ${p.room_name}`
+          ),
+        ];
+        await Share.share({
+          title: 'My_Class_Schedule',
+          message: lines.join('\n'),
+        });
+      }
+    } catch (err: unknown) {
+      const msg = getFriendlyErrorMessage(err, 'Could not prepare this document right now.');
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        setErrorMsg(msg);
+      } else {
+        Alert.alert('Export Error', msg);
+      }
+    } finally {
+      if (isMountedRef.current) setExportingPack(null);
+    }
   };
 
   if (loading && matrix.length === 0) {
@@ -207,7 +285,7 @@ export const AdvisoryMatrixScreen: React.FC = () => {
         <Ionicons name="information-circle-outline" size={44} color={palette.textMuted} />
         <Text style={[ui.title, { marginTop: 8 }]}>No Assigned Advisory Class</Text>
         <Text style={[ui.subtitle, { textAlign: 'center', marginTop: 4 }]}>
-          {errorMsg || 'Your faculty account is not assigned as a Class Adviser yet.'}
+          {errorMsg || 'Your teacher account is not assigned as a Class Adviser yet.'}
         </Text>
         <TouchableOpacity
           style={[ui.buttonPrimary, { marginTop: 16, paddingHorizontal: 20 }]}
@@ -234,12 +312,73 @@ export const AdvisoryMatrixScreen: React.FC = () => {
           borderBottomColor: palette.border,
         }}
       >
-        <Text style={ui.title}>Class List</Text>
-        <Text style={ui.subtitle}>
-          {[gradeLevel, sectionName].filter(Boolean).join(' - ')} • {matrix.length} Students
-        </Text>
+        <View style={[ui.rowBetween, { gap: 8 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={ui.title}>Class List</Text>
+            <Text style={ui.subtitle}>
+              {[gradeLevel, sectionName].filter(Boolean).join(' - ')} • {matrix.length} Students
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              onPress={() => void handleExportAdvisoryPack('CLASS_SCHEDULE')}
+              disabled={exportingPack !== null}
+              style={[
+                ui.badge,
+                {
+                  backgroundColor: palette.primarySoft,
+                  borderWidth: 1,
+                  borderColor: palette.border,
+                  paddingVertical: 7,
+                  paddingHorizontal: 10,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 4,
+                },
+              ]}
+            >
+              {exportingPack === 'CLASS_SCHEDULE' ? (
+                <ActivityIndicator size="small" color={palette.primary} />
+              ) : (
+                <>
+                  <Ionicons name="calendar-outline" size={13} color={palette.primary} />
+                  <Text style={{ fontSize: fonts.size.xs, fontWeight: fonts.weight.bold, color: palette.primary }}>
+                    Schedule
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
 
-        <View style={[ui.rowCenter, { marginTop: 10 }]}>
+            <TouchableOpacity
+              onPress={() => void handleExportAdvisoryPack('CLASS_LIST')}
+              disabled={exportingPack !== null}
+              style={[
+                ui.badge,
+                {
+                  backgroundColor: palette.buttonBg,
+                  paddingVertical: 7,
+                  paddingHorizontal: 10,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 4,
+                },
+              ]}
+            >
+              {exportingPack === 'CLASS_LIST' ? (
+                <ActivityIndicator size="small" color={palette.onPrimary} />
+              ) : (
+                <>
+                  <Ionicons name="print-outline" size={13} color={palette.onPrimary} />
+                  <Text style={{ fontSize: fonts.size.xs, fontWeight: fonts.weight.bold, color: palette.onPrimary }}>
+                    {selectedStudentIds.length > 0 ? `Export (${selectedStudentIds.length})` : 'Print / Share'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={[ui.rowCenter, { marginTop: 10, flexWrap: 'wrap' }]}>
           <TouchableOpacity
             onPress={() => setFilterMode('ALL')}
             style={[
@@ -286,9 +425,35 @@ export const AdvisoryMatrixScreen: React.FC = () => {
                 color: filterMode === 'CUTTING' ? palette.onPrimary : palette.textSecondary,
               }}
             >
-              Missed Period ({cuttingTotal})
+              Cutting Class ({cuttingTotal})
             </Text>
           </TouchableOpacity>
+
+          {selectedStudentIds.length > 0 && (
+            <TouchableOpacity
+              onPress={() => setSelectedStudentIds([])}
+              style={[
+                ui.badge,
+                {
+                  backgroundColor: palette.primarySoft,
+                  borderWidth: 1,
+                  borderColor: palette.primary,
+                  paddingVertical: 6,
+                  paddingHorizontal: 10,
+                },
+              ]}
+            >
+              <Text
+                style={{
+                  fontSize: fonts.size.xs,
+                  fontWeight: fonts.weight.bold,
+                  color: palette.primary,
+                }}
+              >
+                {selectedStudentIds.length} Selected × Clear
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -354,19 +519,38 @@ export const AdvisoryMatrixScreen: React.FC = () => {
             </Text>
             <Text style={[ui.subtitle, { textAlign: 'center' }]}>
               {filterMode === 'CUTTING'
-                ? 'No students have missed periods right now.'
+                ? 'No students are cutting class right now.'
                 : 'Try clearing your search or pulling down to refresh.'}
             </Text>
           </View>
         }
         renderItem={({ item }) => {
           const isCutting = item.cutting_count > 0;
-          const safePhoto = resolveSafePhoto(item.photo_url);
+          const isPicked = selectedStudentIds.includes(item.student_id);
+          const safePhoto = resolveMediaUrl(item.photo_url, serverBase);
 
           return (
-            <View style={[ui.card, isCutting && { borderColor: palette.danger }]}>
+            <View
+              style={[
+                ui.card,
+                isPicked && { borderColor: palette.primary },
+                isCutting && { borderColor: palette.danger },
+              ]}
+            >
               <View style={ui.rowBetween}>
                 <View style={[ui.rowCenter, { flex: 1 }]}>
+                  <TouchableOpacity
+                    onPress={() => toggleStudentPick(item.student_id)}
+                    accessibilityLabel={`Select ${item.student_name}`}
+                    style={{ padding: 2 }}
+                  >
+                    <Ionicons
+                      name={isPicked ? 'checkbox' : 'square-outline'}
+                      size={20}
+                      color={isPicked ? palette.primary : palette.textMuted}
+                    />
+                  </TouchableOpacity>
+
                   <View style={[ui.subtleBox, { paddingVertical: 3, paddingHorizontal: 7 }]}>
                     <Text
                       style={{

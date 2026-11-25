@@ -72,6 +72,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     root.style.setProperty('--text-primary', tokens.textPrimary);
     root.style.setProperty('--text-secondary', tokens.textSecondary);
     root.style.setProperty('--text-muted', tokens.textMuted);
+    root.style.setProperty('--on-primary', tokens.onPrimary);
+    root.style.setProperty('--dark-surface', tokens.darkSurface);
+    root.style.setProperty('--dark-text', tokens.darkText);
     root.style.setProperty('--border-subtle', tokens.borderSubtle);
     root.style.setProperty('--border-input', tokens.borderInput);
     root.style.setProperty('--border-strong', tokens.borderStrong);
@@ -81,7 +84,10 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     root.style.setProperty('--brand-warning', brand.warning);
     root.style.setProperty('--brand-danger', brand.danger);
     root.style.setProperty('--success', tokens.success);
+    root.style.setProperty('--warning', tokens.warning);
     root.style.setProperty('--danger', tokens.danger);
+    root.style.setProperty('--success-bg', tokens.successBg);
+    root.style.setProperty('--warning-bg', tokens.warningBg);
     root.style.setProperty('--danger-bg', tokens.dangerBg);
     root.style.setProperty('--card-shadow', tokens.cardShadow);
     root.style.setProperty('--font-sans', FONTS.sans);

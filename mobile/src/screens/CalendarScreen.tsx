@@ -12,14 +12,13 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
-  Alert,
   ActivityIndicator,
   RefreshControl,
-  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
 import {
@@ -27,6 +26,8 @@ import {
   getFriendlyErrorMessage,
   type ThemePalette,
 } from '../constants/theme';
+import { canManageSchoolSetup } from '../utils/permissions';
+import { confirmAction, isCanceledError, showNotice } from '../utils/helpers';
 
 const CACHED_CALENDAR_KEY = 'attendsure_cached_calendar_data';
 
@@ -57,19 +58,6 @@ const isValidIsoDate = (dateStr: string): boolean => {
   return dt.getFullYear() === year && dt.getMonth() === month - 1 && dt.getDate() === day;
 };
 
-const isCanceledError = (err: unknown): boolean => {
-  const e = err as { code?: string; name?: string };
-  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
-};
-
-const showAlert = (title: string, message: string): void => {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.alert(`${title}: ${message}`);
-  } else {
-    Alert.alert(title, message);
-  }
-};
-
 export const CalendarScreen: React.FC = () => {
   const { user } = useAuth();
   const { palette, fonts } = useThemeMode();
@@ -78,15 +66,7 @@ export const CalendarScreen: React.FC = () => {
   const isMounted = useRef<boolean>(true);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const currentUser = user as Record<string, any> | null;
-  const rawRole = String(currentUser?.role || currentUser?.system_role || '')
-    .trim()
-    .toUpperCase();
-  const isAdmin =
-    rawRole === 'ADMIN' ||
-    rawRole === 'SUPERADMIN' ||
-    rawRole === 'PRINCIPAL' ||
-    (Boolean(currentUser?.is_superuser) && rawRole !== 'FACULTY');
+  const isAdmin = canManageSchoolSetup(user);
 
   const [weekendRestEnabled, setWeekendRestEnabled] = useState<boolean>(true);
   const weekendRestRef = useRef<boolean>(true);
@@ -125,7 +105,7 @@ export const CalendarScreen: React.FC = () => {
     abortControllerRef.current = controller;
 
     try {
-      const res = await apiClient.get('/calendar/exceptions/', {
+      const res = await apiClient.get(ENDPOINTS.HOLIDAYS, {
         signal: controller.signal,
       });
       const payload = res.data;
@@ -192,7 +172,7 @@ export const CalendarScreen: React.FC = () => {
     setWeekendRestEnabled(value);
 
     try {
-      const res = await apiClient.patch('/calendar/exceptions/', {
+      const res = await apiClient.patch(ENDPOINTS.HOLIDAYS, {
         weekend_rest_enabled: value,
       });
       if (isMounted.current && typeof res.data?.weekend_rest_enabled === 'boolean') {
@@ -202,7 +182,7 @@ export const CalendarScreen: React.FC = () => {
     } catch (err: unknown) {
       weekendRestRef.current = previousValue;
       if (isMounted.current) setWeekendRestEnabled(previousValue);
-      showAlert(
+      showNotice(
         'Update Failed',
         getFriendlyErrorMessage(err, 'Could not save weekend rest setting.')
       );
@@ -212,7 +192,7 @@ export const CalendarScreen: React.FC = () => {
   // 4. Input Sanitization & Override Submission
   const handleAddException = async () => {
     if (!isAdmin) {
-      showAlert('Permission Required', 'Only school administrators can add calendar overrides.');
+      showNotice('Permission Required', 'Only school administrators can add calendar overrides.');
       return;
     }
 
@@ -220,12 +200,12 @@ export const CalendarScreen: React.FC = () => {
     const cleanedDate = cleanText(exceptionDate, 10);
 
     if (!cleanedReason) {
-      showAlert('Required', 'Please enter a reason or school notice.');
+      showNotice('Required', 'Please enter a reason or school notice.');
       return;
     }
 
     if (!isValidIsoDate(cleanedDate)) {
-      showAlert('Invalid Date', 'Please enter a valid date in YYYY-MM-DD format.');
+      showNotice('Invalid Date', 'Please enter a valid date in YYYY-MM-DD format.');
       return;
     }
 
@@ -240,7 +220,7 @@ export const CalendarScreen: React.FC = () => {
 
       if (editingExceptionId) {
         const res = await apiClient.patch<CalendarException>(
-          `/calendar/exceptions/${encodeURIComponent(String(editingExceptionId))}/`,
+          `${ENDPOINTS.HOLIDAYS}${encodeURIComponent(String(editingExceptionId))}/`,
           payload
         );
         if (!isMounted.current) return;
@@ -251,9 +231,9 @@ export const CalendarScreen: React.FC = () => {
         }
         setEditingExceptionId(null);
         setExceptionReason('');
-        showAlert('Updated', 'Calendar override updated.');
+        showNotice('Updated', 'Calendar override updated.');
       } else {
-        const res = await apiClient.post<CalendarException>('/calendar/exceptions/', payload);
+        const res = await apiClient.post<CalendarException>(ENDPOINTS.HOLIDAYS, payload);
         if (!isMounted.current) return;
 
         if (res.data && res.data.id) {
@@ -263,11 +243,11 @@ export const CalendarScreen: React.FC = () => {
         }
 
         setExceptionReason('');
-        showAlert('Saved', 'Calendar override saved.');
+        showNotice('Saved', 'Calendar override saved.');
       }
     } catch (err: unknown) {
       if (!isMounted.current) return;
-      showAlert(
+      showNotice(
         'Save Failed',
         getFriendlyErrorMessage(err, 'Could not save calendar override right now.')
       );
@@ -283,36 +263,27 @@ export const CalendarScreen: React.FC = () => {
     if (!Number.isInteger(id) || id <= 0) return;
 
     try {
-      await apiClient.delete(`/calendar/exceptions/${encodeURIComponent(String(id))}/`);
+      await apiClient.delete(`${ENDPOINTS.HOLIDAYS}${encodeURIComponent(String(id))}/`);
       if (isMounted.current) {
         setExceptions((prev) => prev.filter((item) => item.id !== id));
       }
     } catch (err: unknown) {
-      showAlert('Error', getFriendlyErrorMessage(err, 'Could not remove this calendar override.'));
+      showNotice('Error', getFriendlyErrorMessage(err, 'Could not remove this calendar override.'));
     }
   };
 
   const handleDeleteException = (id: number) => {
     if (!isAdmin) {
-      showAlert('Permission Required', 'Only school administrators can remove overrides.');
+      showNotice('Permission Required', 'Only school administrators can remove overrides.');
       return;
     }
 
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm('Remove this calendar override?')) {
-        void executeDeleteException(id);
-      }
-      return;
-    }
-
-    Alert.alert('Confirm Delete', 'Remove this calendar override?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => void executeDeleteException(id),
-      },
-    ]);
+    confirmAction(
+      'Confirm Delete',
+      'Remove this calendar override?',
+      'Delete',
+      () => void executeDeleteException(id)
+    );
   };
 
   const getBadgeColors = (type: CalendarException['type']) => {

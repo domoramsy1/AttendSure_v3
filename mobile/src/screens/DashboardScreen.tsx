@@ -1,5 +1,5 @@
 /**
- * AttendSure Mobile - Faculty Home Dashboard
+ * AttendSure Mobile - Teacher Home Dashboard
  * File: mobile/src/screens/DashboardScreen.tsx
  */
 
@@ -14,7 +14,7 @@ import {
   ActivityIndicator,
   Platform,
   Vibration,
-  Modal,
+  DeviceEventEmitter,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -27,47 +27,27 @@ import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
 import { AttendSureLogo } from '../branding/BrandLogos';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { getServerBaseUrl } from '../services/configService';
 import { getUnsyncedCount, syncOfflineQueue } from '../services/offlineQueue';
-import { sendLiveHeartbeat, format12HourTime } from '../services/telemetryService';
-import { startPassivePresenceTracking } from '../services/backgroundLocation';
+import { sendLiveHeartbeat, format12HourTime, ADAPTIVE_PING_INTERVAL_MS } from '../services/telemetryService';
+import { setTeacherOnDutyFlag } from '../services/backgroundLocation';
 import {
-  isSafeUrl,
   getFriendlyErrorMessage,
   type ThemePalette,
 } from '../constants/theme';
 import { TabType } from '../navigation/MainTabNavigator';
-
-function calculateDistanceMeters(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
-  const R = 6371000.0;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180.0;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180.0;
-  const radLat1 = (lat1 * Math.PI) / 180.0;
-  const radLat2 = (lat2 * Math.PI) / 180.0;
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(radLat1) * Math.cos(radLat2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return Math.round(R * c);
-}
-
-function formatDistance(meters: number): string {
-  if (meters >= 1000) {
-    return `${(meters / 1000).toFixed(2)} km`;
-  }
-  return `${Math.round(meters)} m`;
-}
-
-const isCanceledError = (err: unknown): boolean => {
-  const e = err as { code?: string; name?: string };
-  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
-};
+import { canViewClassList } from '../utils/permissions';
+import {
+  calculateDistanceMeters,
+  formatDistanceMeters,
+  resolveMediaUrl,
+} from '../utils/helpers';
+import CampusAlertModal from '../components/dashboard/CampusAlertModal';
+import DutyRightNowCard from '../components/dashboard/DutyRightNowCard';
+import DashboardQuickActions from '../components/dashboard/DashboardQuickActions';
+import CampusLocationCard from '../components/dashboard/CampusLocationCard';
+import DashboardDtrAndKpiSection from '../components/dashboard/DashboardDtrAndKpiSection';
 
 interface StudentItem {
   id: number;
@@ -117,8 +97,8 @@ interface DtrDayRow {
 }
 
 interface DtrSummaryData {
-  faculty_id: number;
-  faculty_name: string;
+  teacher_id: number;
+  teacher_name: string;
   employee_id: string;
   department: string;
   month: string;
@@ -132,11 +112,12 @@ interface DtrSummaryData {
 }
 
 interface GeofenceConfigData {
-  name: string | null;
+  campus_name?: string | null;
+  name?: string | null;
   latitude: number | null;
   longitude: number | null;
   radius_meters: number | null;
-  is_configured: boolean;
+  is_configured?: boolean;
 }
 
 interface CalendarOverrideItem {
@@ -207,16 +188,17 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const lastHeartbeatSent = useRef<number>(0);
 
   const currentUser = user as Record<string, any> | null;
+  const allowClassViews = canViewClassList(user);
   const displayName =
     currentUser?.full_name ||
     `${currentUser?.first_name || ''} ${currentUser?.last_name || ''}`.trim() ||
-    currentUser?.faculty_name ||
+    currentUser?.teacher_name ||
     currentUser?.username ||
     '';
 
   const employeeId =
     currentUser?.employee_id ||
-    currentUser?.faculty_id ||
+    (currentUser?.teacher_id ? String(currentUser.teacher_id) : '') ||
     dtrData?.employee_id ||
     currentUser?.username ||
     '';
@@ -224,6 +206,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const schoolName =
     schoolProfile?.school_name ||
     currentUser?.school_name ||
+    geofenceConfig?.campus_name ||
     geofenceConfig?.name ||
     'AttendSure';
 
@@ -236,29 +219,16 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
 
   const greetingText = useMemo(() => getGreeting(), []);
 
-  const resolveSafePhotoUrl = useCallback((path: string | null | undefined, base: string): string | null => {
-    if (!path || typeof path !== 'string') return null;
-    const trimmed = path.trim();
-    if (!trimmed) return null;
-    const candidate =
-      trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')
-        ? trimmed
-        : base
-        ? `${base.replace(/\/+$/, '')}${trimmed.startsWith('/') ? trimmed : `/${trimmed}`}`
-        : '';
-    return isSafeUrl(candidate) ? candidate : null;
-  }, []);
-
   const rawUserPhoto =
     currentUser?.photo_url ||
     currentUser?.photo ||
     currentUser?.avatar_url ||
     currentUser?.avatar ||
     null;
-  const resolvedUserPhoto = resolveSafePhotoUrl(rawUserPhoto, serverBase);
+  const resolvedUserPhoto = resolveMediaUrl(rawUserPhoto, serverBase);
 
   const rawLogoPath = schoolProfile?.school_logo || schoolProfile?.left_logo || null;
-  const resolvedLogoUri = resolveSafePhotoUrl(rawLogoPath, serverBase);
+  const resolvedLogoUri = resolveMediaUrl(rawLogoPath, serverBase);
 
   useEffect(() => {
     setAvatarFailed(false);
@@ -268,9 +238,20 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     setLogoFailed(false);
   }, [resolvedLogoUri]);
 
+  const todayStr = getLocalTodayStr();
+  const todayDtrRow: DtrDayRow | null =
+    dtrData?.rows?.find((r) => r.date_str === todayStr) || null;
+
+  const hasCheckedInToday = Boolean(todayDtrRow?.am_arrival || todayDtrRow?.pm_arrival);
+  const hasCheckedOutToday = Boolean(
+    (todayDtrRow?.pm_departure && todayDtrRow.pm_departure !== '') ||
+      (todayDtrRow?.am_departure && !todayDtrRow?.pm_arrival)
+  );
+  const isOfficiallyOnDuty = hasCheckedInToday && !hasCheckedOutToday;
+
   useEffect(() => {
-    startPassivePresenceTracking().catch(() => {});
-  }, [currentUser?.username, currentUser?.id]);
+    void setTeacherOnDutyFlag(isOfficiallyOnDuty);
+  }, [isOfficiallyOnDuty]);
 
   const applyStationaryFilter = useCallback((raw: LiveGpsCoords): LiveGpsCoords => {
     const anchor = anchorCoordsRef.current;
@@ -305,9 +286,17 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     let heartbeatIntervalTimer: ReturnType<typeof setInterval> | null = null;
     let isSubscribed = true;
 
-    const transmitHeartbeat = async (coords: LiveGpsCoords) => {
+    const transmitHeartbeat = async (coords: LiveGpsCoords, force = false) => {
+      if (coords.mocked) {
+        if (isSubscribed) {
+          setGpsError(
+            'A mock location setting appears to be turned on. Disable it in your phone settings to update your campus status.'
+          );
+        }
+        return;
+      }
       try {
-        await sendLiveHeartbeat(coords);
+        await sendLiveHeartbeat(coords, force);
         if (isSubscribed) {
           setIsOnline(true);
           setGpsError(null);
@@ -328,7 +317,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (!isSubscribed) return;
         if (status !== 'granted') {
-          setGpsError('Location access is needed for attendance check-in.');
+          setGpsError('Location access is needed for Teacher Time In / Time Out.');
           return;
         }
 
@@ -359,7 +348,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           setLiveCoords(stabilized);
 
           lastHeartbeatSent.current = Date.now();
-          void transmitHeartbeat(stabilized);
+          void transmitHeartbeat(stabilized, true);
         }
 
         if (!isSubscribed) return;
@@ -385,7 +374,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
             setGpsError(null);
 
             const now = Date.now();
-            if (now - lastHeartbeatSent.current >= 60000) {
+            if (now - lastHeartbeatSent.current >= ADAPTIVE_PING_INTERVAL_MS) {
               lastHeartbeatSent.current = now;
               void transmitHeartbeat(stabilized);
             }
@@ -402,7 +391,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         heartbeatIntervalTimer = setInterval(async () => {
           if (!isSubscribed) return;
           const now = Date.now();
-          if (now - lastHeartbeatSent.current < 60000) return;
+          if (now - lastHeartbeatSent.current < ADAPTIVE_PING_INTERVAL_MS) return;
 
           try {
             const freshLoc = await Location.getCurrentPositionAsync({
@@ -432,7 +421,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
               void transmitHeartbeat(updated);
             }
           }
-        }, 30000);
+        }, ADAPTIVE_PING_INTERVAL_MS);
       } catch (err: unknown) {
         if (isSubscribed) {
           setGpsError(getFriendlyErrorMessage(err, 'Searching for GPS signal...'));
@@ -478,17 +467,6 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     if (liveDistanceMeters === null || campusCenter.radius === null) return null;
     return liveDistanceMeters <= campusCenter.radius;
   }, [liveDistanceMeters, campusCenter.radius]);
-
-  const todayStr = getLocalTodayStr();
-  const todayDtrRow: DtrDayRow | null =
-    dtrData?.rows?.find((r) => r.date_str === todayStr) || null;
-
-  const hasCheckedInToday = Boolean(todayDtrRow?.am_arrival || todayDtrRow?.pm_arrival);
-  const hasCheckedOutToday = Boolean(
-    (todayDtrRow?.pm_departure && todayDtrRow.pm_departure !== '') ||
-      (todayDtrRow?.am_departure && !todayDtrRow?.pm_arrival)
-  );
-  const isOfficiallyOnDuty = hasCheckedInToday && !hasCheckedOutToday;
 
   useEffect(() => {
     if (isInsideCampusPerimeter === false && isOfficiallyOnDuty && campusCenter.radius !== null) {
@@ -600,21 +578,17 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
 
     const [classListRes, schoolRes, dtrRes, geofenceRes, calendarRes] =
       await Promise.allSettled([
-        apiClient
-          .get('classroom/assigned/', { signal: controller.signal, timeout: 5000 })
-          .catch((err: unknown) => {
-            if (isCanceledError(err) || controller.signal.aborted) {
-              throw err;
-            }
-            return apiClient.get('sections/', { signal: controller.signal, timeout: 5000 });
-          }),
-        apiClient.get('settings/school/', { signal: controller.signal, timeout: 5000 }),
-        apiClient.get(
-          `reports/dtr/?month=${now.getMonth() + 1}&year=${now.getFullYear()}`,
-          { signal: controller.signal, timeout: 5000 }
-        ),
-        apiClient.get('geofence/', { signal: controller.signal, timeout: 5000 }),
-        apiClient.get('calendar/exceptions/', { signal: controller.signal, timeout: 5000 }),
+        allowClassViews
+          ? apiClient.get(ENDPOINTS.ATTENDANCE_CLASSES, { signal: controller.signal, timeout: 5000 })
+          : Promise.resolve({ data: [] }),
+        apiClient.get(ENDPOINTS.SCHOOL_PROFILE, { signal: controller.signal, timeout: 5000 }),
+        apiClient.get(ENDPOINTS.EMPLOYEE_DTR, {
+          params: { month: now.getMonth() + 1, year: now.getFullYear() },
+          signal: controller.signal,
+          timeout: 5000,
+        }),
+        apiClient.get(ENDPOINTS.CAMPUS_OVERVIEW, { signal: controller.signal, timeout: 5000 }),
+        apiClient.get(ENDPOINTS.HOLIDAYS, { signal: controller.signal, timeout: 5000 }),
       ]);
 
     if (!isMounted.current || controller.signal.aborted) return;
@@ -688,7 +662,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     }
 
     setLastSyncTime(format12HourTime(new Date()));
-  }, [flushOfflineRecords]);
+  }, [flushOfflineRecords, allowClassViews]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -705,9 +679,18 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     });
     void refreshUser();
 
+    const sub = DeviceEventEmitter.addListener('attendsure:attendance-updated', () => {
+      if (isMounted.current) void loadAllDynamicData();
+    });
+    const livePoll = setInterval(() => {
+      if (isMounted.current) void loadAllDynamicData();
+    }, 10000);
+
     return () => {
       isMounted.current = false;
       abortControllerRef.current?.abort();
+      sub.remove();
+      clearInterval(livePoll);
     };
   }, [loadCachedData, loadAllDynamicData, refreshUser]);
 
@@ -780,55 +763,12 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
       <StatusBar style={isDark ? 'light' : 'dark'} />
 
       {/* Campus Boundary Notice Modal */}
-      <Modal
+      <CampusAlertModal
         visible={showCampusAlertModal}
-        transparent
-        animationType="fade"
-        onRequestClose={handleDismissCampusAlert}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalIconWrap}>
-              <Ionicons name="location-outline" size={32} color={palette.primary} />
-            </View>
-
-            <Text style={styles.modalTitle}>Outside School Area</Text>
-            <Text style={styles.modalSubtitle}>
-              You are signed in on duty, but your phone is currently outside the school boundary.
-            </Text>
-
-            <View style={styles.modalMetricsBox}>
-              <View style={styles.modalMetricCol}>
-                <Text style={styles.modalMetricLabel}>CURRENT DISTANCE</Text>
-                <Text style={styles.modalMetricVal}>
-                  {liveDistanceMeters !== null ? formatDistance(liveDistanceMeters) : '—'}
-                </Text>
-              </View>
-              <View style={styles.modalMetricDivider} />
-              <View style={styles.modalMetricCol}>
-                <Text style={styles.modalMetricLabel}>ALLOWED BOUNDARY</Text>
-                <Text style={styles.modalMetricVal}>
-                  {campusCenter.radius !== null ? `${campusCenter.radius}m` : '—'}
-                </Text>
-              </View>
-            </View>
-
-            <Text style={styles.modalExplanation}>
-              If you are on official school business, let your department head know. Otherwise,
-              please return to campus grounds to verify your attendance.
-            </Text>
-
-            <TouchableOpacity
-              style={styles.modalConfirmBtn}
-              onPress={handleDismissCampusAlert}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="checkmark-outline" size={16} color={palette.onPrimary} />
-              <Text style={styles.modalConfirmBtnText}>I Understand</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+        liveDistanceMeters={liveDistanceMeters}
+        radiusMeters={campusCenter.radius}
+        onDismiss={handleDismissCampusAlert}
+      />
 
       {/* Top Header */}
       <View style={styles.topHeader}>
@@ -891,10 +831,10 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           <View style={styles.locationNoticeCard}>
             <Ionicons name="alert-circle-outline" size={18} color={palette.danger} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.locationNoticeTitle}>Fake GPS Detected</Text>
+              <Text style={styles.locationNoticeTitle}>Mock Location Setting Active</Text>
               <Text style={styles.locationNoticeBody}>
-                A mock location app is active. Please turn off fake GPS in your phone settings so
-                your attendance logs stay valid.
+                A mock location option is turned on in your phone settings. Please disable it so
+                your campus Time In / Out stays verified.
               </Text>
             </View>
           </View>
@@ -906,7 +846,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
             <View style={{ flex: 1, marginRight: 10 }}>
               <Text style={styles.welcomeSub}>{greetingText},</Text>
               <Text style={styles.welcomeTitle} numberOfLines={1}>
-                {displayName || 'Faculty Member'}
+                {displayName || 'Teacher'}
               </Text>
             </View>
             <View style={styles.avatarBox}>
@@ -926,7 +866,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           <View style={styles.progressContainer}>
             <View style={styles.progressTopRow}>
               <Text style={styles.progressBadgeText}>
-                {employeeId ? `ID: ${employeeId}` : 'Faculty'}
+                {employeeId ? `ID: ${employeeId}` : 'Teacher'}
               </Text>
               <Text style={styles.progressPercent}>{overallRate}% Attendance Today</Text>
             </View>
@@ -941,189 +881,69 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           </View>
         </View>
 
-        {/* 2. Primary Classroom Summary Card */}
-        <TouchableOpacity
-          style={styles.primaryStatusCard}
-          onPress={() => onNavigate?.('class_list')}
-          activeOpacity={0.9}
-        >
-          <View style={styles.statusTopRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.statusCardEyebrow}>TODAY&apos;S CLASS SUMMARY</Text>
-              <Text style={styles.statusCardTitle}>
-                {totalPresent} of {totalStudentsEnrolled} Students Present
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={palette.onPrimary} />
-          </View>
-          <View style={styles.statusFooterRow}>
-            <View style={styles.statusPill}>
-              <Text style={styles.statusPillText}>Needs Review: {totalNeedsReview}</Text>
-            </View>
-            <View style={[styles.statusPill, { backgroundColor: palette.headerSurface }]}>
-              <Text style={styles.statusPillText}>
-                Campus GPS: {isInsideCampusPerimeter ? 'On Campus' : 'Away'}
-              </Text>
-            </View>
-          </View>
-        </TouchableOpacity>
+        {/* 1B. 3-Second Glanceable Duty, Location & Single Next-Step Hero */}
+        <DutyRightNowCard
+          offlineCount={offlineCount}
+          isOnline={isOnline}
+          isOfficiallyOnDuty={isOfficiallyOnDuty}
+          hasCheckedInToday={hasCheckedInToday}
+          hasCheckedOutToday={hasCheckedOutToday}
+          arrivalTime={todayDtrRow?.am_arrival || todayDtrRow?.pm_arrival}
+          isInsideCampusPerimeter={isInsideCampusPerimeter}
+          liveDistanceMeters={liveDistanceMeters}
+          allowClassViews={allowClassViews}
+          onNavigate={onNavigate}
+        />
 
-        {/* 3. Quick Actions Grid */}
-        <Text style={styles.sectionHeader}>Quick Actions</Text>
-        <View style={styles.gridContainer}>
+        {/* 2. Primary Classroom Summary Card (Hidden for non-teaching staff) */}
+        {allowClassViews && (
           <TouchableOpacity
-            style={styles.gridCard}
-            onPress={() => onNavigate?.('scanner')}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.gridIconBox, { backgroundColor: palette.warningLight }]}>
-              <Ionicons name="scan-outline" size={20} color={palette.warning} />
-            </View>
-            <Text style={styles.gridCardTitle}>Face Check-In</Text>
-            <Text style={styles.gridCardSub}>Face &amp; Campus GPS</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.gridCard}
-            onPress={() => onNavigate?.('gate_pass')}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.gridIconBox, { backgroundColor: palette.infoLight }]}>
-              <Ionicons name="ticket-outline" size={20} color={palette.info} />
-            </View>
-            <Text style={styles.gridCardTitle}>Exit Passes</Text>
-            <Text style={styles.gridCardSub}>Student &amp; Travel Permits</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.gridCard}
+            style={styles.primaryStatusCard}
             onPress={() => onNavigate?.('class_list')}
-            activeOpacity={0.8}
+            activeOpacity={0.9}
           >
-            <View style={[styles.gridIconBox, { backgroundColor: palette.primarySoft }]}>
-              <Ionicons name="people-outline" size={20} color={palette.primary} />
-            </View>
-            <Text style={styles.gridCardTitle}>Class List</Text>
-            <Text style={styles.gridCardSub}>Enrolled Students</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.gridCard}
-            onPress={() => onNavigate?.('chat')}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.gridIconBox, { backgroundColor: palette.successLight }]}>
-              <Ionicons name="notifications-outline" size={20} color={palette.success} />
-            </View>
-            <Text style={styles.gridCardTitle}>Parent Alerts</Text>
-            <Text style={styles.gridCardSub}>Push Updates &amp; Chat</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* 4. More Tools Card */}
-        <TouchableOpacity
-          style={styles.moreToolsCard}
-          onPress={() => onNavigate?.('menu')}
-          activeOpacity={0.85}
-        >
-          <View style={styles.moreToolsLeft}>
-            <View style={styles.moreToolsIconBox}>
-              <Ionicons name="grid-outline" size={20} color={palette.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.moreToolsTitle}>More School Tools</Text>
-              <Text style={styles.moreToolsSub}>
-                Daily Time Record, Calendar, School Reports &amp; Settings
-              </Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={palette.textMuted} />
-        </TouchableOpacity>
-
-        {/* School Campus Location Card */}
-        <View style={styles.campusLocationCard}>
-          <View style={styles.campusCardHeader}>
-            <View style={styles.campusHeaderLeft}>
-              <View
-                style={[
-                  styles.pulseDot,
-                  {
-                    backgroundColor:
-                      isInsideCampusPerimeter === true
-                        ? palette.success
-                        : isInsideCampusPerimeter === false
-                        ? palette.warning
-                        : palette.textMuted,
-                  },
-                ]}
-              />
-              <Text style={styles.campusHeaderLabel}>SCHOOL CAMPUS LOCATION</Text>
-            </View>
-
-            {liveCoords?.timestamp ? (
-              <View style={styles.timestampBadge}>
-                <Ionicons name="time-outline" size={11} color={palette.textMuted} />
-                <Text style={styles.timestampBadgeText}>{liveCoords.timestamp}</Text>
-              </View>
-            ) : null}
-          </View>
-
-          <View style={styles.campusMainContent}>
-            {liveDistanceMeters !== null ? (
-              <>
-                <View style={styles.distanceValueRow}>
-                  <Text style={styles.distanceMetricBig}>
-                    {formatDistance(liveDistanceMeters)}
-                  </Text>
-                  <Text style={styles.distanceMetricSub}>from school grounds</Text>
-                </View>
-
-                <View style={styles.perimeterBadgeRow}>
-                  <View
-                    style={[
-                      styles.perimeterBadge,
-                      {
-                        backgroundColor: isInsideCampusPerimeter
-                          ? palette.successLight
-                          : palette.warningLight,
-                        borderColor: isInsideCampusPerimeter ? palette.success : palette.warning,
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name={
-                        isInsideCampusPerimeter ? 'checkmark-circle' : 'navigate-circle-outline'
-                      }
-                      size={13}
-                      color={isInsideCampusPerimeter ? palette.success : palette.warning}
-                    />
-                    <Text
-                      style={[
-                        styles.perimeterBadgeText,
-                        { color: isInsideCampusPerimeter ? palette.success : palette.warning },
-                      ]}
-                    >
-                      {isInsideCampusPerimeter ? 'INSIDE SCHOOL GROUNDS' : 'OUTSIDE SCHOOL GROUNDS'}
-                    </Text>
-                  </View>
-
-                  <Text style={styles.perimeterRadiusMeta}>
-                    {campusCenter.radius !== null
-                      ? `Allowed area: ${campusCenter.radius}m`
-                      : 'Boundary not set'}
-                  </Text>
-                </View>
-              </>
-            ) : (
-              <View style={styles.acquiringFixBox}>
-                <ActivityIndicator size="small" color={palette.primary} />
-                <Text style={styles.acquiringFixText}>
-                  {gpsError || 'Finding GPS location...'}
+            <View style={styles.statusTopRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.statusCardEyebrow}>TODAY&apos;S CLASS SUMMARY</Text>
+                <Text style={styles.statusCardTitle}>
+                  {totalPresent} of {totalStudentsEnrolled} Students Present
                 </Text>
               </View>
-            )}
-          </View>
-        </View>
+              <Ionicons name="chevron-forward" size={18} color={palette.onPrimary} />
+            </View>
+            <View style={styles.statusFooterRow}>
+              <View style={styles.statusPill}>
+                <Text style={styles.statusPillText}>Needs Review: {totalNeedsReview}</Text>
+              </View>
+              <View style={[styles.statusPill, { backgroundColor: palette.headerSurface }]}>
+                <Text style={styles.statusPillText}>
+                  Campus GPS:{' '}
+                  {isInsideCampusPerimeter === null
+                    ? 'Locating...'
+                    : isInsideCampusPerimeter
+                    ? 'On Campus'
+                    : `Outside (${liveDistanceMeters !== null ? formatDistanceMeters(liveDistanceMeters) : '—'})`}
+                </Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {/* 3. Quick Actions Grid & More Tools Card */}
+        <DashboardQuickActions
+          user={user}
+          allowClassViews={allowClassViews}
+          onNavigate={onNavigate}
+        />
+
+        {/* School Campus Location Card */}
+        <CampusLocationCard
+          isInsideCampusPerimeter={isInsideCampusPerimeter}
+          liveDistanceMeters={liveDistanceMeters}
+          radiusMeters={campusCenter.radius}
+          timestamp={liveCoords?.timestamp}
+          gpsError={gpsError}
+        />
 
         {/* Offline Queue Banner */}
         {offlineCount > 0 && (
@@ -1141,14 +961,14 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
               />
               <View style={{ flex: 1 }}>
                 <Text style={styles.offlineBufferTitle}>
-                  {offlineCount} {offlineCount === 1 ? 'record' : 'records'} saved on phone
+                  {offlineCount} {offlineCount === 1 ? 'record' : 'records'} saved safely on phone
                 </Text>
                 <Text style={styles.offlineBufferSubtitle}>
                   {isSyncingQueue
                     ? 'Uploading to school server now...'
                     : isOnline
-                    ? 'Tap here to upload now'
-                    : 'Will upload when internet connects'}
+                    ? 'Will sync automatically — or tap to upload now'
+                    : 'Saved on phone — will sync automatically when Wi-Fi returns'}
                 </Text>
               </View>
             </View>
@@ -1192,106 +1012,17 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           </View>
         ) : null}
 
-        {/* DTR Summary Card */}
-        {dtrData && (
-          <>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionHeaderTitle}>
-                Daily Time Record ({dtrData.month} {dtrData.year})
-              </Text>
-              <Text style={styles.sectionHeaderSub}>{dtrData.days_present} Days Logged</Text>
-            </View>
-
-            <View style={styles.dtrSummaryCard}>
-              <View style={styles.dtrGrid}>
-                <View style={styles.dtrSlot}>
-                  <Text style={styles.dtrSlotLabel}>AM IN</Text>
-                  <Text style={styles.dtrSlotTime}>{todayDtrRow?.am_arrival || '--:--'}</Text>
-                </View>
-                <View style={styles.dtrSlot}>
-                  <Text style={styles.dtrSlotLabel}>AM OUT</Text>
-                  <Text style={styles.dtrSlotTime}>{todayDtrRow?.am_departure || '--:--'}</Text>
-                </View>
-                <View style={styles.dtrSlot}>
-                  <Text style={styles.dtrSlotLabel}>PM IN</Text>
-                  <Text style={styles.dtrSlotTime}>{todayDtrRow?.pm_arrival || '--:--'}</Text>
-                </View>
-                <View style={styles.dtrSlot}>
-                  <Text style={styles.dtrSlotLabel}>PM OUT</Text>
-                  <Text style={styles.dtrSlotTime}>{todayDtrRow?.pm_departure || '--:--'}</Text>
-                </View>
-              </View>
-
-              <View style={styles.dtrCardFooter}>
-                <Text style={styles.dtrFooterMeta}>
-                  Undertime: {dtrData.total_undertime_hours}h {dtrData.total_undertime_minutes}m
-                </Text>
-                <Text
-                  style={[
-                    styles.dtrApprovalBadge,
-                    {
-                      color: dtrData.dept_head_approved
-                        ? palette.success
-                        : dtrData.dtr_submitted
-                        ? palette.primary
-                        : palette.textMuted,
-                    },
-                  ]}
-                >
-                  {dtrData.dept_head_approved
-                    ? 'APPROVED BY DEPT HEAD'
-                    : dtrData.dtr_submitted
-                    ? 'SENT FOR REVIEW'
-                    : 'LOGGING TODAY'}
-                </Text>
-              </View>
-            </View>
-          </>
-        )}
-
-        {/* Attendance Breakdown Tiles */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionHeaderTitle}>Student Attendance Today</Text>
-          {lastSyncTime ? (
-            <Text style={styles.sectionHeaderSub}>Updated {lastSyncTime}</Text>
-          ) : null}
-        </View>
-
-        <View style={styles.kpiTileGrid}>
-          <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: palette.successLight }]}>
-              <Ionicons name="checkmark-circle-outline" size={15} color={palette.success} />
-            </View>
-            <Text style={[styles.kpiValueText, { color: palette.success }]}>{totalPresent}</Text>
-            <Text style={styles.kpiLabelText}>Present</Text>
-          </View>
-
-          <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: palette.warningLight }]}>
-              <Ionicons name="time-outline" size={15} color={palette.warning} />
-            </View>
-            <Text style={[styles.kpiValueText, { color: palette.warning }]}>{totalLate}</Text>
-            <Text style={styles.kpiLabelText}>Late</Text>
-          </View>
-
-          <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: palette.dangerLight }]}>
-              <Ionicons name="close-circle-outline" size={15} color={palette.danger} />
-            </View>
-            <Text style={[styles.kpiValueText, { color: palette.danger }]}>{totalAbsent}</Text>
-            <Text style={styles.kpiLabelText}>Absent</Text>
-          </View>
-
-          <View style={styles.kpiTile}>
-            <View style={[styles.kpiIconWrap, { backgroundColor: palette.surfaceSubtle }]}>
-              <Ionicons name="eye-outline" size={15} color={palette.textSecondary} />
-            </View>
-            <Text style={[styles.kpiValueText, { color: palette.textPrimary }]}>
-              {totalNeedsReview}
-            </Text>
-            <Text style={styles.kpiLabelText}>Review</Text>
-          </View>
-        </View>
+        {/* DTR Summary & Student Attendance KPI Tiles */}
+        <DashboardDtrAndKpiSection
+          dtrData={dtrData}
+          todayDtrRow={todayDtrRow}
+          allowClassViews={allowClassViews}
+          lastSyncTime={lastSyncTime}
+          totalPresent={totalPresent}
+          totalLate={totalLate}
+          totalAbsent={totalAbsent}
+          totalNeedsReview={totalNeedsReview}
+        />
       </ScrollView>
     </SafeAreaView>
   );
@@ -1328,79 +1059,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       borderColor: palette.border,
     },
     scrollArea: { flex: 1 },
-    scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 110 },
-    modalOverlay: {
-      flex: 1,
-      backgroundColor: 'rgba(15, 23, 42, 0.75)',
-      justifyContent: 'center',
-      alignItems: 'center',
-      padding: 20,
-    },
-    modalCard: {
-      width: '100%',
-      backgroundColor: palette.surface,
-      borderRadius: 16,
-      padding: 20,
-      alignItems: 'center',
-      borderWidth: 1,
-      borderColor: palette.borderStrong,
-    },
-    modalIconWrap: {
-      width: 54,
-      height: 54,
-      borderRadius: 27,
-      backgroundColor: palette.primarySoft,
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginBottom: 12,
-    },
-    modalTitle: {
-      fontSize: fonts.lg,
-      fontWeight: fonts.weight.extrabold,
-      color: palette.textPrimary,
-      textAlign: 'center',
-    },
-    modalSubtitle: {
-      fontSize: fonts.sm,
-      color: palette.textSecondary,
-      textAlign: 'center',
-      marginTop: 4,
-      lineHeight: 18,
-    },
-    modalMetricsBox: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-around',
-      backgroundColor: palette.surfaceSubtle,
-      borderWidth: 1,
-      borderColor: palette.border,
-      borderRadius: 10,
-      width: '100%',
-      paddingVertical: 10,
-      marginVertical: 12,
-    },
-    modalMetricCol: { alignItems: 'center', flex: 1 },
-    modalMetricDivider: { width: 1, height: 24, backgroundColor: palette.borderStrong },
-    modalMetricLabel: { fontSize: 9, fontWeight: fonts.weight.extrabold, color: palette.textMuted },
-    modalMetricVal: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary, marginTop: 2 },
-    modalExplanation: {
-      fontSize: fonts.xs,
-      color: palette.textSecondary,
-      textAlign: 'center',
-      lineHeight: 16,
-      marginBottom: 16,
-    },
-    modalConfirmBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      backgroundColor: palette.buttonBg,
-      width: '100%',
-      paddingVertical: 12,
-      borderRadius: 10,
-    },
-    modalConfirmBtnText: { color: palette.onPrimary, fontSize: fonts.sm, fontWeight: fonts.weight.bold },
+    scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 136 },
     locationNoticeCard: {
       flexDirection: 'row',
       alignItems: 'flex-start',
@@ -1421,7 +1080,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       marginBottom: 14,
       ...Platform.select({
         ios: {
-          shadowColor: '#000000',
+          shadowColor: palette.shadowColor,
           shadowOffset: { width: 0, height: 6 },
           shadowOpacity: 0.18,
           shadowRadius: 10,
@@ -1450,16 +1109,16 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     progressContainer: { backgroundColor: palette.headerSurface, borderRadius: 12, padding: 12 },
     progressTopRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
     progressBadgeText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.onPrimary },
-    progressPercent: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: '#fef08a' },
+    progressPercent: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: palette.warningHighlight },
     progressBarTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 3, overflow: 'hidden' },
-    progressBarFill: { height: '100%', backgroundColor: '#fef08a', borderRadius: 3 },
+    progressBarFill: { height: '100%', backgroundColor: palette.warningHighlight, borderRadius: 3 },
     primaryStatusCard: {
       backgroundColor: palette.buttonBg,
       borderRadius: 18,
       padding: 16,
       marginBottom: 16,
       ...Platform.select({
-        ios: { shadowColor: '#000000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8 },
+        ios: { shadowColor: palette.shadowColor, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8 },
         android: { elevation: 4 },
       }),
     },
@@ -1469,87 +1128,6 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     statusFooterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     statusPill: { backgroundColor: 'rgba(0,0,0,0.18)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
     statusPillText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.onPrimary },
-    sectionHeader: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary, marginBottom: 10, marginLeft: 2 },
-    gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
-    gridCard: {
-      width: '48%',
-      borderRadius: 16,
-      padding: 14,
-      backgroundColor: palette.surface,
-      borderWidth: 1,
-      borderColor: palette.border,
-      gap: 4,
-    },
-    gridIconBox: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-    gridCardTitle: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
-    gridCardSub: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
-    moreToolsCard: {
-      backgroundColor: palette.surface,
-      borderRadius: 16,
-      padding: 14,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      borderWidth: 1,
-      borderColor: palette.border,
-      marginBottom: 14,
-    },
-    moreToolsLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-    moreToolsIconBox: { width: 40, height: 40, borderRadius: 12, backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center' },
-    moreToolsTitle: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
-    moreToolsSub: { fontSize: fonts.xs, color: palette.textSecondary, marginTop: 2 },
-    campusLocationCard: {
-      backgroundColor: palette.surface,
-      borderRadius: 14,
-      padding: 14,
-      borderWidth: 1,
-      borderColor: palette.border,
-      marginBottom: 12,
-    },
-    campusCardHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: 8,
-    },
-    campusHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    pulseDot: { width: 8, height: 8, borderRadius: 4 },
-    campusHeaderLabel: { fontSize: fonts.xxs, fontWeight: fonts.weight.extrabold, color: palette.primary, letterSpacing: 0.4 },
-    timestampBadge: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      backgroundColor: palette.surfaceSubtle,
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      borderRadius: 6,
-    },
-    timestampBadgeText: { fontSize: fonts.xxs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
-    campusMainContent: { marginVertical: 4 },
-    distanceValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
-    distanceMetricBig: { fontSize: 26, fontWeight: fonts.weight.black, color: palette.textPrimary, letterSpacing: -0.5 },
-    distanceMetricSub: { fontSize: fonts.xs, fontWeight: fonts.weight.semibold, color: palette.textSecondary },
-    perimeterBadgeRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      flexWrap: 'wrap',
-      gap: 6,
-      marginTop: 6,
-    },
-    perimeterBadge: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      paddingVertical: 4,
-      paddingHorizontal: 8,
-      borderRadius: 6,
-      borderWidth: 1,
-    },
-    perimeterBadgeText: { fontSize: fonts.xxs, fontWeight: fonts.weight.extrabold, letterSpacing: 0.2 },
-    perimeterRadiusMeta: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
-    acquiringFixBox: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
-    acquiringFixText: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold, flex: 1 },
     offlineBufferBanner: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1584,62 +1162,6 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     },
     calendarBannerTitle: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.primary },
     calendarBannerReason: { fontSize: fonts.xs, color: palette.textPrimary, marginTop: 1 },
-    sectionHeaderRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginTop: 12,
-      marginBottom: 6,
-    },
-    sectionHeaderTitle: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
-    sectionHeaderSub: { fontSize: fonts.xxs, fontWeight: fonts.weight.semibold, color: palette.textMuted },
-    dtrSummaryCard: {
-      backgroundColor: palette.surface,
-      borderRadius: 14,
-      padding: 12,
-      borderWidth: 1,
-      borderColor: palette.border,
-    },
-    dtrGrid: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      backgroundColor: palette.surfaceSubtle,
-      borderRadius: 8,
-      paddingVertical: 8,
-      paddingHorizontal: 8,
-    },
-    dtrSlot: { alignItems: 'center', flex: 1 },
-    dtrSlotLabel: { fontSize: 9, fontWeight: fonts.weight.extrabold, color: palette.textMuted },
-    dtrSlotTime: { fontSize: fonts.sm, fontWeight: fonts.weight.extrabold, color: palette.textPrimary, marginTop: 2 },
-    dtrCardFooter: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginTop: 8,
-      paddingHorizontal: 2,
-    },
-    dtrFooterMeta: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
-    dtrApprovalBadge: { fontSize: fonts.xxs, fontWeight: fonts.weight.extrabold, letterSpacing: 0.2 },
-    kpiTileGrid: { flexDirection: 'row', gap: 6, marginBottom: 4 },
-    kpiTile: {
-      flex: 1,
-      backgroundColor: palette.surface,
-      borderRadius: 12,
-      padding: 10,
-      borderWidth: 1,
-      borderColor: palette.border,
-      alignItems: 'center',
-    },
-    kpiIconWrap: {
-      width: 28,
-      height: 28,
-      borderRadius: 8,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginBottom: 4,
-    },
-    kpiValueText: { fontSize: fonts.md, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
-    kpiLabelText: { fontSize: 9.5, fontWeight: fonts.weight.bold, color: palette.textSecondary, marginTop: 1, textAlign: 'center' },
   });
 
 export default DashboardScreen;

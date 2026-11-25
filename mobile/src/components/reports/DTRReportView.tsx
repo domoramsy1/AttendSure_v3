@@ -12,14 +12,14 @@ import {
   TextInput,
   Modal,
   ActivityIndicator,
-  Alert,
-  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import { apiClient } from '../../api/client';
+import { ENDPOINTS } from '../../api/endpoints';
 import { useThemeMode } from '../../context/ThemeContext';
 import { cleanText, getFriendlyErrorMessage } from '../../constants/theme';
+import { showNotice } from '../../utils/helpers';
 
 export interface DailyDTRRow {
   day: number;
@@ -38,8 +38,8 @@ export interface DailyDTRRow {
 }
 
 export interface DTRReportData {
-  faculty_id: number;
-  faculty_name: string;
+  teacher_id: number;
+  teacher_name: string;
   employee_id: string;
   department?: string;
   month: string;
@@ -75,14 +75,6 @@ const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
-
-const showNotice = (title: string, message: string) => {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.alert(`${title}: ${message}`);
-  } else {
-    Alert.alert(title, message);
-  }
-};
 
 export const DTRReportView: React.FC<DTRReportViewProps> = ({
   data,
@@ -126,7 +118,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
 
   const isApproved = Boolean(data.dept_head_approved);
   const isSubmitted = Boolean(data.dtr_submitted);
-  const facultyDisplayName = cleanText(data.faculty_name, 160) || 'Faculty Member';
+  const teacherDisplayName = cleanText(data.teacher_name, 160) || 'Teacher';
   const resolvedHead = cleanText(data.school_head, 160) || 'School Head / In-Charge';
   const resolvedTitle = cleanText(data.school_head_title, 120) || 'In-Charge';
   const safeMonthIndex = Math.max(0, Math.min(11, selectedMonth - 1));
@@ -193,12 +185,12 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
 
     setActionProcessing(true);
     try {
-      const encodedFacultyId = encodeURIComponent(String(data.faculty_id));
+      const encodedTeacherId = encodeURIComponent(String(data.teacher_id));
       await apiClient.post(
-        `/reports/dtr/${encodedFacultyId}/`,
+        `${ENDPOINTS.EMPLOYEE_DTR}${encodedTeacherId}/`,
         {
           action: 'EXCUSE_LOAFING',
-          faculty_id: data.faculty_id,
+          teacher_id: data.teacher_id,
           date_str: selectedViolationRow.date_str,
           remarks: cleanRemarks,
         },
@@ -284,7 +276,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
 
       {/* Name Line */}
       <View style={styles.nameBlock}>
-        <Text style={styles.nameText}>{facultyDisplayName.toUpperCase()}</Text>
+        <Text style={styles.nameText}>{teacherDisplayName.toUpperCase()}</Text>
         <View style={styles.blackUnderline} />
         <Text style={styles.captionText}>(Name)</Text>
         {data.employee_id ? (
@@ -467,9 +459,9 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
       </Text>
 
       <View style={styles.sigBox}>
-        <Text style={styles.sigName}>{facultyDisplayName}</Text>
+        <Text style={styles.sigName}>{teacherDisplayName}</Text>
         <View style={styles.sigLine} />
-        <Text style={styles.captionText}>(Signature of Faculty / Employee)</Text>
+        <Text style={styles.captionText}>(Signature of Teacher / Employee)</Text>
       </View>
 
       <View style={styles.sigBox}>
@@ -547,7 +539,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
         <Text style={styles.instQuoteText}>
           &quot;Each chief of a Bureau or Office shall require a daily record of
           attendance of all the officers and employees under him entitled to leave or
-          absence or vacation (including faculty) to be kept on the proper form and
+          absence or vacation (including teachers) to be kept on the proper form and
           also a systematic office record showing for each day all absences from
           duty from any cause whatever. At the beginning of each month he shall
           report to the Commissioner on the proper form of all absences from any cause
@@ -727,30 +719,30 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
               ]}
             >
               <View style={styles.modalHeader}>
-                <Ionicons name="warning" size={24} color={palette.danger} />
+                <Ionicons name="shield-checkmark-outline" size={24} color={palette.warning} />
                 <Text style={[styles.modalTitle, { color: palette.textPrimary }]}>
-                  Early Departure Review
+                  Review Attendance Flag
                 </Text>
               </View>
 
               <Text style={[styles.modalDesc, { color: palette.textSecondary }]}>
-                An unexcused departure was recorded for{' '}
+                An off-campus duty alert was logged for{' '}
                 <Text style={{ fontWeight: '800', color: palette.textPrimary }}>
-                  {facultyDisplayName}
+                  {teacherDisplayName}
                 </Text>{' '}
                 on{' '}
                 <Text style={{ fontWeight: '800', color: palette.textPrimary }}>
                   {selectedViolationRow.date_str}
                 </Text>
-                . If not excused, this day may incur a deduction.
+                . Add an official reason below if this was an approved school errand or excused leave.
               </Text>
 
-              <Text style={[styles.violationNote, { color: palette.danger }]}>
-                Attendance Note: {cleanText(selectedViolationRow.loafing_remarks, 200) || 'None'}
+              <Text style={[styles.violationNote, { color: palette.warning }]}>
+                Recorded Note: {cleanText(selectedViolationRow.loafing_remarks, 200) || 'No note recorded'}
               </Text>
 
               <Text style={[styles.modalInputLabel, { color: palette.textPrimary }]}>
-                Official Remarks / Justification:
+                Official Reason or Reference Note:
               </Text>
               <TextInput
                 style={[
@@ -763,7 +755,7 @@ export const DTRReportView: React.FC<DTRReportViewProps> = ({
                 ]}
                 value={pardonRemarks}
                 onChangeText={setPardonRemarks}
-                placeholder="Enter justification for excusing departure..."
+                placeholder="Add official reason, travel order, or memo note..."
                 placeholderTextColor={palette.textMuted}
                 maxLength={300}
               />

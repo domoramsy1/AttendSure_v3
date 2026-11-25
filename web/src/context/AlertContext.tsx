@@ -104,7 +104,7 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       const normalized: AlertOptions = {
         ...options,
-        title: toSafeString(options.title) || 'Notification',
+        title: toSafeString(options.title) || 'Notice',
         message: toSafeString(options.message),
       };
       alertDataRef.current = normalized;

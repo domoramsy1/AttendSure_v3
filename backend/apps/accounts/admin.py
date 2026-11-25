@@ -1,12 +1,12 @@
 from django.contrib import admin
 
-from .models import AuditLog, Department, FacultyProfile, PositionTitle, UserProfile
+from .models import AuditLog, Department, PositionTitle, TeacherProfile, UserProfile
 
 
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
-    list_display = ("id", "name")
-    search_fields = ("name",)
+    list_display = ("id", "code", "name")
+    search_fields = ("code", "name")
     ordering = ("name",)
 
 
@@ -17,21 +17,20 @@ class PositionTitleAdmin(admin.ModelAdmin):
     ordering = ("title",)
 
 
-@admin.register(FacultyProfile)
-class FacultyProfileAdmin(admin.ModelAdmin):
+@admin.register(TeacherProfile)
+class TeacherProfileAdmin(admin.ModelAdmin):
     list_display = (
         "employee_id",
-        "last_name",
-        "first_name",
-        "department_ref",
-        "position_ref",
+        "full_name",
+        "department",
+        "position",
         "can_handle_classes",
         "is_active",
     )
-    list_filter = ("is_active", "can_handle_classes", "department_ref", "position_ref")
-    search_fields = ("employee_id", "first_name", "last_name", "email", "contact_number")
-    list_select_related = ("department_ref", "position_ref")
-    ordering = ("last_name", "first_name")
+    list_filter = ("can_handle_classes", "department", "position", "user__is_active")
+    search_fields = ("employee_id", "user__first_name", "user__last_name", "user__email", "contact_number")
+    list_select_related = ("user", "department", "position")
+    ordering = ("user__last_name", "user__first_name")
 
 
 @admin.register(UserProfile)
@@ -39,22 +38,18 @@ class UserProfileAdmin(admin.ModelAdmin):
     list_display = (
         "user",
         "role",
-        "faculty",
-        "phone_number",
-        "is_profile_completed",
-        "failed_attempts",
+        "failed_login_attempts",
         "locked_until",
+        "updated_at",
     )
-    list_filter = ("role", "is_profile_completed")
+    list_filter = ("role",)
     search_fields = (
         "user__username",
         "user__first_name",
         "user__last_name",
         "user__email",
-        "phone_number",
-        "faculty__employee_id",
     )
-    list_select_related = ("user", "faculty")
+    list_select_related = ("user",)
 
 
 @admin.register(AuditLog)

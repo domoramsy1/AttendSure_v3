@@ -1,9 +1,9 @@
 /**
- * AttendSure - Zero-Lag Application Shell (Hover Prefetch + Non-Blocking Transitions)
+ * AttendSure - Application Shell (Lazy-Loaded Tabs, Hover Prefetch & Role Guard)
  * File: web/src/App.tsx
  */
 
-import React, { Suspense, lazy, startTransition, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { Suspense, lazy, startTransition, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import apiClient, { clearApiClientCache, prefetchApiGet, warmupRoleEndpoints } from './api/client';
 import { API_ROUTES } from './api/routes';
 import { AuthPage as LoginView } from './components/auth/AuthPage';
@@ -15,13 +15,37 @@ import Footer from './components/layout/Footer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ProfileModal, type ProfileUpdatePayload } from './components/modals/ProfileModal';
 import { CompleteProfileModal, type CompletedProfileUser } from './components/modals/CompleteProfileModal';
+import { ScheduleAlarmModal } from './components/modals/ScheduleAlarmModal';
+import {
+  buildTestWebAlarm,
+  evaluateDueWebAlarm,
+  getLocalDateStamp,
+  getWebAlarmsEnabled,
+  markAlarmDismissed,
+  sendBrowserDesktopAlert,
+  setWebAlarmsEnabled,
+  startWebAlarmLoop,
+  stopWebAlarmLoop,
+  unlockWebAlarmAudio,
+  type ActiveAlarmEvent,
+  type AlarmClassSlot,
+  type AlarmKind,
+  type AlarmScheduleSnapshot,
+} from './utils/scheduleAlarms';
 import { SchoolProvider, useSchool } from './context/SchoolContext';
 import { AlertProvider } from './context/AlertContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
-import { ComplianceProvider, useCompliance } from './context/ComplianceContext';
+import { ComplianceProvider } from './context/ComplianceContext';
 import { isSafeImageUrl } from './theme/tokens';
+import {
+  canViewSf4 as checkCanViewSf4,
+  canViewTab,
+  getAllowedTabs,
+  getCurrentUserFromStorage,
+  type PermissionUser,
+} from './utils/permissions';
 import type { UserSession } from './types/section';
-import { ShieldAlert, ArrowLeft, WifiOff } from 'lucide-react';
+import { WifiOff } from 'lucide-react';
 
 const loadDashboard = () => import('./components/dashboard/DashboardView');
 const loadImpact = () => import('./components/dashboard/EnterpriseSDGWidget');
@@ -29,14 +53,12 @@ const loadScanner = () => import('./components/scanner/ClassroomScanner');
 const loadMyClasses = () => import('./components/tabs/MyAssignedClassesTab');
 const loadAdvisory = () => import('./components/advisory/AdvisorySubjectMonitor');
 const loadStudents = () => import('./components/tabs/StudentsTab');
-const loadFaculty = () => import('./components/tabs/FacultyTab');
+const loadTeachers = () => import('./components/tabs/TeachersTab');
 const loadUsers = () => import('./components/tabs/UsersTab');
 const loadGatePasses = () => import('./components/tabs/GatePassesTab');
 const loadSchedules = () => import('./components/tabs/SchedulesTab');
 const loadDtr = () => import('./components/tabs/DTRTab');
 const loadGeofence = () => import('./components/tabs/GeofenceTab');
-const loadPush = () => import('./components/tabs/PushNotificationsTab');
-const loadParentChat = () => import('./components/tabs/ParentChatTab');
 const loadSettings = () => import('./components/tabs/SettingsTab');
 const loadSf1 = () => import('./components/tabs/SF1ReportTab');
 const loadSf2 = () => import('./components/tabs/SF2ReportTab');
@@ -48,87 +70,22 @@ const ClassroomScanner = lazy(loadScanner);
 const MyAssignedClassesTab = lazy(loadMyClasses);
 const AdvisorySubjectMonitor = lazy(loadAdvisory);
 const StudentsTab = lazy(loadStudents);
-const FacultyTab = lazy(loadFaculty);
+const TeachersTab = lazy(loadTeachers);
 const UsersTab = lazy(loadUsers);
 const GatePassesTab = lazy(loadGatePasses);
 const SchedulesTab = lazy(loadSchedules);
 const DTRTab = lazy(loadDtr);
 const GeofenceTab = lazy(loadGeofence);
-const PushNotificationsTab = lazy(loadPush);
-const ParentChatTab = lazy(loadParentChat);
 const SettingsTab = lazy(loadSettings);
 const SF1ReportTab = lazy(loadSf1);
 const SF2ReportTab = lazy(loadSf2);
 const SF4ReportTab = lazy(loadSf4);
 
-const LEADERSHIP_ROLES = new Set(['SUPERADMIN', 'ADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD']);
-
-const FULL_ADMIN_TABS: NavItemKey[] = [
-  'dashboard',
-  'impact',
-  'classroom-scanner',
-  'my-classes',
-  'advisory-monitor',
-  'students',
-  'facultys',
-  'users',
-  'gate-passes',
-  'schedules',
-  'dtr',
-  'geofence',
-  'messages',
-  'push',
-  'reports',
-  'settings',
-];
-
 export const BASE_ROLE_PERMISSIONS: Record<string, NavItemKey[]> = {
-  SUPERADMIN: FULL_ADMIN_TABS,
-  ADMIN: FULL_ADMIN_TABS,
-  FACULTY_ADMIN: FULL_ADMIN_TABS,
-  PRINCIPAL: [
-    'dashboard',
-    'impact',
-    'classroom-scanner',
-    'my-classes',
-    'advisory-monitor',
-    'students',
-    'facultys',
-    'gate-passes',
-    'schedules',
-    'dtr',
-    'geofence',
-    'messages',
-    'push',
-    'reports',
-    'settings',
-  ],
-  DEPT_HEAD: [
-    'dashboard',
-    'impact',
-    'classroom-scanner',
-    'my-classes',
-    'advisory-monitor',
-    'students',
-    'facultys',
-    'gate-passes',
-    'schedules',
-    'dtr',
-    'messages',
-    'reports',
-  ],
-  FACULTY: [
-    'dashboard',
-    'impact',
-    'classroom-scanner',
-    'my-classes',
-    'advisory-monitor',
-    'students',
-    'dtr',
-    'gate-passes',
-    'messages',
-    'reports',
-  ],
+  ADMIN: getAllowedTabs({ role: 'ADMIN', can_handle_classes: true }),
+  PRINCIPAL: getAllowedTabs({ role: 'PRINCIPAL', can_handle_classes: true }),
+  DEPT_HEAD: getAllowedTabs({ role: 'DEPT_HEAD', can_handle_classes: true }),
+  TEACHER: getAllowedTabs({ role: 'TEACHER', can_handle_classes: true }),
 };
 
 let hoverPrefetchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -136,9 +93,10 @@ let hoverPrefetchTimer: ReturnType<typeof setTimeout> | null = null;
 const prefetchTabResources = (tab: NavItemKey): void => {
   if (hoverPrefetchTimer) clearTimeout(hoverPrefetchTimer);
   hoverPrefetchTimer = setTimeout(() => {
+    const currentUser = getCurrentUserFromStorage();
+    if (!canViewTab(currentUser, tab)) return;
     const now = new Date();
-    const currentRole = (localStorage.getItem('attendsure_role') || '').toUpperCase();
-    const isLeader = LEADERSHIP_ROLES.has(currentRole);
+    const allowSf4 = checkCanViewSf4(currentUser);
 
     switch (tab) {
       case 'dashboard':
@@ -167,9 +125,9 @@ const prefetchTabResources = (tab: NavItemKey): void => {
         prefetchApiGet(API_ROUTES.students.metrics);
         prefetchApiGet(API_ROUTES.students.list, { page: 1, page_size: 25 });
         break;
-      case 'facultys':
-        void loadFaculty();
-        prefetchApiGet(API_ROUTES.accounts.faculty, { page: 1, page_size: 25 });
+      case 'teachers':
+        void loadTeachers();
+        prefetchApiGet(API_ROUTES.accounts.teachers, { page: 1, page_size: 25 });
         break;
       case 'users':
         void loadUsers();
@@ -189,20 +147,13 @@ const prefetchTabResources = (tab: NavItemKey): void => {
         break;
       case 'geofence':
         void loadGeofence();
-        prefetchApiGet(API_ROUTES.campus.boundary);
-        break;
-      case 'messages':
-        void loadParentChat();
-        prefetchApiGet(API_ROUTES.messaging.threads);
-        break;
-      case 'push':
-        void loadPush();
-        prefetchApiGet(API_ROUTES.messaging.notifications, { page_size: 100 });
+        prefetchApiGet(API_ROUTES.campus.overview);
+        prefetchApiGet(API_ROUTES.campus.loafing);
         break;
       case 'reports':
         void loadSf1();
         void loadSf2();
-        if (isLeader) {
+        if (allowSf4) {
           void loadSf4();
         }
         prefetchApiGet(API_ROUTES.school.sections);
@@ -235,7 +186,6 @@ const SubtleSkeletonFallback: React.FC = () => {
 const AppContent: React.FC = () => {
   const { school, loading: isSchoolLoading, refreshSchool } = useSchool();
   const { tokens, brand } = useTheme();
-  const { term } = useCompliance();
   const [showStaffLogin, setShowStaffLogin] = useState<boolean>(false);
 
   const [session, setSession] = useState<UserSession | null>(() => {
@@ -246,8 +196,8 @@ const AppContent: React.FC = () => {
       user_id: Number(localStorage.getItem('attendsure_user_id') || 0),
       token,
       username,
-      faculty_name: localStorage.getItem('attendsure_faculty_name') || username || 'Staff User',
-      role: localStorage.getItem('attendsure_role') || 'FACULTY',
+      teacher_name: localStorage.getItem('attendsure_teacher_name') || username || 'Teacher',
+      role: localStorage.getItem('attendsure_role') || 'TEACHER',
     };
   });
 
@@ -255,7 +205,13 @@ const AppContent: React.FC = () => {
     const saved = localStorage.getItem('attendsure_user_photo');
     return isSafeImageUrl(saved) ? saved : null;
   });
-  const [canTeach, setCanTeach] = useState<boolean>(() => localStorage.getItem('attendsure_can_teach') === 'true');
+  const [canTeach, setCanTeach] = useState<boolean>(() => {
+    const raw = localStorage.getItem('attendsure_can_teach');
+    return raw === null ? true : raw === 'true';
+  });
+  const [isSuperuser, setIsSuperuser] = useState<boolean>(
+    () => localStorage.getItem('attendsure_is_superuser') === 'true'
+  );
   const [isCompleteProfileModalOpen, setIsCompleteProfileModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
@@ -265,8 +221,30 @@ const AppContent: React.FC = () => {
   const [isServerOnline, setIsServerOnline] = useState(true);
   const [isCheckingServer, setIsCheckingServer] = useState(false);
 
+  const [alarmsEnabled, setAlarmsEnabled] = useState<boolean>(() => getWebAlarmsEnabled());
+  const [activeAlarm, setActiveAlarm] = useState<ActiveAlarmEvent | null>(null);
+  const activeAlarmRef = useRef<ActiveAlarmEvent | null>(null);
+  activeAlarmRef.current = activeAlarm;
+  const alarmSnapshotRef = useRef<AlarmScheduleSnapshot>({
+    dutyStartTime: '',
+    dutyEndTime: '',
+    isTimedInToday: false,
+    classes: [],
+  });
+  const alarmSnoozeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const userRole = (session?.role || '').toUpperCase();
-  const canViewSf4 = LEADERSHIP_ROLES.has(userRole);
+  const permissionUser = useMemo<PermissionUser>(
+    () => ({
+      role: userRole,
+      can_handle_classes: canTeach,
+      can_teach: canTeach,
+      is_superuser: isSuperuser,
+    }),
+    [userRole, canTeach, isSuperuser]
+  );
+
+  const canViewSf4 = checkCanViewSf4(permissionUser);
   const effectiveReport: 'sf1' | 'sf2' | 'sf4' =
     !canViewSf4 && selectedReport === 'sf4' ? 'sf1' : selectedReport;
 
@@ -278,28 +256,29 @@ const AppContent: React.FC = () => {
 
   const allowedTabs = useMemo<NavItemKey[]>(() => {
     if (!userRole) return [];
-    const tabs = [...(BASE_ROLE_PERMISSIONS[userRole] || BASE_ROLE_PERMISSIONS.FACULTY)];
-    if (canTeach) {
-      (['my-classes', 'classroom-scanner', 'advisory-monitor', 'messages'] as NavItemKey[]).forEach((t) => {
-        if (!tabs.includes(t)) tabs.push(t);
-      });
-    }
-    return tabs;
-  }, [userRole, canTeach]);
+    return getAllowedTabs(permissionUser);
+  }, [userRole, permissionUser]);
 
-  const isAllowed = allowedTabs.includes(activeTab);
+  const isAllowed = canViewTab(permissionUser, activeTab);
+
+  // Instant route guard: redirect immediately to Dashboard if activeTab becomes unauthorized
+  useEffect(() => {
+    if (session && activeTab !== 'dashboard' && !canViewTab(permissionUser, activeTab)) {
+      setActiveTab('dashboard');
+    }
+  }, [session, activeTab, permissionUser]);
 
   useEffect(() => {
     if (!session?.token || !userRole) return;
     warmupRoleEndpoints(userRole, canTeach);
     const chunkTimer = setTimeout(() => {
-      void loadMyClasses();
-      void loadScanner();
-      void loadStudents();
-      void loadDtr();
+      if (canViewTab(permissionUser, 'my-classes')) void loadMyClasses();
+      if (canViewTab(permissionUser, 'classroom-scanner')) void loadScanner();
+      if (canViewTab(permissionUser, 'students')) void loadStudents();
+      if (canViewTab(permissionUser, 'dtr')) void loadDtr();
     }, 800);
     return () => clearTimeout(chunkTimer);
-  }, [session?.token, userRole, canTeach]);
+  }, [session?.token, userRole, canTeach, permissionUser]);
 
   useEffect(() => {
     return () => {
@@ -322,17 +301,26 @@ const AppContent: React.FC = () => {
       'auth_token',
       'token',
       'attendsure_username',
-      'attendsure_faculty_name',
+      'attendsure_teacher_name',
       'attendsure_role',
       'attendsure_user_id',
+      'attendsure_teacher_id',
+      'attendsure_is_superuser',
       'attendsure_user_photo',
       'attendsure_can_teach',
     ];
     keys.forEach((k) => localStorage.removeItem(k));
     clearApiClientCache();
+    stopWebAlarmLoop();
+    if (alarmSnoozeTimerRef.current) {
+      clearTimeout(alarmSnoozeTimerRef.current);
+      alarmSnoozeTimerRef.current = null;
+    }
+    setActiveAlarm(null);
     setSession(null);
     setUserPhoto(null);
-    setCanTeach(false);
+    setCanTeach(true);
+    setIsSuperuser(false);
     setSelectedReport('sf1');
     setIsCompleteProfileModalOpen(false);
   }, []);
@@ -393,29 +381,46 @@ const AppContent: React.FC = () => {
         const d = res.data;
         const rawPhoto = d.photo_url || d.photo || null;
         const photo = isSafeImageUrl(rawPhoto) ? rawPhoto : null;
-        const name = String(d.full_name || d.username || '').trim();
-        const role = String(d.role || d.system_role || session.role || 'FACULTY').toUpperCase();
+        const name = String(d.full_name || d.teacher_name || d.username || '').trim();
+        const role = String(d.role || d.system_role || session.role || 'TEACHER').toUpperCase();
         const userId = Number(d.id || d.user_id || 0);
-        const teachFlag = Boolean(d.can_teach || d.is_teaching || d.assigned_class_count > 0 || role === 'FACULTY');
+        const teacherId = d.teacher_id ? Number(d.teacher_id) : null;
+        const superFlag = Boolean(d.is_superuser);
+        const teachFlag =
+          d.can_handle_classes !== undefined && d.can_handle_classes !== null
+            ? Boolean(d.can_handle_classes)
+            : d.can_teach !== undefined && d.can_teach !== null
+              ? Boolean(d.can_teach)
+              : role === 'TEACHER';
 
         setUserPhoto(photo);
         if (photo) localStorage.setItem('attendsure_user_photo', photo);
         else localStorage.removeItem('attendsure_user_photo');
 
-        if (name) localStorage.setItem('attendsure_faculty_name', name);
+        if (name) localStorage.setItem('attendsure_teacher_name', name);
         localStorage.setItem('attendsure_role', role);
         if (userId) localStorage.setItem('attendsure_user_id', String(userId));
+        if (teacherId) localStorage.setItem('attendsure_teacher_id', String(teacherId));
+        else localStorage.removeItem('attendsure_teacher_id');
+        setIsSuperuser(superFlag);
+        localStorage.setItem('attendsure_is_superuser', String(superFlag));
         setCanTeach(teachFlag);
         localStorage.setItem('attendsure_can_teach', String(teachFlag));
 
-        if (!LEADERSHIP_ROLES.has(role)) {
+        const nextPermUser: PermissionUser = {
+          role,
+          can_handle_classes: teachFlag,
+          can_teach: teachFlag,
+          is_superuser: superFlag,
+        };
+        if (!checkCanViewSf4(nextPermUser)) {
           setSelectedReport((prev) => (prev === 'sf4' ? 'sf1' : prev));
         }
 
         if (d.is_profile_completed === false) setIsCompleteProfileModalOpen(true);
 
         setSession((prev) =>
-          prev ? { ...prev, user_id: userId || prev.user_id, faculty_name: name || prev.faculty_name, role } : null
+          prev ? { ...prev, user_id: userId || prev.user_id, teacher_name: name || prev.teacher_name, role } : null
         );
       })
       .catch((err) => {
@@ -446,82 +451,221 @@ const AppContent: React.FC = () => {
     }
   }, []);
 
+  // Unlock Web Audio API on first user click or keypress so scheduled alarms ring reliably
+  useEffect(() => {
+    const unlock = () => unlockWebAlarmAudio();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  const triggerWebAlarm = useCallback((ev: ActiveAlarmEvent) => {
+    setActiveAlarm(ev);
+    startWebAlarmLoop(ev.kind);
+    sendBrowserDesktopAlert(ev.title, `${ev.timeLabel} — ${ev.detail}`);
+  }, []);
+
+  const handleDismissAlarm = useCallback(() => {
+    stopWebAlarmLoop();
+    if (alarmSnoozeTimerRef.current) {
+      clearTimeout(alarmSnoozeTimerRef.current);
+      alarmSnoozeTimerRef.current = null;
+    }
+    const current = activeAlarmRef.current;
+    if (current && !current.id.startsWith('TEST_')) {
+      markAlarmDismissed(getLocalDateStamp(), current.id);
+    }
+    setActiveAlarm(null);
+  }, []);
+
+  const handleSnoozeAlarm = useCallback(() => {
+    stopWebAlarmLoop();
+    const current = activeAlarmRef.current;
+    setActiveAlarm(null);
+    if (!current) return;
+    if (alarmSnoozeTimerRef.current) {
+      clearTimeout(alarmSnoozeTimerRef.current);
+    }
+    alarmSnoozeTimerRef.current = setTimeout(() => {
+      alarmSnoozeTimerRef.current = null;
+      if (getWebAlarmsEnabled()) {
+        triggerWebAlarm({ ...current, subtitle: `${current.subtitle} (Snoozed)` });
+      }
+    }, 5 * 60 * 1000);
+  }, [triggerWebAlarm]);
+
+  const handleToggleAlarms = useCallback((next: boolean) => {
+    setAlarmsEnabled(next);
+    setWebAlarmsEnabled(next);
+    if (!next) {
+      stopWebAlarmLoop();
+      if (alarmSnoozeTimerRef.current) {
+        clearTimeout(alarmSnoozeTimerRef.current);
+        alarmSnoozeTimerRef.current = null;
+      }
+      setActiveAlarm(null);
+    } else {
+      unlockWebAlarmAudio();
+    }
+  }, []);
+
+  const handleTestAlarm = useCallback(
+    (kind: AlarmKind) => {
+      unlockWebAlarmAudio();
+      triggerWebAlarm(buildTestWebAlarm(kind));
+    },
+    [triggerWebAlarm]
+  );
+
+  // Sync teacher duty schedule + today's class periods and ring alarm when due
+  useEffect(() => {
+    if (!session?.token || !alarmsEnabled) {
+      stopWebAlarmLoop();
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+
+    const refreshAlarmSchedule = async () => {
+      try {
+        const [campusRes, classesRes] = await Promise.allSettled([
+          apiClient.get<{
+            duty_start_time?: string;
+            duty_end_time?: string;
+            teacher_list?: Array<{
+              teacher_id?: number;
+              user_id?: number;
+              is_clocked_in?: boolean;
+              time_in?: string | null;
+              time_out?: string | null;
+            }>;
+          }>(API_ROUTES.campus.overview, { signal: controller.signal }),
+          canViewTab(permissionUser, 'classroom-scanner')
+            ? apiClient.get<AlarmClassSlot[] | { results?: AlarmClassSlot[] }>(
+                API_ROUTES.attendance.classes,
+                { params: { summary: 1 }, signal: controller.signal }
+              )
+            : Promise.resolve({ data: [] as AlarmClassSlot[] }),
+        ]);
+
+        if (!active || controller.signal.aborted) return;
+
+        let dutyStartTime = '';
+        let dutyEndTime = '';
+        let isTimedInToday = false;
+
+        if (campusRes.status === 'fulfilled' && campusRes.value?.data) {
+          const campus = campusRes.value.data;
+          const savedTeacherId = Number(localStorage.getItem('attendsure_teacher_id') || 0);
+          const currentUserId = Number(session.user_id || 0);
+          const ownTeacher = Array.isArray(campus.teacher_list)
+            ? campus.teacher_list.find(
+                (t) =>
+                  (savedTeacherId > 0 && Number(t.teacher_id) === savedTeacherId) ||
+                  (currentUserId > 0 && Number(t.user_id) === currentUserId)
+              )
+            : undefined;
+
+          if (ownTeacher || userRole === 'TEACHER') {
+            dutyStartTime = String(campus.duty_start_time || '');
+            dutyEndTime = String(campus.duty_end_time || '');
+            isTimedInToday = Boolean(
+              ownTeacher?.is_clocked_in || (ownTeacher?.time_in && !ownTeacher?.time_out)
+            );
+          }
+        }
+
+        let classes: AlarmClassSlot[] = [];
+        if (classesRes.status === 'fulfilled' && classesRes.value?.data) {
+          const raw = classesRes.value.data;
+          classes = Array.isArray(raw) ? raw : Array.isArray(raw.results) ? raw.results : [];
+        }
+
+        alarmSnapshotRef.current = {
+          dutyStartTime,
+          dutyEndTime,
+          isTimedInToday,
+          classes,
+        };
+      } catch {
+        // Ignore transient network errors during background alarm refresh
+      }
+    };
+
+    const checkAlarmTick = () => {
+      if (!active || activeAlarmRef.current || !getWebAlarmsEnabled()) return;
+      const due = evaluateDueWebAlarm(alarmSnapshotRef.current, new Date());
+      if (due) {
+        triggerWebAlarm(due);
+      }
+    };
+
+    void refreshAlarmSchedule().then(() => checkAlarmTick());
+    const syncHandle = setInterval(() => void refreshAlarmSchedule(), 5 * 60 * 1000);
+    const tickHandle = setInterval(checkAlarmTick, 15 * 1000);
+
+    return () => {
+      active = false;
+      controller.abort();
+      clearInterval(syncHandle);
+      clearInterval(tickHandle);
+      stopWebAlarmLoop();
+      if (alarmSnoozeTimerRef.current) {
+        clearTimeout(alarmSnoozeTimerRef.current);
+        alarmSnoozeTimerRef.current = null;
+      }
+    };
+  }, [session?.token, session?.user_id, alarmsEnabled, permissionUser, userRole, triggerWebAlarm]);
+
   const pageTitle = useMemo((): string => {
-    if (!isAllowed) return 'Access Restricted';
+    const safeTab = isAllowed ? activeTab : 'dashboard';
     const prefix = school.school_name ? `${school.school_name} • ` : '';
-    switch (activeTab) {
+    switch (safeTab) {
       case 'dashboard':
         return `${prefix}Dashboard`;
       case 'impact':
-        return term(
-          'UN SDG Impact, Dropout Early-Warning & Campus Safety',
-          'UN SDG Impact, SARDO Early-Warning & Campus Safety'
-        );
+        return 'SARDO Early-Warning & Campus Safety';
       case 'classroom-scanner':
-        return 'Classroom QR Attendance Scanner';
+        return 'QR Scanner';
       case 'my-classes':
         return 'My Classes & Class Lists';
       case 'advisory-monitor':
         return 'Advisory Attendance & Cutting Matrix';
       case 'students':
-        return 'Student Directory & QR Cards';
-      case 'facultys':
-        return 'Faculty & Staff Directory';
+        return 'Students';
+      case 'teachers':
+        return 'Teachers Directory';
       case 'users':
         return 'User Accounts & Roles';
       case 'gate-passes':
-        return 'Campus Exit Passes';
+        return 'Exit & Travel Passes';
       case 'schedules':
-        return 'Sections & Class Schedules';
+        return 'Academic Setup & Class Schedules';
       case 'dtr':
-        return term('Verified Staff Timesheets (GPS)', 'Monthly Time Records (CSC Form 48)');
+        return userRole === 'TEACHER'
+          ? 'My Daily Time Record (CSC Form 48)'
+          : 'Monthly Time Records (CSC Form 48)';
       case 'geofence':
-        return 'Campus GPS Boundary';
-      case 'messages':
-        return 'Parent & Faculty Direct Chat';
-      case 'push':
-        return 'Mobile Push Alerts';
+        return 'Geofence & Loafing Monitor';
       case 'reports':
         return effectiveReport === 'sf1'
-          ? term('Master Student Register (Ed-Fi / SF1)', 'DepEd School Form 1 (Register)')
+          ? 'DepEd School Form 1 (School Register)'
           : effectiveReport === 'sf2'
-            ? term('Daily Attendance Register (Ed-Fi / SF2)', 'DepEd School Form 2 (Daily Attendance)')
-            : term('Consolidated Enrollment & Attendance (SF4)', 'DepEd School Form 4 (Monthly Movement)');
+            ? 'DepEd School Form 2 (Daily Attendance)'
+            : 'DepEd School Form 4 (Monthly Movement)';
       case 'settings':
-        return 'School Settings & Audit Logs';
+        return 'System Settings & Audit Logs';
       default:
         return 'AttendSure Portal';
     }
-  }, [activeTab, isAllowed, school.school_name, effectiveReport, term]);
+  }, [activeTab, isAllowed, school.school_name, effectiveReport, userRole]);
 
   const renderTab = () => {
     if (!isAllowed) {
-      return (
-        <div style={{ padding: 48, textAlign: 'center' }}>
-          <ShieldAlert size={36} color={brand.danger} style={{ margin: '0 auto 12px', display: 'block' }} />
-          <h2 style={{ margin: '0 0 6px', color: tokens.textPrimary }}>Access Restricted</h2>
-          <p style={{ color: tokens.textMuted, fontSize: '0.84rem' }}>Your role ({userRole}) cannot view this module.</p>
-          <button
-            type="button"
-            onClick={() => handleTabSelection(allowedTabs[0] || 'dashboard')}
-            style={{
-              marginTop: 14,
-              padding: '8px 16px',
-              backgroundColor: brand.buttonBg,
-              color: '#fff',
-              border: 'none',
-              borderRadius: 8,
-              fontWeight: 700,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <ArrowLeft size={14} /> Back to Dashboard
-          </button>
-        </div>
-      );
+      return null;
     }
 
     switch (activeTab) {
@@ -561,8 +705,8 @@ const AppContent: React.FC = () => {
         );
       case 'students':
         return <StudentsTab />;
-      case 'facultys':
-        return <FacultyTab />;
+      case 'teachers':
+        return <TeachersTab />;
       case 'users':
         return <UsersTab />;
       case 'gate-passes':
@@ -573,10 +717,6 @@ const AppContent: React.FC = () => {
         return <DTRTab />;
       case 'geofence':
         return <GeofenceTab />;
-      case 'messages':
-        return <ParentChatTab />;
-      case 'push':
-        return <PushNotificationsTab />;
       case 'reports':
         return (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
@@ -610,6 +750,12 @@ const AppContent: React.FC = () => {
             onBackToShowcase={() => setShowStaffLogin(false)}
             onLoginSuccess={(nextSession) => {
               clearApiClientCache();
+              const nextTeach = localStorage.getItem('attendsure_can_teach') !== 'false';
+              const nextSuper = localStorage.getItem('attendsure_is_superuser') === 'true';
+              const savedPhoto = localStorage.getItem('attendsure_user_photo');
+              setCanTeach(nextTeach);
+              setIsSuperuser(nextSuper);
+              setUserPhoto(isSafeImageUrl(savedPhoto) ? savedPhoto : null);
               setSession(nextSession);
               setActiveTab('dashboard');
               setSelectedReport('sf1');
@@ -620,8 +766,20 @@ const AppContent: React.FC = () => {
             onOpenSignIn={() => setShowStaffLogin(true)}
             onDemoLoginSuccess={(nextSession, targetTab = 'dashboard') => {
               clearApiClientCache();
+              const nextTeach = localStorage.getItem('attendsure_can_teach') !== 'false';
+              const nextSuper = localStorage.getItem('attendsure_is_superuser') === 'true';
+              const savedPhoto = localStorage.getItem('attendsure_user_photo');
+              const nextUser: PermissionUser = {
+                role: nextSession.role,
+                can_handle_classes: nextTeach,
+                can_teach: nextTeach,
+                is_superuser: nextSuper,
+              };
+              setCanTeach(nextTeach);
+              setIsSuperuser(nextSuper);
+              setUserPhoto(isSafeImageUrl(savedPhoto) ? savedPhoto : null);
               setSession(nextSession);
-              setActiveTab(targetTab);
+              setActiveTab(canViewTab(nextUser, targetTab) ? targetTab : 'dashboard');
               setSelectedReport('sf1');
             }}
           />
@@ -691,6 +849,9 @@ const AppContent: React.FC = () => {
               schoolName={school.school_name}
               schoolId={school.school_id}
               schoolLogo={resolvedSchoolLogo}
+              alarmsEnabled={alarmsEnabled}
+              onToggleAlarms={handleToggleAlarms}
+              onTestAlarm={handleTestAlarm}
               onLogout={handleAuthExpired}
               onNavigateTab={handleTabSelection}
               onOpenProfile={() => setIsProfileModalOpen(true)}
@@ -731,13 +892,13 @@ const AppContent: React.FC = () => {
                       gap: 10,
                       padding: '10px 20px',
                       borderRadius: 9999,
-                      backgroundColor: '#0f172a',
-                      color: '#f8fafc',
+                      backgroundColor: tokens.darkSurface,
+                      color: tokens.darkText,
                       fontWeight: 700,
                       fontSize: '0.82rem',
                     }}
                   >
-                    <WifiOff size={16} color="#38bdf8" />
+                    <WifiOff size={16} color={brand.secondary} />
                     {isCheckingServer ? 'Reconnecting...' : 'Server offline. Click to reconnect.'}
                   </div>
                 </div>
@@ -762,8 +923,8 @@ const AppContent: React.FC = () => {
                   ? updated.full_name.trim()
                   : undefined;
               if (name) {
-                localStorage.setItem('attendsure_faculty_name', name);
-                setSession((prev) => (prev ? { ...prev, faculty_name: name } : null));
+                localStorage.setItem('attendsure_teacher_name', name);
+                setSession((prev) => (prev ? { ...prev, teacher_name: name } : null));
               }
               if (updated.photo !== undefined || updated.photo_url !== undefined) {
                 const candidate = (updated.photo_url as string | null) ?? updated.photo ?? null;
@@ -786,14 +947,20 @@ const AppContent: React.FC = () => {
                 null;
               const photo = isSafeImageUrl(rawPhoto) ? rawPhoto : null;
               if (name) {
-                localStorage.setItem('attendsure_faculty_name', name);
-                setSession((prev) => (prev ? { ...prev, faculty_name: name } : null));
+                localStorage.setItem('attendsure_teacher_name', name);
+                setSession((prev) => (prev ? { ...prev, teacher_name: name } : null));
               }
               if (photo) {
                 setUserPhoto(photo);
                 localStorage.setItem('attendsure_user_photo', photo);
               }
             }}
+          />
+          <ScheduleAlarmModal
+            alarm={activeAlarm}
+            onDismiss={handleDismissAlarm}
+            onSnooze={handleSnoozeAlarm}
+            onNavigateTab={handleTabSelection}
           />
         </div>
       )}

@@ -10,6 +10,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
 import { isSafeImageUrl } from '../../theme/tokens';
+import { useCopyFeedback } from '../../utils/clipboard';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
 import { QrCodeSvg } from '../common/QrCodeSvg';
@@ -17,6 +18,7 @@ import { exportToCsv } from '../common/Pagination';
 import { ControlSwitch } from '../ui/ControlSwitch';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { PrintableExportModal, type SelectableOption } from '../modals/PrintableExportModal';
 import {
   Search,
   RefreshCw,
@@ -44,7 +46,7 @@ export interface StudentItem {
   photo_url?: string | null;
   attendance_status: string;
   attendance_record_id?: number | null;
-  parent_contact?: string;
+  guardian_contact?: string;
   qr_token?: string;
   qr_payload?: string;
 }
@@ -65,6 +67,7 @@ export interface AssignedClass {
   subject_title: string;
   start_time: string;
   end_time: string;
+  day_of_week?: string;
   time_display?: string;
   room_number?: string;
   total_students: number;
@@ -74,39 +77,6 @@ export interface AssignedClass {
 
 type ViewScope = 'MY_CLASSES' | 'ALL_CLASSES';
 type StatusFilter = 'ALL' | 'PRESENT' | 'LATE' | 'CUTTING' | 'UNSCANNED';
-
-const copyTextSafely = async (textToCopy: string): Promise<boolean> => {
-  const cleanText = String(textToCopy || '').trim();
-  if (!cleanText) return false;
-
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(cleanText);
-      return true;
-    } catch {
-      // Fall through to legacy copy helper on non-HTTPS LAN origins
-    }
-  }
-
-  if (typeof document !== 'undefined') {
-    const textArea = document.createElement('textarea');
-    textArea.value = cleanText;
-    textArea.setAttribute('readonly', '');
-    textArea.style.position = 'fixed';
-    textArea.style.top = '-9999px';
-    document.body.appendChild(textArea);
-    textArea.select();
-    let copied = false;
-    try {
-      copied = document.execCommand('copy');
-    } catch {
-      copied = false;
-    }
-    document.body.removeChild(textArea);
-    return copied;
-  }
-  return false;
-};
 
 const extractGradeLevelText = (val: unknown): string => {
   if (val === null || val === undefined) return '';
@@ -146,21 +116,41 @@ export const MyAssignedClassesTab: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [viewScope, setViewScope] = useState<ViewScope>('MY_CLASSES');
-  const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const { copiedKey: copiedValue, copy } = useCopyFeedback();
   const [badgeStudent, setBadgeStudent] = useState<StudentItem | null>(null);
   const [savingStudentId, setSavingStudentId] = useState<number | null>(null);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
 
   const userRole = useMemo(
-    () => String(localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(),
+    () => String(localStorage.getItem('attendsure_role') || 'TEACHER').toUpperCase(),
     []
   );
-  const isAdmin = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL'].includes(userRole);
-  const canEditAttendance = userRole !== 'PARENT';
+  const isAdmin = ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
+  const canEditAttendance = ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER'].includes(userRole);
 
   const abortRef = useRef<AbortController | null>(null);
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInteracting = useRef<boolean>(false);
-  isInteracting.current = Boolean(badgeStudent);
+  isInteracting.current = Boolean(badgeStudent) || isPrintModalOpen;
+
+  const uniqueSectionOptions = useMemo<SelectableOption[]>(() => {
+    const map = new Map<number, SelectableOption>();
+    classes.forEach((c) => {
+      if (c.section_id && !map.has(c.section_id)) {
+        map.set(c.section_id, {
+          id: c.section_id,
+          label: `${c.grade_level ? `${c.grade_level} - ` : ''}${c.section_name}`,
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [classes]);
+
+  const toggleStudentSelection = (studentId: number) => {
+    setSelectedStudentIds((prev) =>
+      prev.includes(studentId) ? prev.filter((id) => id !== studentId) : [...prev, studentId]
+    );
+  };
 
   const normalizeClassList = useCallback((rawPayload: unknown): AssignedClass[] => {
     const rawData: Record<string, unknown>[] = Array.isArray(rawPayload)
@@ -186,7 +176,7 @@ export const MyAssignedClassesTab: React.FC = () => {
           photo_url: isSafeImageUrl(rawPhoto) ? rawPhoto : null,
           attendance_status: String(st.attendance_status || 'UNSCANNED').toUpperCase(),
           attendance_record_id: st.attendance_record_id ? Number(st.attendance_record_id) : null,
-          parent_contact: String(st.parent_contact || '').trim(),
+          guardian_contact: String(st.guardian_contact || '').trim(),
           qr_token: String(st.qr_token || '').trim(),
           qr_payload: String(st.qr_payload || '').trim() || undefined,
         };
@@ -211,6 +201,7 @@ export const MyAssignedClassesTab: React.FC = () => {
         subject_title: subjectTitle,
         start_time: startTime,
         end_time: endTime,
+        day_of_week: String(item.day_of_week || 'ALL_WEEKDAYS'),
         time_display: timeDisplay,
         room_number: roomVal || '—',
         total_students: students.length || Number(item.total_students) || 0,
@@ -295,34 +286,24 @@ export const MyAssignedClassesTab: React.FC = () => {
   }, [fetchClasses]);
 
   useEffect(() => {
-    return () => {
-      if (copyTimerRef.current) {
-        clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = null;
-      }
+    const handleAttendanceUpdated = () => {
+      void fetchClasses(true, true);
     };
-  }, []);
-
-  useEffect(() => {
+    window.addEventListener('attendsure:attendance-updated', handleAttendanceUpdated);
     const liveInterval = setInterval(() => {
       if (!isInteracting.current && document.visibilityState === 'visible') {
         void fetchClasses(true, true);
       }
     }, 15000);
-    return () => clearInterval(liveInterval);
+    return () => {
+      window.removeEventListener('attendsure:attendance-updated', handleAttendanceUpdated);
+      clearInterval(liveInterval);
+    };
   }, [fetchClasses]);
 
   const handleCopy = async (val: string) => {
     if (!val || val === '—') return;
-    const ok = await copyTextSafely(val);
-    if (ok) {
-      setCopiedValue(val);
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => {
-        setCopiedValue((prev) => (prev === val ? null : prev));
-        copyTimerRef.current = null;
-      }, 2000);
-    }
+    await copy(val, val);
   };
 
   const cleanSearch = useMemo(() => sanitizeInput(searchQuery, 60).toLowerCase(), [searchQuery]);
@@ -368,7 +349,7 @@ export const MyAssignedClassesTab: React.FC = () => {
         'Section',
         'Subject',
         'QR Card Status',
-        'Parent Contact',
+        'Guardian Contact',
         'Attendance Today',
       ],
       filteredStudents.map((st) => [
@@ -378,7 +359,7 @@ export const MyAssignedClassesTab: React.FC = () => {
         selectedClass.section_name,
         selectedClass.subject_title,
         st.qr_token ? 'Linked' : 'Not Linked',
-        st.parent_contact || '',
+        st.guardian_contact || '',
         formatStatusLabel(st.attendance_status),
       ])
     );
@@ -456,6 +437,13 @@ export const MyAssignedClassesTab: React.FC = () => {
         </span>
       );
     }
+    if (status === 'EXCUSED') {
+      return (
+        <span style={statusBadgeStyle(tokens.primaryLight, brand.primary)}>
+          EXCUSED
+        </span>
+      );
+    }
     if (status === 'CUTTING' || status === 'ABSENT') {
       return (
         <span style={statusBadgeStyle(tokens.dangerLight, brand.danger)}>
@@ -529,6 +517,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                 setSelectedClass(found);
                 setSearchQuery('');
                 setStatusFilter('ALL');
+                setSelectedStudentIds([]);
               }
             }}
             style={{ ...ui.input, width: 'auto', minWidth: 260, fontWeight: 700, cursor: 'pointer' }}
@@ -561,6 +550,39 @@ export const MyAssignedClassesTab: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {selectedStudentIds.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedStudentIds([])}
+              style={{
+                ...ui.btnSecondary,
+                backgroundColor: tokens.primaryLight,
+                borderColor: brand.primary,
+                color: brand.primary,
+              }}
+            >
+              <span>{selectedStudentIds.length} Selected &times; Clear</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setIsPrintModalOpen(true)}
+            disabled={classes.length === 0}
+            style={{
+              ...ui.btnSecondary,
+              borderColor: brand.primary,
+              color: brand.primary,
+            }}
+          >
+            <Printer size={14} />
+            <span>
+              {selectedStudentIds.length > 0
+                ? `Print / Download (${selectedStudentIds.length})`
+                : 'Download / Print Packet'}
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={handleExportCsv}
@@ -687,18 +709,36 @@ export const MyAssignedClassesTab: React.FC = () => {
           </div>
         ) : filteredStudents.length === 0 ? (
           <div style={{ padding: '36px 0', textAlign: 'center', color: tokens.textMuted, fontSize: fonts.size.base }}>
-            No students match the selected filter.
+            No students match your current filter. Clear the search box or switch back to All to see the full class list.
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
                 <tr>
+                  <th style={{ ...ui.th, width: 38, textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all visible students"
+                      checked={
+                        filteredStudents.length > 0 &&
+                        filteredStudents.every((st) => selectedStudentIds.includes(st.id))
+                      }
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedStudentIds(filteredStudents.map((st) => st.id).filter(Boolean));
+                        } else {
+                          setSelectedStudentIds([]);
+                        }
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  </th>
                   <th style={ui.th}>Student</th>
                   <th style={ui.th}>LRN</th>
                   <th style={ui.th}>Room &amp; Time</th>
                   <th style={ui.th}>QR ID Card</th>
-                  <th style={ui.th}>Parent Contact</th>
+                  <th style={ui.th}>Guardian Contact</th>
                   <th style={ui.th}>Attendance Today</th>
                   <th style={{ ...ui.th, textAlign: 'right' }}>ID Card</th>
                 </tr>
@@ -706,6 +746,15 @@ export const MyAssignedClassesTab: React.FC = () => {
               <tbody>
                 {filteredStudents.map((st) => (
                   <tr key={st.id || st.lrn}>
+                    <td style={{ ...ui.td, textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${st.name}`}
+                        checked={selectedStudentIds.includes(st.id)}
+                        onChange={() => toggleStudentSelection(st.id)}
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </td>
                     <td style={ui.td}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <ProfileAvatar photoUrl={st.photo_url} name={st.name} size={36} iconSize={17} />
@@ -802,7 +851,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                     <td style={ui.td}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: fonts.size.sm, color: tokens.textSecondary }}>
                         <Phone size={13} color={tokens.textMuted} />
-                        <span>{st.parent_contact || '—'}</span>
+                        <span>{st.guardian_contact || '—'}</span>
                       </div>
                     </td>
 
@@ -813,7 +862,11 @@ export const MyAssignedClassesTab: React.FC = () => {
                           <select
                             aria-label={`Set attendance status for ${st.name}`}
                             disabled={savingStudentId === st.id}
-                            value={st.attendance_status === 'UNSCANNED' ? '' : st.attendance_status}
+                            value={
+                              ['PRESENT', 'LATE', 'ABSENT', 'EXCUSED'].includes(st.attendance_status)
+                                ? st.attendance_status
+                                : ''
+                            }
                             onChange={(e) => {
                               if (e.target.value) void handleManualAttendanceChange(st, e.target.value);
                             }}
@@ -831,7 +884,6 @@ export const MyAssignedClassesTab: React.FC = () => {
                             <option value="LATE">Late</option>
                             <option value="ABSENT">Absent</option>
                             <option value="EXCUSED">Excused</option>
-                            <option value="CUTTING">Cutting</option>
                           </select>
                         )}
                         {canEditAttendance && st.attendance_record_id && (
@@ -895,7 +947,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                 boxShadow: tokens.cardShadow,
               }}
             >
-              <div style={{ backgroundColor: brand.buttonBg, color: '#ffffff', padding: '12px 14px' }}>
+              <div style={{ backgroundColor: brand.buttonBg, color: tokens.onPrimary, padding: '12px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: fonts.size.xs, fontWeight: 800 }}>
                   <ShieldCheck size={14} />
                   <span>OFFICIAL STUDENT QR ID</span>
@@ -934,7 +986,7 @@ export const MyAssignedClassesTab: React.FC = () => {
                   style={{
                     margin: '6px auto',
                     padding: 6,
-                    backgroundColor: '#ffffff',
+                    backgroundColor: tokens.onPrimary,
                     borderWidth: 1,
                     borderStyle: 'solid',
                     borderColor: tokens.borderSubtle,
@@ -983,6 +1035,20 @@ export const MyAssignedClassesTab: React.FC = () => {
           </div>
         </Modal>
       )}
+      <PrintableExportModal
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        title="Download & Print Class Schedule, Class Lists & QR Cards"
+        defaultPackType={selectedStudentIds.length > 0 ? 'CLASS_LIST' : 'COMPLETE_TEACHER_PACKET'}
+        allowedPackTypes={['COMPLETE_TEACHER_PACKET', 'CLASS_SCHEDULE', 'CLASS_LIST', 'QR_ID_CARDS']}
+        initialScope={selectedStudentIds.length > 0 ? 'SELECTED' : 'ALL'}
+        preselectedStudentIds={selectedStudentIds}
+        preselectedSectionIds={
+          selectedStudentIds.length === 0 && selectedClass ? [selectedClass.section_id] : []
+        }
+        sectionOptions={uniqueSectionOptions}
+        isSchoolLeader={isAdmin}
+      />
     </div>
   );
 };

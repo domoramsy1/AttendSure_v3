@@ -1,5 +1,5 @@
 r"""
-AttendSure - 7-Domain Models Schema Inspector
+AttendSure - 6-Domain Models Schema Inspector (3NF)
 Run: python utilities\inspect_models.py
 """
 
@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _bootstrap import BACKEND_DIR, RESULTS_DIR
 
-DOMAIN_APPS = ["accounts", "school", "students", "attendance", "campus", "messaging", "reports"]
+DOMAIN_APPS = ["accounts", "school", "students", "attendance", "campus", "reports"]
 
 
 def main():
@@ -18,7 +18,7 @@ def main():
     out_file = RESULTS_DIR / "domain_models_report.txt"
     blocks = [
         "=" * 80,
-        f"ATTENDSURE DOMAIN MODELS SNAPSHOT ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
+        f"ATTENDSURE 3NF DOMAIN MODELS SNAPSHOT ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
         "=" * 80,
     ]
 

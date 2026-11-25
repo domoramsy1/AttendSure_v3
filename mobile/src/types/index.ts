@@ -1,11 +1,7 @@
-// AttendSure - Core Mobile Type Definitions
+// AttendSure - Core Mobile Type Definitions (3NF & Teachers/Staff Only)
 // File: mobile/src/types/index.ts
 
-// ==============================================================================
-// 1. ROLES & DEVICE IDENTIFICATION
-// ==============================================================================
-
-export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'FACULTY' | 'PARENT';
+export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'TEACHER';
 
 export interface DeviceIdentity {
   deviceId: string;
@@ -17,22 +13,19 @@ export interface DeviceIdentity {
   isPhysicalDevice?: boolean;
 }
 
-// ==============================================================================
-// 2. ATTENDANCE LOGS & CAMPUS PROFILE
-// ==============================================================================
-
 export interface AttendanceLog {
   id?: number | string;
-  log_id?: string;
-  person_type?: 'STUDENT' | 'STAFF' | string;
-  identifier?: string;
-  name?: string;
-  direction: 'IN' | 'OUT';
-  scan_method: 'QR' | 'MANUAL' | 'MOBILE_GPS';
-  station_name?: string;
-  station_code?: string;
-  scan_time: string;
-  raw_time?: string;
+  enrollment_id?: number;
+  student_id?: number;
+  student_name?: string;
+  lrn?: string;
+  schedule_id?: number;
+  subject_code?: string;
+  section?: string;
+  attendance_date?: string;
+  status?: 'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED' | string;
+  scan_method?: 'CAMERA_QR' | 'MANUAL' | string;
+  scanned_at?: string;
 }
 
 export interface SchoolProfile {
@@ -56,11 +49,8 @@ export interface SchoolProfile {
   updated_at?: string;
 }
 
-// ==============================================================================
-// 3. USER ACCOUNTS & PROFILES (SYNCED WITH WEB & POSTGRESQL)
-// ==============================================================================
-
-export interface FacultyProfileObject {
+export interface TeacherProfileObject {
+  id?: number;
   employee_id?: string;
   first_name?: string;
   last_name?: string;
@@ -69,11 +59,10 @@ export interface FacultyProfileObject {
   full_name?: string;
   email?: string;
   contact_number?: string;
-  phone?: string;
   position?: string;
   department?: string;
   photo?: string | null;
-  avatar?: string | null;
+  photo_url?: string | null;
   qr_token?: string;
   bound_device_id?: string | null;
 }
@@ -84,30 +73,32 @@ export interface UserAccount {
   username: string;
   email?: string;
   role?: UserRole | string;
+  system_role?: UserRole | string;
   first_name?: string;
   last_name?: string;
   middle_name?: string;
   suffix?: string;
   full_name?: string;
   contact_number?: string;
-  phone?: string;
   position?: string;
   department?: string;
-  faculty_id?: string;
-  faculty_name?: string;
-  faculty?: FacultyProfileObject;
+  employee_id?: string;
+  teacher_id?: number | string | null;
+  teacher_name?: string;
+  teacher?: TeacherProfileObject;
   qr_token?: string;
   photo?: string | null;
-  avatar?: string | null;
+  photo_url?: string | null;
+  bound_device_id?: string | null;
+  has_bound_device?: boolean;
+  has_biometric_enrolled?: boolean;
   is_staff?: boolean;
   is_superuser?: boolean;
   token?: string;
 }
 
-// Alias for seamless compatibility across AuthContext and mobile screens
 export type AuthenticatedUser = UserAccount;
 
-// Strict typing for updating profile data without sending untrusted keys
 export interface UpdateProfilePayload {
   first_name: string;
   last_name: string;
@@ -120,17 +111,15 @@ export interface UpdateProfilePayload {
   password?: string;
 }
 
-// ==============================================================================
-// 4. AUTHENTICATION RESPONSES
-// ==============================================================================
-
 export interface AuthResponse {
   token: string;
+  access?: string;
+  refresh?: string;
   user_id: number;
   username: string;
-  role: string;
-  faculty_id: string | null;
-  faculty_name: string;
+  role: UserRole;
+  teacher_id: number | null;
+  teacher_name: string;
   is_superuser: boolean;
   first_name?: string;
   last_name?: string;
@@ -144,23 +133,34 @@ export interface AuthResponse {
   school_profile?: SchoolProfile | null;
 }
 
-// ==============================================================================
-// 5. CAMPUS GEOFENCING & LOCATION HEARTBEAT
-// ==============================================================================
-
 export interface GeofenceConfig {
-  name: string;
+  campus_name?: string;
+  name?: string;
   latitude: number | null;
   longitude: number | null;
   radius_meters: number;
-  is_configured: boolean;
+  loafing_grace_minutes?: number;
+  duty_start_time?: string;
+  duty_end_time?: string;
+  is_configured?: boolean;
 }
 
-export interface TelemetryHeartbeatPayload {
-  client_device_id: string;
+export interface CampusPingPayload {
+  device_id: string;
   latitude: number;
   longitude: number;
-  battery_level: number;
+  accuracy_meters: number | null;
   is_mock_location: boolean;
-  request_id?: string;
+}
+
+export interface CampusPingResponse {
+  ok?: boolean;
+  zone_status?: 'INSIDE' | 'AUTHORIZED_OUTSIDE' | 'LOAFING_ALERT' | 'OFF_DUTY' | 'THROTTLED';
+  distance_meters?: number;
+  radius_meters?: number;
+  is_inside?: boolean;
+  loafing_incident_id?: number | null;
+  server_time?: string;
+  message?: string;
+  isQueuedOffline?: boolean;
 }

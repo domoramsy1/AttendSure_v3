@@ -21,9 +21,13 @@ export type RootStackParamList = {
   Reports: undefined;
 };
 
+interface AppNavigatorProps {
+  hideLoadingSpinner?: boolean;
+}
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-export const AppNavigator: React.FC = () => {
+export const AppNavigator: React.FC<AppNavigatorProps> = ({ hideLoadingSpinner = false }) => {
   const { user, isLoading, loading } = useAuth();
   const { palette } = useThemeMode();
   const isCheckingSession = Boolean(isLoading ?? loading);
@@ -31,7 +35,7 @@ export const AppNavigator: React.FC = () => {
   if (isCheckingSession) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: palette.background }]}>
-        <ActivityIndicator size="large" color={palette.primary} />
+        {!hideLoadingSpinner && <ActivityIndicator size="large" color={palette.primary} />}
       </View>
     );
   }

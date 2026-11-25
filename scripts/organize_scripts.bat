@@ -20,12 +20,16 @@ REQUIRED_DIRS = [
 
 KEEP_FILES = {
     "_bootstrap.py",
+    "audit_codebase.py",
+    "optimize_web_assets.py",
     "organize_scripts.bat",
+    "organize_web.bat",
     "start_all.bat",
     "start_tunnel.bat",
     "export_codes.bat",
     "push_and_sync.ps1",
     "database/check_database.py",
+    "database/optimize_indexes.py",
     "database/reset_connections.py",
     "database/seed_school.py",
     "database/sync_avatars.py",

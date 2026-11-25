@@ -12,8 +12,9 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "AttendSure uses your location to verify presence inside campus boundaries for verified attendance records.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "AttendSure uses background location during school hours to maintain verified campus presence.",
-        "NSCameraUsageDescription": "AttendSure uses the camera for on-device faculty facial check-ins and profile photos.",
-        "UIBackgroundModes": ["location", "remote-notification"]
+        "NSCameraUsageDescription": "AttendSure uses the camera to scan official student QR ID cards for classroom attendance.",
+        "NSFaceIDUsageDescription": "AttendSure uses your phone's built-in biometric sensor to verify your identity for daily campus check-in.",
+        "UIBackgroundModes": ["location", "fetch"]
       }
     },
     "android": {
@@ -28,8 +29,12 @@
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
+        "WAKE_LOCK",
+        "RECEIVE_BOOT_COMPLETED",
         "CAMERA",
-        "VIBRATE"
+        "VIBRATE",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT"
       ]
     },
     "web": {
@@ -37,6 +42,7 @@
       "bundler": "metro"
     },
     "plugins": [
+      "expo-local-authentication",
       [
         "expo-location",
         {
@@ -50,8 +56,12 @@
         {
           "backgroundColor": "#ffffff",
           "image": "./assets/splash.png",
-          "imageWidth": 120,
-          "resizeMode": "contain"
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "dark": {
+            "backgroundColor": "#0b1120",
+            "image": "./assets/splash.png"
+          }
         }
       ]
     ]

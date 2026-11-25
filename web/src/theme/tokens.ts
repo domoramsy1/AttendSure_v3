@@ -48,6 +48,7 @@ export interface BrandColors {
   success: string;
   warning: string;
   danger: string;
+  accentPurple: string;
 }
 
 export const BRAND_COLORS: Record<ThemeMode, BrandColors> = {
@@ -60,6 +61,7 @@ export const BRAND_COLORS: Record<ThemeMode, BrandColors> = {
     success: '#059669',
     warning: '#d97706',
     danger: '#dc2626',
+    accentPurple: '#7c3aed',
   },
   dark: {
     primary: '#38bdf8',
@@ -70,6 +72,7 @@ export const BRAND_COLORS: Record<ThemeMode, BrandColors> = {
     success: '#10b981',
     warning: '#f59e0b',
     danger: '#f87171',
+    accentPurple: '#a78bfa',
   },
   'high-contrast': {
     primary: '#002b4d',
@@ -80,6 +83,7 @@ export const BRAND_COLORS: Record<ThemeMode, BrandColors> = {
     success: '#047857',
     warning: '#b45309',
     danger: '#b91c1c',
+    accentPurple: '#6d28d9',
   },
 };
 
@@ -93,6 +97,12 @@ export interface ThemeTokens {
   textPrimary: string;
   textSecondary: string;
   textMuted: string;
+  onPrimary: string;
+  darkSurface: string;
+  darkSurfaceElevated: string;
+  darkBorder: string;
+  darkText: string;
+  darkMuted: string;
   borderSubtle: string;
   borderInput: string;
   borderStrong: string;
@@ -103,10 +113,17 @@ export interface ThemeTokens {
   successBg: string;
   warningBg: string;
   dangerBg: string;
+  accentPurpleBg: string;
+  neutralBg: string;
+  neutralBorder: string;
   successLight: string;
   warningLight: string;
   dangerLight: string;
   infoLight: string;
+  heroBgStart: string;
+  heroBgEnd: string;
+  porcelainBg: string;
+  porcelainEnd: string;
   cardShadow: string;
 }
 
@@ -121,6 +138,12 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     textPrimary: '#0f172a',
     textSecondary: '#475569',
     textMuted: '#64748b',
+    onPrimary: '#ffffff',
+    darkSurface: '#0f172a',
+    darkSurfaceElevated: '#1e293b',
+    darkBorder: '#334155',
+    darkText: '#f8fafc',
+    darkMuted: '#94a3b8',
     borderSubtle: '#e2e8f0',
     borderInput: '#cbd5e1',
     borderStrong: '#cbd5e1',
@@ -131,10 +154,17 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     successBg: '#ecfdf5',
     warningBg: '#fffbeb',
     dangerBg: '#fef2f2',
+    accentPurpleBg: 'rgba(124, 58, 237, 0.11)',
+    neutralBg: 'rgba(100, 116, 139, 0.12)',
+    neutralBorder: 'rgba(100, 116, 139, 0.25)',
     successLight: 'rgba(5, 150, 105, 0.11)',
     warningLight: 'rgba(217, 119, 6, 0.12)',
     dangerLight: 'rgba(220, 38, 38, 0.10)',
     infoLight: 'rgba(2, 132, 199, 0.10)',
+    heroBgStart: '#003a6b',
+    heroBgEnd: '#004b87',
+    porcelainBg: '#ffffff',
+    porcelainEnd: '#f8fafc',
     cardShadow: '0 4px 20px -2px rgba(15, 23, 42, 0.06)',
   },
   dark: {
@@ -147,6 +177,12 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     textPrimary: '#f8fafc',
     textSecondary: '#cbd5e1',
     textMuted: '#94a3b8',
+    onPrimary: '#ffffff',
+    darkSurface: '#070d19',
+    darkSurfaceElevated: '#17243d',
+    darkBorder: '#334155',
+    darkText: '#f8fafc',
+    darkMuted: '#94a3b8',
     borderSubtle: '#1e2f48',
     borderInput: '#334155',
     borderStrong: '#2e4466',
@@ -157,10 +193,17 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     successBg: 'rgba(16, 185, 129, 0.16)',
     warningBg: 'rgba(245, 158, 11, 0.16)',
     dangerBg: 'rgba(248, 113, 113, 0.16)',
+    accentPurpleBg: 'rgba(167, 139, 250, 0.16)',
+    neutralBg: 'rgba(148, 163, 184, 0.14)',
+    neutralBorder: 'rgba(148, 163, 184, 0.28)',
     successLight: 'rgba(16, 185, 129, 0.16)',
     warningLight: 'rgba(245, 158, 11, 0.16)',
     dangerLight: 'rgba(248, 113, 113, 0.16)',
     infoLight: 'rgba(56, 189, 248, 0.14)',
+    heroBgStart: '#0b172c',
+    heroBgEnd: '#132847',
+    porcelainBg: '#ffffff',
+    porcelainEnd: '#f8fafc',
     cardShadow: '0 8px 28px -4px rgba(0, 0, 0, 0.55)',
   },
   'high-contrast': {
@@ -173,6 +216,12 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     textPrimary: '#000000',
     textSecondary: '#0f172a',
     textMuted: '#334155',
+    onPrimary: '#ffffff',
+    darkSurface: '#001d36',
+    darkSurfaceElevated: '#002b4d',
+    darkBorder: '#334155',
+    darkText: '#ffffff',
+    darkMuted: '#cbd5e1',
     borderSubtle: '#94a3b8',
     borderInput: '#334155',
     borderStrong: '#334155',
@@ -183,13 +232,56 @@ export const THEME_PALETTES: Record<ThemeMode, ThemeTokens> = {
     successBg: '#d1fae5',
     warningBg: '#fef3c7',
     dangerBg: '#fee2e2',
+    accentPurpleBg: '#ede9fe',
+    neutralBg: '#e2e8f0',
+    neutralBorder: '#64748b',
     successLight: '#d1fae5',
     warningLight: '#fef3c7',
     dangerLight: '#fee2e2',
     infoLight: '#e0f2fe',
+    heroBgStart: '#001d36',
+    heroBgEnd: '#002b4d',
+    porcelainBg: '#ffffff',
+    porcelainEnd: '#f8fafc',
     cardShadow: '0 0 0 1.5px #0f172a, 0 10px 24px rgba(15, 23, 42, 0.12)',
   },
 };
+
+export const SEAL_COLORS = {
+  white: '#ffffff',
+  surface: '#f8fafc',
+  navy: '#004b87',
+  navyDeep: '#002b4d',
+  sky: '#0284c7',
+  amber: '#d97706',
+  gold: '#f59e0b',
+  ink: '#0f172a',
+  border: '#cbd5e1',
+  subtleBorder: '#e2e8f0',
+  mutedBorder: '#94a3b8',
+} as const;
+
+export const QR_COLORS = {
+  foreground: '#0f172a',
+  background: '#ffffff',
+} as const;
+
+export const PAPER_PRESET_COLORS = [
+  { label: 'Standard White', value: '#ffffff' },
+  { label: 'Soft Ivory', value: '#fdfbf7' },
+  { label: 'Clean Slate', value: '#f8fafc' },
+  { label: 'Document Cream', value: '#fffdf5' },
+] as const;
+
+export const MAP_STATUS_COLORS = {
+  inside: '#059669',
+  authorizedOutside: '#0284c7',
+  loafingAlert: '#dc2626',
+  offDuty: '#64748b',
+  perimeterStroke: '#004b87',
+  perimeterFill: '#0284c7',
+  pinRing: '#ffffff',
+} as const;
 
 export const createStyles = (tokens: ThemeTokens, brand: BrandColors) => ({
   card: {
@@ -283,7 +375,23 @@ export const createStyles = (tokens: ThemeTokens, brand: BrandColors) => ({
     borderStyle: 'none',
     borderColor: 'transparent',
     backgroundColor: brand.buttonBg,
-    color: '#ffffff',
+    color: tokens.onPrimary,
+    fontSize: FONTS.size.sm,
+    fontWeight: FONTS.weight.bold,
+    cursor: 'pointer',
+  } as React.CSSProperties,
+
+  btnDanger: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '7px 14px',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: brand.danger,
+    backgroundColor: brand.danger,
+    color: tokens.onPrimary,
     fontSize: FONTS.size.sm,
     fontWeight: FONTS.weight.bold,
     cursor: 'pointer',
@@ -302,7 +410,7 @@ export const createStyles = (tokens: ThemeTokens, brand: BrandColors) => ({
   }),
 });
 
-const SAFE_RASTER_DATA_URI = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i;
+const SAFE_RASTER_DATA_URI = /^data:image\/(png|jpeg|jpg|webp);base64,/i;
 
 export const isSafeImageUrl = (url?: string | null): boolean => {
   if (!url || typeof url !== 'string') return false;
@@ -313,6 +421,8 @@ export const isSafeImageUrl = (url?: string | null): boolean => {
     clean.startsWith('javascript:') ||
     clean.startsWith('vbscript:') ||
     clean.startsWith('file:') ||
+    clean.startsWith('blob:') ||
+    clean.startsWith('data:text/') ||
     clean.startsWith('data:image/svg')
   ) {
     return false;
@@ -320,10 +430,13 @@ export const isSafeImageUrl = (url?: string | null): boolean => {
   if (clean.startsWith('data:')) {
     return SAFE_RASTER_DATA_URI.test(trimmed);
   }
-  if (clean.startsWith('/')) {
-    return !clean.startsWith('//');
+  if (clean.startsWith('/media/')) {
+    return !clean.includes('..');
   }
-  return clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('blob:');
+  if (clean.startsWith('/')) {
+    return !clean.startsWith('//') && !clean.includes('..');
+  }
+  return clean.startsWith('http://') || clean.startsWith('https://');
 };
 
 export const sanitizeText = (text: string, maxLength = 150): string => {

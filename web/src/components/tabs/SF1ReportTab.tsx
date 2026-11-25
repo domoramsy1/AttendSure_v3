@@ -6,28 +6,12 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
-import { exportToCsv } from '../common/Pagination';
 import { PageSetupModal } from '../common/PageSetupModal';
 import { DepEdReportHeader, DepEdReportFooter } from '../reports/DepEdReportHeaderFooter';
-import {
-  ReportViewerShell,
-  ReportHeaderBar,
-  DEFAULT_DEPED_LANDSCAPE_SETUP,
-  resolvePaperDimensionsInches,
-} from '../reports/ReportViewerShell';
-import {
-  buildAuditStamp,
-  exportElementToExcel,
-  exportElementToLocalPdf,
-  exportElementToWord,
-  exportReportJson,
-  logOfficialReportAudit,
-  saveBlobWithOptionalPicker,
-} from '../../utils/reportExporters';
+import { ReportViewerShell, ReportHeaderBar } from '../reports/ReportViewerShell';
+import { useOfficialReportExport } from '../../hooks/useOfficialReportExport';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
-import { useAlert } from '../../context/AlertContext';
-import type { PageSetupConfig } from '../../types/pageSetup';
 import { BookOpen, RefreshCw, Search, Users, Split } from 'lucide-react';
 
 interface SectionOption {
@@ -60,7 +44,7 @@ interface SF1LearnerRow {
   guardian_name: string;
   guardian_rel?: string;
   guardian_relationship?: string;
-  parent_contact: string;
+  guardian_contact: string;
   remarks: string;
 }
 
@@ -145,7 +129,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
 }) => {
   const { tokens, brand } = useTheme();
   const { school: globalSchool } = useSchool();
-  const { showAlert } = useAlert();
 
   const cachedSectionsPayload = peekApiCache<any>(API_ROUTES.school.sections, { page_size: 250 });
   const initialSections: SectionOption[] = Array.isArray(cachedSectionsPayload)
@@ -164,26 +147,128 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
-  const [isPrinting, setIsPrinting] = useState<boolean>(false);
-
-  const [auditMeta, setAuditMeta] = useState(() => buildAuditStamp('SF1'));
-  const [pageConfig, setPageConfig] = useState<PageSetupConfig>(DEFAULT_DEPED_LANDSCAPE_SETUP);
-  const [isPageSetupOpen, setIsPageSetupOpen] = useState<boolean>(false);
 
   const reportRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const { widthIn: pageWidthInches, heightIn: pageHeightInches } = useMemo(
-    () => resolvePaperDimensionsInches(pageConfig),
-    [pageConfig]
+  const cleanSearch = useMemo(() => sanitizeSearchText(searchQuery).toLowerCase(), [searchQuery]);
+
+  const { maleLearners, femaleLearners, combinedLearners } = useMemo(() => {
+    if (!reportData) {
+      return { maleLearners: [], femaleLearners: [], combinedLearners: [] };
+    }
+    const rawAll = Array.isArray(reportData.students) ? reportData.students : [];
+    const rawMales = Array.isArray(reportData.males)
+      ? reportData.males
+      : rawAll.filter((s) => String(s.sex || '').toUpperCase().startsWith('M'));
+    const rawFemales = Array.isArray(reportData.females)
+      ? reportData.females
+      : rawAll.filter((s) => !String(s.sex || '').toUpperCase().startsWith('M'));
+
+    const match = (s: SF1LearnerRow) =>
+      !cleanSearch ||
+      String(s.name || '').toLowerCase().includes(cleanSearch) ||
+      String(s.lrn || '').toLowerCase().includes(cleanSearch);
+
+    const sortedAll = [...rawAll].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const sortedM = [...rawMales].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const sortedF = [...rawFemales].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    return {
+      maleLearners: sortedM,
+      femaleLearners: sortedF,
+      combinedLearners: sortedAll,
+    };
+  }, [reportData, cleanSearch]);
+
+  const activeLearnerList = useMemo(
+    () => (groupingMode === 'COMBINED' ? combinedLearners : [...maleLearners, ...femaleLearners]),
+    [groupingMode, combinedLearners, maleLearners, femaleLearners]
   );
 
-  const refreshAuditMeta = useCallback(() => {
-    const next = buildAuditStamp('SF1', reportData?.school_id || globalSchool.school_id);
-    setAuditMeta(next);
-    return next;
-  }, [reportData?.school_id, globalSchool.school_id]);
+  const getBaseFilename = useCallback(() => {
+    const sectionClean = (reportData?.section_name || 'Section').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const syClean = (reportData?.academic_year || 'SY').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `DepEd_SF1_${sectionClean}_${syClean}`;
+  }, [reportData?.section_name, reportData?.academic_year]);
+
+  const buildCsvRows = useCallback(() => {
+    if (!reportData) return { headers: [] as string[], rows: [] as Array<Array<string | number>> };
+    const headers = [
+      'No',
+      'LRN',
+      'Learner Name (Last, First, Middle)',
+      'Sex',
+      'Birth Date',
+      'Age',
+      'Mother Tongue',
+      'IP (Ethnic Group)',
+      'Religion',
+      'House # / Street / Sitio / Purok',
+      'Barangay',
+      'Municipality / City',
+      'Province',
+      'Father Name',
+      'Mother Maiden Name',
+      'Guardian Name',
+      'Relationship',
+      'Contact Number',
+      'Remarks',
+    ];
+    const rows = activeLearnerList.map((st, idx) => {
+      const addr = splitAddressParts(st);
+      const { gName, gRel } = parseGuardianFields(st.guardian_name, st.guardian_relationship || st.guardian_rel);
+      return [
+        idx + 1,
+        st.lrn || '',
+        st.name || '',
+        st.sex || '',
+        st.birthdate || '',
+        st.age ?? '',
+        st.mother_tongue || '',
+        st.ethnic_group || '',
+        st.religion || '',
+        addr.street,
+        addr.brgy,
+        addr.city,
+        addr.prov,
+        st.father_name || '',
+        st.mother_maiden_name || '',
+        gName,
+        gRel,
+        st.guardian_contact || '',
+        st.remarks || '',
+      ];
+    });
+    return { headers, rows };
+  }, [reportData, activeLearnerList]);
+
+  const {
+    auditMeta,
+    isExportingPdf,
+    isPrinting,
+    pageConfig,
+    setPageConfig,
+    isPageSetupOpen,
+    setIsPageSetupOpen,
+    pageWidthInches,
+    pageHeightInches,
+    stampView,
+    handleDirectPrint,
+    handleExportPdf,
+    handleExportCsv,
+    handleExportExcel,
+    handleExportWord,
+    handleExportJson,
+  } = useOfficialReportExport({
+    formCode: 'SF1',
+    reportData,
+    reportRef,
+    schoolId: reportData?.school_id || globalSchool.school_id,
+    sectionId: selectedSectionId,
+    getBaseFilename,
+    buildCsvData: buildCsvRows,
+  });
 
   useEffect(() => {
     if (sectionId) {
@@ -251,15 +336,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         if (controller.signal.aborted) return;
         const payload = res.data;
         setReportData(payload);
-        const stamp = buildAuditStamp('SF1', payload?.school_id || globalSchool.school_id);
-        setAuditMeta(stamp);
-        void logOfficialReportAudit({
-          reportName: 'SF1',
-          trackingId: stamp.trackingId,
-          printedAt: stamp.printedAt,
-          action: 'VIEW',
-          sectionId: selectedSectionId,
-        });
+        stampView(payload?.school_id || globalSchool.school_id);
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
         if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
@@ -275,7 +352,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         }
       }
     },
-    [selectedSectionId, globalSchool.school_id]
+    [selectedSectionId, globalSchool.school_id, stampView]
   );
 
   useEffect(() => {
@@ -284,57 +361,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
       abortRef.current?.abort();
     };
   }, [fetchSF1]);
-
-  useEffect(() => {
-    const handleBeforePrint = () => {
-      refreshAuditMeta();
-      setIsPrinting(true);
-    };
-    const handleAfterPrint = () => {
-      setIsPrinting(false);
-    };
-    window.addEventListener('beforeprint', handleBeforePrint);
-    window.addEventListener('afterprint', handleAfterPrint);
-    return () => {
-      window.removeEventListener('beforeprint', handleBeforePrint);
-      window.removeEventListener('afterprint', handleAfterPrint);
-    };
-  }, [refreshAuditMeta]);
-
-  const cleanSearch = useMemo(() => sanitizeSearchText(searchQuery).toLowerCase(), [searchQuery]);
-
-  const { maleLearners, femaleLearners, combinedLearners } = useMemo(() => {
-    if (!reportData) {
-      return { maleLearners: [], femaleLearners: [], combinedLearners: [] };
-    }
-    const rawAll = Array.isArray(reportData.students) ? reportData.students : [];
-    const rawMales = Array.isArray(reportData.males)
-      ? reportData.males
-      : rawAll.filter((s) => String(s.sex || '').toUpperCase().startsWith('M'));
-    const rawFemales = Array.isArray(reportData.females)
-      ? reportData.females
-      : rawAll.filter((s) => !String(s.sex || '').toUpperCase().startsWith('M'));
-
-    const match = (s: SF1LearnerRow) =>
-      !cleanSearch ||
-      String(s.name || '').toLowerCase().includes(cleanSearch) ||
-      String(s.lrn || '').toLowerCase().includes(cleanSearch);
-
-    const sortedAll = [...rawAll].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    const sortedM = [...rawMales].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    const sortedF = [...rawFemales].filter(match).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-    return {
-      maleLearners: sortedM,
-      femaleLearners: sortedF,
-      combinedLearners: sortedAll,
-    };
-  }, [reportData, cleanSearch]);
-
-  const activeLearnerList = useMemo(
-    () => (groupingMode === 'COMBINED' ? combinedLearners : [...maleLearners, ...femaleLearners]),
-    [groupingMode, combinedLearners, maleLearners, femaleLearners]
-  );
 
   const maleCount = reportData?.total_male ?? maleLearners.length;
   const femaleCount = reportData?.total_female ?? femaleLearners.length;
@@ -365,180 +391,6 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
     return pages;
   }, [reportData, activeLearnerList, pageConfig.layoutMode, pageConfig.orientation, pageHeightInches]);
 
-  const getBaseFilename = () => {
-    const sectionClean = (reportData?.section_name || 'Section').replace(/[^a-zA-Z0-9_-]/g, '_');
-    const syClean = (reportData?.academic_year || 'SY').replace(/[^a-zA-Z0-9_-]/g, '_');
-    return `DepEd_SF1_${sectionClean}_${syClean}`;
-  };
-
-  const handleDirectPrint = () => {
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF1',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'PRINT',
-      sectionId: selectedSectionId,
-    });
-    setIsPrinting(true);
-    setTimeout(() => {
-      window.print();
-      setTimeout(() => setIsPrinting(false), 400);
-    }, 180);
-  };
-
-  const handleExportPdf = async (usePicker = false) => {
-    if (!reportData || !reportRef.current) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF1',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'PDF',
-      sectionId: selectedSectionId,
-    });
-
-    setIsExportingPdf(true);
-    setIsPrinting(true);
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      await exportElementToLocalPdf({
-        element: reportRef.current,
-        filename: `${getBaseFilename()}.pdf`,
-        pageWidthInches,
-        pageHeightInches,
-        orientation: pageConfig.orientation,
-        pageColor: pageConfig.pageColor,
-        pageless: pageConfig.layoutMode === 'pageless',
-        usePicker,
-      });
-    } catch {
-      showAlert({
-        title: 'Opening Print Dialog',
-        message: 'Choose "Save as PDF" in your browser print dialog.',
-        type: 'info',
-      });
-      handleDirectPrint();
-    } finally {
-      setIsPrinting(false);
-      setIsExportingPdf(false);
-    }
-  };
-
-  const buildCsvRows = () => {
-    if (!reportData) return { headers: [] as string[], rows: [] as Array<Array<string | number>> };
-    const headers = [
-      'No',
-      'LRN',
-      'Learner Name (Last, First, Middle)',
-      'Sex',
-      'Birth Date',
-      'Age',
-      'Mother Tongue',
-      'IP (Ethnic Group)',
-      'Religion',
-      'House # / Street / Sitio / Purok',
-      'Barangay',
-      'Municipality / City',
-      'Province',
-      'Father Name',
-      'Mother Maiden Name',
-      'Guardian Name',
-      'Relationship',
-      'Contact Number',
-      'Remarks',
-    ];
-    const rows = activeLearnerList.map((st, idx) => {
-      const addr = splitAddressParts(st);
-      const { gName, gRel } = parseGuardianFields(st.guardian_name, st.guardian_relationship || st.guardian_rel);
-      return [
-        idx + 1,
-        st.lrn || '',
-        st.name || '',
-        st.sex || '',
-        st.birthdate || '',
-        st.age ?? '',
-        st.mother_tongue || '',
-        st.ethnic_group || '',
-        st.religion || '',
-        addr.street,
-        addr.brgy,
-        addr.city,
-        addr.prov,
-        st.father_name || '',
-        st.mother_maiden_name || '',
-        gName,
-        gRel,
-        st.parent_contact || '',
-        st.remarks || '',
-      ];
-    });
-    return { headers, rows };
-  };
-
-  const handleExportCsv = async (usePicker = false) => {
-    if (!reportData) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF1',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'CSV',
-      sectionId: selectedSectionId,
-    });
-    const { headers, rows } = buildCsvRows();
-    const filename = `${getBaseFilename()}.csv`;
-
-    if (usePicker) {
-      const escapeCell = (val: unknown) => `"${String(val ?? '').replace(/"/g, '""')}"`;
-      const csvString =
-        '\uFEFF' + [headers.map(escapeCell).join(','), ...rows.map((r) => r.map(escapeCell).join(','))].join('\r\n');
-      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-      await saveBlobWithOptionalPicker(blob, filename, 'text/csv', 'csv', 'CSV Spreadsheet (*.csv)');
-    } else {
-      exportToCsv(filename, headers, rows);
-    }
-  };
-
-  const handleExportExcel = async (usePicker = false) => {
-    if (!reportData || !reportRef.current) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF1',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'EXCEL',
-      sectionId: selectedSectionId,
-    });
-    await exportElementToExcel(reportRef.current, getBaseFilename(), meta, usePicker);
-  };
-
-  const handleExportWord = async (usePicker = false) => {
-    if (!reportData || !reportRef.current) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF1',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'WORD',
-      sectionId: selectedSectionId,
-    });
-    await exportElementToWord(reportRef.current, getBaseFilename(), meta, usePicker);
-  };
-
-  const handleExportJson = async (usePicker = false) => {
-    if (!reportData) return;
-    const meta = refreshAuditMeta();
-    void logOfficialReportAudit({
-      reportName: 'SF1',
-      trackingId: meta.trackingId,
-      printedAt: meta.printedAt,
-      action: 'JSON',
-      sectionId: selectedSectionId,
-    });
-    await exportReportJson(getBaseFilename(), meta, reportData, usePicker);
-  };
-
   const renderLearnerRow = (st: SF1LearnerRow, rowNum: number) => {
     const addr = splitAddressParts(st);
     const { gName, gRel } = parseGuardianFields(st.guardian_name, st.guardian_relationship || st.guardian_rel);
@@ -561,7 +413,7 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
         <td style={tdLeft}>{st.mother_maiden_name}</td>
         <td style={tdLeft}>{gName}</td>
         <td style={tdCenter}>{gRel}</td>
-        <td style={{ ...tdCenter, fontFamily: 'monospace' }}>{st.parent_contact}</td>
+        <td style={{ ...tdCenter, fontFamily: 'monospace' }}>{st.guardian_contact}</td>
         <td style={tdCenter}>{st.remarks}</td>
       </tr>
     );
@@ -768,11 +620,17 @@ export const SF1ReportTab: React.FC<SF1ReportTabProps> = ({
               <div
                 key={pageIdx}
                 className="sf1-sheet-page"
+                data-print-page="true"
                 style={{
                   backgroundColor: pageConfig.pageColor || '#ffffff',
                   color: '#000000',
                   width: isPrinting ? '100%' : `${pageWidthInches}in`,
-                  minHeight: pageConfig.layoutMode === 'pageless' ? 'auto' : `${pageHeightInches}in`,
+                  minHeight:
+                    pageConfig.layoutMode === 'pageless'
+                      ? 'auto'
+                      : isExportingPdf
+                        ? `${Math.max(1, pageHeightInches - 0.08)}in`
+                        : `${pageHeightInches}in`,
                   paddingTop: `${pageConfig.margins.top}in`,
                   paddingRight: `${pageConfig.margins.right}in`,
                   paddingBottom: `${pageConfig.margins.bottom}in`,

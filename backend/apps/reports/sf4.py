@@ -1,5 +1,3 @@
-# D:\AttendSure_V3\backend\apps\reports\sf4.py
-
 import calendar
 from datetime import date, datetime
 from django.db.models import Q
@@ -29,7 +27,9 @@ def compute_attendance_pct(ada: dict, reg: dict) -> dict:
     return {
         "m": round((ada["m"] / reg["m"]) * 100, 1) if reg["m"] > 0 else 0.0,
         "f": round((ada["f"] / reg["f"]) * 100, 1) if reg["f"] > 0 else 0.0,
-        "total": round((ada["total"] / reg["total"]) * 100, 1) if reg["total"] > 0 else 0.0,
+        "total": round((ada["total"] / reg["total"]) * 100, 1)
+        if reg["total"] > 0
+        else 0.0,
     }
 
 
@@ -70,7 +70,9 @@ SUMMABLE_KEYS = (
 )
 
 
-def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school_year: str = "", request=None) -> dict:
+def generate_sf4_report(
+    *, month_name: str = "October", year: int = 2026, school_year: str = "", request=None
+) -> dict:
     month_num, clean_month = resolve_month(month_name)
     year = int(year)
     if not (1900 <= year <= 2100):
@@ -79,12 +81,15 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
     start_dt, end_dt = date(year, month_num, 1), date(year, month_num, num_days)
 
     holiday_dates = set(
-        SchoolHoliday.objects.filter(holiday_date__range=(start_dt, end_dt)).values_list("holiday_date", flat=True)
+        SchoolHoliday.objects.filter(
+            holiday_date__range=(start_dt, end_dt)
+        ).values_list("holiday_date", flat=True)
     )
     school_days = [
         date(year, month_num, d)
         for d in range(1, num_days + 1)
-        if date(year, month_num, d).weekday() < 5 and date(year, month_num, d) not in holiday_dates
+        if date(year, month_num, d).weekday() < 5
+        and date(year, month_num, d) not in holiday_dates
     ]
     n_days = len(school_days) or 1
 
@@ -94,52 +99,65 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
         target_sy = (
             SchoolYear.objects.filter(id=int(sy_clean)).first()
             if sy_clean.isdigit()
-            else SchoolYear.objects.filter(code__iexact=sy_clean).first()
+            else SchoolYear.objects.filter(name__iexact=sy_clean).first()
         )
     if target_sy is None:
-        target_sy = SchoolYear.objects.filter(is_active=True).first() or SchoolYear.objects.first()
+        target_sy = (
+            SchoolYear.objects.filter(is_active=True).first()
+            or SchoolYear.objects.first()
+        )
 
-    sections_qs = Section.objects.select_related("grade_level", "school_year", "adviser").filter(is_active=True)
+    sections_qs = Section.objects.select_related(
+        "grade_level", "school_year", "adviser", "adviser__user"
+    ).filter(is_active=True)
     if target_sy:
-        sections_qs = sections_qs.filter(Q(school_year=target_sy) | Q(school_year__isnull=True))
-    sections = list(sections_qs.order_by("grade_level__level_order", "name"))
+        sections_qs = sections_qs.filter(
+            Q(school_year=target_sy) | Q(school_year__isnull=True)
+        )
+    sections = list(sections_qs.order_by("grade_level__level_number", "name"))
 
-    enr_qs = Enrollment.objects.filter(section__in=sections, student__is_active=True).select_related(
-        "student", "section__school_year"
-    )
+    enr_qs = Enrollment.objects.filter(
+        section__in=sections, student__is_active=True
+    ).select_related("student", "section__school_year")
     if target_sy:
-        enr_qs = enr_qs.filter(Q(section__school_year=target_sy) | Q(section__school_year__isnull=True))
+        enr_qs = enr_qs.filter(
+            Q(section__school_year=target_sy) | Q(section__school_year__isnull=True)
+        )
 
     enr_by_sec: dict[int, list] = {}
-    all_student_ids = set()
+    all_enrollment_ids = set()
     for enr in enr_qs:
         enr_by_sec.setdefault(enr.section_id, []).append(enr)
-        all_student_ids.add(enr.student_id)
+        all_enrollment_ids.add(enr.id)
 
-    present_codes = ["PRESENT", "LATE", "CUTTING", "EXCUSED"]
+    present_codes = ["PRESENT", "LATE", "EXCUSED"]
     present_pairs = set()
-    if all_student_ids:
+    if all_enrollment_ids:
         present_pairs.update(
             DailyAttendance.objects.filter(
-                student_id__in=all_student_ids,
+                enrollment_id__in=all_enrollment_ids,
                 attendance_date__range=(start_dt, end_dt),
                 status__in=present_codes,
-            ).values_list("student_id", "attendance_date")
+            ).values_list("enrollment_id", "attendance_date")
         )
         present_pairs.update(
             ClassAttendance.objects.filter(
                 class_period__section__in=sections,
-                student_id__in=all_student_ids,
+                enrollment_id__in=all_enrollment_ids,
                 attendance_date__range=(start_dt, end_dt),
                 status__in=present_codes,
-            ).values_list("student_id", "attendance_date")
+            ).values_list("enrollment_id", "attendance_date")
         )
 
-    grade_names = list(GradeLevel.objects.order_by("level_order").values_list("name", flat=True))
+    grade_names = list(
+        GradeLevel.objects.order_by("level_number").values_list("name", flat=True)
+    )
     groups_map: dict[str, list] = {g: [] for g in grade_names if g}
 
     for sec in sections:
-        g_label = (sec.grade_level.name if sec.grade_level else "NON-GRADED").strip() or "NON-GRADED"
+        g_label = (
+            sec.grade_level.name if sec.grade_level else "NON-GRADED"
+        ).strip() or "NON-GRADED"
         adviser_label = (sec.adviser.full_name if sec.adviser else "Unassigned").upper()
 
         reg_m = reg_f = att_m = att_f = 0
@@ -149,13 +167,21 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
 
         for enr in enr_by_sec.get(sec.id, []):
             st = enr.student
-            is_m = str(st.sex or "").upper().startswith("M")
-            enr_dt = enr.enrollment_date.date() if isinstance(enr.enrollment_date, datetime) else enr.enrollment_date
+            is_m = str(st.gender or "").upper().startswith("M")
+            enr_dt = (
+                enr.enrolled_date.date()
+                if isinstance(enr.enrolled_date, datetime)
+                else enr.enrolled_date
+            )
             if enr_dt and enr_dt > end_dt:
                 continue
 
             status_val = str(enr.status or "").upper()
-            exit_dt = enr.status_date.date() if isinstance(enr.status_date, datetime) else enr.status_date
+            exit_dt = (
+                enr.status_date.date()
+                if isinstance(enr.status_date, datetime)
+                else enr.status_date
+            )
 
             if "DROP" in status_val:
                 if exit_dt and exit_dt < start_dt:
@@ -194,13 +220,15 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
                     else:
                         tin_mo_f += 1
 
-            if status_val not in ("DROPPED", "TRANSFERRED_OUT") or (exit_dt and exit_dt > end_dt):
+            if status_val not in ("DROPPED", "TRANSFERRED_OUT") or (
+                exit_dt and exit_dt > end_dt
+            ):
                 if is_m:
                     reg_m += 1
                 else:
                     reg_f += 1
                 for s_day in school_days:
-                    if (st.id, s_day) in present_pairs:
+                    if (enr.id, s_day) in present_pairs:
                         if is_m:
                             att_m += 1
                         else:
@@ -208,9 +236,15 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
 
         reg = make_triplet(reg_m, reg_f)
         ada = make_triplet(round(att_m / n_days, 1), round(att_f / n_days, 1))
-        d_prev, d_mo = make_triplet(drop_prev_m, drop_prev_f), make_triplet(drop_mo_m, drop_mo_f)
-        to_prev, to_mo = make_triplet(tout_prev_m, tout_prev_f), make_triplet(tout_mo_m, tout_mo_f)
-        ti_prev, ti_mo = make_triplet(tin_prev_m, tin_prev_f), make_triplet(tin_mo_m, tin_mo_f)
+        d_prev, d_mo = make_triplet(drop_prev_m, drop_prev_f), make_triplet(
+            drop_mo_m, drop_mo_f
+        )
+        to_prev, to_mo = make_triplet(tout_prev_m, tout_prev_f), make_triplet(
+            tout_mo_m, tout_mo_f
+        )
+        ti_prev, ti_mo = make_triplet(tin_prev_m, tin_prev_f), make_triplet(
+            tin_mo_m, tin_mo_f
+        )
 
         groups_map.setdefault(g_label, []).append(
             {
@@ -259,7 +293,11 @@ def generate_sf4_report(*, month_name: str = "October", year: int = 2026, school
     )
 
     active_sy = target_sy or SchoolYear.objects.filter(is_active=True).first()
-    resolved_sy = active_sy.code if active_sy else (str(school_year).strip() or f"{year}-{year + 1}")
+    resolved_sy = (
+        active_sy.name
+        if active_sy
+        else (str(school_year).strip() or f"{year}-{year + 1}")
+    )
 
     return {
         **get_school_metadata(request),

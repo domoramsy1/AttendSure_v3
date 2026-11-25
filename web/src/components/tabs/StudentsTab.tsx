@@ -8,15 +8,27 @@ import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
-import { isSafeImageUrl } from '../../theme/tokens';
+import { isSafeImageUrl, QR_COLORS } from '../../theme/tokens';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
+import { AvatarUploadField } from '../common/AvatarUploadField';
+import { StatusBadge } from '../common/StatusBadge';
 import { QrCodeSvg } from '../common/QrCodeSvg';
 import { Pagination, exportToCsv, ALL_ROWS_SIZE } from '../common/Pagination';
 import { ControlSwitch } from '../ui/ControlSwitch';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { PrintableExportModal, type SelectableOption } from '../modals/PrintableExportModal';
 import { useAlert } from '../../context/AlertContext';
+import { useCopyFeedback } from '../../utils/clipboard';
+import { useFieldAvailability } from '../../hooks/useFieldAvailability';
+import {
+  canBulkImportStudents,
+  canDeleteStudents,
+  canManageStudents as canManageStudentsPerm,
+  getCurrentUserFromStorage,
+  isAdminOrPrincipal,
+} from '../../utils/permissions';
 import {
   User,
   Pencil,
@@ -28,8 +40,6 @@ import {
   Check,
   Phone,
   Printer,
-  Camera,
-  X,
   AlertCircle,
   Download,
   Upload,
@@ -64,12 +74,13 @@ interface Student {
   mother_maiden_name?: string;
   guardian_name?: string;
   guardian_relationship?: string;
-  parent_contact: string;
+  guardian_contact: string;
   qr_token?: string;
   qr_payload?: string;
   current_section?: string;
   current_section_id?: number | null;
   section_id?: number;
+  enrollment_status?: 'ENROLLED' | 'TRANSFERRED_IN' | 'TRANSFERRED_OUT' | 'DROPPED';
   grade_level_name?: string;
   photo?: string | null;
   photo_url?: string | null;
@@ -86,8 +97,12 @@ interface SectionItem {
   id: number;
   name: string;
   code?: string;
+  display_label?: string;
   grade_level?: number | { id: number; name: string };
   grade_level_name?: string;
+  adviser_id?: number | null;
+  is_adviser?: boolean;
+  scheduled_subjects_count?: number;
 }
 
 interface MetricsData {
@@ -105,7 +120,7 @@ interface CsvImportSummary {
   errors: Array<{ row: number; lrn: string; reason: string }>;
 }
 
-type ModalFormTab = 'BASIC' | 'ADDRESS' | 'PARENTS' | 'DEPED';
+type ModalFormTab = 'BASIC' | 'ADDRESS' | 'GUARDIAN' | 'DEPED';
 
 const sanitizeInput = (raw: string, maxLength = 150): string =>
   String(raw || '')
@@ -124,8 +139,10 @@ export const StudentsTab: React.FC = () => {
   const { school } = useSchool();
   const { showAlert, showConfirm } = useAlert();
 
-  const userRole = useMemo(() => (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(), []);
-  const canManageStudents = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
+  const currentUser = useMemo(() => getCurrentUserFromStorage(), []);
+  const isExecutive = isAdminOrPrincipal(currentUser);
+  const canBulkImport = canBulkImportStudents(currentUser);
+  const canDeleteStudent = canDeleteStudents(currentUser);
 
   const cachedStudentsPayload = peekApiCache<any>(API_ROUTES.students.list, { page: 1, page_size: 25 });
   const cachedMetricsPayload = peekApiCache<any>(API_ROUTES.students.metrics);
@@ -164,9 +181,26 @@ export const StudentsTab: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [selectedSectionFilter, setSelectedSectionFilter] = useState<string>('ALL');
-  const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const { copiedKey: copiedValue, copy } = useCopyFeedback();
   const [badgeStudent, setBadgeStudent] = useState<Student | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
+
+  const sectionOptions = useMemo<SelectableOption[]>(
+    () =>
+      sections.map((sec) => ({
+        id: sec.id,
+        label: `${sec.grade_level_name ? `${sec.grade_level_name} - ` : ''}${sec.name}`,
+      })),
+    [sections]
+  );
+
+  const toggleStudentSelection = (studentId: number) => {
+    setSelectedStudentIds((prev) =>
+      prev.includes(studentId) ? prev.filter((id) => id !== studentId) : [...prev, studentId]
+    );
+  };
 
   // Bulk CSV Import Modal State
   const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
@@ -194,6 +228,7 @@ export const StudentsTab: React.FC = () => {
     birthdate: '2012-01-01',
     grade_level_id: '',
     section_id: '',
+    enrollment_status: 'ENROLLED' as 'ENROLLED' | 'TRANSFERRED_IN' | 'TRANSFERRED_OUT' | 'DROPPED',
     qr_token: '',
     photo: null as string | null,
     house_street_sitio: '',
@@ -204,7 +239,7 @@ export const StudentsTab: React.FC = () => {
     mother_maiden_name: '',
     guardian_name: '',
     guardian_relationship: 'Mother',
-    parent_contact: '',
+    guardian_contact: '',
     mother_tongue: '',
     ethnic_group: '',
     religion: '',
@@ -212,9 +247,24 @@ export const StudentsTab: React.FC = () => {
 
   const abortRef = useRef<AbortController | null>(null);
   const metricsAbortRef = useRef<AbortController | null>(null);
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInteracting = useRef<boolean>(false);
   isInteracting.current = isModalOpen || isImportModalOpen || Boolean(badgeStudent);
+
+  const lrnDigits = formData.lrn.replace(/\D/g, '');
+  const lrnAvail = useFieldAvailability({
+    enabled: isModalOpen && lrnDigits.length === 12,
+    field: 'lrn',
+    value: lrnDigits,
+    minLength: 12,
+    fallbackMessage: 'This 12-digit LRN is already registered.',
+    excludeId: editingStudent?.id,
+  });
+  const lrnCheck = {
+    checking: lrnAvail.checking,
+    is_taken: lrnAvail.isTaken,
+    available: lrnAvail.verified,
+    message: lrnAvail.error,
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -248,10 +298,6 @@ export const StudentsTab: React.FC = () => {
   useEffect(() => {
     return () => {
       metricsAbortRef.current?.abort();
-      if (copyTimerRef.current) {
-        clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = null;
-      }
     };
   }, []);
 
@@ -359,28 +405,41 @@ export const StudentsTab: React.FC = () => {
     return () => clearInterval(timer);
   }, [currentPage, pageSize, loadStudents, loadMetrics]);
 
+  const advisedSectionIds = useMemo(() => {
+    const tid = Number(currentUser.teacher_id || 0);
+    return sections
+      .filter((sec) => Boolean(sec.is_adviser) || (tid > 0 && Number(sec.adviser_id) === tid))
+      .map((sec) => sec.id);
+  }, [sections, currentUser.teacher_id]);
+
+  const canAddStudent = canManageStudentsPerm(currentUser, advisedSectionIds);
+  const canEditStudentRow = useCallback(
+    (st: Student) =>
+      canManageStudentsPerm(currentUser, advisedSectionIds, st.current_section_id ?? st.section_id ?? null),
+    [currentUser, advisedSectionIds]
+  );
+
   const modalAvailableSections = useMemo(() => {
-    if (!formData.grade_level_id) return sections;
-    return sections.filter((sec) => {
+    const baseSections =
+      !isExecutive && advisedSectionIds.length > 0
+        ? sections.filter((sec) => advisedSectionIds.includes(sec.id))
+        : sections;
+    if (!formData.grade_level_id) return baseSections;
+    return baseSections.filter((sec) => {
       const glId =
         typeof sec.grade_level === 'object' && sec.grade_level !== null ? sec.grade_level.id : sec.grade_level;
       return String(glId) === String(formData.grade_level_id);
     });
-  }, [sections, formData.grade_level_id]);
+  }, [sections, formData.grade_level_id, isExecutive, advisedSectionIds]);
+
+  const selectedModalSection = useMemo(() => {
+    if (!formData.section_id) return null;
+    return sections.find((sec) => String(sec.id) === String(formData.section_id)) || null;
+  }, [sections, formData.section_id]);
 
   const handleCopy = async (val: string) => {
     if (!val) return;
-    try {
-      await navigator.clipboard.writeText(val);
-      setCopiedValue(val);
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => {
-        setCopiedValue((prev) => (prev === val ? null : prev));
-        copyTimerRef.current = null;
-      }, 2000);
-    } catch {
-      // Ignore clipboard failure
-    }
+    await copy(val, val);
   };
 
   const handleDownloadCsvTemplate = () => {
@@ -396,7 +455,7 @@ export const StudentsTab: React.FC = () => {
         'birthdate',
         'section_name',
         'grade_level',
-        'parent_contact',
+        'guardian_contact',
         'barangay',
         'municipality_city',
         'province',
@@ -491,7 +550,7 @@ export const StudentsTab: React.FC = () => {
           'Birthdate',
           'Class Section',
           'QR Card Status',
-          'Parent Contact',
+          'Guardian Contact',
           'Father Name',
           'Mother Maiden Name',
           'Barangay',
@@ -505,7 +564,7 @@ export const StudentsTab: React.FC = () => {
           s.birthdate || '',
           s.current_section || 'Unassigned',
           s.qr_token ? 'Linked' : 'Not Linked',
-          s.parent_contact || '',
+          s.guardian_contact || '',
           s.father_name || '',
           s.mother_maiden_name || '',
           s.barangay || '',
@@ -520,36 +579,19 @@ export const StudentsTab: React.FC = () => {
     }
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setFormError('Please upload a JPG, PNG, or WebP photo.');
-      return;
-    }
-    if (file.size > 2.5 * 1024 * 1024) {
-      setFormError('Photo size must be 2.5 MB or smaller.');
-      return;
-    }
-    setFormError(null);
-    setPhotoRemoved(false);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      if (!isSafeImageUrl(result)) {
-        setFormError('Selected file is not a valid image.');
-        return;
-      }
-      setFormData((prev) => ({ ...prev, photo: result }));
-    };
-    reader.readAsDataURL(file);
-  };
-
   const handleOpenCreate = () => {
     setEditingStudent(null);
     setFormError(null);
     setPhotoRemoved(false);
     setFormTab('BASIC');
+    const defaultAdvisedSec =
+      !isExecutive && advisedSectionIds.length > 0
+        ? sections.find((s) => advisedSectionIds.includes(s.id))
+        : undefined;
+    const defaultGl =
+      defaultAdvisedSec && typeof defaultAdvisedSec.grade_level === 'object' && defaultAdvisedSec.grade_level !== null
+        ? defaultAdvisedSec.grade_level.id
+        : defaultAdvisedSec?.grade_level;
     setFormData({
       lrn: '',
       first_name: '',
@@ -558,8 +600,9 @@ export const StudentsTab: React.FC = () => {
       suffix: '',
       sex: 'Male',
       birthdate: '2012-01-01',
-      grade_level_id: gradeLevels[0] ? String(gradeLevels[0].id) : '',
-      section_id: '',
+      grade_level_id: defaultGl ? String(defaultGl) : gradeLevels[0] ? String(gradeLevels[0].id) : '',
+      section_id: defaultAdvisedSec ? String(defaultAdvisedSec.id) : '',
+      enrollment_status: 'ENROLLED',
       qr_token: '',
       photo: null,
       house_street_sitio: '',
@@ -570,7 +613,7 @@ export const StudentsTab: React.FC = () => {
       mother_maiden_name: '',
       guardian_name: '',
       guardian_relationship: 'Mother',
-      parent_contact: '',
+      guardian_contact: '',
       mother_tongue: '',
       ethnic_group: '',
       religion: '',
@@ -603,6 +646,7 @@ export const StudentsTab: React.FC = () => {
       birthdate: st.birthdate || '2012-01-01',
       grade_level_id: glVal ? String(glVal) : gradeLevels[0] ? String(gradeLevels[0].id) : '',
       section_id: exactSecId ? String(exactSecId) : matchedSec ? String(matchedSec.id) : '',
+      enrollment_status: st.enrollment_status || 'ENROLLED',
       qr_token: '',
       photo: isSafeImageUrl(st.photo_url || st.photo) ? st.photo_url || st.photo || null : null,
       house_street_sitio: st.house_street_sitio || '',
@@ -613,7 +657,7 @@ export const StudentsTab: React.FC = () => {
       mother_maiden_name: st.mother_maiden_name || '',
       guardian_name: st.guardian_name || '',
       guardian_relationship: st.guardian_relationship || 'Mother',
-      parent_contact: st.parent_contact || '',
+      guardian_contact: st.guardian_contact || '',
       mother_tongue: st.mother_tongue || '',
       ethnic_group: st.ethnic_group || '',
       religion: st.religion || '',
@@ -630,6 +674,11 @@ export const StudentsTab: React.FC = () => {
       setFormTab('BASIC');
       return;
     }
+    if (lrnCheck.is_taken) {
+      setFormError(lrnCheck.message || 'This 12-digit LRN is already registered to another student.');
+      setFormTab('BASIC');
+      return;
+    }
     if (!formData.first_name.trim() || !formData.last_name.trim()) {
       setFormError('First name and last name are required.');
       setFormTab('BASIC');
@@ -641,10 +690,10 @@ export const StudentsTab: React.FC = () => {
       return;
     }
 
-    const cleanParentPhone = formData.parent_contact.trim().replace(/[\s-]/g, '');
-    if (!cleanParentPhone) {
-      setFormError('Parent mobile number is required in the "3. Guardian" tab.');
-      setFormTab('PARENTS');
+    const cleanGuardianPhone = formData.guardian_contact.trim().replace(/[\s-]/g, '');
+    if (!cleanGuardianPhone) {
+      setFormError('Guardian contact number is required in the "3. Guardian" tab.');
+      setFormTab('GUARDIAN');
       return;
     }
 
@@ -656,8 +705,8 @@ export const StudentsTab: React.FC = () => {
         middle_name: sanitizeInput(formData.middle_name, 100),
         last_name: sanitizeInput(formData.last_name, 100),
         suffix: sanitizeInput(formData.suffix, 20),
-        sex: formData.sex,
-        birthdate: formData.birthdate,
+        gender: formData.sex,
+        birth_date: formData.birthdate,
         mother_tongue: sanitizeInput(formData.mother_tongue, 80),
         ethnic_group: sanitizeInput(formData.ethnic_group, 80),
         religion: sanitizeInput(formData.religion, 80),
@@ -669,8 +718,9 @@ export const StudentsTab: React.FC = () => {
         mother_maiden_name: sanitizeInput(formData.mother_maiden_name, 150),
         guardian_name: sanitizeInput(formData.guardian_name, 150),
         guardian_relationship: sanitizeInput(formData.guardian_relationship, 60),
-        parent_contact: sanitizeInput(cleanParentPhone, 20),
+        guardian_contact: sanitizeInput(cleanGuardianPhone, 20),
         section_id: Number(formData.section_id),
+        enrollment_status: formData.enrollment_status,
       };
 
       if (formData.photo && formData.photo.startsWith('data:image/') && isSafeImageUrl(formData.photo)) {
@@ -800,6 +850,35 @@ export const StudentsTab: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {selectedStudentIds.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedStudentIds([])}
+              style={{
+                ...ui.btnSecondary,
+                backgroundColor: tokens.primaryLight,
+                borderColor: brand.primary,
+                color: brand.primary,
+              }}
+            >
+              <span>{selectedStudentIds.length} Selected &times; Clear</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setIsPrintModalOpen(true)}
+            disabled={totalCount === 0}
+            style={{ ...ui.btnSecondary, borderColor: brand.primary, color: brand.primary }}
+          >
+            <Printer size={14} color={brand.primary} />
+            <span>
+              {selectedStudentIds.length > 0
+                ? `Print Class List & QR (${selectedStudentIds.length})`
+                : 'Print / Export Class List & QR'}
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={handleExportCsv}
@@ -810,22 +889,22 @@ export const StudentsTab: React.FC = () => {
             <span>Export CSV ({totalCount.toLocaleString()})</span>
           </button>
 
-          {canManageStudents && (
-            <>
-              <button
-                type="button"
-                onClick={handleOpenCsvImport}
-                style={ui.btnSecondary}
-              >
-                <Upload size={14} color={brand.primary} />
-                <span>Import CSV Class List</span>
-              </button>
+          {canBulkImport && (
+            <button
+              type="button"
+              onClick={handleOpenCsvImport}
+              style={ui.btnSecondary}
+            >
+              <Upload size={14} color={brand.primary} />
+              <span>Import CSV Class List</span>
+            </button>
+          )}
 
-              <button type="button" onClick={handleOpenCreate} style={ui.btnPrimary}>
-                <Plus size={15} />
-                <span>Add Student</span>
-              </button>
-            </>
+          {canAddStudent && (
+            <button type="button" onClick={handleOpenCreate} style={ui.btnPrimary}>
+              <Plus size={15} />
+              <span>Add Student</span>
+            </button>
           )}
         </div>
       </div>
@@ -866,11 +945,30 @@ export const StudentsTab: React.FC = () => {
             <table style={{ width: '100%', minWidth: 740, borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
                 <tr>
+                  <th style={{ ...ui.th, width: 38, textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all students on this page"
+                      checked={
+                        students.length > 0 &&
+                        students.every((row) => selectedStudentIds.includes(row.id))
+                      }
+                      onChange={(e) => {
+                        const pageIds = students.map((row) => row.id);
+                        if (e.target.checked) {
+                          setSelectedStudentIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+                        } else {
+                          setSelectedStudentIds((prev) => prev.filter((id) => !pageIds.includes(id)));
+                        }
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  </th>
                   <th style={ui.th}>Student</th>
                   <th style={ui.th}>LRN</th>
                   <th style={ui.th}>Class Section</th>
                   <th style={ui.th}>QR ID Card</th>
-                  <th style={ui.th}>Parent Contact</th>
+                  <th style={ui.th}>Guardian Contact</th>
                   <th style={ui.th}>Status</th>
                   <th style={{ ...ui.th, textAlign: 'right' }}>Actions</th>
                 </tr>
@@ -880,6 +978,15 @@ export const StudentsTab: React.FC = () => {
                   const fullName = row.full_name || `${row.first_name} ${row.last_name}`;
                   return (
                     <tr key={row.id}>
+                      <td style={{ ...ui.td, textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${fullName}`}
+                          checked={selectedStudentIds.includes(row.id)}
+                          onChange={() => toggleStudentSelection(row.id)}
+                          style={{ cursor: 'pointer' }}
+                        />
+                      </td>
                       <td style={ui.td}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <ProfileAvatar photoUrl={row.photo_url || row.photo} name={fullName} size={36} iconSize={17} />
@@ -957,14 +1064,14 @@ export const StudentsTab: React.FC = () => {
 
                       <td style={ui.td}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: fonts.size.sm, color: tokens.textSecondary }}>
-                          <Phone size={13} color={tokens.textMuted} /> {row.parent_contact || '—'}
+                          <Phone size={13} color={tokens.textMuted} /> {row.guardian_contact || '—'}
                         </span>
                       </td>
 
                       <td style={ui.td}>
-                        <span style={ui.badge(row.is_active ? tokens.successLight : tokens.dangerLight, row.is_active ? brand.success : brand.danger)}>
-                          {row.is_active ? 'ACTIVE' : 'INACTIVE'}
-                        </span>
+                        <StatusBadge
+                          status={row.enrollment_status || (row.is_active ? 'ENROLLED' : 'INACTIVE')}
+                        />
                       </td>
 
                       <td style={{ ...ui.td, textAlign: 'right' }}>
@@ -978,25 +1085,26 @@ export const StudentsTab: React.FC = () => {
                             <QrCode size={14} color={brand.primary} />
                           </button>
 
-                          {canManageStudents && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEdit(row)}
-                                title="Edit Student"
-                                style={{ ...ui.btnSecondary, padding: '6px 8px' }}
-                              >
-                                <Pencil size={14} color={brand.primary} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(row)}
-                                title="Delete Student"
-                                style={{ ...ui.btnSecondary, padding: '6px 8px', color: brand.danger }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </>
+                          {canEditStudentRow(row) && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEdit(row)}
+                              title="Edit Student"
+                              style={{ ...ui.btnSecondary, padding: '6px 8px' }}
+                            >
+                              <Pencil size={14} color={brand.primary} />
+                            </button>
+                          )}
+
+                          {canDeleteStudent && (
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(row)}
+                              title="Delete Student"
+                              style={{ ...ui.btnSecondary, padding: '6px 8px', color: brand.danger }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
                           )}
                         </div>
                       </td>
@@ -1198,7 +1306,7 @@ export const StudentsTab: React.FC = () => {
             options={[
               { value: 'BASIC', label: '1. Basic', icon: <User size={13} /> },
               { value: 'ADDRESS', label: '2. Address', icon: <Home size={13} /> },
-              { value: 'PARENTS', label: '3. Guardian', icon: <Users2 size={13} /> },
+              { value: 'GUARDIAN', label: '3. Guardian', icon: <Users2 size={13} /> },
               { value: 'DEPED', label: '4. DepEd', icon: <GraduationCap size={13} /> },
             ]}
             value={formTab}
@@ -1208,27 +1316,23 @@ export const StudentsTab: React.FC = () => {
 
           {formTab === 'BASIC' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ ...ui.subtleBox, display: 'flex', alignItems: 'center', gap: 12 }}>
-                <ProfileAvatar photoUrl={formData.photo} name={formData.first_name || 'Student'} size={50} iconSize={22} />
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <label style={ui.btnPrimary}>
-                    <Camera size={13} /> Upload Photo
-                    <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoUpload} style={{ display: 'none' }} />
-                  </label>
-                  {formData.photo && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFormData((p) => ({ ...p, photo: null }));
-                        setPhotoRemoved(true);
-                      }}
-                      style={{ ...ui.btnSecondary, color: brand.danger }}
-                    >
-                      <X size={13} /> Remove
-                    </button>
-                  )}
-                </div>
-              </div>
+              <AvatarUploadField
+                previewUrl={formData.photo}
+                displayName={`${formData.first_name} ${formData.last_name}`.trim() || 'Student'}
+                label="Student ID Photo"
+                size={54}
+                disabled={saving}
+                onSelectPhoto={(_file, dataUri) => {
+                  setFormError(null);
+                  setPhotoRemoved(false);
+                  setFormData((prev) => ({ ...prev, photo: dataUri }));
+                }}
+                onRemovePhoto={() => {
+                  setFormData((p) => ({ ...p, photo: null }));
+                  setPhotoRemoved(true);
+                }}
+                onValidationError={(msg) => setFormError(msg)}
+              />
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
                 <div>
@@ -1237,9 +1341,31 @@ export const StudentsTab: React.FC = () => {
                     maxLength={12}
                     value={formData.lrn}
                     onChange={(e) => setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })}
-                    style={ui.input}
+                    style={{
+                      ...ui.input,
+                      borderColor: lrnCheck.is_taken
+                        ? brand.danger
+                        : lrnCheck.available
+                          ? brand.success
+                          : tokens.borderStrong,
+                    }}
                     placeholder="Enter 12-digit LRN"
                   />
+                  {lrnCheck.checking && (
+                    <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', color: tokens.textMuted, fontWeight: 600 }}>
+                      Checking LRN availability...
+                    </span>
+                  )}
+                  {lrnCheck.is_taken && (
+                    <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', color: brand.danger, fontWeight: 700 }}>
+                      {lrnCheck.message || 'This 12-digit LRN is already registered.'}
+                    </span>
+                  )}
+                  {!lrnCheck.checking && lrnCheck.available && (
+                    <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', color: brand.success, fontWeight: 700 }}>
+                      LRN is available.
+                    </span>
+                  )}
                 </div>
                 <div>
                   <label style={ui.label}>Birthdate *</label>
@@ -1320,7 +1446,56 @@ export const StudentsTab: React.FC = () => {
                     ))}
                   </select>
                 </div>
+                <div>
+                  <label style={ui.label}>Enrollment Status (DepEd SF1) *</label>
+                  <select
+                    value={formData.enrollment_status}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        enrollment_status: e.target.value as
+                          | 'ENROLLED'
+                          | 'TRANSFERRED_IN'
+                          | 'TRANSFERRED_OUT'
+                          | 'DROPPED',
+                      })
+                    }
+                    style={ui.input}
+                  >
+                    <option value="ENROLLED">Enrolled</option>
+                    <option value="TRANSFERRED_IN">Transferred In</option>
+                    <option value="TRANSFERRED_OUT">Transferred Out</option>
+                    <option value="DROPPED">Dropped</option>
+                  </select>
+                </div>
               </div>
+
+              {selectedModalSection && (
+                <div
+                  style={{
+                    ...ui.subtleBox,
+                    backgroundColor: tokens.infoLight,
+                    borderColor: brand.primary,
+                    color: brand.primary,
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    fontSize: fonts.size.xs,
+                    fontWeight: 700,
+                  }}
+                >
+                  <BookOpen size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span>
+                    Auto-Enrollment Active: Enrolling in{' '}
+                    {selectedModalSection.display_label ||
+                      (selectedModalSection.grade_level_name
+                        ? `${selectedModalSection.grade_level_name} - ${selectedModalSection.name}`
+                        : selectedModalSection.name)}{' '}
+                    automatically includes this student in all{' '}
+                    {Number(selectedModalSection.scheduled_subjects_count ?? 0)} scheduled subject periods and class lists for this section.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1347,21 +1522,21 @@ export const StudentsTab: React.FC = () => {
             </div>
           )}
 
-          {formTab === 'PARENTS' && (
+          {formTab === 'GUARDIAN' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
                 <div>
-                  <label style={ui.label}>Father&apos;s Name</label>
+                  <label style={ui.label}>Father&apos;s Name (SF1)</label>
                   <input maxLength={150} value={formData.father_name} onChange={(e) => setFormData({ ...formData, father_name: e.target.value })} style={ui.input} />
                 </div>
                 <div>
-                  <label style={ui.label}>Mother&apos;s Maiden Name</label>
+                  <label style={ui.label}>Mother&apos;s Maiden Name (SF1)</label>
                   <input maxLength={150} value={formData.mother_maiden_name} onChange={(e) => setFormData({ ...formData, mother_maiden_name: e.target.value })} style={ui.input} />
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
                 <div>
-                  <label style={ui.label}>Guardian Name</label>
+                  <label style={ui.label}>Guardian Name (SF1)</label>
                   <input maxLength={150} value={formData.guardian_name} onChange={(e) => setFormData({ ...formData, guardian_name: e.target.value })} style={ui.input} />
                 </div>
                 <div>
@@ -1370,13 +1545,13 @@ export const StudentsTab: React.FC = () => {
                 </div>
               </div>
               <div>
-                <label style={ui.label}>Parent Mobile Number (11 Digits) *</label>
+                <label style={ui.label}>Guardian Contact Number (11 Digits, SF1 Record) *</label>
                 <input
                   maxLength={20}
-                  value={formData.parent_contact}
-                  onChange={(e) => setFormData({ ...formData, parent_contact: e.target.value })}
+                  value={formData.guardian_contact}
+                  onChange={(e) => setFormData({ ...formData, guardian_contact: e.target.value })}
                   style={ui.input}
-                  placeholder="Enter 11-digit mobile number"
+                  placeholder="Enter 11-digit guardian contact number"
                 />
               </div>
             </div>
@@ -1405,7 +1580,7 @@ export const StudentsTab: React.FC = () => {
             <Button variant="secondary" type="button" onClick={() => setIsModalOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" type="submit" loading={saving}>
+            <Button variant="primary" type="submit" loading={saving} disabled={saving || lrnCheck.is_taken || lrnCheck.checking}>
               {editingStudent ? 'Save Changes' : 'Enroll Student'}
             </Button>
           </div>
@@ -1427,7 +1602,7 @@ export const StudentsTab: React.FC = () => {
                 boxShadow: tokens.cardShadow,
               }}
             >
-              <div style={{ backgroundColor: brand.buttonBg, color: '#ffffff', padding: '12px 14px' }}>
+              <div style={{ backgroundColor: brand.buttonBg, color: tokens.onPrimary, padding: '12px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: fonts.size.xs, fontWeight: 800 }}>
                   <ShieldCheck size={14} /> OFFICIAL STUDENT QR PASS
                 </div>
@@ -1462,7 +1637,7 @@ export const StudentsTab: React.FC = () => {
                     height: 124,
                     margin: '8px auto',
                     padding: 6,
-                    backgroundColor: '#ffffff',
+                    backgroundColor: QR_COLORS.background,
                     borderWidth: 1,
                     borderStyle: 'solid',
                     borderColor: tokens.borderSubtle,
@@ -1492,6 +1667,25 @@ export const StudentsTab: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      <PrintableExportModal
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        title="Print & Download Section Class Lists & Student QR ID Cards"
+        defaultPackType="CLASS_LIST"
+        allowedPackTypes={['CLASS_LIST', 'QR_ID_CARDS']}
+        initialScope={
+          selectedStudentIds.length > 0 || selectedSectionFilter !== 'ALL' ? 'SELECTED' : 'ALL'
+        }
+        preselectedStudentIds={selectedStudentIds}
+        preselectedSectionIds={
+          selectedStudentIds.length === 0 && selectedSectionFilter !== 'ALL'
+            ? [Number(selectedSectionFilter)]
+            : []
+        }
+        sectionOptions={sectionOptions}
+        isSchoolLeader={isExecutive}
+      />
     </div>
   );
 };

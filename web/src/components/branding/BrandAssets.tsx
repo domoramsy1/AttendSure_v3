@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import attendsureLogoSvg from '../../assets/AttendSureLogo.svg';
+import { SEAL_COLORS } from '../../theme/tokens';
 
 export const BRAND_ASSETS = {
   attendsureLogo: attendsureLogoSvg,
@@ -63,15 +64,15 @@ export const AttendSureBrandBadge: React.FC<AttendSureBrandBadgeProps> = ({
     mode === 'dark'
       ? 'rgba(56, 189, 248, 0.55)'
       : mode === 'high-contrast'
-      ? '#002b4d'
-      : '#cbd5e1';
+      ? SEAL_COLORS.navyDeep
+      : SEAL_COLORS.border;
 
   const shadow =
     mode === 'dark'
-      ? '0 4px 14px rgba(2, 132, 199, 0.28), inset 0 1px 0 #ffffff'
+      ? `0 4px 14px rgba(2, 132, 199, 0.28), inset 0 1px 0 ${SEAL_COLORS.white}`
       : mode === 'high-contrast'
       ? 'none'
-      : '0 2px 8px rgba(0, 75, 135, 0.12), inset 0 1px 0 #ffffff';
+      : `0 2px 8px rgba(0, 75, 135, 0.12), inset 0 1px 0 ${SEAL_COLORS.white}`;
 
   return (
     <div
@@ -79,7 +80,7 @@ export const AttendSureBrandBadge: React.FC<AttendSureBrandBadgeProps> = ({
         width: size,
         height: size,
         borderRadius: radius,
-        background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+        background: `linear-gradient(180deg, ${SEAL_COLORS.white} 0%, ${SEAL_COLORS.surface} 100%)`,
         borderWidth: mode === 'high-contrast' ? 1.5 : 1,
         borderStyle: 'solid',
         borderColor,
@@ -107,8 +108,8 @@ export const AttendSureBrandBadge: React.FC<AttendSureBrandBadgeProps> = ({
         />
       ) : (
         <svg viewBox="0 0 64 64" width={innerSize} height={innerSize} fill="none" aria-label="AttendSure">
-          <path d="M32 8L12 52H22.5L32 30.5L41.5 52H52L32 8Z" fill="#004b87" />
-          <rect x="14" y="42" width="36" height="10" rx="3" fill="#0284c7" />
+          <path d="M32 8L12 52H22.5L32 30.5L41.5 52H52L32 8Z" fill={SEAL_COLORS.navy} />
+          <rect x="14" y="42" width="36" height="10" rx="3" fill={SEAL_COLORS.sky} />
         </svg>
       )}
     </div>

@@ -1,25 +1,27 @@
 # D:\AttendSure_V3\backend\apps\attendance\serializers.py
-
 import os
-import uuid
 from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 
-from apps.accounts.models import FacultyProfile
-from apps.accounts.selectors import get_faculty_student_ids, resolve_faculty_for_user
-from apps.messaging.services import notify_student_parent
+from apps.accounts.models import TeacherProfile
+from apps.accounts.selectors import (
+    get_teacher_enrollment_ids,
+    resolve_teacher_for_user,
+)
+from apps.students.models import Enrollment
 from common.exceptions import AppError
 from common.media import build_media_url, decode_uploaded_image
-from common.permissions import get_user_role, is_school_leader
+from common.permissions import is_school_leader
+from common.validators import clean_text
 from .models import ExitPass
 
 ALLOWED_PROOF_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}
-MAX_PROOF_BYTES = 5 * 1024 * 1024
+MAX_PROOF_BYTES = 2 * 1024 * 1024
 
 
 class ExitPassProofField(serializers.Field):
-    """Accepts multipart file uploads (PDF/Image) or Base64 data URIs with strict size & extension validation."""
+    """Validates PDF or image proof files up to 2 MB and blocks unsafe file content."""
 
     def to_representation(self, value):
         return build_media_url(value, self.context.get("request"))
@@ -29,17 +31,22 @@ class ExitPassProofField(serializers.Field):
             return None
 
         if hasattr(data, "read"):
-            ext = os.path.splitext(str(getattr(data, "name", "") or ""))[1].lower()
+            safe_name = os.path.basename(str(getattr(data, "name", "") or ""))
+            ext = os.path.splitext(safe_name)[1].lower()
             if ext not in ALLOWED_PROOF_EXTS:
-                raise serializers.ValidationError("Allowed proof formats: PDF, JPG, PNG, or WEBP.")
+                raise serializers.ValidationError("Allowed file types: PDF, JPG, PNG, or WEBP.")
             size = getattr(data, "size", 0) or 0
-            if size > MAX_PROOF_BYTES:
-                raise serializers.ValidationError("Proof attachment cannot exceed 5 MB.")
+            if size <= 0 or size > MAX_PROOF_BYTES:
+                raise serializers.ValidationError("Proof file must be under 2 MB.")
             if ext == ".pdf":
-                header = data.read(5)
+                sample = data.read(4096)
                 data.seek(0)
-                if header != b"%PDF-":
-                    raise serializers.ValidationError("Uploaded PDF file is invalid or corrupted.")
+                if not sample.startswith(b"%PDF-"):
+                    raise serializers.ValidationError("Uploaded PDF file is invalid or damaged.")
+                lowered = sample.lower()
+                if b"/javascript" in lowered or b"/js" in lowered:
+                    raise serializers.ValidationError("PDF files with active scripts are blocked.")
+                data.name = safe_name
                 return data
             return decode_uploaded_image(data, prefix="exit_proof")
 
@@ -52,153 +59,224 @@ class ExitPassProofField(serializers.Field):
 
 
 class ExitPassSerializer(serializers.ModelSerializer):
-    bearer_type = serializers.SerializerMethodField()
-    student_name = serializers.CharField(source="student.full_name", read_only=True, default="")
-    student_lrn = serializers.CharField(source="student.lrn", read_only=True, default="")
-    teacher = serializers.IntegerField(source="faculty_id", read_only=True, allow_null=True)
-    teacher_name = serializers.CharField(source="faculty.full_name", read_only=True, default="")
-    faculty_name = serializers.CharField(source="faculty.full_name", read_only=True, default="")
-    faculty_emp_id = serializers.CharField(source="faculty.employee_id", read_only=True, default="")
-    adviser_name = serializers.CharField(source="issued_by.full_name", read_only=True, default="School Staff")
+    pass_status = serializers.CharField(read_only=True)
+    status = serializers.CharField(source="pass_status", read_only=True)
+    bearer_type = serializers.CharField(source="pass_scope", read_only=True)
+    person_name = serializers.SerializerMethodField()
+    student = serializers.IntegerField(source="enrollment.student_id", read_only=True, allow_null=True)
+    student_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    student_name = serializers.SerializerMethodField()
+    student_lrn = serializers.SerializerMethodField()
+    section_name = serializers.SerializerMethodField()
+    teacher_name = serializers.SerializerMethodField()
+    teacher_employee_id = serializers.SerializerMethodField()
+    issued_by_name = serializers.SerializerMethodField()
+    valid_from = serializers.DateTimeField(source="issued_at", required=False)
     valid_to = serializers.DateTimeField(source="valid_until", required=False)
     attachment = ExitPassProofField(required=False, allow_null=True)
     attachment_url = serializers.SerializerMethodField()
+    guardian_notice = serializers.SerializerMethodField()
 
     class Meta:
         model = ExitPass
         fields = [
             "id",
             "pass_number",
+            "pass_scope",
             "bearer_type",
+            "person_name",
+            "enrollment",
             "student",
+            "student_id",
             "student_name",
             "student_lrn",
+            "section_name",
             "teacher",
             "teacher_name",
-            "faculty",
-            "faculty_name",
-            "faculty_emp_id",
-            "issued_by",
-            "adviser_name",
+            "teacher_employee_id",
             "pass_type",
             "reason",
+            "destination",
             "attachment",
             "attachment_url",
+            "issued_by",
+            "issued_by_name",
+            "issued_at",
             "valid_from",
             "valid_until",
             "valid_to",
+            "returned_at",
+            "is_cancelled",
+            "pass_status",
             "status",
-            "created_at",
+            "guardian_notice",
         ]
-        read_only_fields = ["id", "pass_number", "issued_by", "status", "created_at"]
+        read_only_fields = ["id", "pass_number", "issued_by", "returned_at", "is_cancelled"]
         extra_kwargs = {
-            "valid_from": {"required": False},
+            "pass_scope": {"required": False},
+            "issued_at": {"required": False},
             "valid_until": {"required": False},
         }
+
+    def get_person_name(self, obj: ExitPass) -> str:
+        if obj.pass_scope == "STUDENT" and obj.enrollment_id and obj.enrollment:
+            return obj.enrollment.student.full_name
+        if obj.teacher_id and obj.teacher:
+            return obj.teacher.full_name
+        if obj.enrollment_id and obj.enrollment:
+            return obj.enrollment.student.full_name
+        return ""
+
+    def get_student_name(self, obj: ExitPass) -> str:
+        return obj.enrollment.student.full_name if (obj.enrollment_id and obj.enrollment) else ""
+
+    def get_student_lrn(self, obj: ExitPass) -> str:
+        return obj.enrollment.student.lrn if (obj.enrollment_id and obj.enrollment) else ""
+
+    def get_section_name(self, obj: ExitPass) -> str:
+        if obj.enrollment_id and obj.enrollment and obj.enrollment.section:
+            return obj.enrollment.section.name
+        return ""
+
+    def get_teacher_name(self, obj: ExitPass) -> str:
+        return obj.teacher.full_name if (obj.teacher_id and obj.teacher) else ""
+
+    def get_teacher_employee_id(self, obj: ExitPass) -> str:
+        return obj.teacher.employee_id if (obj.teacher_id and obj.teacher) else ""
+
+    def get_issued_by_name(self, obj: ExitPass) -> str:
+        if not obj.issued_by:
+            return "School Staff"
+        return (obj.issued_by.get_full_name() or obj.issued_by.username).strip()
+
+    def get_attachment_url(self, obj: ExitPass):
+        return build_media_url(obj.attachment, self.context.get("request"))
+
+    def get_guardian_notice(self, obj: ExitPass) -> str:
+        holder = self.get_person_name(obj) or "The pass holder"
+        valid_str = (
+            timezone.localtime(obj.valid_until).strftime("%I:%M %p").lstrip("0")
+            if obj.valid_until
+            else ""
+        )
+        dest_ctx = f" to {obj.destination}" if obj.destination else ""
+        if obj.returned_at:
+            ret_str = timezone.localtime(obj.returned_at).strftime("%I:%M %p").lstrip("0")
+            return f"{holder} returned safely to campus at {ret_str} (Pass #{obj.pass_number})."
+        if obj.is_cancelled:
+            return f"Exit pass #{obj.pass_number} for {holder} was cancelled."
+        return (
+            f"{holder} was issued an official exit pass ({obj.pass_type or 'Campus Pass'}){dest_ctx}, "
+            f"valid until {valid_str or 'scheduled return'}."
+        )
 
     def to_internal_value(self, data):
         mutable = {k: data.get(k) for k in data.keys()} if hasattr(data, "keys") else dict(data)
         empty_vals = ("", "null", "none", "undefined")
-        if "faculty" in mutable and str(mutable["faculty"]).strip().lower() in empty_vals:
-            mutable["faculty"] = None
-        if not mutable.get("faculty"):
-            for alias in ("faculty_id", "teacher", "teacher_id"):
-                if alias in mutable and str(mutable[alias]).strip().lower() not in empty_vals:
-                    mutable["faculty"] = mutable[alias]
-                    break
-        if "student" in mutable and str(mutable["student"]).strip().lower() in empty_vals:
-            mutable["student"] = None
-        if not mutable.get("student") and "student_id" in mutable:
-            if str(mutable["student_id"]).strip().lower() not in empty_vals:
-                mutable["student"] = mutable["student_id"]
+
+        if "teacher" in mutable and str(mutable["teacher"]).strip().lower() in empty_vals:
+            mutable["teacher"] = None
+        if not mutable.get("teacher") and "teacher_id" in mutable:
+            if str(mutable["teacher_id"]).strip().lower() not in empty_vals:
+                mutable["teacher"] = mutable["teacher_id"]
+
+        if "enrollment" in mutable and str(mutable["enrollment"]).strip().lower() in empty_vals:
+            mutable["enrollment"] = None
+        if "student_id" not in mutable and "student" in mutable:
+            if str(mutable["student"]).strip().lower() not in empty_vals:
+                mutable["student_id"] = mutable["student"]
+        if "student_id" in mutable and str(mutable["student_id"]).strip().lower() in empty_vals:
+            mutable["student_id"] = None
+
+        if "pass_scope" not in mutable and "bearer_type" in mutable:
+            raw_scope = str(mutable["bearer_type"]).strip().upper()
+            if raw_scope in ("STUDENT", "TEACHER"):
+                mutable["pass_scope"] = raw_scope
+
         if "attachment" not in mutable and "proof_file" in mutable:
             mutable["attachment"] = mutable["proof_file"]
+
+        for txt_key in ("reason", "destination", "pass_type"):
+            if txt_key in mutable and isinstance(mutable[txt_key], str):
+                mutable[txt_key] = clean_text(mutable[txt_key], 300)
+
         return super().to_internal_value(mutable)
 
-    def get_bearer_type(self, obj) -> str:
-        return "STUDENT" if obj.student_id else "FACULTY"
-
-    def get_attachment_url(self, obj):
-        return build_media_url(obj.attachment, self.context.get("request"))
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if data.get("status") == "REVOKED":
-            data["status"] = "DECLINED"
-        return data
-
     def validate(self, attrs):
-        if self.instance:
-            valid_from = attrs.get("valid_from", self.instance.valid_from)
-            valid_until = attrs.get("valid_until", self.instance.valid_until)
-            if valid_from and valid_until and valid_until <= valid_from:
-                raise serializers.ValidationError({"valid_until": "Return time must be after departure time."})
-            return attrs
-        now = timezone.now()
-        attrs.setdefault("valid_from", now)
-        attrs.setdefault("valid_until", attrs["valid_from"] + timedelta(hours=4))
-        if attrs["valid_until"] <= attrs["valid_from"]:
-            raise serializers.ValidationError({"valid_until": "Return time must be after departure time."})
+        issued_at = attrs.get("issued_at", self.instance.issued_at if self.instance else timezone.now())
+        valid_until = attrs.get(
+            "valid_until",
+            self.instance.valid_until if self.instance else (issued_at + timedelta(hours=4)),
+        )
+        if valid_until <= issued_at:
+            raise serializers.ValidationError({"valid_until": "Return time must be after exit time."})
+        if not self.instance:
+            attrs["issued_at"] = issued_at
+            attrs["valid_until"] = valid_until
         return attrs
 
     def create(self, validated_data):
         request = self.context["request"]
         user = request.user
-        role = get_user_role(user)
         leader = is_school_leader(user)
+        own_teacher = resolve_teacher_for_user(user)
 
-        if role == "PARENT":
-            raise AppError("FORBIDDEN", "Parent accounts cannot issue exit passes.", 403)
+        student_id = validated_data.pop("student_id", None)
+        enrollment = validated_data.get("enrollment")
+        target_teacher = validated_data.get("teacher")
 
-        own_faculty = resolve_faculty_for_user(user)
-        issuer = own_faculty or (FacultyProfile.objects.filter(is_active=True).first() if leader else None)
-        if not issuer:
-            raise AppError(
-                "NO_FACULTY_PROFILE",
-                "A linked faculty profile is required to issue an exit pass.",
-                403,
+        if not enrollment and student_id:
+            enrollment = (
+                Enrollment.objects.select_related("student", "section")
+                .filter(student_id=student_id, status="ENROLLED")
+                .order_by("-section__school_year__is_active", "-id")
+                .first()
             )
+            if not enrollment:
+                raise serializers.ValidationError(
+                    {"student_id": "Selected student is not enrolled in an active class."}
+                )
 
-        target_student = validated_data.get("student")
-        target_faculty = validated_data.get("faculty")
-
-        if target_student:
-            if not leader and target_student.id not in get_faculty_student_ids(own_faculty):
+        if enrollment:
+            if not leader and (
+                not own_teacher
+                or not own_teacher.can_handle_classes
+                or enrollment.id not in get_teacher_enrollment_ids(own_teacher)
+            ):
                 raise AppError(
                     "FORBIDDEN",
-                    "You can only issue exit passes for students in your assigned classes.",
+                    "You can only create exit passes for students in your assigned classes.",
                     403,
                 )
-            validated_data["faculty"] = None
+            validated_data["pass_scope"] = "STUDENT"
+            validated_data["enrollment"] = enrollment
+            validated_data["teacher"] = None
         else:
-            validated_data["student"] = None
+            validated_data["pass_scope"] = "TEACHER"
+            validated_data["enrollment"] = None
             if not leader:
-                validated_data["faculty"] = own_faculty
-            elif not target_faculty:
-                validated_data["faculty"] = issuer
+                if not own_teacher:
+                    raise AppError("NO_TEACHER_PROFILE", "A teacher profile is required.", 403)
+                validated_data["teacher"] = own_teacher
+            else:
+                validated_data["teacher"] = (
+                    target_teacher
+                    or own_teacher
+                    or TeacherProfile.objects.select_related("user")
+                    .filter(user__is_active=True)
+                    .first()
+                )
+                if not validated_data["teacher"]:
+                    raise serializers.ValidationError({"teacher": "Select an active teacher for this pass."})
 
-        is_student_pass = bool(validated_data.get("student"))
-        initial_status = "ACTIVE" if (leader or is_student_pass) else "PENDING"
-        pass_code = f"EP-{timezone.localdate().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
-
-        pass_obj = ExitPass.objects.create(
-            **validated_data,
-            pass_number=pass_code,
-            issued_by=issuer,
-            status=initial_status,
-        )
-        if pass_obj.student:
-            notify_student_parent(
-                student=pass_obj.student,
-                title=f"Exit Pass Issued: {pass_obj.student.first_name}",
-                message=f"Exit pass #{pass_code} issued for {pass_obj.student.full_name} ({pass_obj.reason}).",
-                category="GATE_PASS",
-            )
-        return pass_obj
+        return ExitPass.objects.create(**validated_data, issued_by=user)
 
     def update(self, instance, validated_data):
-        if validated_data.get("student") is not None:
-            validated_data["faculty"] = None
-        elif validated_data.get("faculty") is not None:
-            validated_data["student"] = None
+        validated_data.pop("student_id", None)
+        if validated_data.get("enrollment") is not None:
+            validated_data["pass_scope"] = "STUDENT"
+            validated_data["teacher"] = None
+        elif validated_data.get("teacher") is not None:
+            validated_data["pass_scope"] = "TEACHER"
+            validated_data["enrollment"] = None
         return super().update(instance, validated_data)

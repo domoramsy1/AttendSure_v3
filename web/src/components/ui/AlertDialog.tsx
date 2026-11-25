@@ -122,7 +122,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
     success: {
       icon: CheckCircle2,
       color: tokens.success,
-      buttonBg: '#059669',
+      buttonBg: brand.success,
       bgColor: tokens.successBg,
       borderColor: tokens.borderSubtle,
       defaultTitle: 'Saved Successfully',
@@ -130,7 +130,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
     warning: {
       icon: AlertTriangle,
       color: tokens.warning,
-      buttonBg: '#d97706',
+      buttonBg: brand.warning,
       bgColor: tokens.warningBg,
       borderColor: tokens.borderSubtle,
       defaultTitle: 'Action Needed',
@@ -138,7 +138,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
     error: {
       icon: XCircle,
       color: tokens.danger,
-      buttonBg: '#dc2626',
+      buttonBg: brand.danger,
       bgColor: tokens.dangerBg,
       borderColor: tokens.borderSubtle,
       defaultTitle: 'Notice',
@@ -263,7 +263,7 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
               style={{
                 padding: '7px 16px',
                 backgroundColor: actionLabel ? tokens.bgSurfaceSubtle : config.buttonBg,
-                color: actionLabel ? tokens.textPrimary : '#ffffff',
+                color: actionLabel ? tokens.textPrimary : tokens.onPrimary,
                 borderRadius: 6,
                 border: actionLabel ? `1px solid ${tokens.borderInput}` : 'none',
                 fontSize: '0.80rem',
@@ -312,7 +312,7 @@ const actionBtnStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 6,
   padding: '7px 14px',
-  color: '#ffffff',
+  color: 'var(--on-primary)',
   borderRadius: 6,
   border: 'none',
   fontSize: '0.80rem',

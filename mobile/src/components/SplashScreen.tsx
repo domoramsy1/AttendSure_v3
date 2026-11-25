@@ -1,9 +1,9 @@
 /**
- * AttendSure Mobile - Circular Radar & Spiral Loader Splash Screen
+ * AttendSure Mobile - Seamless Branded Splash Screen
  * File: mobile/src/components/SplashScreen.tsx
  */
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,96 +11,96 @@ import {
   Animated,
   Easing,
   Platform,
-  TouchableOpacity,
-  Modal,
-  TextInput,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { Ionicons } from '@expo/vector-icons';
-import * as NativeSplashScreen from 'expo-splash-screen';
-import { getServerBaseUrl, setServerBaseUrl } from '../services/configService';
+import * as ExpoSplashScreen from 'expo-splash-screen';
+import { getServerBaseUrl } from '../services/configService';
 import { AttendSureLogo } from '../branding/BrandLogos';
 import { useThemeMode } from '../context/ThemeContext';
-import {
-  cleanText,
-  isSafeUrl,
-  getFriendlyErrorMessage,
-} from '../constants/theme';
+import { QR_COLORS } from '../constants/theme';
 
 export interface SplashScreenProps {
   loading?: boolean;
   minDurationMs?: number;
+  maxDurationMs?: number;
   onFinish?: () => void;
 }
 
-const SPIRAL_DOTS = Array.from({ length: 8 }, (_, index) => index);
+interface SpiralDotSpec {
+  index: number;
+  angleDeg: string;
+  inputRange: number[];
+  outputScale: number[];
+  outputOpacity: number[];
+}
 
-const showNotice = (title: string, message: string) => {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.alert(`${title}: ${message}`);
-  } else {
-    Alert.alert(title, message);
-  }
-};
-
-// Cybersecurity: Reject dangerous protocols and validate strict http/https URL
-const isValidHttpServerUrl = (rawUrl: string): boolean => {
-  const trimmed = cleanText(rawUrl, 300);
-  if (!trimmed) return false;
-  const lower = trimmed.toLowerCase();
-  if (
-    lower.startsWith('javascript:') ||
-    lower.startsWith('data:') ||
-    lower.startsWith('file:') ||
-    lower.startsWith('vbscript:')
-  ) {
-    return false;
-  }
-  if (!isSafeUrl(trimmed)) return false;
-  try {
-    const parsed = new URL(trimmed);
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname);
-  } catch {
-    return false;
-  }
-};
+// Precomputed once at module load for smooth 60 FPS startup rendering
+const SPIRAL_DOT_SPECS: readonly SpiralDotSpec[] = Array.from({ length: 8 }, (_, i) => {
+  const phase = i / 8;
+  const sortedInputs = [0, phase, (phase + 0.5) % 1, 1].sort((a, b) => a - b);
+  const inputRange = Array.from(new Set(sortedInputs));
+  const outputScale = inputRange.map((val) => {
+    const dist = Math.abs(((val - phase + 1.5) % 1) - 0.5) * 2;
+    return 1 - dist * 0.68;
+  });
+  const outputOpacity = inputRange.map((val) => {
+    const dist = Math.abs(((val - phase + 1.5) % 1) - 0.5) * 2;
+    return 1 - dist * 0.8;
+  });
+  return {
+    index: i,
+    angleDeg: `${i * 45}deg`,
+    inputRange,
+    outputScale,
+    outputOpacity,
+  };
+});
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   loading = false,
-  minDurationMs = 1200,
+  minDurationMs = 950,
+  maxDurationMs = 3500,
   onFinish,
 }) => {
   const { palette, isDark } = useThemeMode();
   const [canExit, setCanExit] = useState(false);
+  const [forceExit, setForceExit] = useState(false);
   const [hidden, setHidden] = useState(false);
 
   const isMountedRef = useRef<boolean>(true);
-  const isHoldingSplashRef = useRef<boolean>(false);
+  const nativeSplashHiddenRef = useRef<boolean>(false);
+  const exitStartedRef = useRef<boolean>(false);
 
-  // Fade out animation
   const opacityAnim = useRef(new Animated.Value(1)).current;
-
-  // Radar wave & sweep animations
   const radarWave1 = useRef(new Animated.Value(0)).current;
   const radarWave2 = useRef(new Animated.Value(0)).current;
   const radarSweep = useRef(new Animated.Value(0)).current;
-
-  // Spiral loader master clock (0 -> 1 loop)
   const spiralClock = useRef(new Animated.Value(0)).current;
 
-  // Server Settings Modal State
-  const [showToolsModal, setShowToolsModal] = useState<boolean>(false);
-  const [customServerUrl, setCustomServerUrl] = useState<string>('');
-  const [savingUrl, setSavingUrl] = useState<boolean>(false);
+  const hideNativeSplashOnce = useCallback(() => {
+    if (Platform.OS === 'web' || nativeSplashHiddenRef.current) return;
+    nativeSplashHiddenRef.current = true;
+    try {
+      Promise.resolve(ExpoSplashScreen.hideAsync()).catch(() => {});
+    } catch {
+      // Safe no-op if native splash is already hidden
+    }
+  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
+    // Pre-warm fastest school server discovery in parallel during splash
+    getServerBaseUrl().catch(() => {});
+
+    // Fallback in case onLayout does not fire promptly
+    const nativeFallback = setTimeout(hideNativeSplashOnce, 120);
+
     return () => {
       isMountedRef.current = false;
+      clearTimeout(nativeFallback);
     };
-  }, []);
+  }, [hideNativeSplashOnce]);
 
   // Start continuous radar & spiral animations
   useEffect(() => {
@@ -156,33 +156,40 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     };
   }, [radarWave1, radarWave2, radarSweep, spiralClock]);
 
-  // Splash duration timer
+  // Min and max splash duration timers
   useEffect(() => {
-    if (Platform.OS !== 'web') {
-      NativeSplashScreen.hideAsync().catch(() => {});
-    }
-
-    const timer = setTimeout(() => {
+    const minTimer = setTimeout(() => {
       if (isMountedRef.current) {
         setCanExit(true);
       }
     }, minDurationMs);
 
-    return () => clearTimeout(timer);
-  }, [minDurationMs]);
+    const maxTimer = setTimeout(() => {
+      if (isMountedRef.current) {
+        setForceExit(true);
+      }
+    }, Math.max(minDurationMs, maxDurationMs));
 
-  // Exit transition once timer finishes
+    return () => {
+      clearTimeout(minTimer);
+      clearTimeout(maxTimer);
+    };
+  }, [minDurationMs, maxDurationMs]);
+
+  // Smooth fade-out once minimum duration completes and session hydration settles
   useEffect(() => {
-    if (!loading && canExit && !isHoldingSplashRef.current) {
+    if (exitStartedRef.current) return;
+    if ((!loading && canExit) || forceExit) {
+      exitStartedRef.current = true;
       const fadeAnim = Animated.timing(opacityAnim, {
         toValue: 0,
-        duration: 350,
+        duration: 260,
         useNativeDriver: true,
       });
       fadeAnim.start(({ finished }) => {
         if (finished && isMountedRef.current) {
           setHidden(true);
-          if (onFinish) onFinish();
+          onFinish?.();
         }
       });
       return () => {
@@ -190,63 +197,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
       };
     }
     return undefined;
-  }, [loading, canExit, onFinish, opacityAnim]);
-
-  const openTools = async () => {
-    isHoldingSplashRef.current = true;
-    try {
-      const activeUrl = await getServerBaseUrl();
-      if (isMountedRef.current) {
-        setCustomServerUrl(activeUrl);
-        setShowToolsModal(true);
-      }
-    } catch {
-      if (isMountedRef.current) {
-        setCustomServerUrl('');
-        setShowToolsModal(true);
-      }
-    }
-  };
-
-  const closeToolsAndContinue = () => {
-    setShowToolsModal(false);
-    isHoldingSplashRef.current = false;
-    if (onFinish) onFinish();
-  };
-
-  const saveServerAddress = async () => {
-    if (savingUrl) return;
-    const sanitized = cleanText(customServerUrl, 300);
-    if (!isValidHttpServerUrl(sanitized)) {
-      showNotice(
-        'Invalid Address',
-        'Please enter a valid web address starting with http:// or https://.'
-      );
-      return;
-    }
-
-    setSavingUrl(true);
-    try {
-      await setServerBaseUrl(sanitized);
-      showNotice('Saved', 'School server address updated.');
-      if (isMountedRef.current) {
-        closeToolsAndContinue();
-      }
-    } catch (err: unknown) {
-      showNotice(
-        'Invalid Address',
-        getFriendlyErrorMessage(err, 'Please check the school server address and try again.')
-      );
-    } finally {
-      if (isMountedRef.current) {
-        setSavingUrl(false);
-      }
-    }
-  };
+  }, [loading, canExit, forceExit, onFinish, opacityAnim]);
 
   if (hidden) return null;
-
-  const currentYear = new Date().getFullYear();
 
   const wave1Scale = radarWave1.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.85] });
   const wave1Opacity = radarWave1.interpolate({ inputRange: [0, 1], outputRange: [0.75, 0] });
@@ -258,6 +211,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 
   return (
     <Animated.View
+      onLayout={hideNativeSplashOnce}
       style={[
         styles.container,
         { backgroundColor: palette.background, opacity: opacityAnim },
@@ -266,26 +220,11 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
       <SafeAreaView style={styles.safeContainer} edges={['top', 'bottom']}>
         <StatusBar style={isDark ? 'light' : 'dark'} />
 
-        {/* Top-Left Server Settings Button */}
-        <View style={styles.topBar}>
-          <TouchableOpacity
-            style={styles.toolsButton}
-            onPress={openTools}
-            activeOpacity={0.8}
-            accessibilityLabel="Server settings"
-          >
-            <View style={[styles.toolsIconHalo, { backgroundColor: palette.primarySoft }]}>
-              <View style={[styles.toolsIconCircle, { backgroundColor: palette.buttonBg }]}>
-                <Ionicons name="settings-sharp" size={16} color={palette.onPrimary} />
-              </View>
-            </View>
-          </TouchableOpacity>
-        </View>
+        <View style={styles.spacer} />
 
         {/* Center Circular Radar Logo + Spiral Loader */}
         <View style={styles.centerSection}>
           <View style={styles.radarContainer}>
-            {/* Expanding Radar Wave 1 */}
             <Animated.View
               pointerEvents="none"
               style={[
@@ -298,7 +237,6 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
               ]}
             />
 
-            {/* Expanding Radar Wave 2 */}
             <Animated.View
               pointerEvents="none"
               style={[
@@ -311,7 +249,6 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
               ]}
             />
 
-            {/* Rotating Radar Sweep Ring */}
             <Animated.View
               pointerEvents="none"
               style={[
@@ -324,17 +261,17 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
               ]}
             />
 
-            {/* Solid Circular Logo Emblem */}
             <View
               style={[
                 styles.emblemCircle,
                 {
+                  backgroundColor: QR_COLORS.background,
                   borderColor: palette.primary,
                   shadowColor: palette.primary,
                 },
               ]}
             >
-              <AttendSureLogo size={56} style={{ borderWidth: 0 }} />
+              <AttendSureLogo size={64} style={{ borderWidth: 0 }} />
             </View>
           </View>
 
@@ -345,37 +282,26 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 
           {/* 8-Dot Spiral Loading Spinner */}
           <View style={styles.spiralContainer} accessibilityLabel="Loading">
-            {SPIRAL_DOTS.map((i) => {
-              const angleDeg = `${i * 45}deg`;
-              const phase = i / 8;
-
-              const inputRange = [0, phase, (phase + 0.5) % 1, 1].sort((a, b) => a - b);
-              const uniqueInput = Array.from(new Set(inputRange));
-              const outputScale = uniqueInput.map((val) => {
-                const dist = Math.abs(((val - phase + 1.5) % 1) - 0.5) * 2;
-                return 1 - dist * 0.68;
-              });
-              const outputOpacity = uniqueInput.map((val) => {
-                const dist = Math.abs(((val - phase + 1.5) % 1) - 0.5) * 2;
-                return 1 - dist * 0.8;
-              });
-
+            {SPIRAL_DOT_SPECS.map((spec) => {
               const dotScale = spiralClock.interpolate({
-                inputRange: uniqueInput,
-                outputRange: outputScale,
+                inputRange: spec.inputRange,
+                outputRange: spec.outputScale,
               });
               const dotOpacity = spiralClock.interpolate({
-                inputRange: uniqueInput,
-                outputRange: outputOpacity,
+                inputRange: spec.inputRange,
+                outputRange: spec.outputOpacity,
               });
 
               return (
-                <View key={i} style={[styles.spiralArm, { transform: [{ rotate: angleDeg }] }]}>
+                <View
+                  key={spec.index}
+                  style={[styles.spiralArm, { transform: [{ rotate: spec.angleDeg }] }]}
+                >
                   <Animated.View
                     style={[
                       styles.spiralDot,
                       {
-                        backgroundColor: palette.textPrimary,
+                        backgroundColor: palette.primary,
                         transform: [{ scale: dotScale }],
                         opacity: dotOpacity,
                       },
@@ -385,89 +311,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
               );
             })}
           </View>
-
-          <Text style={[styles.waitText, { color: palette.textMuted }]}>Please wait...</Text>
         </View>
 
-        {/* Bottom Footer */}
-        <View style={styles.footerSection}>
-          <Text style={[styles.signatureText, { color: palette.textMuted }]}>
-            &copy; {currentYear} AttendSure &bull;{' '}
-            <Text style={{ fontWeight: '800', color: palette.textPrimary }}>TechBlazer</Text>
-          </Text>
-        </View>
-
-        {/* Server Settings Modal */}
-        <Modal
-          visible={showToolsModal}
-          transparent
-          animationType="fade"
-          onRequestClose={closeToolsAndContinue}
-        >
-          <View style={styles.modalBackdrop}>
-            <View
-              style={[
-                styles.modalCard,
-                { backgroundColor: palette.surface, borderColor: palette.border },
-              ]}
-            >
-              <View style={styles.modalHeaderRow}>
-                <Ionicons name="server-outline" size={20} color={palette.primary} />
-                <Text style={[styles.modalTitle, { color: palette.textPrimary }]}>
-                  Server Settings
-                </Text>
-              </View>
-              <Text style={[styles.modalSubtitle, { color: palette.textSecondary }]}>
-                Enter your school server web address
-              </Text>
-
-              <TextInput
-                style={[
-                  styles.modalInput,
-                  {
-                    backgroundColor: palette.surfaceSubtle,
-                    borderColor: palette.borderStrong,
-                    color: palette.textPrimary,
-                  },
-                ]}
-                value={customServerUrl}
-                onChangeText={setCustomServerUrl}
-                placeholder="https://school.example.edu"
-                placeholderTextColor={palette.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                maxLength={300}
-                editable={!savingUrl}
-              />
-
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={[
-                    styles.modalCancelBtn,
-                    { borderColor: palette.borderStrong, backgroundColor: palette.surfaceSubtle },
-                  ]}
-                  onPress={closeToolsAndContinue}
-                  disabled={savingUrl}
-                >
-                  <Text style={[styles.modalCancelText, { color: palette.textPrimary }]}>
-                    Cancel
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.modalSaveBtn,
-                    { backgroundColor: palette.buttonBg, opacity: savingUrl ? 0.6 : 1 },
-                  ]}
-                  onPress={saveServerAddress}
-                  disabled={savingUrl}
-                >
-                  <Text style={[styles.modalSaveText, { color: palette.onPrimary }]}>Save</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
+        <View style={styles.spacer} />
       </SafeAreaView>
     </Animated.View>
   );
@@ -489,26 +335,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
   },
-  topBar: {
-    width: '100%',
-    alignItems: 'flex-start',
-  },
-  toolsButton: {
-    padding: 4,
-  },
-  toolsIconHalo: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toolsIconCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
+  spacer: {
+    height: 24,
   },
   centerSection: {
     alignItems: 'center',
@@ -541,7 +369,6 @@ const styles = StyleSheet.create({
     width: 92,
     height: 92,
     borderRadius: 46,
-    backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
@@ -562,9 +389,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   spiralContainer: {
-    width: 44,
-    height: 44,
-    marginTop: 24,
+    width: 42,
+    height: 42,
+    marginTop: 26,
     position: 'relative',
   },
   spiralArm: {
@@ -576,82 +403,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   spiralDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  waitText: {
-    fontSize: 12.5,
-    fontWeight: '600',
-    marginTop: 10,
-  },
-  footerSection: {
-    alignItems: 'center',
-    paddingBottom: 12,
-  },
-  signatureText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 340,
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-  },
-  modalHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  modalTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  modalSubtitle: {
-    fontSize: 12,
-    marginTop: 4,
-    marginBottom: 14,
-  },
-  modalInput: {
-    height: 44,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    fontSize: 13,
-    marginBottom: 16,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-  },
-  modalCancelBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  modalCancelText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  modalSaveBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
-  modalSaveText: {
-    fontSize: 13,
-    fontWeight: '700',
+    width: 7.5,
+    height: 7.5,
+    borderRadius: 3.75,
   },
 });
 

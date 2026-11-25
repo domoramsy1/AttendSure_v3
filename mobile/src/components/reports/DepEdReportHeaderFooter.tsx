@@ -134,17 +134,17 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   sealBox: {
-    width: 73,
-    height: 73,
-    minWidth: 73,
-    minHeight: 73,
+    width: 96,
+    height: 68,
+    minWidth: 96,
+    minHeight: 68,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },
   sealImage: {
-    width: 73,
-    height: 73,
+    width: '100%',
+    height: '100%',
   },
   headerCenter: {
     flex: 1,

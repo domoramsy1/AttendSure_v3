@@ -24,6 +24,7 @@ import type {
   MarginPresetKey,
 } from '../../types/pageSetup';
 import { useTheme } from '../../context/ThemeContext';
+import { PAPER_PRESET_COLORS, SEAL_COLORS } from '../../theme/tokens';
 
 interface PageSetupModalProps {
   isOpen: boolean;
@@ -34,12 +35,7 @@ interface PageSetupModalProps {
   reportTitle?: string;
 }
 
-const PRESET_COLORS = [
-  { label: 'Standard White', value: '#ffffff' },
-  { label: 'Soft Ivory', value: '#fdfbf7' },
-  { label: 'Clean Slate', value: '#f8fafc' },
-  { label: 'Document Cream', value: '#fffdf5' },
-];
+const PRESET_COLORS = PAPER_PRESET_COLORS;
 
 export const PageSetupModal: React.FC<PageSetupModalProps> = ({
   isOpen,
@@ -301,7 +297,7 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
     borderRadius: 6,
     border: 'none',
     backgroundColor: brand.buttonBg,
-    color: '#ffffff',
+    color: tokens.onPrimary,
     fontSize: '0.8rem',
     fontWeight: 700,
     cursor: 'pointer',
@@ -467,7 +463,7 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                     cursor: 'pointer',
                     fontSize: '0.74rem',
                     fontWeight: 600,
-                    color: '#0f172a',
+                    color: SEAL_COLORS.ink,
                   }}
                 >
                   <span
@@ -476,7 +472,7 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                       height: 12,
                       borderRadius: '50%',
                       backgroundColor: c.value,
-                      border: '1px solid #94a3b8',
+                      border: `1px solid ${SEAL_COLORS.mutedBorder}`,
                       display: 'inline-block',
                     }}
                   />
@@ -512,7 +508,7 @@ export const PageSetupModal: React.FC<PageSetupModalProps> = ({
                     fontWeight: 700,
                     border: draft.marginPreset === presetKey ? `1px solid ${brand.buttonBg}` : `1px solid ${tokens.borderInput}`,
                     backgroundColor: draft.marginPreset === presetKey ? brand.buttonBg : tokens.bgSurfaceSubtle,
-                    color: draft.marginPreset === presetKey ? '#ffffff' : tokens.textPrimary,
+                    color: draft.marginPreset === presetKey ? tokens.onPrimary : tokens.textPrimary,
                     cursor: 'pointer',
                   }}
                 >
@@ -650,7 +646,7 @@ const colorPickerInputStyle: React.CSSProperties = {
   height: 28,
   padding: 0,
   borderRadius: 6,
-  border: '1px solid #cbd5e1',
+  border: '1px solid var(--border-input)',
   cursor: 'pointer',
   backgroundColor: 'transparent',
 };

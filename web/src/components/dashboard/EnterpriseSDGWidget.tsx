@@ -1,5 +1,5 @@
 /**
- * AttendSure - UN SDG Impact, Dropout Early-Warning, Global Ed-Fi Export & Emergency Campus Roll-Call
+ * AttendSure - DepEd Campus Safety, SARDO Early-Warning, Division Data Export & Emergency Roll-Call
  * File: web/src/components/dashboard/EnterpriseSDGWidget.tsx
  */
 
@@ -10,7 +10,7 @@ import {
   Briefcase,
   CheckCircle2,
   Download,
-  Globe,
+  FileSpreadsheet,
   Leaf,
   Lock,
   RefreshCw,
@@ -24,18 +24,18 @@ import apiClient from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useApiResource } from '../../hooks/useApiResource';
 import { useTheme } from '../../context/ThemeContext';
-import { useCompliance } from '../../context/ComplianceContext';
+import { getCurrentUserFromStorage, isSchoolLeader } from '../../utils/permissions';
 
 interface EmergencyStudent {
   student_id: number;
   lrn: string;
   full_name: string;
   section: string;
-  parent_contact: string;
+  guardian_contact?: string;
 }
 
-interface EmergencyFaculty {
-  faculty_id: number;
+interface EmergencyTeacher {
+  teacher_id: number;
   employee_id: string;
   full_name: string;
   department: string;
@@ -45,18 +45,16 @@ interface EmergencyRollCallData {
   timestamp: string;
   total_people_on_campus: number;
   students_count: number;
-  faculty_count: number;
+  teachers_count: number;
   students: EmergencyStudent[];
-  faculty: EmergencyFaculty[];
+  teachers: EmergencyTeacher[];
 }
 
 export const EnterpriseSDGWidget: React.FC = () => {
-  const { mode, tokens, brand } = useTheme();
-  const { isGlobalMode, term } = useCompliance();
-  const userRole = (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase();
-  const isLeader = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
+  const { tokens, brand } = useTheme();
+  const isLeader = isSchoolLeader(getCurrentUserFromStorage());
 
-  const { data: sdgData, loading: loadingSdg, reload: reloadSdg } = useApiResource<any>(
+  const { data: impactData, loading: loadingImpact, reload: reloadImpact } = useApiResource<any>(
     API_ROUTES.reports.sdgImpact,
     null
   );
@@ -71,8 +69,8 @@ export const EnterpriseSDGWidget: React.FC = () => {
   const [rollCallData, setRollCallData] = useState<EmergencyRollCallData | null>(null);
   const [rollCallSearch, setRollCallSearch] = useState<string>('');
   const [safeStudentIds, setSafeStudentIds] = useState<Record<number, boolean>>({});
-  const [exportingEdFi, setExportingEdFi] = useState<boolean>(false);
-  const [anonymizeEdFi, setAnonymizeEdFi] = useState<boolean>(true);
+  const [exportingFormat, setExportingFormat] = useState<'json' | 'csv' | null>(null);
+  const [maskPersonalIds, setMaskPersonalIds] = useState<boolean>(true);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   const rollCallAbortRef = useRef<AbortController | null>(null);
@@ -87,13 +85,10 @@ export const EnterpriseSDGWidget: React.FC = () => {
     };
   }, []);
 
-  const loading = loadingSdg || loadingSardo;
-  const purpleAccent = mode === 'dark' ? '#c084fc' : '#7c3aed';
-  const purpleBg = mode === 'dark' ? 'rgba(192, 132, 252, 0.16)' : 'rgba(124, 58, 237, 0.12)';
-  const dangerSolidBg = mode === 'dark' ? '#dc2626' : brand.danger;
+  const loading = loadingImpact || loadingSardo;
 
   const handleRefresh = () => {
-    void reloadSdg(false, true);
+    void reloadImpact(false, true);
     void reloadSardo(false, true);
   };
 
@@ -141,40 +136,53 @@ export const EnterpriseSDGWidget: React.FC = () => {
     }));
   };
 
-  const handleExportEdFi = async () => {
+  const handleDivisionExport = async (exportFmt: 'json' | 'csv') => {
     exportAbortRef.current?.abort();
     const controller = new AbortController();
     exportAbortRef.current = controller;
 
-    setExportingEdFi(true);
+    setExportingFormat(exportFmt);
     setExportStatus(null);
     try {
-      const res = await apiClient.get(API_ROUTES.reports.edfiExport, {
+      const res = await apiClient.get(API_ROUTES.reports.divisionExport, {
         params: {
           days: 30,
-          anonymize: anonymizeEdFi ? 1 : 0,
+          anonymize: maskPersonalIds ? 1 : 0,
+          export_format: exportFmt,
         },
+        responseType: exportFmt === 'csv' ? 'text' : 'json',
         signal: controller.signal,
       });
       if (controller.signal.aborted) return;
 
-      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      const today = new Date().toISOString().slice(0, 10);
+      const modeTag = maskPersonalIds ? 'privacy_masked' : 'official';
+      const content =
+        exportFmt === 'csv'
+          ? String(res.data || '')
+          : JSON.stringify(res.data, null, 2);
+      const mime = exportFmt === 'csv' ? 'text/csv;charset=utf-8' : 'application/json';
+      const blob = new Blob([content], { type: mime });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      const modeTag = anonymizeEdFi ? 'gdpr_pseudonymized' : 'standard';
       a.href = url;
-      a.download = `attendsure_edfi_${modeTag}_${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `attendsure_deped_division_export_${modeTag}_${today}.${exportFmt}`;
       a.click();
       if (revokeTimerRef.current) clearTimeout(revokeTimerRef.current);
       revokeTimerRef.current = setTimeout(() => {
         URL.revokeObjectURL(url);
       }, 1000);
 
-      const eventCount = res.data?.recordCounts?.studentSchoolAttendanceEvents ?? 0;
+      const eventCount =
+        exportFmt === 'json' ? res.data?.recordCounts?.studentSchoolAttendanceEvents ?? 0 : null;
       setExportStatus(
-        `Exported Ed-Fi bundle (${eventCount} attendance events • ${
-          anonymizeEdFi ? 'GDPR Pseudonymized' : 'Standard Institutional'
-        }).`
+        exportFmt === 'csv'
+          ? `Downloaded DepEd Division Data Export (.CSV • ${
+              maskPersonalIds ? 'Privacy-Masked' : 'Full Official'
+            }).`
+          : `Downloaded DepEd Division Data Export (.JSON • ${eventCount} attendance events • ${
+              maskPersonalIds ? 'Privacy-Masked' : 'Full Official'
+            }).`
       );
     } catch (err: unknown) {
       const anyErr = err as { name?: string; code?: string };
@@ -187,11 +195,14 @@ export const EnterpriseSDGWidget: React.FC = () => {
         return;
       }
       setExportStatus(
-        extractApiError(err, 'Ed-Fi export requires School Leadership permissions (Admin / Principal).')
+        extractApiError(
+          err,
+          'DepEd Division Data Export requires School Leadership permissions (Admin / Principal / Department Head).'
+        )
       );
     } finally {
       if (!controller.signal.aborted) {
-        setExportingEdFi(false);
+        setExportingFormat(null);
       }
     }
   };
@@ -213,38 +224,30 @@ export const EnterpriseSDGWidget: React.FC = () => {
     return rollCallData.students.filter((s) => Boolean(safeStudentIds[s.student_id])).length;
   }, [rollCallData, safeStudentIds]);
 
-  const sdg4 = sdgData?.sdg_metrics?.sdg_4_quality_education;
-  const sdg5 = sdgData?.sdg_metrics?.sdg_5_and_10_equality_and_inclusion;
-  const sdg8 = sdgData?.sdg_metrics?.sdg_8_decent_work;
-  const sdg12 = sdgData?.sdg_metrics?.sdg_12_and_13_climate_and_sustainability;
-  const sdg16 = sdgData?.sdg_metrics?.sdg_16_accountable_institutions;
+  const eduMetrics = impactData?.sdg_metrics?.sdg_4_quality_education;
+  const inclusionMetrics = impactData?.sdg_metrics?.sdg_5_and_10_equality_and_inclusion;
+  const workloadMetrics = impactData?.sdg_metrics?.sdg_8_decent_work;
+  const paperlessMetrics = impactData?.sdg_metrics?.sdg_12_and_13_climate_and_sustainability;
+  const governanceMetrics = impactData?.sdg_metrics?.sdg_16_accountable_institutions;
   const atRiskStudents = Array.isArray(sardoData?.at_risk_students) ? sardoData.at_risk_students : [];
 
   return (
     <div style={{ ...containerStyle, backgroundColor: tokens.bgSurface, borderColor: tokens.borderSubtle }}>
-      {/* Top Action Header */}
       <div style={headerBarStyle}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ ...badgePillStyle, backgroundColor: tokens.primaryLight, color: brand.primary }}>
-              <Globe size={13} /> UN SDG IMPACT &amp; SAFETY COMMAND CENTER
+              <ShieldAlert size={13} /> DEPED CAMPUS SAFETY &amp; SARDO MONITORING
             </span>
             <span style={{ ...privacyPillStyle, backgroundColor: tokens.successLight, color: brand.success }}>
-              <ShieldCheck size={13} />{' '}
-              {term(
-                'Global Ed-Fi • GDPR Art. 25 • FERPA & COPPA Ready',
-                'DepEd PH • RA 10173 & GDPR Compliant • Pure Software'
-              )}
+              <ShieldCheck size={13} /> DepEd PH &bull; Data Privacy Act (RA 10173) &bull; Pure Software
             </span>
           </div>
           <h3 style={{ margin: '4px 0 0', fontSize: '1.08rem', fontWeight: 900, color: tokens.textPrimary }}>
-            {term(
-              'UN Sustainable Development Goals, Dropout Early-Warning & Emergency Roll-Call',
-              'UN SDG Impact, SARDO Early-Warning & Emergency Campus Roll-Call'
-            )}
+            School Operations, SARDO Early-Warning &amp; Emergency Campus Roll-Call
           </h3>
           <p style={{ margin: 0, fontSize: '0.78rem', color: tokens.textSecondary }}>
-            Pure-Software Campus Platform &bull; Live school data from USB QR Scans, Mobile Face &amp; GPS Check-Ins, and Parent Push Alerts
+            Live school data from Built-In Camera QR Scans, Teacher Phone Fingerprint / Biometric &amp; Campus GPS Time In / Time Out, and Campus Geofence Loafing Audits
           </p>
         </div>
 
@@ -259,8 +262,8 @@ export const EnterpriseSDGWidget: React.FC = () => {
               padding: '7px 13px',
               borderRadius: 8,
               border: 'none',
-              backgroundColor: dangerSolidBg,
-              color: '#ffffff',
+              backgroundColor: brand.danger,
+              color: tokens.onPrimary,
               fontSize: '0.76rem',
               fontWeight: 800,
               cursor: 'pointer',
@@ -272,7 +275,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
           {isLeader && (
             <>
               <label
-                title="GDPR Art. 25 Pseudonymization replaces student and staff personal identifiers with privacy-safe codes in Ed-Fi exports"
+                title="Replaces personal learner and teacher identifiers with privacy-safe codes under the Philippine Data Privacy Act (RA 10173)"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -289,17 +292,17 @@ export const EnterpriseSDGWidget: React.FC = () => {
               >
                 <input
                   type="checkbox"
-                  checked={anonymizeEdFi}
-                  onChange={(e) => setAnonymizeEdFi(e.target.checked)}
+                  checked={maskPersonalIds}
+                  onChange={(e) => setMaskPersonalIds(e.target.checked)}
                   style={{ accentColor: brand.success }}
                 />
-                <Lock size={12} color={brand.success} /> GDPR Anonymize
+                <Lock size={12} color={brand.success} /> Privacy Mask (RA 10173)
               </label>
 
               <button
                 type="button"
-                onClick={handleExportEdFi}
-                disabled={exportingEdFi}
+                onClick={() => void handleDivisionExport('json')}
+                disabled={exportingFormat !== null}
                 style={{
                   ...secondaryBtnStyle,
                   backgroundColor: tokens.primaryLight,
@@ -307,7 +310,27 @@ export const EnterpriseSDGWidget: React.FC = () => {
                   color: brand.primary,
                 }}
               >
-                <Download size={14} /> {exportingEdFi ? 'Exporting...' : 'Export Ed-Fi JSON'}
+                <Download size={14} />
+                {exportingFormat === 'json'
+                  ? 'Exporting JSON...'
+                  : 'DepEd Division Data Export (.JSON)'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleDivisionExport('csv')}
+                disabled={exportingFormat !== null}
+                style={{
+                  ...secondaryBtnStyle,
+                  backgroundColor: tokens.successLight,
+                  borderColor: brand.success,
+                  color: brand.success,
+                }}
+              >
+                <FileSpreadsheet size={14} />
+                {exportingFormat === 'csv'
+                  ? 'Exporting CSV...'
+                  : 'DepEd Division Data Export (.CSV)'}
               </button>
             </>
           )}
@@ -355,7 +378,6 @@ export const EnterpriseSDGWidget: React.FC = () => {
         </div>
       )}
 
-      {/* Emergency Campus Roll-Call Panel (SDG 11) */}
       {rollCallOpen && (
         <div
           style={{
@@ -371,7 +393,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <div>
               <div style={{ fontSize: '0.95rem', fontWeight: 800, color: brand.danger, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <ShieldAlert size={18} /> SDG 11 &bull; EMERGENCY EVACUATION CAMPUS ROLL-CALL
+                <ShieldAlert size={18} /> EMERGENCY EVACUATION CAMPUS ROLL-CALL
               </div>
               <div style={{ fontSize: '0.76rem', color: tokens.textSecondary }}>
                 {rollCallData
@@ -403,13 +425,13 @@ export const EnterpriseSDGWidget: React.FC = () => {
 
           {rollCallLoading ? (
             <div style={{ fontSize: '0.82rem', color: tokens.textSecondary, fontWeight: 700 }}>
-              Fetching active student and faculty headcount...
+              Fetching active learner and teacher headcount...
             </div>
           ) : rollCallData ? (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
                 <div style={{ backgroundColor: tokens.bgSurface, padding: 10, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
-                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: tokens.textMuted }}>STUDENTS ON CAMPUS</div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: tokens.textMuted }}>LEARNERS ON CAMPUS</div>
                   <div style={{ fontSize: '1.3rem', fontWeight: 800, color: tokens.textPrimary }}>{rollCallData.students_count}</div>
                 </div>
                 <div style={{ backgroundColor: tokens.bgSurface, padding: 10, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
@@ -423,8 +445,8 @@ export const EnterpriseSDGWidget: React.FC = () => {
                   </div>
                 </div>
                 <div style={{ backgroundColor: tokens.bgSurface, padding: 10, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
-                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: brand.primary }}>FACULTY ON CAMPUS</div>
-                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: brand.primary }}>{rollCallData.faculty_count}</div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 800, color: brand.primary }}>TEACHERS ON CAMPUS</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: brand.primary }}>{rollCallData.teachers_count ?? 0}</div>
                 </div>
               </div>
 
@@ -433,10 +455,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
                 maxLength={80}
                 value={rollCallSearch}
                 onChange={(e) => setRollCallSearch(e.target.value.replace(/[\u0000-\u001F\u007F<>]/g, ''))}
-                placeholder={term(
-                  'Filter student class list by name, Student ID, or class section...',
-                  'Filter student class list by name, LRN, or section...'
-                )}
+                placeholder="Filter learner class list by name, 12-digit LRN, or section..."
                 style={{
                   padding: '8px 12px',
                   borderRadius: 8,
@@ -450,7 +469,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
               <div style={{ maxHeight: 240, overflowY: 'auto', backgroundColor: tokens.bgSurface, borderRadius: 8, border: `1px solid ${tokens.borderSubtle}` }}>
                 {filteredRollCallStudents.length === 0 ? (
                   <div style={{ padding: 12, fontSize: '0.8rem', color: tokens.textMuted }}>
-                    No students currently checked in on campus today.
+                    No learners currently checked in on campus today.
                   </div>
                 ) : (
                   filteredRollCallStudents.map((st) => {
@@ -479,7 +498,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
                           <div>
                             <strong style={{ color: tokens.textPrimary }}>{st.full_name}</strong>
                             <span style={{ color: tokens.textSecondary, marginLeft: 8 }}>
-                              {term('ID', 'LRN')}: {st.lrn} &bull; {st.section}
+                              LRN: {st.lrn} &bull; {st.section}
                             </span>
                           </div>
                         </div>
@@ -502,24 +521,23 @@ export const EnterpriseSDGWidget: React.FC = () => {
         </div>
       )}
 
-      {/* 5 UN SDG Live Impact Cards */}
       <div style={cardsGridStyle}>
         <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: tokens.dangerLight, color: brand.danger }}>
-              SDG 4 &bull; QUALITY EDUCATION
+            <span style={{ ...pillTagStyle, backgroundColor: tokens.dangerLight, color: brand.danger }}>
+              CLASSROOM ATTENDANCE &amp; SARDO
             </span>
             <Award size={18} color={brand.danger} />
           </div>
           <div style={{ ...metricValueStyle, color: tokens.textPrimary }}>
-            {loading ? '...' : (sdg4?.verified_classroom_qr_scans ?? 0).toLocaleString()}
+            {loading ? '...' : (eduMetrics?.verified_classroom_qr_scans ?? 0).toLocaleString()}
           </div>
           <div style={{ ...metricSubStyle, color: tokens.textMuted }}>
-            Verified Signed Classroom QR Scans ({sdg4?.attendance_rate_today ?? 0}% Present Today)
+            Verified Signed Classroom QR Scans ({eduMetrics?.attendance_rate_today ?? 0}% Present Today)
           </div>
           <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
-            <span>{term('Critical Dropout Risk:', 'Critical SARDO Risk:')}</span>
+            <span>Critical SARDO Risk:</span>
             <strong style={{ color: brand.danger }}>{sardoData?.critical_sardo_count ?? 0} Learners</strong>
           </div>
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
@@ -530,129 +548,121 @@ export const EnterpriseSDGWidget: React.FC = () => {
 
         <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: tokens.infoLight, color: brand.secondary }}>
-              SDG 5 &amp; 10 &bull; EQUALITY &amp; INCLUSION
+            <span style={{ ...pillTagStyle, backgroundColor: tokens.infoLight, color: brand.secondary }}>
+              LEARNER INCLUSION &amp; 4Ps TRACKING
             </span>
             <Users size={18} color={brand.secondary} />
           </div>
           <div style={{ ...metricValueStyle, color: tokens.textPrimary }}>
             {loading
               ? '...'
-              : `${sdg5?.male_attendance_rate_today ?? 0}% M / ${sdg5?.female_attendance_rate_today ?? 0}% F`}
+              : `${inclusionMetrics?.male_attendance_rate_today ?? 0}% M / ${inclusionMetrics?.female_attendance_rate_today ?? 0}% F`}
           </div>
           <div style={{ ...metricSubStyle, color: tokens.textMuted }}>
-            Live Gender Parity Index: {sdg5?.gender_parity_index ?? '1.00'}
+            Live Gender Parity Index: {inclusionMetrics?.gender_parity_index ?? '1.00'}
           </div>
           <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Enrolled Male / Female:</span>
             <strong style={{ color: tokens.textPrimary }}>
-              {sdg5?.male_learners ?? 0} M &bull; {sdg5?.female_learners ?? 0} F
+              {inclusionMetrics?.male_learners ?? 0} M &bull; {inclusionMetrics?.female_learners ?? 0} F
             </strong>
           </div>
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
-            <span>{term('Social Aid / CCT Monitored:', '4Ps / CCT Beneficiaries:')}</span>
-            <strong style={{ color: brand.secondary }}>{sdg5?.cct_4ps_beneficiaries_monitored ?? 0} Learners</strong>
+            <span>4Ps / CCT Beneficiaries:</span>
+            <strong style={{ color: brand.secondary }}>{inclusionMetrics?.cct_4ps_beneficiaries_monitored ?? 0} Learners</strong>
           </div>
         </div>
 
         <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: tokens.warningLight, color: brand.warning }}>
-              SDG 8 &bull; DECENT WORK &amp; SAVINGS
+            <span style={{ ...pillTagStyle, backgroundColor: tokens.warningLight, color: brand.warning }}>
+              TEACHER WORKLOAD &amp; SAVINGS
             </span>
             <Briefcase size={18} color={brand.warning} />
           </div>
           <div style={{ ...metricValueStyle, color: tokens.textPrimary }}>
-            {loading ? '...' : `${sdg8?.faculty_hours_saved_monthly ?? 0} hrs/mo`}
+            {loading ? '...' : `${workloadMetrics?.teacher_hours_saved_monthly ?? 0} hrs/mo`}
           </div>
           <div style={{ ...metricSubStyle, color: tokens.textMuted }}>
-            Faculty Clerical Workload Saved Automatically
+            Teacher Clerical Time Saved on SF1/SF2/DTR
           </div>
           <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Pure-Software Savings:</span>
             <strong style={{ color: brand.success }}>
-              {isGlobalMode
-                ? `$${(sdg8?.zero_hardware_capex_saved_usd ?? 0).toLocaleString()} USD`
-                : `PHP ${((sdg8?.zero_hardware_capex_saved_usd ?? 0) * 56).toLocaleString()}`}
+              PHP {((workloadMetrics?.zero_hardware_capex_saved_usd ?? 0) * 56).toLocaleString()}
             </strong>
           </div>
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Active Class Schedules:</span>
-            <strong style={{ color: tokens.textPrimary }}>{sdg8?.active_schedules ?? 0} Periods</strong>
+            <strong style={{ color: tokens.textPrimary }}>{workloadMetrics?.active_schedules ?? 0} Periods</strong>
           </div>
         </div>
 
         <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: tokens.successLight, color: brand.success }}>
-              SDG 12 &amp; 13 &bull; CLIMATE ACTION
+            <span style={{ ...pillTagStyle, backgroundColor: tokens.successLight, color: brand.success }}>
+              PAPERLESS SCHOOL OPERATIONS
             </span>
             <Leaf size={18} color={brand.success} />
           </div>
           <div style={{ ...metricValueStyle, color: brand.success }}>
-            {loading ? '...' : `${sdg12?.estimated_co2_reduced_kg ?? 0} kg CO2e`}
+            {loading ? '...' : `${(paperlessMetrics?.paper_sheets_saved ?? 0).toLocaleString()} Sheets`}
           </div>
           <div style={{ ...metricSubStyle, color: tokens.textMuted }}>
-            Carbon Reduced &amp; {sdg12?.hardware_ewaste_avoided_kg ?? 0} kg Hardware Waste Avoided
+            Paper Class Lists Saved ({paperlessMetrics?.estimated_co2_reduced_kg ?? 0} kg CO2e reduced)
           </div>
           <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
-            <span>Paper Sheets Saved:</span>
-            <strong style={{ color: tokens.textPrimary }}>{(sdg12?.paper_sheets_saved ?? 0).toLocaleString()} Sheets</strong>
+            <span>Hardware Waste Avoided:</span>
+            <strong style={{ color: tokens.textPrimary }}>{paperlessMetrics?.hardware_ewaste_avoided_kg ?? 0} kg</strong>
           </div>
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Est. Annual Savings:</span>
             <strong style={{ color: brand.success }}>
-              {isGlobalMode
-                ? `$${(sdg12?.estimated_annual_savings_usd ?? 0).toLocaleString()} USD`
-                : `PHP ${(sdg12?.estimated_annual_savings_php ?? 0).toLocaleString()}`}
+              PHP {(paperlessMetrics?.estimated_annual_savings_php ?? 0).toLocaleString()}
             </strong>
           </div>
         </div>
 
         <div style={{ ...cardStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ ...sdgTagStyle, backgroundColor: purpleBg, color: purpleAccent }}>
-              SDG 16 &bull; ACCOUNTABLE SCHOOLS
+            <span style={{ ...pillTagStyle, backgroundColor: tokens.accentPurpleBg, color: brand.accentPurple }}>
+              CAMPUS GEOFENCE &amp; AUDIT TRAIL
             </span>
-            <Smartphone size={18} color={purpleAccent} />
+            <Smartphone size={18} color={brand.accentPurple} />
           </div>
           <div style={{ ...metricValueStyle, color: tokens.textPrimary }}>
             {loading
               ? '...'
-              : `${sdg16?.faculty_face_gps_verified_today ?? 0} / ${sdg16?.total_active_faculty ?? 0}`}
+              : `${governanceMetrics?.teachers_face_gps_verified_today ?? 0} / ${governanceMetrics?.total_active_teachers ?? 0}`}
           </div>
           <div style={{ ...metricSubStyle, color: tokens.textMuted }}>
-            Faculty Verified via On-Device Face &amp; Campus GPS Today
+            Teachers Verified via Phone Fingerprint / Biometric &amp; Campus GPS Today
           </div>
           <div style={{ ...dividerStyle, backgroundColor: tokens.borderSubtle }} />
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
-            <span>Parent Push Alerts:</span>
+            <span>Open Loafing &amp; Cutting Alerts:</span>
             <strong style={{ color: tokens.textPrimary }}>
-              {(sdg12?.mobile_push_alerts_delivered ?? 0).toLocaleString()} Delivered
+              {(governanceMetrics?.open_loafing_incidents ?? 0).toLocaleString()} Active
             </strong>
           </div>
           <div style={{ ...metaRowStyle, color: tokens.textSecondary }}>
             <span>Audit Logs (Month):</span>
             <strong style={{ color: tokens.textPrimary }}>
-              {(sdg16?.tamper_evident_audit_logs_this_month ?? 0).toLocaleString()} Records
+              {(governanceMetrics?.tamper_evident_audit_logs_this_month ?? 0).toLocaleString()} Records
             </strong>
           </div>
         </div>
       </div>
 
-      {/* Dropout Early-Warning Section */}
       <div style={{ ...sardoBoxStyle, backgroundColor: tokens.bgSurfaceSubtle, borderColor: tokens.borderSubtle }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <AlertTriangle size={17} color={atRiskStudents.length > 0 ? brand.danger : brand.success} />
             <span style={{ fontSize: '0.88rem', fontWeight: 800, color: tokens.textPrimary }}>
-              {term(
-                `At-Risk Dropout Early-Warning Class List (Last 30 Days: ${atRiskStudents.length} Flagged)`,
-                `SARDO Dropout Early-Warning Class List (Last 30 Days: ${atRiskStudents.length} Flagged)`
-              )}
+              SARDO Dropout Early-Warning Class List (Last 30 Days: {atRiskStudents.length} Flagged)
             </span>
           </div>
           {atRiskStudents.length > 0 && (
@@ -675,7 +685,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
           <div style={{ ...healthyBannerStyle, backgroundColor: tokens.successLight, color: brand.success }}>
             <CheckCircle2 size={16} color={brand.success} />
             <span>
-              Zero students are currently at risk of dropping out over the last 30 days. All class lists have healthy attendance.
+              Zero learners are currently flagged for SARDO dropout risk over the last 30 days. All class lists have healthy attendance.
             </span>
           </div>
         ) : (
@@ -684,12 +694,10 @@ export const EnterpriseSDGWidget: React.FC = () => {
               <table style={{ ...tableStyle, backgroundColor: tokens.bgSurface }}>
                 <thead>
                   <tr style={{ backgroundColor: tokens.bgSurfaceSubtle, textAlign: 'left' }}>
-                    <th style={{ ...thStyle, color: tokens.textMuted }}>
-                      {term('Student Name & ID', "Learner Name & LRN")}
-                    </th>
+                    <th style={{ ...thStyle, color: tokens.textMuted }}>Learner Name &amp; LRN</th>
                     <th style={{ ...thStyle, color: tokens.textMuted }}>Grade &amp; Section</th>
                     <th style={{ ...thStyle, color: tokens.textMuted }}>30-Day Attendance</th>
-                    <th style={{ ...thStyle, color: tokens.textMuted }}>Risk Score</th>
+                    <th style={{ ...thStyle, color: tokens.textMuted }}>SARDO Risk Score</th>
                     <th style={{ ...thStyle, color: tokens.textMuted }}>Recommended Intervention</th>
                   </tr>
                 </thead>
@@ -701,8 +709,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
                         <td style={tdStyle}>
                           <div style={{ fontWeight: 800, color: tokens.textPrimary }}>{st.full_name}</div>
                           <div style={{ fontSize: '0.7rem', color: tokens.textMuted }}>
-                            {term('ID', 'LRN')}: {st.lrn}{' '}
-                            {st.is_4ps_beneficiary ? term('• Social Aid Recipient', '• 4Ps Beneficiary') : ''}
+                            LRN: {st.lrn} {st.is_4ps_beneficiary ? '• 4Ps Beneficiary' : ''}
                           </div>
                         </td>
                         <td style={{ ...tdStyle, color: tokens.textPrimary }}>{st.section}</td>
@@ -725,7 +732,7 @@ export const EnterpriseSDGWidget: React.FC = () => {
                               border: `1px solid ${isCritical ? brand.danger : brand.warning}`,
                             }}
                           >
-                            {isCritical ? term('CRITICAL RISK', 'CRITICAL SARDO') : 'EARLY WARNING'} ({st.risk_score}%)
+                            {isCritical ? 'CRITICAL SARDO' : 'EARLY WARNING'} ({st.risk_score}%)
                           </span>
                         </td>
                         <td style={{ ...tdStyle, fontSize: '0.74rem', color: tokens.textSecondary }}>
@@ -798,7 +805,7 @@ const secondaryBtnStyle: React.CSSProperties = {
 
 const cardsGridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(215px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 230px), 1fr))',
   gap: 12,
 };
 
@@ -812,23 +819,23 @@ const cardStyle: React.CSSProperties = {
   gap: 6,
 };
 
-const sdgTagStyle: React.CSSProperties = {
+const pillTagStyle: React.CSSProperties = {
   fontSize: '0.64rem',
-  fontWeight: 800,
-  padding: '2px 7px',
-  borderRadius: 6,
-  letterSpacing: '0.3px',
+  fontWeight: 900,
+  padding: '3px 8px',
+  borderRadius: 999,
+  letterSpacing: '0.04em',
 };
 
 const metricValueStyle: React.CSSProperties = {
   fontSize: '1.35rem',
-  fontWeight: 800,
+  fontWeight: 900,
   marginTop: 4,
 };
 
 const metricSubStyle: React.CSSProperties = {
   fontSize: '0.72rem',
-  fontWeight: 600,
+  lineHeight: 1.35,
 };
 
 const dividerStyle: React.CSSProperties = {
@@ -839,7 +846,8 @@ const dividerStyle: React.CSSProperties = {
 const metaRowStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
-  fontSize: '0.73rem',
+  alignItems: 'center',
+  fontSize: '0.72rem',
 };
 
 const sardoBoxStyle: React.CSSProperties = {
@@ -849,19 +857,8 @@ const sardoBoxStyle: React.CSSProperties = {
   padding: 14,
 };
 
-const healthyBannerStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  marginTop: 8,
-  padding: '8px 12px',
-  borderRadius: 8,
-  fontSize: '0.78rem',
-  fontWeight: 700,
-};
-
 const toggleBtnStyle: React.CSSProperties = {
-  padding: '4px 10px',
+  padding: '5px 10px',
   borderRadius: 6,
   borderWidth: 1,
   borderStyle: 'solid',
@@ -870,23 +867,34 @@ const toggleBtnStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 
+const healthyBannerStyle: React.CSSProperties = {
+  marginTop: 10,
+  padding: '10px 12px',
+  borderRadius: 8,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  fontSize: '0.78rem',
+  fontWeight: 700,
+};
+
 const tableStyle: React.CSSProperties = {
   width: '100%',
   borderCollapse: 'collapse',
-  fontSize: '0.78rem',
   borderRadius: 8,
   overflow: 'hidden',
 };
 
 const thStyle: React.CSSProperties = {
   padding: '8px 10px',
-  fontSize: '0.7rem',
+  fontSize: '0.68rem',
   fontWeight: 800,
   textTransform: 'uppercase',
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: '8px 10px',
+  padding: '9px 10px',
+  fontSize: '0.78rem',
   verticalAlign: 'middle',
 };
 

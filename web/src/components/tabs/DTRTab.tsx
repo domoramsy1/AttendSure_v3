@@ -11,9 +11,21 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { ControlSwitch } from '../ui/ControlSwitch';
 import { ProfileAvatar } from '../common/ProfileAvatar';
+import { PageSetupModal } from '../common/PageSetupModal';
+import {
+  DEFAULT_PAGE_SETUP,
+  PAPER_SIZES,
+  type PageSetupConfig,
+} from '../../types/pageSetup';
 import { useAlert } from '../../context/AlertContext';
 import { useSchool } from '../../context/SchoolContext';
 import { useTheme } from '../../context/ThemeContext';
+import {
+  canResolveLoafing,
+  canViewTeacherDirectory,
+  getCurrentUserFromStorage,
+  isAdminOrPrincipal,
+} from '../../utils/permissions';
 import {
   Printer,
   Download,
@@ -28,9 +40,21 @@ import {
   CheckCircle2,
   AlertTriangle,
   Send,
+  SlidersHorizontal,
 } from 'lucide-react';
 
-interface FacultyDropdownItem {
+const DEFAULT_DTR_PAGE_SETUP: PageSetupConfig = {
+  ...DEFAULT_PAGE_SETUP,
+  layoutMode: 'pages',
+  orientation: 'portrait',
+  paperSize: 'folio',
+  pageColor: '#ffffff',
+  marginPreset: 'compact',
+  margins: { top: 0.25, right: 0.25, bottom: 0.25, left: 0.25 },
+  headerRepeat: 'first_page_only',
+};
+
+interface TeacherDropdownItem {
   id: number;
   employee_id: string;
   first_name: string;
@@ -64,8 +88,8 @@ interface DailyDTRRow {
 }
 
 interface DTRReportData {
-  faculty_id: number;
-  faculty_name: string;
+  teacher_id: number;
+  teacher_name: string;
   employee_id: string;
   department?: string;
   month: string;
@@ -99,11 +123,8 @@ export const DTRTab: React.FC = () => {
   const { school } = useSchool();
   const successBtnBg = mode === 'dark' ? '#059669' : brand.success;
 
-  const currentUserRole = useMemo(
-    () => (localStorage.getItem('attendsure_role') || 'FACULTY').toUpperCase(),
-    []
-  );
-  const isFaculty = currentUserRole === 'FACULTY';
+  const currentUser = useMemo(() => getCurrentUserFromStorage(), []);
+  const isTeacher = !canViewTeacherDirectory(currentUser);
 
   const nowDate = useMemo(() => new Date(), []);
   const yearOptions = useMemo(() => {
@@ -111,14 +132,14 @@ export const DTRTab: React.FC = () => {
     return [cur - 1, cur, cur + 1];
   }, [nowDate]);
 
-  const [facultyList, setFacultyList] = useState<FacultyDropdownItem[]>(() => {
-    if (isFaculty) return [];
-    const cached = peekApiCache<FacultyDropdownItem[]>(API_ROUTES.accounts.facultyDropdown);
+  const [teacherList, setTeacherList] = useState<TeacherDropdownItem[]>(() => {
+    if (isTeacher) return [];
+    const cached = peekApiCache<TeacherDropdownItem[]>(API_ROUTES.accounts.teachersDropdown);
     return Array.isArray(cached) ? cached : [];
   });
-  const [selectedFacultyId, setSelectedFacultyId] = useState<string>(() => {
-    if (isFaculty) return '';
-    const cached = peekApiCache<FacultyDropdownItem[]>(API_ROUTES.accounts.facultyDropdown);
+  const [selectedTeacherId, setSelectedTeacherId] = useState<string>(() => {
+    if (isTeacher) return '';
+    const cached = peekApiCache<TeacherDropdownItem[]>(API_ROUTES.accounts.teachersDropdown);
     return Array.isArray(cached) && cached.length > 0 ? String(cached[0].id) : '';
   });
   const [selectedMonth, setSelectedMonth] = useState<number>(nowDate.getMonth() + 1);
@@ -135,6 +156,15 @@ export const DTRTab: React.FC = () => {
   const [actionProcessing, setActionProcessing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [exportingPdf, setExportingPdf] = useState<boolean>(false);
+  const [pageConfig, setPageConfig] = useState<PageSetupConfig>(DEFAULT_DTR_PAGE_SETUP);
+  const [isPageSetupOpen, setIsPageSetupOpen] = useState<boolean>(false);
+
+  const dtrPaperDims = useMemo(() => {
+    const p = PAPER_SIZES[pageConfig.paperSize] || PAPER_SIZES.folio;
+    return pageConfig.orientation === 'landscape'
+      ? { widthIn: p.height, heightIn: p.width }
+      : { widthIn: p.width, heightIn: p.height };
+  }, [pageConfig.paperSize, pageConfig.orientation]);
 
   const [selectedAlertRow, setSelectedAlertRow] = useState<DailyDTRRow | null>(null);
   const [excuseRemarks, setExcuseRemarks] = useState<string>('');
@@ -144,25 +174,25 @@ export const DTRTab: React.FC = () => {
   const isInteracting = useRef<boolean>(false);
   isInteracting.current = Boolean(selectedAlertRow) || actionProcessing || hoursDirty;
 
-  const activeFaculty = useMemo(
-    () => facultyList.find((f) => String(f.id) === selectedFacultyId),
-    [facultyList, selectedFacultyId]
+  const activeTeacher = useMemo(
+    () => teacherList.find((t) => String(t.id) === selectedTeacherId),
+    [teacherList, selectedTeacherId]
   );
 
   useEffect(() => {
-    if (isFaculty) return;
+    if (isTeacher) return;
     const controller = new AbortController();
 
     apiClient
-      .get<FacultyDropdownItem[]>(API_ROUTES.accounts.facultyDropdown, {
+      .get<TeacherDropdownItem[]>(API_ROUTES.accounts.teachersDropdown, {
         signal: controller.signal,
       })
       .then((res) => {
         if (controller.signal.aborted) return;
         const list = Array.isArray(res.data) ? res.data : [];
-        setFacultyList(list);
+        setTeacherList(list);
         if (list.length > 0) {
-          setSelectedFacultyId((prev) => prev || String(list[0].id));
+          setSelectedTeacherId((prev) => prev || String(list[0].id));
         }
       })
       .catch((err: unknown) => {
@@ -170,17 +200,17 @@ export const DTRTab: React.FC = () => {
         if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
           return;
         }
-        setError(extractApiError(err, 'Could not load faculty list.'));
+        setError(extractApiError(err, 'Could not load teacher list.'));
       });
 
     return () => {
       controller.abort();
     };
-  }, [isFaculty]);
+  }, [isTeacher]);
 
   useEffect(() => {
     setHoursDirty(false);
-  }, [selectedFacultyId, selectedMonth, selectedYear]);
+  }, [selectedTeacherId, selectedMonth, selectedYear]);
 
   const normalizeDtrPayload = useCallback(
     (raw: any): DTRReportData => {
@@ -247,13 +277,13 @@ export const DTRTab: React.FC = () => {
         setSaturdayHours(satHrs);
       }
 
-      if (!isFaculty && raw.faculty_id && !selectedFacultyId) {
-        setSelectedFacultyId(String(raw.faculty_id));
+      if (!isTeacher && raw.teacher_id && !selectedTeacherId) {
+        setSelectedTeacherId(String(raw.teacher_id));
       }
 
       return {
-        faculty_id: Number(raw.faculty_id || 0),
-        faculty_name: String(raw.faculty_name || ''),
+        teacher_id: Number(raw.teacher_id || 0),
+        teacher_name: String(raw.teacher_name || ''),
         employee_id: String(raw.employee_id || ''),
         department: String(raw.department || ''),
         month: resolvedMonthName,
@@ -266,10 +296,10 @@ export const DTRTab: React.FC = () => {
         dtr_submitted: Boolean(raw.dtr_submitted ?? raw.is_submitted),
         dept_head_approved: Boolean(raw.dept_head_approved ?? raw.is_dept_head_approved),
         can_approve_dept: Boolean(
-          raw.can_approve_dept ?? ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(currentUserRole)
+          raw.can_approve_dept ?? canResolveLoafing(currentUser)
         ),
         can_clear_loafing: Boolean(
-          raw.can_clear_loafing ?? ['ADMIN', 'SUPERADMIN', 'PRINCIPAL'].includes(currentUserRole)
+          raw.can_clear_loafing ?? isAdminOrPrincipal(currentUser)
         ),
         rows: rows31,
         total_undertime_hours: Number(raw.total_undertime_hours || 0),
@@ -277,20 +307,20 @@ export const DTRTab: React.FC = () => {
         days_present: Number(raw.days_present || 0),
       };
     },
-    [selectedFacultyId, selectedMonth, selectedYear, currentUserRole, isFaculty]
+    [selectedTeacherId, selectedMonth, selectedYear, currentUser, isTeacher]
   );
 
   const fetchDTR = useCallback(
     async (silent = false, bypassCache = false) => {
-      if (!isFaculty && !selectedFacultyId && facultyList.length > 0) return;
+      if (!isTeacher && !selectedTeacherId && teacherList.length > 0) return;
 
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
       const endpoint =
-        !isFaculty && selectedFacultyId
-          ? `${API_ROUTES.reports.dtr}${selectedFacultyId}/`
+        !isTeacher && selectedTeacherId
+          ? `${API_ROUTES.reports.dtr}${selectedTeacherId}/`
           : API_ROUTES.reports.dtr;
 
       const baseParams = { month: selectedMonth, year: selectedYear };
@@ -332,7 +362,7 @@ export const DTRTab: React.FC = () => {
         }
       }
     },
-    [isFaculty, selectedFacultyId, selectedMonth, selectedYear, facultyList.length, normalizeDtrPayload]
+    [isTeacher, selectedTeacherId, selectedMonth, selectedYear, teacherList.length, normalizeDtrPayload]
   );
 
   useEffect(() => {
@@ -362,9 +392,9 @@ export const DTRTab: React.FC = () => {
       onConfirm: async () => {
         setActionProcessing(true);
         try {
-          await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.faculty_id}/`, {
+          await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.teacher_id}/`, {
             action: 'SUBMIT_DTR',
-            faculty_id: dtrData.faculty_id,
+            teacher_id: dtrData.teacher_id,
             month: dtrData.month_number,
             year: dtrData.year,
             regular_days_hours: sanitizeInput(regularHours, 100),
@@ -395,15 +425,15 @@ export const DTRTab: React.FC = () => {
 
     showConfirm({
       title: 'Approve Official DTR',
-      message: `Approve the Daily Time Record for ${dtrData.faculty_name} (${dtrData.month} ${dtrData.year})? This removes the DRAFT watermark and unlocks printing.`,
+      message: `Approve the Daily Time Record for ${dtrData.teacher_name} (${dtrData.month} ${dtrData.year})? This removes the DRAFT watermark and unlocks printing.`,
       confirmLabel: 'Approve DTR',
       isDestructive: false,
       onConfirm: async () => {
         setActionProcessing(true);
         try {
-          await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.faculty_id}/`, {
+          await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.teacher_id}/`, {
             action: 'APPROVE_DEPT_HEAD',
-            faculty_id: dtrData.faculty_id,
+            teacher_id: dtrData.teacher_id,
             month: dtrData.month_number,
             year: dtrData.year,
             regular_days_hours: sanitizeInput(regularHours, 100),
@@ -412,7 +442,7 @@ export const DTRTab: React.FC = () => {
           setHoursDirty(false);
           showAlert({
             title: 'DTR Approved',
-            message: `Official DTR for ${dtrData.faculty_name} is now unlocked for printing.`,
+            message: `Official DTR for ${dtrData.teacher_name} is now unlocked for printing.`,
             type: 'success',
           });
           void fetchDTR(true, true);
@@ -435,7 +465,7 @@ export const DTRTab: React.FC = () => {
     if (!cleanReason) {
       showAlert({
         title: 'Reason Required',
-        message: 'Please enter official remarks explaining why this off-campus alert is excused.',
+        message: 'Please enter official remarks explaining why this teacher loafing alert is excused.',
         type: 'warning',
       });
       return;
@@ -443,9 +473,9 @@ export const DTRTab: React.FC = () => {
 
     setActionProcessing(true);
     try {
-      await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.faculty_id}/`, {
+      await apiClient.post(`${API_ROUTES.reports.dtr}${dtrData.teacher_id}/`, {
         action: 'EXCUSE_LOAFING',
-        faculty_id: dtrData.faculty_id,
+        teacher_id: dtrData.teacher_id,
         date_str: selectedAlertRow.date_str,
         month: dtrData.month_number,
         year: dtrData.year,
@@ -453,7 +483,7 @@ export const DTRTab: React.FC = () => {
       });
       showAlert({
         title: 'Alert Excused',
-        message: `Off-campus alert on ${selectedAlertRow.date_str} has been marked as excused.`,
+        message: `Teacher loafing alert on ${selectedAlertRow.date_str} has been marked as excused.`,
         type: 'success',
       });
       setSelectedAlertRow(null);
@@ -483,14 +513,16 @@ export const DTRTab: React.FC = () => {
 
     setExportingPdf(true);
     try {
-      const safeName = (dtrData.faculty_name || 'Faculty').replace(/[^a-zA-Z0-9]/g, '_');
+      const safeName = (dtrData.teacher_name || 'Teacher').replace(/[^a-zA-Z0-9]/g, '_');
       await exportElementToLocalPdf({
         element: printAreaRef.current,
         filename: `CSC_Form_48_${safeName}_${dtrData.month}_${dtrData.year}.pdf`,
-        pageWidthInches: 8.5,
-        pageHeightInches: 14.0,
-        orientation: 'portrait',
-        marginsInches: [0.15, 0.15, 0.15, 0.15],
+        pageWidthInches: dtrPaperDims.widthIn,
+        pageHeightInches: dtrPaperDims.heightIn,
+        orientation: pageConfig.orientation,
+        pageColor: pageConfig.pageColor,
+        pageless: pageConfig.layoutMode === 'pageless',
+        marginsInches: [0, 0, 0, 0],
       });
     } catch {
       window.print();
@@ -538,7 +570,7 @@ export const DTRTab: React.FC = () => {
 
           <div style={{ marginTop: 8, borderBottom: '1.2px solid #000', paddingBottom: 1, minHeight: 18 }}>
             <span style={{ fontSize: '9.2pt', fontWeight: 800, textTransform: 'uppercase' }}>
-              {dtrData.faculty_name}
+              {dtrData.teacher_name}
             </span>
           </div>
           <div style={{ fontSize: '6.5pt', fontStyle: 'italic', marginTop: 1 }}>(Name)</div>
@@ -599,7 +631,7 @@ export const DTRTab: React.FC = () => {
                     {row.is_loafing && (
                       <span
                         onClick={() => dtrData.can_clear_loafing && setSelectedAlertRow(row)}
-                        title={hasOpenAlert ? 'Off-campus alert. Click to review.' : 'Excused by Principal'}
+                        title={hasOpenAlert ? 'Teacher loafing alert. Click to review.' : 'Excused by Principal'}
                         style={{
                           marginLeft: 2,
                           fontSize: '5.2pt',
@@ -651,7 +683,7 @@ export const DTRTab: React.FC = () => {
         <div style={{ marginTop: 16, textAlign: 'center' }}>
           <div style={{ borderBottom: '1px solid #000', width: '82%', margin: '0 auto' }} />
           <div style={{ fontSize: '5.6pt', fontStyle: 'italic', marginTop: 1 }}>
-            (Signature of Faculty / Employee)
+            (Signature of Teacher / Employee)
           </div>
         </div>
 
@@ -690,7 +722,7 @@ export const DTRTab: React.FC = () => {
           Attention is invited to paragraph 3, Civil Service Rule XV, Executive Order No. 5, series of 1909, which reads as follows:
         </p>
         <blockquote style={{ margin: '0 0 0 8px', borderLeft: '1.5px solid #000', paddingLeft: 6, fontStyle: 'italic' }}>
-          &ldquo;Each chief of a Bureau or Office shall require a daily record of attendance of all the officers and employees under him entitled to leave of absence or vacation (including faculty) to be kept on the proper form and also a systematic office record showing for each day all absences from duty from any cause whatever. At the beginning of each month he shall report to the Commissioner on the proper form of all absences from any cause whatever, including the exact amount of undertime of each person for each day. Falsification of time records will render the offending officer or employee liable to summary removal from the service and criminal prosecution.&rdquo;
+          &ldquo;Each chief of a Bureau or Office shall require a daily record of attendance of all the officers and employees under him entitled to leave of absence or vacation (including teachers) to be kept on the proper form and also a systematic office record showing for each day all absences from duty from any cause whatever. At the beginning of each month he shall report to the Commissioner on the proper form of all absences from any cause whatever, including the exact amount of undertime of each person for each day. Falsification of time records will render the offending officer or employee liable to summary removal from the service and criminal prosecution.&rdquo;
         </blockquote>
         <p style={{ margin: '4px 0 0 0', fontSize: '5.7pt' }}>
           <strong>(NOTE:</strong> A record made from memory at sometime subsequent to the occurrence of an event is not reliable. Non-observance of office hours deprives the employee of leave privileges although he may have rendered overtime service. Where service is rendered outside of the Office for the whole morning or afternoon, notation to that effect should be made clearly.)
@@ -715,13 +747,13 @@ export const DTRTab: React.FC = () => {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <ProfileAvatar
-              photoUrl={activeFaculty?.photo_url}
-              name={activeFaculty?.full_name || dtrData?.faculty_name || 'Faculty'}
+              photoUrl={activeTeacher?.photo_url}
+              name={activeTeacher?.full_name || dtrData?.teacher_name || 'Teacher'}
               size={36}
               iconSize={18}
             />
 
-            {isFaculty ? (
+            {isTeacher ? (
               <div
                 style={{
                   ...ui.subtleBox,
@@ -737,20 +769,20 @@ export const DTRTab: React.FC = () => {
               >
                 <Lock size={13} color={tokens.textMuted} />
                 <span>
-                  {dtrData?.faculty_name || 'My Time Record'}
+                  {dtrData?.teacher_name || 'My Time Record'}
                   {dtrData?.employee_id ? ` (${dtrData.employee_id})` : ''}
                 </span>
               </div>
             ) : (
               <select
-                aria-label="Select faculty member"
-                value={selectedFacultyId}
-                onChange={(e) => setSelectedFacultyId(e.target.value)}
+                aria-label="Select teacher"
+                value={selectedTeacherId}
+                onChange={(e) => setSelectedTeacherId(e.target.value)}
                 style={{ ...ui.input, width: 'auto', minWidth: 220, fontWeight: 700 }}
               >
-                {facultyList.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.full_name} ({f.employee_id})
+                {teacherList.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.full_name} ({t.employee_id})
                   </option>
                 ))}
               </select>
@@ -811,7 +843,7 @@ export const DTRTab: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {isFaculty && dtrData && !dtrData.dtr_submitted && !dtrData.dept_head_approved && (
+          {isTeacher && dtrData && !dtrData.dtr_submitted && !dtrData.dept_head_approved && (
             <Button
               variant="primary"
               size="md"
@@ -837,6 +869,17 @@ export const DTRTab: React.FC = () => {
               <span>Approve DTR</span>
             </Button>
           )}
+
+          <Button
+            variant="secondary"
+            size="md"
+            type="button"
+            onClick={() => setIsPageSetupOpen(true)}
+            title="Configure paper size, orientation, margins, and paper color"
+          >
+            <SlidersHorizontal size={14} />
+            <span>Page Setup</span>
+          </Button>
 
           <Button
             variant="secondary"
@@ -950,7 +993,7 @@ export const DTRTab: React.FC = () => {
             <input
               type="text"
               maxLength={100}
-              disabled={Boolean(dtrData?.dept_head_approved && isFaculty)}
+              disabled={Boolean(dtrData?.dept_head_approved && isTeacher)}
               value={regularHours}
               placeholder="e.g. 7:30 AM - 12:00 NN, 1:00 - 4:30 PM"
               onChange={(e) => {
@@ -966,7 +1009,7 @@ export const DTRTab: React.FC = () => {
             <input
               type="text"
               maxLength={100}
-              disabled={Boolean(dtrData?.dept_head_approved && isFaculty)}
+              disabled={Boolean(dtrData?.dept_head_approved && isTeacher)}
               value={saturdayHours}
               placeholder="e.g. As Required / None"
               onChange={(e) => {
@@ -1008,7 +1051,20 @@ export const DTRTab: React.FC = () => {
         ) : dtrData ? (
           <div ref={printAreaRef} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             {(viewSide === 'BOTH' || viewSide === 'FRONT') && (
-              <div id="csc-form-48-front" className="csc-print-page" style={printableSheetContainer}>
+              <div
+                id="csc-form-48-front"
+                className="csc-print-page"
+                data-print-page="true"
+                style={{
+                  ...printableSheetContainer,
+                  width: `${dtrPaperDims.widthIn}in`,
+                  backgroundColor: pageConfig.pageColor || '#ffffff',
+                  paddingTop: `${pageConfig.margins.top}in`,
+                  paddingRight: `${pageConfig.margins.right}in`,
+                  paddingBottom: `${pageConfig.margins.bottom}in`,
+                  paddingLeft: `${pageConfig.margins.left}in`,
+                }}
+              >
                 {renderDTRCopy()}
                 <div style={perforationLine} />
                 {renderDTRCopy()}
@@ -1016,7 +1072,20 @@ export const DTRTab: React.FC = () => {
             )}
 
             {(viewSide === 'BOTH' || viewSide === 'BACK') && (
-              <div id="csc-form-48-back" className="csc-print-page" style={printableSheetContainer}>
+              <div
+                id="csc-form-48-back"
+                className="csc-print-page"
+                data-print-page="true"
+                style={{
+                  ...printableSheetContainer,
+                  width: `${dtrPaperDims.widthIn}in`,
+                  backgroundColor: pageConfig.pageColor || '#ffffff',
+                  paddingTop: `${pageConfig.margins.top}in`,
+                  paddingRight: `${pageConfig.margins.right}in`,
+                  paddingBottom: `${pageConfig.margins.bottom}in`,
+                  paddingLeft: `${pageConfig.margins.left}in`,
+                }}
+              >
                 {renderInstructionsCopy()}
                 <div style={perforationLine} />
                 {renderInstructionsCopy()}
@@ -1030,7 +1099,7 @@ export const DTRTab: React.FC = () => {
         <Modal
           isOpen={Boolean(selectedAlertRow)}
           onClose={() => setSelectedAlertRow(null)}
-          title="Principal Review: Off-Campus Boundary Alert"
+          title="Principal Review: Teacher Loafing Alert"
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div
@@ -1046,13 +1115,13 @@ export const DTRTab: React.FC = () => {
             >
               <AlertTriangle size={22} color={brand.danger} style={{ flexShrink: 0 }} />
               <div style={{ fontSize: '0.78rem', lineHeight: 1.4 }}>
-                An unexcused off-campus alert was recorded for <strong>{dtrData?.faculty_name}</strong> on{' '}
+                An unexcused teacher loafing alert was recorded for <strong>{dtrData?.teacher_name}</strong> on{' '}
                 <strong>{selectedAlertRow.date_str}</strong>.
               </div>
             </div>
 
             <div style={{ fontSize: '0.80rem', color: tokens.textPrimary }}>
-              <strong>Boundary Alert Note:</strong> {selectedAlertRow.loafing_remarks || 'No note recorded'}
+              <strong>Loafing Alert Note:</strong> {selectedAlertRow.loafing_remarks || 'No note recorded'}
             </div>
 
             <div>
@@ -1087,14 +1156,23 @@ export const DTRTab: React.FC = () => {
         </Modal>
       )}
 
+      <PageSetupModal
+        isOpen={isPageSetupOpen}
+        onClose={() => setIsPageSetupOpen(false)}
+        currentConfig={pageConfig}
+        onLiveChange={setPageConfig}
+        onApply={(cfg) => setPageConfig(cfg)}
+        reportTitle="CSC Form 48 (Daily Time Record)"
+      />
+
       <style>{`
         @media print {
           @page {
-            size: 8.5in 13in;
-            margin: 0.2in !important;
+            size: ${dtrPaperDims.widthIn}in ${dtrPaperDims.heightIn}in;
+            margin: 0 !important;
           }
           html, body, #root {
-            background: #ffffff !important;
+            background: ${pageConfig.pageColor || '#ffffff'} !important;
             margin: 0 !important;
             padding: 0 !important;
           }
@@ -1108,12 +1186,15 @@ export const DTRTab: React.FC = () => {
             position: relative;
             left: 0;
             top: 0;
-            width: 8.5in !important;
-            min-height: 12.5in !important;
+            width: 100% !important;
+            min-height: 0 !important;
             margin: 0 auto !important;
-            padding: 0.25in !important;
             box-shadow: none !important;
             border: none !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
+          .csc-print-page:not(:last-child) {
             page-break-after: always !important;
             break-after: page !important;
           }

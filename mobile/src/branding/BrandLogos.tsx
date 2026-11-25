@@ -8,8 +8,8 @@ import { View, Text, StyleSheet, type StyleProp, type ViewStyle } from 'react-na
 import { Image } from 'expo-image';
 import { useThemeMode } from '../context/ThemeContext';
 
-export const ATTENDSURE_LOGO_ASSET = require('../../assets/AttendSureLogo.svg');
-export const TECHBLAZER_LOGO_ASSET = require('../../assets/techblazer.svg');
+// Crisp local PNG asset (renders immediately across Android, iOS, and Web without SVG filter lag)
+export const ATTENDSURE_LOGO_ASSET = require('../../assets/AttendSureLogo.png');
 
 export interface AttendSureLogoProps {
   size?: number;
@@ -35,7 +35,7 @@ export const AttendSureLogo: React.FC<AttendSureLogoProps> = ({ size = 48, style
     >
       <Image
         source={ATTENDSURE_LOGO_ASSET}
-        style={{ width: size, height: size }}
+        style={{ width: Math.round(size * 0.84), height: Math.round(size * 0.84) }}
         contentFit="contain"
         priority="high"
         cachePolicy="memory-disk"
@@ -50,40 +50,12 @@ export interface TechBlazerLogoProps {
   style?: StyleProp<ViewStyle>;
 }
 
-export const TechBlazerLogo: React.FC<TechBlazerLogoProps> = ({
-  width = 76,
-  height = 16,
-  style,
-}) => {
+export const TechBlazerLogo: React.FC<TechBlazerLogoProps> = ({ style }) => {
   const { palette } = useThemeMode();
 
-  if (palette.isDark) {
-    return (
-      <View
-        style={[
-          styles.darkLogoPill,
-          { borderColor: palette.border },
-          style,
-        ]}
-      >
-        <Image
-          source={TECHBLAZER_LOGO_ASSET}
-          style={{ width, height }}
-          contentFit="contain"
-          cachePolicy="memory-disk"
-        />
-      </View>
-    );
-  }
-
   return (
-    <View style={style}>
-      <Image
-        source={TECHBLAZER_LOGO_ASSET}
-        style={{ width, height }}
-        contentFit="contain"
-        cachePolicy="memory-disk"
-      />
+    <View style={[styles.wordmarkWrap, style]}>
+      <Text style={[styles.wordmarkText, { color: palette.textPrimary }]}>TechBlazer</Text>
     </View>
   );
 };
@@ -118,14 +90,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  darkLogoPill: {
-    backgroundColor: '#ffffff',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderWidth: 1,
+  wordmarkWrap: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  wordmarkText: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   signatureContainer: {
     alignItems: 'center',

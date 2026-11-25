@@ -1,13 +1,13 @@
-# D:\AttendSure_V3\backend\apps\school\views.py
 from django.core.cache import cache
 from django.db import transaction
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.models import TeacherProfile
 from common.audit import AuditedModelViewSet, record_audit_log
-from common.permissions import IsLeadershipOrReadOnly, is_school_leader
-from .models import GradeLevel, Room, SchoolHoliday, SchoolSettings, SchoolYear, Subject
+from common.permissions import IsSystemAdminOrReadOnly, IsTeacherOrLeader, is_system_admin
+from .models import GradeLevel, Room, SchoolHoliday, SchoolSettings, SchoolYear, Section, Subject
 from .selectors import (
     SCHOOL_META_CACHE_KEY,
     get_class_periods_for_user,
@@ -24,6 +24,12 @@ from .serializers import (
     SchoolYearSerializer,
     SectionSerializer,
     SubjectSerializer,
+)
+from .services import (
+    check_class_period_conflicts,
+    check_section_conflicts,
+    normalize_day_of_week,
+    parse_schedule_time,
 )
 
 WEEKEND_REST_CACHE_KEY = "school:calendar:weekend_rest_enabled"
@@ -47,8 +53,9 @@ class PublicSchoolBrandingView(APIView):
             "division_ref",
             "active_school_year",
             "campus_boundary",
-            "principal_faculty",
-            "principal_faculty__position_ref",
+            "principal_teacher",
+            "principal_teacher__user",
+            "principal_teacher__position",
         ).first()
         meta = get_school_metadata(request, school=school)
         sid = str(meta.get("school_id") or "").strip()
@@ -58,7 +65,6 @@ class PublicSchoolBrandingView(APIView):
                 "school_id": sid,
                 "deped_school_id": sid,
                 "school_name": meta.get("school_name", ""),
-                "short_name": "",
                 "region": meta.get("region", ""),
                 "division": meta.get("division", ""),
                 "district": meta.get("district", ""),
@@ -67,6 +73,7 @@ class PublicSchoolBrandingView(APIView):
                 "email": meta.get("school_email", ""),
                 "principal_name": meta.get("principal_name", ""),
                 "principal_title": meta.get("principal_title", ""),
+                "school_year": meta.get("school_year", ""),
                 "academic_year": meta.get("academic_year", ""),
                 "school_logo": meta.get("school_logo"),
                 "left_logo": meta.get("left_logo"),
@@ -77,7 +84,7 @@ class PublicSchoolBrandingView(APIView):
 
 
 class SchoolSettingsView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
     def get(self, request):
         if _wants_fresh_cache(request):
@@ -87,9 +94,10 @@ class SchoolSettingsView(APIView):
             "division_ref",
             "active_school_year",
             "campus_boundary",
-            "principal_faculty",
-            "principal_faculty__position_ref",
-            "principal_faculty__department_ref",
+            "principal_teacher",
+            "principal_teacher__user",
+            "principal_teacher__position",
+            "principal_teacher__department",
         ).first()
         if not school:
             meta = get_school_metadata(request)
@@ -109,7 +117,11 @@ class SchoolSettingsView(APIView):
     @transaction.atomic
     def put(self, request):
         school = SchoolSettings.objects.select_related(
-            "division_ref", "active_school_year", "campus_boundary", "principal_faculty"
+            "division_ref",
+            "active_school_year",
+            "campus_boundary",
+            "principal_teacher",
+            "principal_teacher__user",
         ).first()
         raw_payload = (
             {k: request.data.get(k) for k in request.data.keys()}
@@ -133,7 +145,7 @@ class SchoolSettingsView(APIView):
 
         serializer.is_valid(raise_exception=True)
         saved = migrate_inline_logos_to_files(serializer.save())
-        cache.delete_many([SCHOOL_META_CACHE_KEY, "reports:system_status"])
+        cache.delete_many([SCHOOL_META_CACHE_KEY, "reports:system_status", "campus:active_boundary"])
 
         record_audit_log(
             request=request,
@@ -174,7 +186,7 @@ class SchoolSettingsView(APIView):
 class SchoolHolidayViewSet(AuditedModelViewSet):
     queryset = SchoolHoliday.objects.order_by("holiday_date")
     serializer_class = SchoolHolidaySerializer
-    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
     def _get_weekend_rest(self) -> bool:
         cached = cache.get(WEEKEND_REST_CACHE_KEY)
@@ -199,9 +211,9 @@ class SchoolHolidayViewSet(AuditedModelViewSet):
         return super().partial_update(request, *args, **kwargs)
 
     def partial_update_settings(self, request):
-        if not is_school_leader(request.user):
+        if not is_system_admin(request.user):
             return Response(
-                {"error": "School leadership access required."},
+                {"error": "System administrator access required."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         val = request.data.get("weekend_rest_enabled")
@@ -226,32 +238,32 @@ class SchoolHolidayViewSet(AuditedModelViewSet):
 
 
 class RoomViewSet(AuditedModelViewSet):
-    queryset = Room.objects.select_related("building_ref").order_by("name")
+    queryset = Room.objects.select_related("building").order_by("name")
     serializer_class = RoomSerializer
-    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
 
 class GradeLevelViewSet(AuditedModelViewSet):
-    queryset = GradeLevel.objects.order_by("level_order")
+    queryset = GradeLevel.objects.order_by("level_number")
     serializer_class = GradeLevelSerializer
-    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
 
 class SchoolYearViewSet(AuditedModelViewSet):
     queryset = SchoolYear.objects.order_by("-start_date")
     serializer_class = SchoolYearSerializer
-    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
 
 class SubjectViewSet(AuditedModelViewSet):
     queryset = Subject.objects.select_related("grade_level").order_by("code")
     serializer_class = SubjectSerializer
-    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
 
 class SectionViewSet(AuditedModelViewSet):
     serializer_class = SectionSerializer
-    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
     def get_queryset(self):
         include_inactive = (
@@ -260,14 +272,122 @@ class SectionViewSet(AuditedModelViewSet):
         )
         return get_sections_for_user(self.request.user, include_inactive=include_inactive)
 
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        extra = {"allow_multiple_advisories": True} if getattr(serializer, "_allow_multiple_advisories_used", False) else None
+        record_audit_log(
+            request=self.request,
+            table_name=instance._meta.db_table,
+            record_id=instance.pk or 0,
+            action="CREATE",
+            changed_fields=list(serializer.validated_data.keys()),
+            new_data=extra,
+        )
+
+    def perform_update(self, serializer):
+        changed = list(serializer.validated_data.keys())
+        instance = serializer.save()
+        extra = {"allow_multiple_advisories": True} if getattr(serializer, "_allow_multiple_advisories_used", False) else None
+        record_audit_log(
+            request=self.request,
+            table_name=instance._meta.db_table,
+            record_id=instance.pk or 0,
+            action="UPDATE",
+            changed_fields=changed,
+            new_data=extra,
+        )
+
 
 class ClassPeriodViewSet(AuditedModelViewSet):
     serializer_class = ClassPeriodSerializer
-    permission_classes = [permissions.IsAuthenticated, IsLeadershipOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
     def get_queryset(self):
         sec_id = self.request.query_params.get("section_id") or self.request.query_params.get("section")
         return get_class_periods_for_user(
             self.request.user,
             int(sec_id) if (sec_id and str(sec_id).isascii() and str(sec_id).isdigit()) else None,
+        )
+
+
+def _parse_optional_int(raw) -> int | None:
+    text = str(raw or "").strip()
+    return int(text) if (text and text.isascii() and text.isdigit()) else None
+
+
+class AcademicConflictCheckView(APIView):
+    """
+    Live conflict preview endpoint for sections, advisers, rooms, and class schedules.
+    GET /api/v1/school/check-conflict/?type=section|period&...
+    """
+
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
+
+    def get(self, request):
+        mode = str(request.query_params.get("type") or "period").strip().lower()
+        exclude_id = _parse_optional_int(request.query_params.get("exclude_id"))
+
+        if mode == "section":
+            sy_id = _parse_optional_int(request.query_params.get("school_year"))
+            school_year = SchoolYear.objects.filter(id=sy_id).first() if sy_id else None
+            grade_level_id = _parse_optional_int(
+                request.query_params.get("grade_level") or request.query_params.get("grade_level_id")
+            )
+            name = str(request.query_params.get("name") or "").strip()[:100]
+            room_name = str(
+                request.query_params.get("room_name") or request.query_params.get("room_number") or ""
+            ).strip()[:100]
+            adviser_id = _parse_optional_int(
+                request.query_params.get("adviser_id") or request.query_params.get("adviser")
+            )
+            adviser = (
+                TeacherProfile.objects.select_related("user").filter(id=adviser_id).first()
+                if adviser_id
+                else None
+            )
+            result = check_section_conflicts(
+                school_year=school_year,
+                grade_level_id=grade_level_id,
+                name=name,
+                adviser=adviser,
+                room_name=room_name,
+                exclude_id=exclude_id,
+            )
+            return Response(result, status=status.HTTP_200_OK)
+
+        if mode == "period":
+            section_id = _parse_optional_int(
+                request.query_params.get("section_id") or request.query_params.get("section")
+            )
+            teacher_id = _parse_optional_int(
+                request.query_params.get("teacher_id") or request.query_params.get("teacher")
+            )
+            section = (
+                Section.objects.select_related("grade_level", "school_year").filter(id=section_id).first()
+                if section_id
+                else None
+            )
+            teacher = (
+                TeacherProfile.objects.select_related("user").filter(id=teacher_id).first()
+                if teacher_id
+                else None
+            )
+            raw_dow = request.query_params.get("day_of_week") or request.query_params.get("days_of_week") or "ALL_WEEKDAYS"
+            day_of_week = normalize_day_of_week(raw_dow)
+            start_time = parse_schedule_time(request.query_params.get("start_time"))
+            end_time = parse_schedule_time(request.query_params.get("end_time"))
+
+            result = check_class_period_conflicts(
+                section=section,
+                teacher=teacher,
+                day_of_week=day_of_week,
+                start_time=start_time,
+                end_time=end_time,
+                exclude_id=exclude_id,
+            )
+            return Response(result, status=status.HTTP_200_OK)
+
+        return Response(
+            {"error": "Supported check types are 'section' and 'period'."},
+            status=status.HTTP_400_BAD_REQUEST,
         )

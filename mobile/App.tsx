@@ -1,13 +1,19 @@
 import React, { useMemo, useState } from 'react';
-import { NavigationContainer, DefaultTheme, DarkTheme, type Theme as NavigationTheme } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  DefaultTheme,
+  DarkTheme,
+  type Theme as NavigationTheme,
+} from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { AuthProvider } from './src/context/AuthContext';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useThemeMode } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import SplashScreen from './src/components/SplashScreen';
 
 function AppShell() {
   const [splashDone, setSplashDone] = useState(false);
+  const { loading: authLoading } = useAuth();
   const { palette, isDark } = useThemeMode();
 
   const navigationTheme = useMemo<NavigationTheme>(() => {
@@ -28,10 +34,12 @@ function AppShell() {
 
   return (
     <NavigationContainer theme={navigationTheme}>
-      <AppNavigator />
+      <AppNavigator hideLoadingSpinner={!splashDone} />
       {!splashDone && (
         <SplashScreen
-          minDurationMs={1200}
+          loading={authLoading}
+          minDurationMs={950}
+          maxDurationMs={3500}
           onFinish={() => setSplashDone(true)}
         />
       )}

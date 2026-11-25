@@ -14,6 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import { apiClient } from '../../api/client';
+import { ENDPOINTS } from '../../api/endpoints';
 import { useAuth } from '../../context/AuthContext';
 import { useThemeMode } from '../../context/ThemeContext';
 import { cleanText, getFriendlyErrorMessage } from '../../constants/theme';
@@ -97,7 +98,7 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
 
     const encodedSection = encodeURIComponent(String(sectionId));
     apiClient
-      .get(`reports/sf2/${encodedSection}/`, {
+      .get(`${ENDPOINTS.REPORT_SF2}${encodedSection}/`, {
         params: {
           ...(month ? { month } : {}),
           ...(year ? { year } : {}),
@@ -130,19 +131,19 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
 
   const activeData = data || fetchedData;
 
-  // 1. Dynamic Faculty Signatory Resolution
+  // 1. Dynamic Teacher Signatory Resolution
   const activeUserFullName =
     user?.full_name ||
     `${user?.first_name || ''} ${user?.last_name || ''}`.trim() ||
-    user?.faculty_name ||
+    user?.teacher_name ||
     user?.username ||
     '';
 
-  const userRole = String(user?.role || user?.system_role || 'EMPLOYEE')
+  const userRole = String(user?.role || user?.system_role || 'TEACHER')
     .trim()
     .toUpperCase();
 
-  const isFacultyRole = ['FACULTY', 'ADVISER', 'EMPLOYEE'].includes(userRole);
+  const isTeacherRole = userRole === 'TEACHER';
 
   // 2. Safe Array Normalization (supports optional search-filtered learners prop)
   const schoolDays: SchoolDay[] = Array.isArray(activeData?.school_days)
@@ -278,8 +279,8 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
 
   if (!activeData) return null;
 
-  const resolvedFacultyName =
-    (isFacultyRole && activeUserFullName.length > 0 ? activeUserFullName : null) ||
+  const resolvedTeacherName =
+    (isTeacherRole && activeUserFullName.length > 0 ? activeUserFullName : null) ||
     activeData.adviser_name ||
     activeUserFullName ||
     'Class Adviser';
@@ -777,7 +778,7 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
               <Text style={styles.reasonSection}>a. Domestic-Related Factors</Text>
               <Text style={styles.reasonItem}>a.1. Had to take care of siblings</Text>
               <Text style={styles.reasonItem}>a.2. Early marriage/pregnancy</Text>
-              <Text style={styles.reasonItem}>a.3. Parents&apos; attitude toward schooling</Text>
+              <Text style={styles.reasonItem}>a.3. Family or guardian attitude toward schooling</Text>
               <Text style={styles.reasonItem}>a.4. Family problems</Text>
 
               <Text style={styles.reasonSection}>b. Individual-Related Factors</Text>
@@ -790,7 +791,7 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
               <Text style={styles.reasonItem}>b.7. Hunger/Malnutrition</Text>
 
               <Text style={styles.reasonSection}>c. School-Related Factors</Text>
-              <Text style={styles.reasonItem}>c.1. Faculty Factor</Text>
+              <Text style={styles.reasonItem}>c.1. Teacher Factor</Text>
               <Text style={styles.reasonItem}>c.2. Physical condition of classroom</Text>
               <Text style={styles.reasonItem}>c.3. Peer influence</Text>
 
@@ -960,11 +961,11 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
 
                 <View style={styles.signFieldBox}>
                   <Text style={styles.signPersonName}>
-                    {String(resolvedFacultyName).toUpperCase()}
+                    {String(resolvedTeacherName).toUpperCase()}
                   </Text>
                   <View style={styles.signUnderline} />
                   <Text style={styles.signPositionLabel}>
-                    (Signature of Faculty over Printed Name)
+                    (Signature of Teacher over Printed Name)
                   </Text>
                 </View>
 

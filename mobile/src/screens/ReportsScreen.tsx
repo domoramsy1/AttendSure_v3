@@ -12,16 +12,17 @@ import {
   ScrollView,
   RefreshControl,
   ActivityIndicator,
-  Alert,
   Platform,
   TextInput,
   Share,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
 import {
@@ -29,13 +30,61 @@ import {
   getFriendlyErrorMessage,
   type ThemePalette,
 } from '../constants/theme';
+import { canViewReports, canViewSf4 } from '../utils/permissions';
+import { isCanceledError, showNotice } from '../utils/helpers';
+import ChipRow from '../components/common/ChipRow';
 
 import DTRReportView from '../components/reports/DTRReportView';
 import SF1ReportView from '../components/reports/SF1ReportView';
 import SF2ReportView from '../components/reports/SF2ReportView';
 import SF4ReportView from '../components/reports/SF4ReportView';
 
-type ReportType = 'DTR' | 'SF1' | 'SF2' | 'SF4';
+type ReportType = 'SCHEDULE' | 'CLASS_LIST' | 'DTR' | 'SF1' | 'SF2' | 'SF4';
+type PackScope = 'ALL' | 'SELECTED';
+type MobilePaperKey = 'letter' | 'folio' | 'legal' | 'a4';
+type MobileOrientation = 'portrait' | 'landscape';
+type MobileMarginPreset = 'compact' | 'narrow' | 'normal';
+
+interface MobilePageSetup {
+  paperSize: MobilePaperKey;
+  orientation: MobileOrientation;
+  marginPreset: MobileMarginPreset;
+}
+
+const MOBILE_PAPER_DIMS: Record<MobilePaperKey, { label: string; width: number; height: number }> = {
+  letter: { label: 'Letter (8.5×11 in)', width: 8.5, height: 11.0 },
+  folio: { label: 'Folio (8.5×13 in)', width: 8.5, height: 13.0 },
+  legal: { label: 'Legal (8.5×14 in)', width: 8.5, height: 14.0 },
+  a4: { label: 'A4 (8.27×11.69 in)', width: 8.27, height: 11.69 },
+};
+
+const MOBILE_MARGIN_INCHES: Record<MobileMarginPreset, { label: string; inches: number }> = {
+  compact: { label: 'Compact (0.25 in)', inches: 0.25 },
+  narrow: { label: 'Narrow (0.50 in)', inches: 0.5 },
+  normal: { label: 'Normal (1.00 in)', inches: 1.0 },
+};
+
+const applyMobilePageSetupToHtml = (rawHtml: string, setup: MobilePageSetup): string => {
+  const paper = MOBILE_PAPER_DIMS[setup.paperSize] || MOBILE_PAPER_DIMS.legal;
+  const wIn = setup.orientation === 'landscape' ? paper.height : paper.width;
+  const hIn = setup.orientation === 'landscape' ? paper.width : paper.height;
+  const mIn = (MOBILE_MARGIN_INCHES[setup.marginPreset] || MOBILE_MARGIN_INCHES.compact).inches;
+
+  const pageCss = `<style>
+    @page { size: ${wIn}in ${hIn}in; margin: ${mIn}in !important; }
+    html, body { margin: 0 !important; padding: 0 !important; }
+    table { width: 100%; border-collapse: collapse; page-break-inside: auto; }
+    thead { display: table-header-group; }
+    tr, .qr-card, .sig-grid { page-break-inside: avoid; break-inside: avoid; }
+    section.sheet:not(:last-child) { page-break-after: always; break-after: page; }
+    section.sheet:last-child, .page-break:last-child { page-break-after: avoid !important; break-after: avoid !important; }
+  </style>`;
+
+  if (/<\/head>/i.test(rawHtml)) {
+    return rawHtml.replace(/<\/head>/i, `${pageCss}</head>`);
+  }
+  return `${pageCss}${rawHtml}`;
+};
 
 interface ReportsScreenProps {
   embedded?: boolean;
@@ -45,6 +94,12 @@ interface AssignedSection {
   section_id: number;
   section_name: string;
   grade_level?: string;
+}
+
+interface SelectableTeacher {
+  id: number;
+  full_name: string;
+  employee_id?: string;
 }
 
 const SECTIONS_CACHE_KEY = 'attendsure_cached_report_sections';
@@ -58,19 +113,6 @@ const SHORT_MONTHS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
-
-const isCanceledError = (err: unknown): boolean => {
-  const e = err as { code?: string; name?: string };
-  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
-};
-
-const showAlert = (title: string, message: string): void => {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.alert(`${title}: ${message}`);
-  } else {
-    Alert.alert(title, message);
-  }
-};
 
 // Strips executable scripts and event handlers from HTML before printing or downloading
 const sanitizeReportHtml = (rawHtml: string): string =>
@@ -127,19 +169,24 @@ const triggerSafeBrowserPrint = (rawHtml: string): void => {
 };
 
 // Safe Blob file download on web without document.write
-const triggerSafeBrowserDownload = (rawHtml: string, rawFilename: string): void => {
+const triggerSafeBrowserDownload = (
+  content: string,
+  rawFilename: string,
+  mimeType = 'text/html;charset=utf-8',
+  extension = 'html'
+): void => {
   if (typeof document === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
     return;
   }
 
-  const safeHtml = sanitizeReportHtml(rawHtml);
+  const finalBody = extension === 'html' ? sanitizeReportHtml(content) : String(content || '');
   const safeName = cleanText(rawFilename, 80).replace(/[^a-zA-Z0-9_-]/g, '_') || 'AttendSure_Report';
-  const blob = new Blob([safeHtml], { type: 'text/html;charset=utf-8' });
+  const blob = new Blob([finalBody], { type: mimeType });
   const blobUrl = URL.createObjectURL(blob);
 
   const link = document.createElement('a');
   link.href = blobUrl;
-  link.download = `${safeName}.html`;
+  link.download = `${safeName}.${extension}`;
   link.rel = 'noopener noreferrer';
   document.body.appendChild(link);
   link.click();
@@ -159,22 +206,27 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
   const reportAbortRef = useRef<AbortController | null>(null);
   const monthScrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(null);
 
-  // 1. Role-Based Permissions
+  // 1. Role-Based Permissions (Centralized RBAC Matrix)
   const currentUser = user as Record<string, any> | null;
-  const userRole = String(currentUser?.role || currentUser?.system_role || 'FACULTY')
-    .trim()
-    .toUpperCase();
-
-  const isAdmin =
-    ['ADMIN', 'SUPERADMIN', 'PRINCIPAL', 'REGISTRAR', 'DEPT_HEAD'].includes(userRole) ||
-    Boolean(currentUser?.is_superuser);
-  const isFaculty = ['FACULTY', 'ADVISER', 'EMPLOYEE'].includes(userRole);
-  const isStaffOnly = ['STAFF', 'PARENT'].includes(userRole);
+  const isAdmin = canViewSf4(user);
+  const canSeeClassReports = canViewReports(user);
 
   const availableTabs = useMemo(() => {
     const tabs: Array<{ key: ReportType; label: string; icon: keyof typeof Ionicons.glyphMap }> = [];
+    if (canSeeClassReports) {
+      tabs.push({
+        key: 'SCHEDULE',
+        label: isAdmin ? 'Schedules' : 'My Schedule',
+        icon: 'calendar-number-outline',
+      });
+      tabs.push({
+        key: 'CLASS_LIST',
+        label: 'Class Lists',
+        icon: 'list-outline',
+      });
+    }
     tabs.push({ key: 'DTR', label: 'DTR', icon: 'time-outline' });
-    if (isAdmin || isFaculty) {
+    if (canSeeClassReports) {
       tabs.push({ key: 'SF1', label: 'SF1', icon: 'people-outline' });
       tabs.push({ key: 'SF2', label: 'SF2', icon: 'calendar-outline' });
     }
@@ -182,10 +234,10 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
       tabs.push({ key: 'SF4', label: 'SF4', icon: 'stats-chart-outline' });
     }
     return tabs;
-  }, [isAdmin, isFaculty]);
+  }, [isAdmin, canSeeClassReports]);
 
   const [selectedTab, setSelectedTab] = useState<ReportType>(() =>
-    isAdmin || isFaculty ? 'SF1' : 'DTR'
+    canSeeClassReports ? 'SCHEDULE' : 'DTR'
   );
   const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(now.getFullYear());
@@ -193,7 +245,13 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
 
   const [sections, setSections] = useState<AssignedSection[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+  const [teachersList, setTeachersList] = useState<SelectableTeacher[]>([]);
+  const [packScope, setPackScope] = useState<PackScope>('ALL');
+  const [pickedSectionIds, setPickedSectionIds] = useState<number[]>([]);
+  const [pickedTeacherIds, setPickedTeacherIds] = useState<number[]>([]);
 
+  const [scheduleData, setScheduleData] = useState<any>(null);
+  const [classListData, setClassListData] = useState<any>(null);
   const [dtrData, setDtrData] = useState<any>(null);
   const [sf1Data, setSf1Data] = useState<any>(null);
   const [sf2Data, setSf2Data] = useState<any>(null);
@@ -204,6 +262,12 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
   const [submittingDtr, setSubmittingDtr] = useState<boolean>(false);
   const [exportingDoc, setExportingDoc] = useState<boolean>(false);
   const [printingDoc, setPrintingDoc] = useState<boolean>(false);
+  const [showPageSetup, setShowPageSetup] = useState<boolean>(false);
+  const [pageSetup, setPageSetup] = useState<MobilePageSetup>({
+    paperSize: 'legal',
+    orientation: 'landscape',
+    marginPreset: 'compact',
+  });
 
   useEffect(() => {
     const isCurrentTabAllowed = availableTabs.some((t) => t.key === selectedTab);
@@ -225,8 +289,6 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
   }, [selectedMonth, selectedTab]);
 
   const loadSections = useCallback(async () => {
-    if (isStaffOnly) return;
-
     sectionsAbortRef.current?.abort();
     const controller = new AbortController();
     sectionsAbortRef.current = controller;
@@ -243,26 +305,29 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
     } catch {}
 
     try {
-      const [classListRes, secRes] = await Promise.allSettled([
-        apiClient
-          .get('classroom/assigned/', { signal: controller.signal })
-          .catch((err: unknown) => {
-            if (isCanceledError(err) || controller.signal.aborted) throw err;
-            return apiClient.get('classroom/class_list/', { signal: controller.signal });
-          }),
-        apiClient.get('sections/', { signal: controller.signal }),
+      const [classListRes, secRes, teacherRes] = await Promise.allSettled([
+        apiClient.get(ENDPOINTS.ATTENDANCE_CLASSES, { signal: controller.signal }),
+        apiClient.get(ENDPOINTS.SECTIONS, { signal: controller.signal }),
+        isAdmin
+          ? apiClient.get(ENDPOINTS.TEACHERS_DROPDOWN, { signal: controller.signal })
+          : Promise.resolve(null),
       ]);
 
       if (!isMounted.current || controller.signal.aborted) return;
 
       const map = new Map<number, AssignedSection>();
 
-      if (classListRes.status === 'fulfilled' && Array.isArray(classListRes.value?.data)) {
-        classListRes.value.data.forEach((item: any) => {
-          if (item?.section_id && !map.has(item.section_id)) {
-            map.set(item.section_id, {
-              section_id: item.section_id,
-              section_name: item.section_name,
+      if (classListRes.status === 'fulfilled') {
+        const rawClasses = Array.isArray(classListRes.value?.data)
+          ? classListRes.value.data
+          : classListRes.value?.data?.classes || classListRes.value?.data?.results || [];
+        rawClasses.forEach((item: any) => {
+          const secId = item?.section_id ?? item?.section?.id;
+          const secName = item?.section_name ?? item?.section?.name;
+          if (secId && !map.has(secId)) {
+            map.set(secId, {
+              section_id: secId,
+              section_name: secName || `Section ${secId}`,
             });
           }
         });
@@ -277,10 +342,24 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
             map.set(s.id, {
               section_id: s.id,
               section_name: s.name,
-              grade_level: s.grade_level,
+              grade_level: s.grade_level_name || s.grade_level,
             });
           }
         });
+      }
+
+      if (isAdmin && teacherRes.status === 'fulfilled' && teacherRes.value) {
+        const rawTeachers = Array.isArray(teacherRes.value.data)
+          ? teacherRes.value.data
+          : teacherRes.value.data?.results || [];
+        const normalizedTeachers: SelectableTeacher[] = rawTeachers
+          .filter((t: any) => t?.id)
+          .map((t: any) => ({
+            id: Number(t.id),
+            full_name: String(t.full_name || t.name || `Teacher #${t.id}`),
+            employee_id: t.employee_id ? String(t.employee_id) : undefined,
+          }));
+        setTeachersList(normalizedTeachers);
       }
 
       const list = Array.from(map.values());
@@ -292,22 +371,63 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
     } catch (err: unknown) {
       if (isCanceledError(err)) return;
     }
-  }, [isStaffOnly]);
+  }, [isAdmin]);
+
+  const buildPrintPackBody = useCallback(
+    (
+      tabKey: 'SCHEDULE' | 'CLASS_LIST',
+      exportFormat: 'json' | 'html' | 'csv',
+      actionMode: 'PRINT' | 'EXPORT' = 'EXPORT'
+    ) => {
+      const body: Record<string, unknown> = {
+        pack_type: tabKey === 'SCHEDULE' ? 'CLASS_SCHEDULE' : 'CLASS_LIST',
+        scope: packScope,
+        export_format: exportFormat,
+        action_mode: actionMode,
+      };
+      if (exportFormat === 'html') {
+        body.wrap_json = true;
+      }
+      if (packScope === 'SELECTED') {
+        if (pickedSectionIds.length > 0) body.section_ids = pickedSectionIds;
+        if (isAdmin && pickedTeacherIds.length > 0) body.teacher_ids = pickedTeacherIds;
+      }
+      return body;
+    },
+    [packScope, pickedSectionIds, pickedTeacherIds, isAdmin]
+  );
 
   const loadReportData = useCallback(async () => {
     reportAbortRef.current?.abort();
     const controller = new AbortController();
     reportAbortRef.current = controller;
 
+    if (
+      (selectedTab === 'SCHEDULE' || selectedTab === 'CLASS_LIST') &&
+      packScope === 'SELECTED' &&
+      pickedSectionIds.length === 0 &&
+      (!isAdmin || pickedTeacherIds.length === 0)
+    ) {
+      if (selectedTab === 'SCHEDULE') setScheduleData(null);
+      else setClassListData(null);
+      if (isMounted.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+      return;
+    }
+
     if (isMounted.current) setLoading(true);
     const monthName = FULL_MONTHS[selectedMonth - 1] || 'October';
-    const cacheKey = `attendsure_report_${selectedTab}_${selectedSectionId || 'all'}_${selectedMonth}_${selectedYear}`;
+    const cacheKey = `attendsure_report_${selectedTab}_${selectedSectionId || 'all'}_${packScope}_${selectedMonth}_${selectedYear}`;
 
     try {
       const cached = await AsyncStorage.getItem(cacheKey);
       if (cached && isMounted.current && !controller.signal.aborted) {
         const parsed = JSON.parse(cached);
-        if (selectedTab === 'DTR') setDtrData(parsed);
+        if (selectedTab === 'SCHEDULE') setScheduleData(parsed);
+        else if (selectedTab === 'CLASS_LIST') setClassListData(parsed);
+        else if (selectedTab === 'DTR') setDtrData(parsed);
         else if (selectedTab === 'SF1') setSf1Data(parsed);
         else if (selectedTab === 'SF2') setSf2Data(parsed);
         else if (selectedTab === 'SF4') setSf4Data(parsed);
@@ -315,35 +435,40 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
     } catch {}
 
     try {
-      if (selectedTab === 'DTR') {
-        const res = await apiClient
-          .get<any>('reports/dtr/', {
-            params: { month: selectedMonth, year: selectedYear },
-            signal: controller.signal,
-          })
-          .catch((err: unknown) => {
-            if (isCanceledError(err) || controller.signal.aborted) throw err;
-            return apiClient.get<any>('dtr/', {
-              params: { month: selectedMonth, year: selectedYear },
-              signal: controller.signal,
-            });
-          });
+      if ((selectedTab === 'SCHEDULE' || selectedTab === 'CLASS_LIST') && canSeeClassReports) {
+        const res = await apiClient.post(
+          ENDPOINTS.REPORT_PRINT_PACK,
+          buildPrintPackBody(selectedTab, 'json', 'EXPORT'),
+          { signal: controller.signal }
+        );
+        if (isMounted.current && !controller.signal.aborted) {
+          if (selectedTab === 'SCHEDULE') setScheduleData(res.data || null);
+          else setClassListData(res.data || null);
+          if (res.data && packScope === 'ALL') {
+            AsyncStorage.setItem(cacheKey, JSON.stringify(res.data)).catch(() => {});
+          }
+        }
+      } else if (selectedTab === 'DTR') {
+        const res = await apiClient.get<any>(ENDPOINTS.EMPLOYEE_DTR, {
+          params: { month: selectedMonth, year: selectedYear },
+          signal: controller.signal,
+        });
         if (isMounted.current && !controller.signal.aborted) {
           setDtrData(res.data || null);
           if (res.data) AsyncStorage.setItem(cacheKey, JSON.stringify(res.data)).catch(() => {});
         }
-      } else if (selectedTab === 'SF1' && selectedSectionId && (isAdmin || isFaculty)) {
+      } else if (selectedTab === 'SF1' && selectedSectionId && canSeeClassReports) {
         const encodedId = encodeURIComponent(String(selectedSectionId));
-        const res = await apiClient.get(`reports/sf1/${encodedId}/`, {
+        const res = await apiClient.get(`${ENDPOINTS.REPORT_SF1}${encodedId}/`, {
           signal: controller.signal,
         });
         if (isMounted.current && !controller.signal.aborted) {
           setSf1Data(res.data || null);
           if (res.data) AsyncStorage.setItem(cacheKey, JSON.stringify(res.data)).catch(() => {});
         }
-      } else if (selectedTab === 'SF2' && selectedSectionId && (isAdmin || isFaculty)) {
+      } else if (selectedTab === 'SF2' && selectedSectionId && canSeeClassReports) {
         const encodedId = encodeURIComponent(String(selectedSectionId));
-        const res = await apiClient.get(`reports/sf2/${encodedId}/`, {
+        const res = await apiClient.get(`${ENDPOINTS.REPORT_SF2}${encodedId}/`, {
           params: { month: monthName, year: selectedYear },
           signal: controller.signal,
         });
@@ -352,7 +477,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           if (res.data) AsyncStorage.setItem(cacheKey, JSON.stringify(res.data)).catch(() => {});
         }
       } else if (selectedTab === 'SF4' && isAdmin) {
-        const res = await apiClient.get('reports/sf4/', {
+        const res = await apiClient.get(ENDPOINTS.REPORT_SF4, {
           params: { month: monthName, year: selectedYear },
           signal: controller.signal,
         });
@@ -369,7 +494,18 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         setRefreshing(false);
       }
     }
-  }, [selectedTab, selectedMonth, selectedYear, selectedSectionId, isAdmin, isFaculty]);
+  }, [
+    selectedTab,
+    selectedMonth,
+    selectedYear,
+    selectedSectionId,
+    isAdmin,
+    canSeeClassReports,
+    packScope,
+    pickedSectionIds,
+    pickedTeacherIds,
+    buildPrintPackBody,
+  ]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -394,11 +530,11 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
     if (!dtrData) return;
     setSubmittingDtr(true);
     try {
-      const facultyId = dtrData.faculty_id || currentUser?.id;
-      const encodedFacultyId = encodeURIComponent(String(facultyId));
+      const teacherId = dtrData.teacher_id || currentUser?.teacher_profile?.id || currentUser?.id;
+      const encodedTeacherId = encodeURIComponent(String(teacherId));
       const payload = {
         action: 'SUBMIT_DTR',
-        faculty_id: facultyId,
+        teacher_id: teacherId,
         month: dtrData.month_number || selectedMonth,
         year: dtrData.year || selectedYear,
         regular_days_hours:
@@ -407,21 +543,21 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
       };
 
       await apiClient
-        .post(`reports/dtr/${encodedFacultyId}/`, payload)
+        .post(`${ENDPOINTS.EMPLOYEE_DTR}${encodedTeacherId}/`, payload)
         .catch((err: any) => {
           const status = err?.response?.status;
           if (status === 404 || status === 405) {
-            return apiClient.post('dtr/', payload);
+            return apiClient.post(ENDPOINTS.EMPLOYEE_DTR, payload);
           }
           throw err;
         });
 
       if (!isMounted.current) return;
-      showAlert('Submitted', 'Your Daily Time Record has been sent to your Department Head.');
+      showNotice('Submitted', 'Your Daily Time Record has been sent to your Department Head.');
       await loadReportData();
     } catch (err: unknown) {
       if (!isMounted.current) return;
-      showAlert('Error', getFriendlyErrorMessage(err, 'Could not submit your Daily Time Record.'));
+      showNotice('Error', getFriendlyErrorMessage(err, 'Could not submit your Daily Time Record.'));
     } finally {
       if (isMounted.current) setSubmittingDtr(false);
     }
@@ -437,31 +573,94 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
     };
 
     try {
-      const res = await apiClient.post('reports/export/', payload);
+      const res = await apiClient.post(ENDPOINTS.REPORT_EXPORT, payload);
       return res.data;
     } catch (postErr: any) {
       if (postErr?.response?.status === 405) {
-        const res = await apiClient.get('reports/export/', { params: payload });
+        const res = await apiClient.get(ENDPOINTS.REPORT_EXPORT, { params: payload });
         return res.data;
       }
       throw postErr;
     }
   };
 
+  const buildNativeShareSummary = (tabKey: 'SCHEDULE' | 'CLASS_LIST'): string => {
+    if (tabKey === 'SCHEDULE') {
+      const blocks = Array.isArray(scheduleData?.teacher_schedules)
+        ? scheduleData.teacher_schedules
+        : [];
+      const lines: string[] = [
+        `AttendSure Official Class Schedule (${scheduleData?.school?.school_name || 'School'})`,
+        `School Year: ${scheduleData?.school?.school_year || 'Current'}`,
+        '',
+      ];
+      blocks.forEach((ts: any) => {
+        lines.push(`${ts.teacher_name} (${ts.employee_id}) — ${ts.total_weekly_hours} hrs/wk`);
+        (ts.periods || []).forEach((p: any) => {
+          lines.push(`• ${p.time_range} (${p.day_label}) | ${p.subject_code} | ${p.section_label} | ${p.room_name}`);
+        });
+        lines.push('');
+      });
+      return lines.join('\n');
+    }
+
+    const lists = Array.isArray(classListData?.class_lists) ? classListData.class_lists : [];
+    const lines: string[] = [
+      `AttendSure Official Class Lists (${classListData?.school?.school_name || 'School'})`,
+      '',
+    ];
+    lists.forEach((cl: any) => {
+      lines.push(`${cl.section_label} — Adviser: ${cl.adviser_name} (${cl.total_count} students)`);
+      (cl.students || []).forEach((st: any, idx: number) => {
+        lines.push(`${idx + 1}. ${st.full_name} (LRN: ${st.lrn}) [${st.sex}]`);
+      });
+      lines.push('');
+    });
+    return lines.join('\n');
+  };
+
   const handlePrint = async () => {
     if ((selectedTab === 'SF1' || selectedTab === 'SF2') && !selectedSectionId) {
-      showAlert('Required', 'Please select a class section first.');
+      showNotice('Required', 'Please select a class section first.');
+      return;
+    }
+    if (
+      (selectedTab === 'SCHEDULE' || selectedTab === 'CLASS_LIST') &&
+      packScope === 'SELECTED' &&
+      pickedSectionIds.length === 0 &&
+      (!isAdmin || pickedTeacherIds.length === 0)
+    ) {
+      showNotice('Selection Needed', 'Select at least one section or teacher, or switch to All.');
       return;
     }
 
     setPrintingDoc(true);
     try {
+      if (selectedTab === 'SCHEDULE' || selectedTab === 'CLASS_LIST') {
+        const res = await apiClient.post(
+          ENDPOINTS.REPORT_PRINT_PACK,
+          buildPrintPackBody(selectedTab, 'html', 'PRINT')
+        );
+        const html = typeof res.data === 'string' ? res.data : res.data?.html || '';
+        const docTitle =
+          (typeof res.data === 'object' && res.data?.title) || `AttendSure_${selectedTab}`;
+        if (Platform.OS === 'web' && html) {
+          triggerSafeBrowserPrint(applyMobilePageSetupToHtml(html, pageSetup));
+        } else {
+          await Share.share({
+            title: docTitle,
+            message: buildNativeShareSummary(selectedTab),
+          });
+        }
+        return;
+      }
+
       const data = await fetchReportExportPayload();
       const html = typeof data === 'string' ? data : data?.html || '';
       const monthName = FULL_MONTHS[selectedMonth - 1] || '';
 
       if (Platform.OS === 'web' && html) {
-        triggerSafeBrowserPrint(html);
+        triggerSafeBrowserPrint(applyMobilePageSetupToHtml(html, pageSetup));
       } else {
         await Share.share({
           title: `AttendSure_${selectedTab}_${monthName}_${selectedYear}`,
@@ -470,7 +669,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
       }
     } catch (err: unknown) {
       if (!isMounted.current) return;
-      showAlert('Notice', getFriendlyErrorMessage(err, 'Could not prepare this document for printing.'));
+      showNotice('Notice', getFriendlyErrorMessage(err, 'Could not prepare this document for printing.'));
     } finally {
       if (isMounted.current) setPrintingDoc(false);
     }
@@ -478,12 +677,40 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
 
   const handleExportReport = async () => {
     if ((selectedTab === 'SF1' || selectedTab === 'SF2') && !selectedSectionId) {
-      showAlert('Required', 'Please select a class section first.');
+      showNotice('Required', 'Please select a class section first.');
+      return;
+    }
+    if (
+      (selectedTab === 'SCHEDULE' || selectedTab === 'CLASS_LIST') &&
+      packScope === 'SELECTED' &&
+      pickedSectionIds.length === 0 &&
+      (!isAdmin || pickedTeacherIds.length === 0)
+    ) {
+      showNotice('Selection Needed', 'Select at least one section or teacher, or switch to All.');
       return;
     }
 
     setExportingDoc(true);
     try {
+      if (selectedTab === 'SCHEDULE' || selectedTab === 'CLASS_LIST') {
+        const docTitle = `AttendSure_${selectedTab.toLowerCase()}_${packScope.toLowerCase()}`;
+        if (Platform.OS === 'web') {
+          const res = await apiClient.post(
+            ENDPOINTS.REPORT_PRINT_PACK,
+            buildPrintPackBody(selectedTab, 'csv', 'EXPORT'),
+            { responseType: 'text' }
+          );
+          const csvText = typeof res.data === 'string' ? res.data : String(res.data || '');
+          triggerSafeBrowserDownload(csvText, docTitle, 'text/csv;charset=utf-8', 'csv');
+        } else {
+          await Share.share({
+            title: docTitle,
+            message: buildNativeShareSummary(selectedTab),
+          });
+        }
+        return;
+      }
+
       const data = await fetchReportExportPayload();
       const html = typeof data === 'string' ? data : data?.html || '';
       const monthName = FULL_MONTHS[selectedMonth - 1] || '';
@@ -492,7 +719,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         `AttendSure_${selectedTab}_${monthName}_${selectedYear}`;
 
       if (Platform.OS === 'web' && html) {
-        triggerSafeBrowserDownload(html, title);
+        triggerSafeBrowserDownload(applyMobilePageSetupToHtml(html, pageSetup), title);
       } else {
         await Share.share({
           title,
@@ -501,7 +728,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
       }
     } catch (err: unknown) {
       if (!isMounted.current) return;
-      showAlert('Notice', getFriendlyErrorMessage(err, 'Could not export this report right now.'));
+      showNotice('Notice', getFriendlyErrorMessage(err, 'Could not export this report right now.'));
     } finally {
       if (isMounted.current) setExportingDoc(false);
     }
@@ -550,7 +777,16 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
   }, [sf4Data, cleanSearch]);
 
   const renderActionButtons = () => (
-    <View style={{ flexDirection: 'row', gap: 6 }}>
+    <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+      <TouchableOpacity
+        style={styles.btnSec}
+        onPress={() => setShowPageSetup(true)}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="options-outline" size={15} color={palette.primary} />
+        <Text style={styles.btnSecText}>Page Setup</Text>
+      </TouchableOpacity>
+
       <TouchableOpacity
         style={[styles.btnSec, (loading || printingDoc) && { opacity: 0.6 }]}
         onPress={() => void handlePrint()}
@@ -580,6 +816,62 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           </>
         )}
       </TouchableOpacity>
+
+      <Modal
+        visible={showPageSetup}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPageSetup(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Page Setup</Text>
+            <Text style={styles.modalSub}>
+              Choose paper size, orientation, and margins so every downloaded or printed sheet fits cleanly with no cut or blank pages.
+            </Text>
+
+            <Text style={styles.modalLabel}>Paper Size</Text>
+            <ChipRow<MobilePaperKey>
+              wrap
+              options={(Object.keys(MOBILE_PAPER_DIMS) as MobilePaperKey[]).map((key) => ({
+                key,
+                label: MOBILE_PAPER_DIMS[key].label,
+              }))}
+              selected={pageSetup.paperSize}
+              onSelect={(paperSize) => setPageSetup((p) => ({ ...p, paperSize }))}
+            />
+
+            <Text style={styles.modalLabel}>Orientation</Text>
+            <ChipRow<MobileOrientation>
+              wrap
+              options={[
+                { key: 'portrait', label: 'Portrait' },
+                { key: 'landscape', label: 'Landscape' },
+              ]}
+              selected={pageSetup.orientation}
+              onSelect={(orientation) => setPageSetup((p) => ({ ...p, orientation }))}
+            />
+
+            <Text style={styles.modalLabel}>Page Margins</Text>
+            <ChipRow<MobileMarginPreset>
+              wrap
+              options={(Object.keys(MOBILE_MARGIN_INCHES) as MobileMarginPreset[]).map((mKey) => ({
+                key: mKey,
+                label: MOBILE_MARGIN_INCHES[mKey].label,
+              }))}
+              selected={pageSetup.marginPreset}
+              onSelect={(marginPreset) => setPageSetup((p) => ({ ...p, marginPreset }))}
+            />
+
+            <TouchableOpacity
+              style={[styles.btnPri, { width: '100%', paddingVertical: 11, marginTop: 12 }]}
+              onPress={() => setShowPageSetup(false)}
+            >
+              <Text style={styles.btnPriText}>Apply Page Setup</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 
@@ -613,7 +905,12 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
       )}
 
       {/* Role-Filtered Tab Switcher */}
-      <View style={styles.tabRow}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.tabScrollWrap}
+        contentContainerStyle={styles.tabRow}
+      >
         {availableTabs.map((tab) => {
           const active = selectedTab === tab.key;
           return (
@@ -636,7 +933,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
             </TouchableOpacity>
           );
         })}
-      </View>
+      </ScrollView>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -650,8 +947,107 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           />
         }
       >
+        {/* All vs Selected Only Controls for Schedules & Class Lists */}
+        {(selectedTab === 'SCHEDULE' || selectedTab === 'CLASS_LIST') && (
+          <View style={styles.card}>
+            <Text style={styles.sectionHeaderTitle}>EXPORT &amp; PRINT SCOPE</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: packScope === 'SELECTED' ? 10 : 0 }}>
+              <TouchableOpacity
+                style={[styles.secPill, { flex: 1, justifyContent: 'center', marginRight: 0 }, packScope === 'ALL' && styles.secPillActive]}
+                onPress={() => setPackScope('ALL')}
+              >
+                <Text style={[styles.secPillText, packScope === 'ALL' && styles.secPillTextActive]}>
+                  {isAdmin ? 'All School Records' : 'All My Classes'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.secPill, { flex: 1, justifyContent: 'center', marginRight: 0 }, packScope === 'SELECTED' && styles.secPillActive]}
+                onPress={() => setPackScope('SELECTED')}
+              >
+                <Text style={[styles.secPillText, packScope === 'SELECTED' && styles.secPillTextActive]}>
+                  Selected Only ({pickedSectionIds.length + (isAdmin ? pickedTeacherIds.length : 0)})
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {packScope === 'SELECTED' && (
+              <View style={{ gap: 8 }}>
+                {sections.length > 0 && (
+                  <View>
+                    <Text style={[styles.loadingText, { textAlign: 'left', marginBottom: 6 }]}>
+                      Tap Class Sections to Include:
+                    </Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {sections.map((sec) => {
+                        const checked = pickedSectionIds.includes(sec.section_id);
+                        return (
+                          <TouchableOpacity
+                            key={`pick-sec-${sec.section_id}`}
+                            style={[styles.secPill, checked && styles.secPillActive]}
+                            onPress={() =>
+                              setPickedSectionIds((prev) =>
+                                prev.includes(sec.section_id)
+                                  ? prev.filter((id) => id !== sec.section_id)
+                                  : [...prev, sec.section_id]
+                              )
+                            }
+                          >
+                            <Ionicons
+                              name={checked ? 'checkbox' : 'square-outline'}
+                              size={13}
+                              color={checked ? palette.onPrimary : palette.primary}
+                            />
+                            <Text style={[styles.secPillText, checked && styles.secPillTextActive]}>
+                              {sec.section_name}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {isAdmin && teachersList.length > 0 && selectedTab === 'SCHEDULE' && (
+                  <View>
+                    <Text style={[styles.loadingText, { textAlign: 'left', marginBottom: 6 }]}>
+                      Or Tap Teachers to Include:
+                    </Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {teachersList.map((t) => {
+                        const checked = pickedTeacherIds.includes(t.id);
+                        return (
+                          <TouchableOpacity
+                            key={`pick-t-${t.id}`}
+                            style={[styles.secPill, checked && styles.secPillActive]}
+                            onPress={() =>
+                              setPickedTeacherIds((prev) =>
+                                prev.includes(t.id)
+                                  ? prev.filter((id) => id !== t.id)
+                                  : [...prev, t.id]
+                              )
+                            }
+                          >
+                            <Ionicons
+                              name={checked ? 'checkbox' : 'square-outline'}
+                              size={13}
+                              color={checked ? palette.onPrimary : palette.primary}
+                            />
+                            <Text style={[styles.secPillText, checked && styles.secPillTextActive]}>
+                              {t.full_name}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+        )}
+
         {/* Month Selector for DTR, SF2, SF4 */}
-        {selectedTab !== 'SF1' && (
+        {(selectedTab === 'DTR' || selectedTab === 'SF2' || selectedTab === 'SF4') && (
           <ScrollView
             ref={monthScrollRef}
             horizontal
@@ -683,27 +1079,14 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
             {sections.length === 0 ? (
               <Text style={styles.emptyText}>No assigned sections found.</Text>
             ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {sections.map((sec) => {
-                  const active = sec.section_id === selectedSectionId;
-                  return (
-                    <TouchableOpacity
-                      key={String(sec.section_id)}
-                      style={[styles.secPill, active && styles.secPillActive]}
-                      onPress={() => setSelectedSectionId(sec.section_id)}
-                    >
-                      <Ionicons
-                        name="school-outline"
-                        size={13}
-                        color={active ? palette.onPrimary : palette.primary}
-                      />
-                      <Text style={[styles.secPillText, active && styles.secPillTextActive]}>
-                        {sec.section_name}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+              <ChipRow<number>
+                options={sections.map((sec) => ({
+                  key: sec.section_id,
+                  label: sec.section_name,
+                }))}
+                selected={selectedSectionId ?? -1}
+                onSelect={setSelectedSectionId}
+              />
             )}
           </View>
         )}
@@ -734,7 +1117,135 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         {loading ? (
           <View style={styles.card}>
             <ActivityIndicator size="small" color={palette.primary} style={{ marginVertical: 24 }} />
-            <Text style={styles.loadingText}>Loading {selectedTab} records...</Text>
+            <Text style={styles.loadingText}>Loading {selectedTab.replace('_', ' ')} records...</Text>
+          </View>
+        ) : selectedTab === 'SCHEDULE' ? (
+          <View style={{ gap: 10 }}>
+            {packScope === 'SELECTED' &&
+            pickedSectionIds.length === 0 &&
+            (!isAdmin || pickedTeacherIds.length === 0) ? (
+              <View style={styles.card}>
+                <Text style={styles.emptyText}>
+                  Tap one or more class sections or teachers above, or switch to All.
+                </Text>
+              </View>
+            ) : !scheduleData || !(scheduleData.teacher_schedules || []).length ? (
+              <View style={styles.card}>
+                <Text style={styles.emptyText}>No class schedules found for the selected filter.</Text>
+              </View>
+            ) : (
+              (scheduleData.teacher_schedules as any[])
+                .filter(
+                  (ts) =>
+                    !cleanSearch ||
+                    String(ts.teacher_name || '').toLowerCase().includes(cleanSearch) ||
+                    (ts.periods || []).some(
+                      (p: any) =>
+                        String(p.subject_title || '').toLowerCase().includes(cleanSearch) ||
+                        String(p.section_label || '').toLowerCase().includes(cleanSearch)
+                    )
+                )
+                .map((ts: any) => (
+                  <View key={`sched-t-${ts.teacher_id}`} style={styles.card}>
+                    <Text style={styles.sectionHeaderTitle}>
+                      {ts.teacher_name} ({ts.employee_id}) • {ts.total_weekly_hours} hrs/wk
+                    </Text>
+                    {Array.isArray(ts.advisory_sections) && ts.advisory_sections.length > 0 && (
+                      <Text style={[styles.loadingText, { textAlign: 'left', marginBottom: 8 }]}>
+                        Class Adviser: {ts.advisory_sections.join(', ')}
+                      </Text>
+                    )}
+                    {(ts.periods || []).length === 0 ? (
+                      <Text style={styles.emptyText}>No active subject periods assigned.</Text>
+                    ) : (
+                      (ts.periods || []).map((p: any) => (
+                        <View
+                          key={`per-${p.id}`}
+                          style={{
+                            paddingVertical: 8,
+                            borderTopWidth: 1,
+                            borderTopColor: palette.border,
+                            gap: 2,
+                          }}
+                        >
+                          <Text style={{ fontSize: fonts.sm, fontWeight: fonts.weight.bold, color: palette.textPrimary }}>
+                            {p.subject_code} — {p.subject_title}
+                          </Text>
+                          <Text style={{ fontSize: fonts.xs, color: palette.textSecondary }}>
+                            {p.section_label} • {p.room_name}
+                          </Text>
+                          <Text style={{ fontSize: fonts.xs, color: palette.primary, fontWeight: fonts.weight.semibold }}>
+                            {p.time_range} ({p.day_label})
+                          </Text>
+                        </View>
+                      ))
+                    )}
+                  </View>
+                ))
+            )}
+          </View>
+        ) : selectedTab === 'CLASS_LIST' ? (
+          <View style={{ gap: 10 }}>
+            {packScope === 'SELECTED' && pickedSectionIds.length === 0 ? (
+              <View style={styles.card}>
+                <Text style={styles.emptyText}>
+                  Tap one or more class sections above, or switch to All.
+                </Text>
+              </View>
+            ) : !classListData || !(classListData.class_lists || []).length ? (
+              <View style={styles.card}>
+                <Text style={styles.emptyText}>No class lists found for the selected filter.</Text>
+              </View>
+            ) : (
+              (classListData.class_lists as any[]).map((cl: any) => {
+                const matchingStudents = (cl.students || []).filter(
+                  (st: any) =>
+                    !cleanSearch ||
+                    String(st.full_name || '').toLowerCase().includes(cleanSearch) ||
+                    String(st.lrn || '').toLowerCase().includes(cleanSearch)
+                );
+                return (
+                  <View key={`cl-${cl.section_id}`} style={styles.card}>
+                    <Text style={styles.sectionHeaderTitle}>
+                      {cl.section_label} ({cl.total_count} Students)
+                    </Text>
+                    <Text style={[styles.loadingText, { textAlign: 'left', marginBottom: 8 }]}>
+                      Adviser: {cl.adviser_name} • Room: {cl.room_name} • Male: {cl.male_count} / Female: {cl.female_count}
+                    </Text>
+                    {matchingStudents.length === 0 ? (
+                      <Text style={styles.emptyText}>No students match your search.</Text>
+                    ) : (
+                      matchingStudents.map((st: any) => (
+                        <View
+                          key={`st-${cl.section_id}-${st.student_id}`}
+                          style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            paddingVertical: 7,
+                            borderTopWidth: 1,
+                            borderTopColor: palette.border,
+                            gap: 8,
+                          }}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: fonts.sm, fontWeight: fonts.weight.bold, color: palette.textPrimary }}>
+                              {st.full_name}
+                            </Text>
+                            <Text style={{ fontSize: fonts.xs, color: palette.textSecondary }}>
+                              LRN: {st.lrn} • {st.sex}
+                            </Text>
+                          </View>
+                          <Text style={{ fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.primary }}>
+                            {st.today_status}
+                          </Text>
+                        </View>
+                      ))
+                    )}
+                  </View>
+                );
+              })
+            )}
           </View>
         ) : selectedTab === 'DTR' ? (
           <DTRReportView
@@ -836,26 +1347,29 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       justifyContent: 'center',
     },
     btnSecText: { color: palette.primary, fontSize: fonts.xs, fontWeight: fonts.weight.extrabold },
-    tabRow: {
-      flexDirection: 'row',
+    tabScrollWrap: {
+      flexGrow: 0,
       backgroundColor: palette.surface,
-      paddingHorizontal: 16,
-      paddingVertical: 8,
-      gap: 6,
       borderBottomWidth: 1,
       borderBottomColor: palette.border,
     },
+    tabRow: {
+      flexDirection: 'row',
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      gap: 6,
+    },
     tabBtn: {
-      flex: 1,
       flexDirection: 'row',
       justifyContent: 'center',
       paddingVertical: 8,
+      paddingHorizontal: 12,
       borderRadius: 8,
       backgroundColor: palette.surfaceSubtle,
       borderWidth: 1,
       borderColor: palette.border,
       alignItems: 'center',
-      gap: 4,
+      gap: 5,
     },
     tabBtnActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
     tabBtnText: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: palette.textSecondary },
@@ -917,6 +1431,44 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     searchInput: { flex: 1, fontSize: fonts.sm, color: palette.textPrimary },
     loadingText: { fontSize: fonts.xs, color: palette.textSecondary, textAlign: 'center' },
     emptyText: { fontSize: fonts.xs, color: palette.textMuted, textAlign: 'center', paddingVertical: 8 },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(15, 23, 42, 0.65)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 18,
+    },
+    modalCard: {
+      width: '100%',
+      maxWidth: 420,
+      backgroundColor: palette.surface,
+      borderRadius: 16,
+      padding: 18,
+      borderWidth: 1,
+      borderColor: palette.borderStrong,
+    },
+    modalTitle: { fontSize: fonts.lg, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    modalSub: { fontSize: fonts.xs, color: palette.textSecondary, marginTop: 4, marginBottom: 10 },
+    modalLabel: {
+      fontSize: fonts.xs,
+      fontWeight: fonts.weight.extrabold,
+      color: palette.primary,
+      marginTop: 10,
+      marginBottom: 6,
+      textTransform: 'uppercase',
+    },
+    chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    setupChip: {
+      paddingVertical: 7,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+      backgroundColor: palette.surfaceSubtle,
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    setupChipActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
+    setupChipText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.textPrimary },
+    setupChipTextActive: { color: palette.onPrimary },
   });
 
 export default ReportsScreen;

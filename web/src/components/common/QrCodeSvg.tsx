@@ -3,11 +3,12 @@
  * File: web/src/components/common/QrCodeSvg.tsx
  *
  * Generates standard Byte-mode QR codes (Versions 1-10, Error Correction Level L)
- * completely inside the browser so signed student and faculty QR codes work
+ * completely inside the browser so signed student and teacher QR codes work
  * offline and never transmit sensitive tokens to external third-party servers.
  */
 
 import React, { useMemo } from 'react';
+import { QR_COLORS } from '../../theme/tokens';
 
 type BlockGroup = readonly [blocks: number, dataCodewords: number, ecCodewords: number];
 
@@ -361,7 +362,7 @@ export function buildQrSvgPath(matrix: boolean[][], quietZone = 4): { viewBoxSiz
 export function buildQrSvgDataUri(value: string, size = 180): string {
   const matrix = generateQrMatrix(value);
   const { viewBoxSize, path } = buildQrSvgPath(matrix, 4);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${viewBoxSize} ${viewBoxSize}" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#ffffff"/><path d="${path}" fill="#0f172a"/></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${viewBoxSize} ${viewBoxSize}" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="${QR_COLORS.background}"/><path d="${path}" fill="${QR_COLORS.foreground}"/></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
@@ -393,13 +394,13 @@ export const QrCodeSvg: React.FC<QrCodeSvgProps> = ({
       aria-label={label}
       style={{
         display: 'block',
-        backgroundColor: '#ffffff',
+        backgroundColor: QR_COLORS.background,
         borderRadius: 6,
         ...style,
       }}
     >
-      <rect width={viewBoxSize} height={viewBoxSize} fill="#ffffff" />
-      <path d={path} fill="#0f172a" />
+      <rect width={viewBoxSize} height={viewBoxSize} fill={QR_COLORS.background} />
+      <path d={path} fill={QR_COLORS.foreground} />
     </svg>
   );
 };

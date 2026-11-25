@@ -1,10 +1,9 @@
 r"""
-AttendSure - Physical Profile Avatar Generator (Zero Mock Data)
-Ensures every existing Student, TeacherProfile, and UserProfile has a valid JPEG file on disk.
+AttendSure - Physical Profile Avatar Generator (3NF Schema)
+Ensures every existing Student and TeacherProfile has a valid JPEG file on disk.
 Run: python database\sync_avatars.py
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -15,7 +14,7 @@ setup_django()
 
 from django.conf import settings
 from PIL import Image, ImageDraw, ImageFont
-from apps.accounts.models import TeacherProfile, UserProfile
+from apps.accounts.models import TeacherProfile
 from apps.students.models import Student
 
 PALETTES = [
@@ -47,7 +46,7 @@ def draw_avatar(target_path: Path, initials: str, seed_num: int, size: int = 256
 
 def main():
     media_root = Path(settings.MEDIA_ROOT)
-    st_fixed = tc_fixed = us_fixed = 0
+    st_fixed = tc_fixed = 0
 
     for st in Student.objects.only("id", "lrn", "first_name", "last_name", "photo"):
         rel = st.photo.name if (st.photo and st.photo.name) else f"students/std_{st.lrn or st.id}.jpg"
@@ -58,29 +57,17 @@ def main():
                 Student.objects.filter(pk=st.id).update(photo=rel)
             st_fixed += 1
 
-    for tc in TeacherProfile.objects.only("id", "employee_id", "first_name", "last_name", "photo"):
-        rel = tc.photo.name if (tc.photo and tc.photo.name) else f"faculty/fac_{tc.employee_id or tc.id}.jpg"
+    for tc in TeacherProfile.objects.select_related("user"):
+        rel = tc.photo.name if (tc.photo and tc.photo.name) else f"teachers/tch_{tc.employee_id or tc.id}.jpg"
         full = media_root / rel
         if not full.is_file():
-            draw_avatar(full, f"{tc.first_name[:1]}{tc.last_name[:1]}", tc.id)
+            initials = f"{tc.first_name[:1]}{tc.last_name[:1]}".strip() or tc.user.username[:2]
+            draw_avatar(full, initials, tc.id)
             if not tc.photo or tc.photo.name != rel:
                 TeacherProfile.objects.filter(pk=tc.id).update(photo=rel)
             tc_fixed += 1
 
-    for prof in UserProfile.objects.select_related("user", "teacher"):
-        if prof.teacher and prof.teacher.photo:
-            continue
-        rel = prof.avatar.name if (prof.avatar and prof.avatar.name) else f"avatars/user_{prof.user_id}.jpg"
-        full = media_root / rel
-        if not full.is_file():
-            u = prof.user
-            initials = f"{u.first_name[:1]}{u.last_name[:1]}".strip() or u.username[:2]
-            draw_avatar(full, initials, prof.user_id)
-            if not prof.avatar or prof.avatar.name != rel:
-                UserProfile.objects.filter(pk=prof.id).update(avatar=rel)
-            us_fixed += 1
-
-    print(f"[OK] Avatars verified -> Students: {st_fixed}, Teachers: {tc_fixed}, Users: {us_fixed} created.")
+    print(f"[OK] Avatars verified -> Students: {st_fixed}, Teachers: {tc_fixed} created.")
 
 
 if __name__ == "__main__":

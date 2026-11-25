@@ -63,8 +63,8 @@ export const DepEdReportHeader: React.FC<DepEdReportHeaderProps> = ({
 
   return (
     <div style={headerContainerStyle}>
-      {/* Top Left: Kagawaran ng Edukasyon Seal (0.76 Inch) */}
-      <div style={sealBoxStyle}>
+      {/* Top Left: Kagawaran ng Edukasyon Seal (0.76 Inch height, auto aspect ratio) */}
+      <div style={headerLeftSealBoxStyle}>
         {effectiveTopLeftLogo ? (
           <img
             src={effectiveTopLeftLogo}
@@ -222,8 +222,8 @@ export const DepEdReportHeader: React.FC<DepEdReportHeaderProps> = ({
         )}
       </div>
 
-      {/* Top Right: Department of Education Logo (0.76 Inch) */}
-      <div style={sealBoxStyle}>
+      {/* Top Right: Department of Education Logo (auto-fits circular or wide logos without stretching) */}
+      <div style={headerRightSealBoxStyle}>
         {effectiveTopRightLogo ? (
           <img
             src={effectiveTopRightLogo}
@@ -270,14 +270,14 @@ export const DepEdReportFooter: React.FC<DepEdReportFooterProps> = ({
 
   return (
     <div style={dmosFooterStyle}>
-      {/* Footer Bottom Left: School Logo (0.76 Inch) */}
-      <div style={sealBoxStyle}>
+      {/* Footer Bottom Left: School Logo (auto aspect ratio) */}
+      <div style={footerSealBoxStyle}>
         {effectiveSchoolLogo ? (
           <img
             src={effectiveSchoolLogo}
             alt="School Logo"
             style={sealImgStyle}
-            loading="lazy"
+            loading="eager"
           />
         ) : null}
       </div>
@@ -308,21 +308,46 @@ const headerContainerStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-// Seal – 0.76 Inch (73px at 96 DPI)
-const sealBoxStyle: React.CSSProperties = {
-  width: '0.76in',
-  height: '0.76in',
+// Balanced Left & Right Seal Boxes (keeps center text dead-center while letting wide logos keep true aspect ratio in html2canvas)
+const headerLeftSealBoxStyle: React.CSSProperties = {
+  width: '1.25in',
+  minWidth: '1.25in',
+  height: '0.78in',
+  minHeight: '0.78in',
+  flexShrink: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-start',
+};
+
+const headerRightSealBoxStyle: React.CSSProperties = {
+  width: '1.25in',
+  minWidth: '1.25in',
+  height: '0.78in',
+  minHeight: '0.78in',
+  flexShrink: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+};
+
+const footerSealBoxStyle: React.CSSProperties = {
   minWidth: '0.76in',
-  minHeight: '0.76in',
+  maxWidth: '1.35in',
+  height: '0.76in',
   flexShrink: 0,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
 };
 
+// Using width: auto + height: auto with max bounds avoids html2canvas aspect-ratio distortion
 const sealImgStyle: React.CSSProperties = {
-  width: '0.76in',
-  height: '0.76in',
+  maxWidth: '100%',
+  maxHeight: '0.76in',
+  width: 'auto',
+  height: 'auto',
+  display: 'block',
   objectFit: 'contain',
 };
 

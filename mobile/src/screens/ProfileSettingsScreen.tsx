@@ -1,5 +1,5 @@
 /**
- * AttendSure Mobile - Faculty Profile & Digital ID Pass
+ * AttendSure Mobile - Teacher Profile & Digital ID Pass
  * File: mobile/src/screens/ProfileSettingsScreen.tsx
  */
 
@@ -11,9 +11,7 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   RefreshControl,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,17 +22,19 @@ import { Image } from 'expo-image';
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { getServerBaseUrl } from '../services/configService';
 import {
-  isSafeUrl,
   cleanText,
   getFriendlyErrorMessage,
+  QR_COLORS,
   type ThemePalette,
 } from '../constants/theme';
+import { confirmAction, isCanceledError, resolveMediaUrl } from '../utils/helpers';
 
-const PROFILE_CACHE_KEY = 'attendsure_cached_faculty_profile';
+const PROFILE_CACHE_KEY = 'attendsure_cached_teacher_profile';
 
-interface LiveFacultyProfile {
+interface LiveTeacherProfile {
   id: number;
   employee_id: string;
   first_name: string;
@@ -42,11 +42,12 @@ interface LiveFacultyProfile {
   full_name: string;
   position: string;
   department: string;
-  phone_number?: string;
+  contact_number?: string;
   email?: string;
   photo_url?: string | null;
   photo?: string | null;
   bound_device_id?: string | null;
+  has_bound_device?: boolean;
   device_bound_at?: string | null;
 }
 
@@ -58,16 +59,12 @@ interface ExtendedSessionUser {
   first_name?: string;
   last_name?: string;
   employee_id?: string;
-  faculty_id?: string;
+  teacher_id?: string | number | null;
   role?: string;
   device_id?: string;
-  bound_device_id?: string;
+  bound_device_id?: string | null;
+  has_bound_device?: boolean;
 }
-
-const isCanceledError = (err: unknown): boolean => {
-  const e = err as { code?: string; name?: string };
-  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
-};
 
 export const ProfileSettingsScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -75,7 +72,7 @@ export const ProfileSettingsScreen: React.FC = () => {
   const { palette, fonts } = useThemeMode();
   const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
 
-  const [profile, setProfile] = useState<LiveFacultyProfile | null>(null);
+  const [profile, setProfile] = useState<LiveTeacherProfile | null>(null);
   const [serverBase, setServerBase] = useState<string>('');
   const [photoError, setPhotoError] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
@@ -105,7 +102,7 @@ export const ProfileSettingsScreen: React.FC = () => {
     }
 
     try {
-      const res = await apiClient.get<LiveFacultyProfile>('me/', {
+      const res = await apiClient.get<LiveTeacherProfile>(ENDPOINTS.CURRENT_USER, {
         timeout: 8000,
         signal: controller.signal,
       });
@@ -151,17 +148,7 @@ export const ProfileSettingsScreen: React.FC = () => {
   };
 
   const handleLogout = () => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm('Sign out of AttendSure on this device?')) {
-        void logout();
-      }
-      return;
-    }
-
-    Alert.alert('Sign Out', 'Sign out of AttendSure on this device?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: () => void logout() },
-    ]);
+    confirmAction('Sign Out', 'Sign out of AttendSure on this device?', 'Sign Out', () => void logout());
   };
 
   const sessionUser = user as ExtendedSessionUser | null;
@@ -171,37 +158,35 @@ export const ProfileSettingsScreen: React.FC = () => {
       sessionUser?.name ||
       `${sessionUser?.first_name || ''} ${sessionUser?.last_name || ''}`.trim() ||
       sessionUser?.username ||
-      'Faculty Member',
+      'Teacher',
     120
   );
   const displayId = cleanText(
-    profile?.employee_id || sessionUser?.employee_id || sessionUser?.faculty_id || '—',
+    profile?.employee_id ||
+      sessionUser?.employee_id ||
+      (sessionUser?.teacher_id ? String(sessionUser.teacher_id) : '') ||
+      '—',
     40
   );
-  const displayPosition = cleanText(profile?.position || sessionUser?.role || 'Faculty', 80);
+  const displayPosition = cleanText(profile?.position || sessionUser?.role || 'Teacher', 80);
   const displayDept = cleanText(profile?.department || '—', 80);
   const boundDeviceId =
     profile?.bound_device_id || sessionUser?.device_id || sessionUser?.bound_device_id || null;
+  const isDeviceLinked = Boolean(
+    profile?.has_bound_device || sessionUser?.has_bound_device || boundDeviceId
+  );
 
-  const rawPhoto = profile?.photo_url || profile?.photo || null;
-  const candidatePhoto =
-    typeof rawPhoto === 'string' && rawPhoto.trim()
-      ? rawPhoto.startsWith('http://') ||
-        rawPhoto.startsWith('https://') ||
-        rawPhoto.startsWith('data:')
-        ? rawPhoto.trim()
-        : serverBase
-        ? `${serverBase.replace(/\/+$/, '')}/${rawPhoto.replace(/^\/+/, '')}`
-        : ''
-      : '';
-  const safePhoto = isSafeUrl(candidatePhoto) ? candidatePhoto : null;
+  const safePhoto = resolveMediaUrl(
+    user?.photo_url ?? user?.photo ?? profile?.photo_url ?? profile?.photo,
+    serverBase
+  );
 
   useEffect(() => {
     setPhotoError(false);
   }, [safePhoto]);
 
-  const facultyPassPayload = JSON.stringify({
-    app: 'ATTENDSURE_FACULTY_PASS',
+  const teacherPassPayload = JSON.stringify({
+    app: 'ATTENDSURE_TEACHER_PASS',
     emp_id: displayId,
     name: displayName,
     ts: qrTimestamp,
@@ -218,7 +203,7 @@ export const ProfileSettingsScreen: React.FC = () => {
         >
           <Ionicons name="arrow-back" size={20} color={palette.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.appBarTitle}>Faculty Profile &amp; Pass</Text>
+        <Text style={styles.appBarTitle}>Teacher Profile &amp; Pass</Text>
         <View style={{ width: 36 }} />
       </View>
 
@@ -268,21 +253,21 @@ export const ProfileSettingsScreen: React.FC = () => {
             <View
               style={[
                 styles.statusBadge,
-                boundDeviceId ? styles.statusActive : styles.statusPending,
+                isDeviceLinked ? styles.statusActive : styles.statusPending,
               ]}
             >
               <Ionicons
-                name={boundDeviceId ? 'shield-checkmark' : 'shield-outline'}
+                name={isDeviceLinked ? 'shield-checkmark' : 'shield-outline'}
                 size={13}
-                color={boundDeviceId ? palette.success : palette.warning}
+                color={isDeviceLinked ? palette.success : palette.warning}
               />
               <Text
                 style={[
                   styles.statusBadgeText,
-                  { color: boundDeviceId ? palette.success : palette.warning },
+                  { color: isDeviceLinked ? palette.success : palette.warning },
                 ]}
               >
-                {boundDeviceId ? 'Device Linked' : 'Not Linked'}
+                {isDeviceLinked ? 'Device Linked' : 'Not Linked'}
               </Text>
             </View>
           </View>
@@ -291,11 +276,11 @@ export const ProfileSettingsScreen: React.FC = () => {
         <View style={styles.qrCard}>
           <View style={styles.qrHeader}>
             <Ionicons name="qr-code-outline" size={20} color={palette.primary} />
-            <Text style={styles.qrCardTitle}>Digital Faculty ID Pass</Text>
+            <Text style={styles.qrCardTitle}>Digital Teacher ID Pass</Text>
           </View>
           <Text style={styles.qrSubtitle}>
-            Verify daily faculty attendance using on-device face check and campus GPS inside this
-            app.
+            Verify daily teacher attendance using Phone Fingerprint / Biometric &amp; Campus GPS
+            inside this app.
           </Text>
 
           <View style={styles.qrWrapper}>
@@ -303,10 +288,10 @@ export const ProfileSettingsScreen: React.FC = () => {
               <ActivityIndicator size="large" color={palette.primary} />
             ) : (
               <QRCode
-                value={facultyPassPayload}
+                value={teacherPassPayload}
                 size={180}
-                color="#003460"
-                backgroundColor="#ffffff"
+                color={QR_COLORS.foreground}
+                backgroundColor={QR_COLORS.background}
               />
             )}
           </View>
@@ -446,7 +431,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     },
     qrWrapper: {
       padding: 14,
-      backgroundColor: '#ffffff',
+      backgroundColor: QR_COLORS.background,
       borderRadius: 12,
       borderWidth: 1,
       borderColor: palette.borderStrong,

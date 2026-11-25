@@ -3,33 +3,39 @@ from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
+from apps.accounts.selectors import get_teacher_enrollment_ids, resolve_teacher_for_user
 from common.audit import AuditedModelViewSet, record_audit_log
 from common.exceptions import AppError
-from common.permissions import get_user_role, is_school_leader
+from common.permissions import IsSchoolLeader, IsTeacherOrLeader, is_school_leader
+from .loafing_detector import detect_daily_student_loafing
 from .models import ClassAttendance, DailyAttendance
 from .selectors import (
-    PASS_FACULTY_FIELD,
     get_adviser_matrix,
     get_assigned_classes_with_class_lists,
     get_attendance_logs,
     get_exit_passes_for_user,
-    get_faculty_student_ids,
     get_section_class_list,
-    resolve_faculty_for_user,
 )
 from .serializers import ExitPassSerializer
 from .services import (
-    change_exit_pass_status,
+    _invalidate_live_attendance_caches,
     record_student_qr_scan,
     save_manual_attendance,
     sync_offline_qr_scans,
+    update_exit_pass_lifecycle,
 )
 
 
+class ScanThrottle(UserRateThrottle):
+    scope = "scan_ping"
+
+
 class ScanStudentQrView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
+    throttle_classes = [ScanThrottle]
 
     def post(self, request):
         raw_qr = (
@@ -44,6 +50,7 @@ class ScanStudentQrView(APIView):
             user=request.user,
             raw_qr=str(raw_qr),
             period_id=int(period_id) if (period_id and str(period_id).isdigit()) else None,
+            client_scan_uuid=request.data.get("client_scan_uuid"),
             latitude=request.data.get("latitude"),
             longitude=request.data.get("longitude"),
             accuracy=request.data.get("accuracy"),
@@ -55,7 +62,8 @@ class ScanStudentQrView(APIView):
 
 
 class OfflineQrSyncView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
+    throttle_classes = [ScanThrottle]
 
     def post(self, request):
         scans = request.data.get("scans") or []
@@ -64,8 +72,29 @@ class OfflineQrSyncView(APIView):
         return Response(sync_offline_qr_scans(user=request.user, raw_scans=scans))
 
 
+class StudentLoafingAuditView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
+
+    def post(self, request):
+        date_str = request.data.get("date")
+        target_date = None
+        if date_str:
+            try:
+                target_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+            except ValueError:
+                return Response({"error": "Invalid date format (use YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
+        sec_id = request.data.get("section_id")
+        parsed_sec = int(sec_id) if (sec_id and str(sec_id).isdigit()) else None
+        result = detect_daily_student_loafing(
+            target_date=target_date,
+            section_id=parsed_sec,
+            user=request.user,
+        )
+        return Response(result, status=status.HTTP_200_OK)
+
+
 class ClassAttendanceView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
 
     def get(self, request):
         date_str = request.query_params.get("date")
@@ -102,7 +131,7 @@ class ClassAttendanceView(APIView):
             table_name=log._meta.db_table,
             record_id=log.id,
             action="CREATE",
-            new_data={"student_id": log.student_id, "status": log.status},
+            new_data={"enrollment_id": log.enrollment_id, "status": log.status},
         )
         return Response({"ok": True, "success": True, "id": log.id, "status": log.status}, status=status.HTTP_201_CREATED)
 
@@ -111,12 +140,12 @@ class ClassAttendanceView(APIView):
         if rec_id is not None and str(rec_id).strip() != "":
             if not str(rec_id).isdigit():
                 return Response({"error": "Valid attendance record id is required."}, status=status.HTTP_400_BAD_REQUEST)
-            existing = ClassAttendance.objects.filter(id=int(rec_id)).first()
+            existing = ClassAttendance.objects.select_related("enrollment").filter(id=int(rec_id)).first()
             if not existing:
                 return Response({"error": "Attendance record not found."}, status=status.HTTP_404_NOT_FOUND)
             log = save_manual_attendance(
                 user=request.user,
-                student_id=existing.student_id,
+                student_id=existing.enrollment.student_id,
                 status_code=str(request.data.get("status", existing.status)),
                 period_id=existing.class_period_id,
                 date_str=str(existing.attendance_date),
@@ -126,7 +155,7 @@ class ClassAttendanceView(APIView):
                 table_name=log._meta.db_table,
                 record_id=log.id,
                 action="UPDATE",
-                new_data={"student_id": log.student_id, "status": log.status},
+                new_data={"enrollment_id": log.enrollment_id, "status": log.status},
             )
             return Response({"ok": True, "success": True, "id": log.id, "status": log.status})
         return self.post(request)
@@ -135,45 +164,63 @@ class ClassAttendanceView(APIView):
         return self.put(request)
 
     def delete(self, request):
-        if get_user_role(request.user) == "PARENT":
-            return Response({"error": "Parent accounts cannot remove attendance records."}, status=status.HTTP_403_FORBIDDEN)
-
         rec_id = request.data.get("id") or request.query_params.get("id")
         if not rec_id or not str(rec_id).isdigit():
             return Response({"error": "Valid attendance record id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        existing = ClassAttendance.objects.filter(id=int(rec_id)).first()
+        existing = ClassAttendance.objects.select_related("enrollment__section__adviser").filter(id=int(rec_id)).first()
         if not existing:
             return Response({"error": "Attendance record not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if not is_school_leader(request.user):
-            faculty_member = resolve_faculty_for_user(request.user)
-            if not faculty_member or existing.student_id not in get_faculty_student_ids(faculty_member):
-                return Response({"error": "You can only remove attendance for your assigned students."}, status=status.HTTP_403_FORBIDDEN)
+            teacher = resolve_teacher_for_user(request.user)
+            if not teacher or existing.enrollment_id not in get_teacher_enrollment_ids(teacher):
+                return Response(
+                    {"error": "You can only remove attendance for your assigned students."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
-        student_id = existing.student_id
+        enr_id = existing.enrollment_id
         att_date = existing.attendance_date
         rec_pk = existing.id
+        adviser_uid = (
+            existing.enrollment.section.adviser.user_id
+            if (
+                existing.enrollment
+                and existing.enrollment.section
+                and existing.enrollment.section.adviser_id
+                and existing.enrollment.section.adviser
+            )
+            else None
+        )
         existing.delete()
 
-        remaining = ClassAttendance.objects.filter(student_id=student_id, attendance_date=att_date).order_by("-scanned_at").first()
+        remaining = (
+            ClassAttendance.objects.filter(enrollment_id=enr_id, attendance_date=att_date)
+            .order_by("-scanned_at")
+            .first()
+        )
         if remaining:
-            DailyAttendance.objects.filter(student_id=student_id, attendance_date=att_date).update(status=remaining.status)
+            DailyAttendance.objects.filter(enrollment_id=enr_id, attendance_date=att_date).update(
+                status=remaining.status
+            )
         else:
-            DailyAttendance.objects.filter(student_id=student_id, attendance_date=att_date).delete()
+            DailyAttendance.objects.filter(enrollment_id=enr_id, attendance_date=att_date).delete()
+
+        _invalidate_live_attendance_caches(user_id=request.user.id, adviser_user_id=adviser_uid)
 
         record_audit_log(
             request=request,
             table_name=ClassAttendance._meta.db_table,
             record_id=rec_pk,
             action="DELETE",
-            new_data={"student_id": student_id, "attendance_date": str(att_date)},
+            new_data={"enrollment_id": enr_id, "attendance_date": str(att_date)},
         )
         return Response({"ok": True, "success": True, "message": "Attendance record removed."})
 
 
 class AssignedClassListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
 
     def get(self, request):
         view_all = str(request.query_params.get("mode", "")).lower() == "all"
@@ -189,7 +236,7 @@ class AssignedClassListView(APIView):
 
 
 class SectionStudentListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
 
     def get(self, request):
         sec_id = request.query_params.get("section_id") or request.query_params.get("section")
@@ -198,14 +245,25 @@ class SectionStudentListView(APIView):
 
 
 class AdviserMatrixView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
 
     def get(self, request):
         sec_id = request.query_params.get("section_id")
+        date_str = request.query_params.get("date")
+        target_date = None
+        if date_str:
+            try:
+                target_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+            except ValueError:
+                return Response(
+                    {"error": "Invalid date format (use YYYY-MM-DD)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         return Response(
             get_adviser_matrix(
                 user=request.user,
                 section_id=int(sec_id) if (sec_id and str(sec_id).isdigit()) else None,
+                target_date=target_date,
                 request=request,
             )
         )
@@ -213,7 +271,7 @@ class AdviserMatrixView(APIView):
 
 class ExitPassViewSet(AuditedModelViewSet):
     serializer_class = ExitPassSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
 
     def get_queryset(self):
         return get_exit_passes_for_user(
@@ -224,16 +282,13 @@ class ExitPassViewSet(AuditedModelViewSet):
 
     def _assert_can_modify_pass(self, instance):
         user = self.request.user
-        if get_user_role(user) == "PARENT":
-            raise AppError("FORBIDDEN", "Parent accounts cannot modify or delete exit passes.", 403)
         if is_school_leader(user):
             return
-        own_faculty = resolve_faculty_for_user(user)
-        pass_faculty_id = getattr(instance, f"{PASS_FACULTY_FIELD}_id", None)
-        if not own_faculty or (instance.issued_by_id != own_faculty.id and pass_faculty_id != own_faculty.id):
+        own_teacher = resolve_teacher_for_user(user)
+        if instance.issued_by_id != user.id and (not own_teacher or instance.teacher_id != own_teacher.id):
             raise AppError("FORBIDDEN", "You can only edit or remove exit passes you issued.", 403)
-        if instance.status == "USED":
-            raise AppError("PASS_LOCKED", "Used exit passes cannot be modified by non-administrators.", 400)
+        if instance.returned_at is not None:
+            raise AppError("PASS_LOCKED", "Returned exit passes cannot be modified.", 400)
 
     def perform_update(self, serializer):
         self._assert_can_modify_pass(serializer.instance)
@@ -243,17 +298,46 @@ class ExitPassViewSet(AuditedModelViewSet):
         self._assert_can_modify_pass(instance)
         super().perform_destroy(instance)
 
-    @action(detail=True, methods=["post"], url_path="approve")
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="approve",
+        permission_classes=[permissions.IsAuthenticated, IsSchoolLeader],
+    )
     def approve(self, request, pk=None):
-        updated = change_exit_pass_status(user=request.user, exit_pass=self.get_object(), next_status="ACTIVE")
-        return Response({"ok": True, "success": True, "status": updated.status})
+        updated = update_exit_pass_lifecycle(user=request.user, exit_pass=self.get_object(), action_name="APPROVE")
+        record_audit_log(
+            request=request,
+            table_name=updated._meta.db_table,
+            record_id=updated.id,
+            action="APPROVE",
+            new_data={"pass_number": updated.pass_number, "pass_scope": updated.pass_scope},
+        )
+        return Response(
+            {
+                "ok": True,
+                "success": True,
+                "approved": True,
+                "pass_status": updated.pass_status,
+                "status": updated.pass_status,
+                "issued_by_name": (request.user.get_full_name() or request.user.username).strip(),
+            }
+        )
 
-    @action(detail=True, methods=["post"], url_path="decline")
-    def decline(self, request, pk=None):
-        updated = change_exit_pass_status(user=request.user, exit_pass=self.get_object(), next_status="REVOKED")
-        return Response({"ok": True, "success": True, "status": updated.status})
+    @action(detail=True, methods=["post"], url_path="mark-returned")
+    def mark_returned(self, request, pk=None):
+        updated = update_exit_pass_lifecycle(user=request.user, exit_pass=self.get_object(), action_name="RETURN")
+        return Response({"ok": True, "success": True, "pass_status": updated.pass_status, "status": updated.pass_status})
 
     @action(detail=True, methods=["post"], url_path="mark-used")
     def mark_used(self, request, pk=None):
-        updated = change_exit_pass_status(user=request.user, exit_pass=self.get_object(), next_status="USED")
-        return Response({"ok": True, "success": True, "status": updated.status})
+        return self.mark_returned(request, pk=pk)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, pk=None):
+        updated = update_exit_pass_lifecycle(user=request.user, exit_pass=self.get_object(), action_name="CANCEL")
+        return Response({"ok": True, "success": True, "pass_status": updated.pass_status, "status": updated.pass_status})
+
+    @action(detail=True, methods=["post"], url_path="decline")
+    def decline(self, request, pk=None):
+        return self.cancel(request, pk=pk)

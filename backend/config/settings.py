@@ -1,7 +1,9 @@
 import os
+import socket
 import sys
 from datetime import timedelta
 from pathlib import Path
+
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
@@ -19,20 +21,56 @@ if not SECRET_KEY:
 LOGS_DIR = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 
+
+def _detect_local_lan_ips() -> list[str]:
+    ips: set[str] = set()
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
+    except OSError:
+        pass
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            primary_ip = s.getsockname()[0]
+            if primary_ip and not primary_ip.startswith("127."):
+                ips.add(primary_ip)
+    except OSError:
+        pass
+    return sorted(ips)
+
+
+_DETECTED_LAN_IPS = _detect_local_lan_ips()
+
 ALLOWED_HOSTS = [
     h.strip()
     for h in os.getenv(
         "ALLOWED_HOSTS",
-        "localhost,127.0.0.1,0.0.0.0,testserver,.attendsure.ph,.attendsure.com.ph,.trycloudflare.com",
+        "localhost,127.0.0.1,[::1],testserver,10.0.2.2,.attendsure.ph,.attendsure.com.ph,.trycloudflare.com",
     ).split(",")
-    if h.strip()
+    if h.strip() and h.strip() != "*"
 ]
+
+if DEBUG or "test" in sys.argv:
+    for _safe_host in (
+        "localhost",
+        "127.0.0.1",
+        "[::1]",
+        "testserver",
+        "10.0.2.2",
+        *_DETECTED_LAN_IPS,
+    ):
+        if _safe_host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(_safe_host)
 
 CSRF_TRUSTED_ORIGINS = [
     o.strip()
     for o in os.getenv(
         "CSRF_TRUSTED_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,http://macasandig.attendsure.com.ph,https://macasandig.attendsure.com.ph",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8081,http://127.0.0.1:8081,http://macasandig.attendsure.com.ph,https://macasandig.attendsure.com.ph",
     ).split(",")
     if o.strip()
 ]
@@ -47,20 +85,20 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework.authtoken",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "apps.accounts.apps.AccountsConfig",
     "apps.school.apps.SchoolConfig",
     "apps.students.apps.StudentsConfig",
     "apps.attendance.apps.AttendanceConfig",
     "apps.campus.apps.CampusConfig",
-    "apps.messaging.apps.MessagingConfig",
     "apps.reports.apps.ReportsConfig",
 ]
 
 MIDDLEWARE = [
+    "django.middleware.gzip.GZipMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "common.request_logger.RequestLoggerMiddleware",
-    "django.middleware.gzip.GZipMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "common.security.ApiSecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -94,6 +132,7 @@ TEMPLATES = [
 DB_ENGINE = os.getenv("DB_ENGINE", "postgresql").strip().lower()
 if "test" in sys.argv:
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+    PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 elif "postgres" in DB_ENGINE:
     DATABASES = {
         "default": {
@@ -103,17 +142,40 @@ elif "postgres" in DB_ENGINE:
             "PASSWORD": os.getenv("DB_PASSWORD", ""),
             "HOST": os.getenv("DB_HOST", "127.0.0.1"),
             "PORT": os.getenv("DB_PORT", "5432"),
-            # "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", 60)),
-            "CONN_MAX_AGE": 600,
+            "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
             "CONN_HEALTH_CHECKS": True,
             "OPTIONS": {"connect_timeout": 5},
         }
     }
 else:
-    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+            "CONN_MAX_AGE": 60,
+        }
+    }
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-USE_REDIS_CACHE = os.getenv("USE_REDIS_CACHE", "False").strip().lower() in ("true", "1")
+def _resolve_use_redis_cache(
+    raw_use_redis: str | None,
+    raw_redis_url: str | None,
+    *,
+    is_testing: bool = False,
+) -> bool:
+    if is_testing:
+        return False
+    if raw_use_redis is not None and raw_use_redis.strip() != "":
+        return raw_use_redis.strip().lower() in ("true", "1", "yes")
+    return bool((raw_redis_url or "").strip())
+
+
+_RAW_REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_URL = _RAW_REDIS_URL or "redis://127.0.0.1:6379/0"
+USE_REDIS_CACHE = _resolve_use_redis_cache(
+    os.getenv("USE_REDIS_CACHE"),
+    _RAW_REDIS_URL,
+    is_testing="test" in sys.argv,
+)
 
 if USE_REDIS_CACHE:
     CACHES = {
@@ -156,24 +218,49 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": "60/minute",
-        "user": "600/minute",
+        "login": "10/minute",
+        "user": "300/minute",
+        "scan_ping": "60/minute",
     },
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
 }
 
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
-if not DEBUG:
-    CORS_ALLOWED_ORIGINS = [
-        o.strip()
-        for o in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
-        if o.strip()
-    ]
+_DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173,"
+    "http://127.0.0.1:5173,"
+    "http://localhost:5174,"
+    "http://127.0.0.1:5174,"
+    "http://localhost:8081,"
+    "http://127.0.0.1:8081,"
+    "http://localhost:19006,"
+    "http://127.0.0.1:19006,"
+    "http://localhost,"
+    "http://127.0.0.1,"
+    "http://macasandig.attendsure.com.ph,"
+    "https://macasandig.attendsure.com.ph"
+)
+CORS_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ALLOWED_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",")
+    if o.strip() and o.strip() != "*"
+]
+
+if DEBUG:
+    for _lan_ip in _DETECTED_LAN_IPS:
+        for _port in (8000, 8081, 5173, 5174, 19006):
+            _origin = f"http://{_lan_ip}:{_port}"
+            if _origin not in CORS_ALLOWED_ORIGINS:
+                CORS_ALLOWED_ORIGINS.append(_origin)
+            if _origin not in CSRF_TRUSTED_ORIGINS:
+                CSRF_TRUSTED_ORIGINS.append(_origin)
 
 LOGGING = {
     "version": 1,
@@ -211,7 +298,6 @@ LOGGING = {
         },
     },
     "loggers": {
-        # Silences duplicate uncolored runserver lines so RequestLoggerMiddleware owns terminal output
         "django.server": {
             "handlers": ["console"],
             "level": "ERROR",
@@ -240,8 +326,8 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
-FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
@@ -256,8 +342,5 @@ if ENABLE_HTTPS_STRICT and not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
-# Security & Competition Feature Flags
-ALLOW_LEGACY_UNSIGNED_QR = os.getenv("ALLOW_LEGACY_UNSIGNED_QR", "False").strip().lower() in ("true", "1", "yes")
 REQUIRE_GPS_FOR_QR_SCAN = os.getenv("REQUIRE_GPS_FOR_QR_SCAN", "False").strip().lower() in ("true", "1", "yes")
-# Judge Demo Mode is enabled automatically in local DEBUG mode or when ENABLE_JUDGE_DEMO=True is explicitly set
 ENABLE_JUDGE_DEMO = os.getenv("ENABLE_JUDGE_DEMO", "False").strip().lower() in ("true", "1", "yes")

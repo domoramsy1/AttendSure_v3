@@ -16,6 +16,8 @@ import {
   FileSpreadsheet,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { SEAL_COLORS } from '../../theme/tokens';
+import { canViewSf4, getCurrentUserFromStorage } from '../../utils/permissions';
 import { DEFAULT_PAGE_SETUP, PAPER_SIZES } from '../../types/pageSetup';
 import type { PageSetupConfig } from '../../types/pageSetup';
 
@@ -24,7 +26,7 @@ export const DEFAULT_DEPED_LANDSCAPE_SETUP: PageSetupConfig = {
   layoutMode: 'pages',
   orientation: 'landscape',
   paperSize: 'legal',
-  pageColor: '#ffffff',
+  pageColor: SEAL_COLORS.white,
   marginPreset: 'compact',
   margins: { top: 0.25, right: 0.25, bottom: 0.25, left: 0.25 },
   headerRepeat: 'first_page_only',
@@ -42,17 +44,17 @@ export const resolvePaperDimensionsInches = (
 
 export const DepEdOfficialSeal: React.FC<{ size?: number }> = ({ size = 56 }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="none" aria-label="Official Seal">
-    <circle cx="32" cy="32" r="30" fill="#ffffff" stroke="#004b87" strokeWidth="2.5" />
-    <circle cx="32" cy="32" r="24" fill="#f8fafc" stroke="#d97706" strokeWidth="1.5" />
-    <path d="M20 38L32 18L44 38H20Z" fill="#004b87" opacity="0.9" />
-    <circle cx="32" cy="28" r="4" fill="#f59e0b" />
+    <circle cx="32" cy="32" r="30" fill={SEAL_COLORS.white} stroke={SEAL_COLORS.navy} strokeWidth="2.5" />
+    <circle cx="32" cy="32" r="24" fill={SEAL_COLORS.surface} stroke={SEAL_COLORS.amber} strokeWidth="1.5" />
+    <path d="M20 38L32 18L44 38H20Z" fill={SEAL_COLORS.navy} opacity="0.9" />
+    <circle cx="32" cy="28" r="4" fill={SEAL_COLORS.gold} />
     <text
       x="32"
       y="49"
       textAnchor="middle"
       fontSize="7"
       fontWeight="800"
-      fill="#0f172a"
+      fill={SEAL_COLORS.ink}
       fontFamily="Arial, sans-serif"
     >
       DEPED
@@ -103,10 +105,7 @@ export const ReportHeaderBar: React.FC<ReportHeaderBarProps> = ({
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const userRole = (localStorage.getItem('attendsure_role') || '').toUpperCase();
-  const isLeader = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(
-    userRole
-  );
+  const isLeader = canViewSf4(getCurrentUserFromStorage());
 
   const reportTabs = [
     { id: 'sf1', label: 'Form 1 (School Register)' },
@@ -211,7 +210,7 @@ export const ReportHeaderBar: React.FC<ReportHeaderBarProps> = ({
                   fontWeight: 700,
                   cursor: 'pointer',
                   backgroundColor: isActive ? brand.buttonBg : 'transparent',
-                  color: isActive ? '#ffffff' : tokens.textSecondary,
+                  color: isActive ? tokens.onPrimary : tokens.textSecondary,
                   boxShadow: isActive ? tokens.cardShadow : 'none',
                   transition: 'all 0.15s ease',
                 }}
@@ -366,7 +365,7 @@ const sanitizePageColor = (raw?: string): string => {
   if (raw && /^#[0-9a-fA-F]{6}$/.test(raw.trim())) {
     return raw.trim();
   }
-  return '#ffffff';
+  return SEAL_COLORS.white;
 };
 
 export const ReportViewerShell: React.FC<ReportViewerShellProps> = ({
@@ -617,8 +616,8 @@ export const ReportViewerShell: React.FC<ReportViewerShellProps> = ({
             min-height: 0 !important;
             overflow: visible !important;
             display: block !important;
-            background: #ffffff !important;
-            background-color: #ffffff !important;
+            background: ${SEAL_COLORS.white} !important;
+            background-color: ${SEAL_COLORS.white} !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }

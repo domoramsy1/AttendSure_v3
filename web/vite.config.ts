@@ -16,10 +16,9 @@ export default defineConfig({
     },
   },
   server: {
-    port: 80, // Default HTTP port
-    host: true, // Listen on all network interfaces (0.0.0.0)
-    strictPort: true,
-    // Protect against host-header injection and unauthorized tunnels
+    port: 5173,
+    host: true,
+    strictPort: false,
     allowedHosts: [
       '.attendsure.com.ph',
       '.trycloudflare.com',
@@ -37,7 +36,6 @@ export default defineConfig({
         timeout: 10000,
         configure: (proxy) => {
           proxy.on('error', (_err, _req, res) => {
-            // Verify res is an HTTP response before writing headers
             if (res && 'writeHead' in res && typeof res.writeHead === 'function') {
               const httpRes = res as ServerResponse;
               if (!httpRes.headersSent) {
@@ -61,10 +59,9 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 1200,
-    sourcemap: false, // Cybersecurity: prevent source code leaks in production
+    sourcemap: false,
     rollupOptions: {
       output: {
-        // Universal function syntax compatible with all Vite and Rollup releases
         manualChunks(id: string) {
           if (id.includes('node_modules')) {
             if (id.includes('react') || id.includes('react-dom')) {

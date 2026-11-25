@@ -72,7 +72,7 @@ export function ControlSwitch<T extends string>({
               borderWidth: 0,
               borderStyle: 'none',
               backgroundColor: active ? brand.buttonBg : 'transparent',
-              color: active ? '#ffffff' : tokens.textSecondary,
+              color: active ? tokens.onPrimary : tokens.textSecondary,
               boxShadow: active ? '0 1px 4px rgba(0, 0, 0, 0.18)' : 'none',
               fontFamily: fonts.sans,
               fontSize: size === 'sm' ? fonts.size.xs : fonts.size.sm,
@@ -92,7 +92,7 @@ export function ControlSwitch<T extends string>({
                   fontSize: '0.62rem',
                   fontWeight: 800,
                   backgroundColor: active ? 'rgba(255,255,255,0.22)' : tokens.primaryLight,
-                  color: active ? '#ffffff' : brand.primary,
+                  color: active ? tokens.onPrimary : brand.primary,
                 }}
               >
                 {opt.badge}
@@ -172,7 +172,7 @@ export const ToggleSwitch: React.FC<ToggleSwitchProps> = ({
             width: 20,
             height: 20,
             borderRadius: '50%',
-            backgroundColor: '#ffffff',
+            backgroundColor: tokens.onPrimary,
             transform: checked ? 'translateX(18px)' : 'translateX(0)',
             transition: 'transform 0.18s ease',
             boxShadow: '0 1px 3px rgba(0,0,0,0.2)',

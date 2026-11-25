@@ -3,14 +3,65 @@ from django.db.models import UniqueConstraint
 from django.utils import timezone
 
 DAY_OF_WEEK_CHOICES = [
-    (1, "Monday"),
-    (2, "Tuesday"),
-    (3, "Wednesday"),
-    (4, "Thursday"),
-    (5, "Friday"),
-    (6, "Saturday"),
-    (7, "Sunday"),
+    ("ALL_WEEKDAYS", "Monday to Friday"),
+    ("MWF", "Monday, Wednesday, Friday"),
+    ("TTH", "Tuesday, Thursday"),
+    ("1", "Monday"),
+    ("2", "Tuesday"),
+    ("3", "Wednesday"),
+    ("4", "Thursday"),
+    ("5", "Friday"),
+    ("6", "Saturday"),
+    ("7", "Sunday"),
 ]
+
+_NAMED_WEEKDAYS = {
+    "MON": 1,
+    "MONDAY": 1,
+    "TUE": 2,
+    "TUESDAY": 2,
+    "WED": 3,
+    "WEDNESDAY": 3,
+    "THU": 4,
+    "THURSDAY": 4,
+    "FRI": 5,
+    "FRIDAY": 5,
+    "SAT": 6,
+    "SATURDAY": 6,
+    "SUN": 7,
+    "SUNDAY": 7,
+}
+
+
+def expand_schedule_days(day_of_week: str | int | None) -> set[int]:
+    """Return the ISO weekday numbers (1=Mon through 7=Sun) for a class period schedule."""
+    clean = str(day_of_week or "ALL_WEEKDAYS").strip().upper()
+    if clean in {"ALL_WEEKDAYS", "ALL", "WEEKDAYS", "MON-FRI", "MON_FRI"}:
+        return {1, 2, 3, 4, 5}
+    if clean == "MWF":
+        return {1, 3, 5}
+    if clean == "TTH":
+        return {2, 4}
+    if clean in _NAMED_WEEKDAYS:
+        return {_NAMED_WEEKDAYS[clean]}
+    if clean.isdigit():
+        val = int(clean)
+        if 1 <= val <= 7:
+            return {val}
+
+    days: set[int] = set()
+    for token in clean.replace("/", ",").split(","):
+        part = token.strip()
+        if part in _NAMED_WEEKDAYS:
+            days.add(_NAMED_WEEKDAYS[part])
+        elif part.isdigit() and 1 <= int(part) <= 7:
+            days.add(int(part))
+    return days or {1, 2, 3, 4, 5}
+
+
+def period_runs_on_weekday(day_of_week: str | int | None, iso_weekday: int) -> bool:
+    """Return True when a class period's day_of_week includes the given ISO weekday (1=Mon..7=Sun)."""
+    return iso_weekday in expand_schedule_days(day_of_week)
 
 HOLIDAY_TYPE_CHOICES = [
     ("HOLIDAY", "Holiday"),
@@ -21,15 +72,19 @@ HOLIDAY_TYPE_CHOICES = [
 
 class SchoolYear(models.Model):
     id = models.BigAutoField(primary_key=True)
-    code = models.CharField(max_length=20, unique=True)
+    name = models.CharField(max_length=20, unique=True, db_index=True)
     start_date = models.DateField()
-    baseline_cutoff_date = models.DateField(db_column="first_friday_june")
+    baseline_cutoff_date = models.DateField(null=True, blank=True)
     end_date = models.DateField()
     is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
-        db_table = "academic_years"
+        db_table = "school_years"
         ordering = ["-start_date"]
+
+    @property
+    def code(self) -> str:
+        return self.name
 
     def save(self, *args, **kwargs):
         with transaction.atomic():
@@ -38,11 +93,11 @@ class SchoolYear(models.Model):
             super().save(*args, **kwargs)
 
     def __str__(self) -> str:
-        return self.code
+        return self.name
 
 
 class AdministrativeDivision(models.Model):
-    """3NF Lookup: District -> Division -> Region hierarchy."""
+    """3NF Geographic Hierarchy Lookup: Region / Division / District."""
 
     id = models.BigAutoField(primary_key=True)
     region = models.CharField(max_length=100, blank=True, default="")
@@ -58,12 +113,12 @@ class AdministrativeDivision(models.Model):
 
 class SchoolSettings(models.Model):
     """
-    3NF School Profile:
-    - Links to SchoolYear instead of duplicating academic_year text.
-    - Links to FacultyProfile for Principal details (derives name & title via JOIN).
-    - Links to CampusBoundary instead of duplicating latitude/longitude/radius.
+    3NF School Settings:
+    - Links to SchoolYear, TeacherProfile (Principal), AdministrativeDivision, and CampusBoundary.
+    - Zero duplicated text for school year, principal name, or GPS boundary fields.
     """
 
+    id = models.BigAutoField(primary_key=True)
     school_id = models.CharField(max_length=50, unique=True)
     school_name = models.CharField(max_length=255)
     division_ref = models.ForeignKey(
@@ -87,22 +142,18 @@ class SchoolSettings(models.Model):
         blank=True,
         related_name="school_profile",
     )
-
     address = models.TextField(blank=True, default="")
     contact_number = models.CharField(max_length=50, blank=True, default="")
     email = models.EmailField(blank=True, default="")
     website = models.URLField(max_length=200, blank=True, default="")
-
-    principal_faculty = models.ForeignKey(
-        "accounts.FacultyProfile",
+    principal_teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        db_column="principal_faculty_id",
         related_name="headed_schools",
     )
     superintendent_name = models.CharField(max_length=255, blank=True, default="")
-
     school_logo = models.CharField(max_length=255, blank=True, null=True)
     left_logo = models.CharField(max_length=255, blank=True, null=True)
     right_logo = models.CharField(max_length=255, blank=True, null=True)
@@ -110,12 +161,10 @@ class SchoolSettings(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "attendsure_school_profile"
+        db_table = "school_settings"
 
 
 class SchoolHoliday(models.Model):
-    """1NF & 3NF Compliant: Stores holiday_type atomically instead of '[TYPE] reason' strings."""
-
     id = models.BigAutoField(primary_key=True)
     holiday_date = models.DateField(unique=True, db_index=True)
     holiday_type = models.CharField(max_length=20, choices=HOLIDAY_TYPE_CHOICES, default="HOLIDAY", db_index=True)
@@ -135,11 +184,14 @@ class Building(models.Model):
         db_table = "buildings"
         ordering = ["name"]
 
+    def __str__(self) -> str:
+        return self.name
+
 
 class Room(models.Model):
     id = models.BigAutoField(primary_key=True)
     name = models.CharField(max_length=100, unique=True)
-    building_ref = models.ForeignKey(
+    building = models.ForeignKey(
         Building, on_delete=models.SET_NULL, null=True, blank=True, related_name="rooms"
     )
     capacity = models.PositiveIntegerField(default=45)
@@ -152,134 +204,133 @@ class Room(models.Model):
         ordering = ["name"]
 
     @property
-    def building(self) -> str:
-        return self.building_ref.name if self.building_ref_id and self.building_ref else ""
+    def building_name(self) -> str:
+        return self.building.name if (self.building_id and self.building) else ""
+
+    def __str__(self) -> str:
+        return self.name
 
 
 class GradeLevel(models.Model):
     id = models.BigAutoField(primary_key=True)
+    level_number = models.PositiveSmallIntegerField(unique=True, db_index=True)
     code = models.CharField(max_length=20, unique=True)
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, unique=True)
     stage = models.CharField(max_length=20, blank=True, default="JHS")
-    level_order = models.IntegerField(default=1, db_index=True)
 
     class Meta:
         db_table = "grade_levels"
-        ordering = ["level_order"]
+        ordering = ["level_number"]
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = f"G{self.level_number}"
+        if not self.stage:
+            self.stage = "SHS" if self.level_number >= 11 else "JHS"
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class Subject(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=30, unique=True, db_index=True)
+    title = models.CharField(max_length=200)
+    grade_level = models.ForeignKey(
+        GradeLevel, on_delete=models.CASCADE, null=True, blank=True, related_name="subjects"
+    )
+    subject_category = models.CharField(max_length=50, blank=True, default="Core")
+    units = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        db_table = "subjects"
+        ordering = ["code"]
+
+    def __str__(self) -> str:
+        return f"{self.code} - {self.title}"
 
 
 class Section(models.Model):
-    """3NF Section: Room name comes strictly from Room FK (no duplicate room_number text column)."""
+    """
+    Strict 3NF Section:
+    - Uniquely constrained by (school_year, grade_level, name).
+    - Adviser references TeacherProfile directly.
+    """
 
     id = models.BigAutoField(primary_key=True)
-    school_year = models.ForeignKey(
-        SchoolYear, on_delete=models.CASCADE, db_column="academic_year_id", related_name="sections"
-    )
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=50, blank=True, default="")
+    school_year = models.ForeignKey(SchoolYear, on_delete=models.CASCADE, related_name="sections")
     grade_level = models.ForeignKey(GradeLevel, on_delete=models.CASCADE, related_name="sections")
     adviser = models.ForeignKey(
-        "accounts.FacultyProfile",
+        "accounts.TeacherProfile",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="advising_sections",
     )
-    room = models.ForeignKey(Room, on_delete=models.SET_NULL, null=True, blank=True, related_name="sections")
-    name = models.CharField(max_length=100)
-    code = models.CharField(max_length=50, blank=True, default="")
+    room_name = models.CharField(max_length=100, blank=True, default="")
     track_strand = models.CharField(max_length=150, blank=True, default="")
-    capacity = models.IntegerField(default=45)
+    capacity = models.PositiveIntegerField(default=45)
     is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
         db_table = "sections"
-        ordering = ["name"]
+        ordering = ["grade_level__level_number", "name"]
         constraints = [
             UniqueConstraint(fields=["school_year", "grade_level", "name"], name="uq_section_year_grade_name")
         ]
 
     @property
     def room_number(self) -> str:
-        return self.room.name if self.room_id and self.room else ""
+        return self.room_name
 
-
-class Subject(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    grade_level = models.ForeignKey(
-        GradeLevel, on_delete=models.CASCADE, null=True, blank=True, related_name="uniform_subjects"
-    )
-    code = models.CharField(max_length=30, unique=True)
-    title = models.CharField(max_length=200)
-    subject_category = models.CharField(max_length=50, blank=True, default="Core")
-    units = models.IntegerField(default=1)
-
-    class Meta:
-        db_table = "subjects"
-        ordering = ["code"]
+    def __str__(self) -> str:
+        return f"{self.grade_level.name} - {self.name}" if self.grade_level_id else self.name
 
 
 class ClassPeriod(models.Model):
     """
-    1NF & 3NF Schedule:
-    - Single schedule_code (removed duplicate code).
-    - Room resolved via Room FK (removed duplicate room_number).
-    - Days stored atomically in ClassPeriodDay (removed multi-valued days_of_week text).
+    Strict 3NF ClassPeriod:
+    - Never stores school_year or grade_level (determined via ClassPeriod -> Section).
+    - Atomic day_of_week choice (1..7, ALL_WEEKDAYS, MWF, TTH).
     """
 
     id = models.BigAutoField(primary_key=True)
     schedule_code = models.CharField(max_length=64, blank=True, default="", db_index=True)
-    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name="schedules")
-    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="schedules")
-    faculty = models.ForeignKey(
-        "accounts.FacultyProfile",
+    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name="class_periods")
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="class_periods")
+    teacher = models.ForeignKey(
+        "accounts.TeacherProfile",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        db_column="faculty_id",
         related_name="assigned_periods",
     )
-    room = models.ForeignKey(Room, on_delete=models.SET_NULL, null=True, blank=True, related_name="schedules")
+    day_of_week = models.CharField(
+        max_length=16, choices=DAY_OF_WEEK_CHOICES, default="ALL_WEEKDAYS", db_index=True
+    )
     start_time = models.TimeField(db_index=True)
     end_time = models.TimeField()
     is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
-        db_table = "schedules"
+        db_table = "class_periods"
         ordering = ["start_time"]
         indexes = [
-            models.Index(fields=["section", "is_active", "start_time"], name="idx_sched_sec_active_time"),
-            models.Index(fields=["faculty", "is_active"], name="idx_sched_fac_active"),
+            models.Index(fields=["teacher", "is_active"], name="idx_period_teacher_active"),
+            models.Index(fields=["section", "is_active"], name="idx_period_section_active"),
         ]
 
     @property
-    def room_number(self) -> str:
-        if self.room_id and self.room:
-            return self.room.name
-        if self.section_id and self.section and self.section.room_id and self.section.room:
-            return self.section.room.name
-        return ""
+    def room_name(self) -> str:
+        return self.section.room_name if (self.section_id and self.section) else ""
 
-    @property
-    def days_of_week(self) -> str:
-        day_nums = sorted(d.day_of_week for d in self.days.all())
-        if day_nums == [1, 2, 3, 4, 5] or not day_nums:
-            return "MON-FRI"
-        if day_nums == [1, 3, 5]:
-            return "MWF"
-        if day_nums == [2, 4]:
-            return "TTH"
-        names = {1: "MON", 2: "TUE", 3: "WED", 4: "THU", 5: "FRI", 6: "SAT", 7: "SUN"}
-        return ",".join(names[n] for n in day_nums if n in names)
+    def runs_on_weekday(self, iso_weekday: int) -> bool:
+        return period_runs_on_weekday(self.day_of_week, iso_weekday)
 
-
-class ClassPeriodDay(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    class_period = models.ForeignKey(
-        ClassPeriod, on_delete=models.CASCADE, db_column="schedule_id", related_name="days"
-    )
-    day_of_week = models.PositiveSmallIntegerField(choices=DAY_OF_WEEK_CHOICES, default=1)
-
-    class Meta:
-        db_table = "schedule_days"
-        constraints = [
-            UniqueConstraint(fields=["class_period", "day_of_week"], name="uq_period_day_of_week")
-        ]
+    def __str__(self) -> str:
+        subj = self.subject.code if self.subject_id else "CLASS"
+        sec = self.section.name if self.section_id else ""
+        return f"{sec} {subj} ({self.start_time}-{self.end_time})"

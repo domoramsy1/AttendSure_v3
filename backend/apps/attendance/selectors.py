@@ -1,82 +1,22 @@
 from django.db.models import Count, Q
 from django.utils import timezone
-from common.media import build_media_url
-from common.permissions import get_user_role, is_school_leader
-from common.qr_signer import sign_student_qr
-from apps.school.models import ClassPeriod, Section
+
+from apps.accounts.selectors import (
+    get_teacher_enrollment_ids,
+    get_teacher_section_ids,
+    resolve_teacher_for_user,
+)
+from apps.school.models import ClassPeriod, Section, period_runs_on_weekday
 from apps.school.selectors import format_section_label
 from apps.students.models import Enrollment
+from common.media import build_media_url
+from common.permissions import is_school_leader
+from common.qr_signer import sign_student_qr
 from .models import ClassAttendance, DailyAttendance, ExitPass
-
-FacultyModel = Section._meta.get_field("adviser").related_model
-PERIOD_FACULTY_FIELD = next(
-    f.name for f in ClassPeriod._meta.fields if f.db_column == "faculty_id"
-)
-PASS_FACULTY_FIELD = next(
-    f.name for f in ExitPass._meta.fields if f.db_column == "faculty_id"
-)
-
-
-def resolve_faculty_for_user(user):
-    if not user or not getattr(user, "is_authenticated", False):
-        return None
-    if get_user_role(user) == "PARENT":
-        return None
-
-    by_account = (
-        FacultyModel.objects.select_related("account")
-        .filter(account__user=user, is_active=True)
-        .first()
-    )
-    if by_account:
-        return by_account
-
-    lookup = Q()
-    clean_username = str(getattr(user, "username", "") or "").strip()
-    clean_email = str(getattr(user, "email", "") or "").strip()
-    if clean_username:
-        lookup |= Q(employee_id__iexact=clean_username)
-    if clean_email:
-        lookup |= Q(email__iexact=clean_email)
-
-    if lookup:
-        return (
-            FacultyModel.objects.select_related("account")
-            .filter(lookup, is_active=True)
-            .first()
-        )
-    return None
-
-
-def get_faculty_section_ids(faculty_member) -> set[int]:
-    if not faculty_member:
-        return set()
-    advisory_ids = set(
-        Section.objects.filter(adviser=faculty_member, is_active=True).values_list("id", flat=True)
-    )
-    period_sec_ids = set(
-        faculty_member.assigned_periods.filter(is_active=True, section__is_active=True)
-        .exclude(section_id__isnull=True)
-        .values_list("section_id", flat=True)
-    )
-    return advisory_ids | period_sec_ids
-
-
-def get_faculty_student_ids(faculty_member) -> set[int]:
-    section_ids = get_faculty_section_ids(faculty_member)
-    if not section_ids:
-        return set()
-    return set(
-        Enrollment.objects.filter(
-            section_id__in=section_ids,
-            status__in=["ENROLLED", "TRANSFERRED_IN"],
-            student__is_active=True,
-        ).values_list("student_id", flat=True)
-    )
 
 
 def format_class_list_items(
-    students,
+    enrollments,
     request=None,
     period_logs=None,
     daily_logs=None,
@@ -86,31 +26,36 @@ def format_class_list_items(
     period_logs = period_logs or {}
     daily_logs = daily_logs or {}
     period_record_ids = period_record_ids or {}
-    return [
-        {
-            "id": st.id,
-            "lrn": st.lrn,
-            "full_name": st.full_name,
-            "name": st.full_name,
-            "sex": st.sex,
-            "gender": st.sex,
-            "photo_url": build_media_url(st.photo, request),
-            "attendance_status": (
-                (period_logs.get((period_id, st.id)) if period_id else period_logs.get(st.id))
-                or daily_logs.get(st.id)
-                or "UNSCANNED"
-            ),
-            "attendance_record_id": (
-                period_record_ids.get((period_id, st.id))
-                if period_id
-                else period_record_ids.get(st.id)
-            ),
-            "parent_contact": st.parent_contact,
-            "qr_token": st.qr_token,
-            "qr_payload": sign_student_qr(st.lrn, st.qr_token),
-        }
-        for st in students
-    ]
+    items = []
+    for enr in enrollments:
+        st = enr.student
+        items.append(
+            {
+                "id": st.id,
+                "student_id": st.id,
+                "enrollment_id": enr.id,
+                "lrn": st.lrn,
+                "full_name": st.full_name,
+                "name": st.full_name,
+                "gender": st.gender,
+                "sex": st.gender,
+                "photo_url": build_media_url(st.photo, request),
+                "attendance_status": (
+                    (period_logs.get((period_id, enr.id)) if period_id else period_logs.get(enr.id))
+                    or daily_logs.get(enr.id)
+                    or "UNSCANNED"
+                ),
+                "attendance_record_id": (
+                    period_record_ids.get((period_id, enr.id))
+                    if period_id
+                    else period_record_ids.get(enr.id)
+                ),
+                "guardian_contact": st.guardian_contact,
+                "qr_token": st.qr_token,
+                "qr_payload": sign_student_qr(st.lrn, st.qr_token),
+            }
+        )
+    return items
 
 
 def get_assigned_classes_with_class_lists(
@@ -120,19 +65,19 @@ def get_assigned_classes_with_class_lists(
     include_students: bool = True,
     request=None,
 ) -> list[dict]:
-    faculty_member = resolve_faculty_for_user(user)
+    teacher = resolve_teacher_for_user(user)
     leader = is_school_leader(user)
     today = timezone.localdate()
 
     periods_qs = ClassPeriod.objects.none()
     extra_sections_qs = Section.objects.none()
 
-    if faculty_member and not view_all:
+    if teacher and not view_all:
         own_periods = ClassPeriod.objects.filter(
-            Q(**{PERIOD_FACULTY_FIELD: faculty_member}) | Q(section__adviser=faculty_member),
+            Q(teacher=teacher) | Q(section__adviser=teacher),
             is_active=True,
         ).distinct()
-        own_advisory = Section.objects.filter(adviser=faculty_member, is_active=True)
+        own_advisory = Section.objects.filter(adviser=teacher, is_active=True)
 
         if own_periods.exists() or own_advisory.exists():
             periods_qs = own_periods
@@ -146,14 +91,14 @@ def get_assigned_classes_with_class_lists(
 
     periods = list(
         periods_qs.select_related(
-            "section", "section__grade_level", "subject", PERIOD_FACULTY_FIELD
+            "section", "section__grade_level", "subject", "teacher", "teacher__user"
         ).order_by("start_time")
     )
     covered_section_ids = {p.section_id for p in periods if p.section_id}
     extra_sections = list(
         extra_sections_qs.exclude(id__in=covered_section_ids)
         .select_related("grade_level")
-        .order_by("grade_level__level_order", "name")
+        .order_by("grade_level__level_number", "name")
     )
 
     all_section_ids = covered_section_ids | {s.id for s in extra_sections}
@@ -176,53 +121,56 @@ def get_assigned_classes_with_class_lists(
             start_s = str(p.start_time)[:5] if p.start_time else ""
             end_s = str(p.end_time)[:5] if p.end_time else ""
             cnt = counts_by_sec.get(p.section_id, 0)
-            results.append({
-                "id": p.id,
-                "schedule_id": p.id,
-                "section_id": p.section_id,
-                "name": p.section.name,
-                "section_name": p.section.name,
-                "grade_level": p.section.grade_level.name if p.section.grade_level else "",
-                "subject_code": p.subject.code if p.subject else "",
-                "subject_title": p.subject.title if p.subject else "",
-                "room": p.section.room_number or p.room_number,
-                "start_time": start_s,
-                "end_time": end_s,
-                "time_display": f"{start_s} - {end_s}".strip(" -"),
-                "total_students": cnt,
-                "students": [],
-                "is_adviser": bool(faculty_member and p.section.adviser_id == faculty_member.id),
-            })
+            results.append(
+                {
+                    "id": p.id,
+                    "schedule_id": p.id,
+                    "section_id": p.section_id,
+                    "name": p.section.name,
+                    "section_name": p.section.name,
+                    "grade_level": p.section.grade_level.name if p.section.grade_level else "",
+                    "subject_code": p.subject.code if p.subject else "",
+                    "subject_title": p.subject.title if p.subject else "",
+                    "room": p.section.room_name,
+                    "day_of_week": p.day_of_week,
+                    "start_time": start_s,
+                    "end_time": end_s,
+                    "time_display": f"{start_s} - {end_s}".strip(" -"),
+                    "total_students": cnt,
+                    "students": [],
+                    "is_adviser": bool(teacher and p.section.adviser_id == teacher.id),
+                }
+            )
         return results
 
-    enrollments = (
+    enrollments = list(
         Enrollment.objects.filter(
             section_id__in=all_section_ids, status="ENROLLED", student__is_active=True
         )
         .select_related("student")
         .order_by("student__last_name", "student__first_name")
     )
-    students_by_sec: dict[int, list] = {}
-    all_student_ids = []
+    enr_by_sec: dict[int, list[Enrollment]] = {}
+    all_enr_ids = []
     for enr in enrollments:
-        students_by_sec.setdefault(enr.section_id, []).append(enr.student)
-        all_student_ids.append(enr.student_id)
+        enr_by_sec.setdefault(enr.section_id, []).append(enr)
+        all_enr_ids.append(enr.id)
 
     period_logs = {}
     period_record_ids = {}
     for row in ClassAttendance.objects.filter(
         attendance_date=today,
-        student_id__in=all_student_ids,
-    ).values("id", "class_period_id", "student_id", "status"):
-        key = (row["class_period_id"], row["student_id"])
+        enrollment_id__in=all_enr_ids,
+    ).values("id", "class_period_id", "enrollment_id", "status"):
+        key = (row["class_period_id"], row["enrollment_id"])
         period_logs[key] = row["status"]
         period_record_ids[key] = row["id"]
 
     daily_logs = dict(
         DailyAttendance.objects.filter(
             attendance_date=today,
-            student_id__in=all_student_ids,
-        ).values_list("student_id", "status")
+            enrollment_id__in=all_enr_ids,
+        ).values_list("enrollment_id", "status")
     )
 
     results = []
@@ -230,7 +178,7 @@ def get_assigned_classes_with_class_lists(
         if not p.section:
             continue
         class_list = format_class_list_items(
-            students_by_sec.get(p.section_id, []),
+            enr_by_sec.get(p.section_id, []),
             request=request,
             period_logs=period_logs,
             daily_logs=daily_logs,
@@ -239,47 +187,53 @@ def get_assigned_classes_with_class_lists(
         )
         start_s = str(p.start_time)[:5] if p.start_time else ""
         end_s = str(p.end_time)[:5] if p.end_time else ""
-        results.append({
-            "id": p.id,
-            "schedule_id": p.id,
-            "section_id": p.section_id,
-            "name": p.section.name,
-            "section_name": p.section.name,
-            "grade_level": p.section.grade_level.name if p.section.grade_level else "",
-            "subject_code": p.subject.code if p.subject else "",
-            "subject_name": p.subject.title if p.subject else "",
-            "subject_title": p.subject.title if p.subject else "",
-            "room": p.section.room_number or p.room_number,
-            "start_time": start_s,
-            "end_time": end_s,
-            "time_display": f"{start_s} - {end_s}".strip(" -"),
-            "total_students": len(class_list),
-            "students": class_list,
-            "is_adviser": bool(faculty_member and p.section.adviser_id == faculty_member.id),
-        })
+        results.append(
+            {
+                "id": p.id,
+                "schedule_id": p.id,
+                "section_id": p.section_id,
+                "name": p.section.name,
+                "section_name": p.section.name,
+                "grade_level": p.section.grade_level.name if p.section.grade_level else "",
+                "subject_code": p.subject.code if p.subject else "",
+                "subject_name": p.subject.title if p.subject else "",
+                "subject_title": p.subject.title if p.subject else "",
+                "room": p.section.room_name,
+                "day_of_week": p.day_of_week,
+                "start_time": start_s,
+                "end_time": end_s,
+                "time_display": f"{start_s} - {end_s}".strip(" -"),
+                "total_students": len(class_list),
+                "students": class_list,
+                "is_adviser": bool(teacher and p.section.adviser_id == teacher.id),
+            }
+        )
 
     for sec in extra_sections:
         class_list = format_class_list_items(
-            students_by_sec.get(sec.id, []), request=request, daily_logs=daily_logs
+            enr_by_sec.get(sec.id, []), request=request, daily_logs=daily_logs
         )
-        results.append({
-            "id": sec.id,
-            "schedule_id": sec.id,
-            "section_id": sec.id,
-            "name": sec.name,
-            "section_name": sec.name,
-            "grade_level": sec.grade_level.name if sec.grade_level else "",
-            "subject_code": "ADV",
-            "subject_name": "Advisory Homeroom",
-            "subject_title": "Advisory Homeroom",
-            "room": sec.room_number or "",
-            "start_time": "",
-            "end_time": "",
-            "time_display": "Homeroom",
-            "total_students": len(class_list),
-            "students": class_list,
-            "is_adviser": bool(faculty_member and sec.adviser_id == faculty_member.id),
-        })
+        results.append(
+            {
+                "id": sec.id,
+                "schedule_id": sec.id,
+                "section_id": sec.id,
+                "name": sec.name,
+                "section_name": sec.name,
+                "grade_level": sec.grade_level.name if sec.grade_level else "",
+                "subject_code": "ADV",
+                "subject_name": "Advisory Homeroom",
+                "subject_title": "Advisory Homeroom",
+                "room": sec.room_name,
+                "day_of_week": "ALL_WEEKDAYS",
+                "start_time": "",
+                "end_time": "",
+                "time_display": "Homeroom",
+                "total_students": len(class_list),
+                "students": class_list,
+                "is_adviser": bool(teacher and sec.adviser_id == teacher.id),
+            }
+        )
 
     return results
 
@@ -289,45 +243,48 @@ def get_section_class_list(*, user, section_id: int | None = None, request=None)
         return get_assigned_classes_with_class_lists(user=user, request=request)
 
     if not is_school_leader(user):
-        faculty_member = resolve_faculty_for_user(user)
-        if not faculty_member or section_id not in get_faculty_section_ids(faculty_member):
+        teacher = resolve_teacher_for_user(user)
+        if not teacher or section_id not in get_teacher_section_ids(teacher):
             return []
 
     today = timezone.localdate()
-    students = [
-        enr.student
-        for enr in Enrollment.objects.filter(
+    enrollments = list(
+        Enrollment.objects.filter(
             section_id=section_id, status="ENROLLED", student__is_active=True
         )
         .select_related("student")
         .order_by("student__last_name", "student__first_name")
-    ]
-    student_ids = [s.id for s in students]
+    )
+    enr_ids = [e.id for e in enrollments]
 
     period_logs = dict(
-        ClassAttendance.objects.filter(student_id__in=student_ids, attendance_date=today).values_list(
-            "student_id", "status"
+        ClassAttendance.objects.filter(enrollment_id__in=enr_ids, attendance_date=today).values_list(
+            "enrollment_id", "status"
         )
     )
     daily_logs = dict(
-        DailyAttendance.objects.filter(student_id__in=student_ids, attendance_date=today).values_list(
-            "student_id", "status"
+        DailyAttendance.objects.filter(enrollment_id__in=enr_ids, attendance_date=today).values_list(
+            "enrollment_id", "status"
         )
     )
     return format_class_list_items(
-        students, request=request, period_logs=period_logs, daily_logs=daily_logs
+        enrollments, request=request, period_logs=period_logs, daily_logs=daily_logs
     )
 
 
-def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> dict:
+def get_adviser_matrix(*, user, section_id: int | None = None, target_date=None, request=None) -> dict:
     today = timezone.localdate()
+    active_date = target_date or today
+    active_weekday = active_date.isoweekday()
     now_time = timezone.localtime().time()
-    faculty_member = resolve_faculty_for_user(user)
+    is_past_date = active_date < today
+    is_future_date = active_date > today
+    teacher = resolve_teacher_for_user(user)
     leader = is_school_leader(user)
 
     advisory_ids = (
-        set(Section.objects.filter(adviser=faculty_member, is_active=True).values_list("id", flat=True))
-        if faculty_member
+        set(Section.objects.filter(adviser=teacher, is_active=True).values_list("id", flat=True))
+        if teacher
         else set()
     )
 
@@ -335,13 +292,13 @@ def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> 
         sections_qs = (
             Section.objects.filter(is_active=True)
             .select_related("grade_level")
-            .order_by("grade_level__level_order", "name")
+            .order_by("grade_level__level_number", "name")
         )
-    elif faculty_member:
+    elif teacher:
         sections_qs = (
-            Section.objects.filter(id__in=get_faculty_section_ids(faculty_member), is_active=True)
+            Section.objects.filter(id__in=get_teacher_section_ids(teacher), is_active=True)
             .select_related("grade_level")
-            .order_by("grade_level__level_order", "name")
+            .order_by("grade_level__level_number", "name")
         )
     else:
         sections_qs = Section.objects.none()
@@ -363,6 +320,7 @@ def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> 
     )
     if not target:
         return {
+            "date": str(active_date),
             "has_advisory_class": False,
             "is_adviser": False,
             "available_sections": available,
@@ -370,34 +328,40 @@ def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> 
             "matrix": [],
         }
 
-    periods = list(
-        ClassPeriod.objects.filter(section=target, is_active=True)
-        .select_related("subject", PERIOD_FACULTY_FIELD)
+    periods = [
+        p
+        for p in ClassPeriod.objects.filter(section=target, is_active=True)
+        .select_related("subject", "teacher", "teacher__user")
         .order_by("start_time")
-    )
-    students = [
-        e.student
-        for e in Enrollment.objects.filter(section=target, status="ENROLLED", student__is_active=True)
+        if period_runs_on_weekday(p.day_of_week, active_weekday)
+    ]
+    period_ids = [p.id for p in periods]
+    enrollments = list(
+        Enrollment.objects.filter(section=target, status="ENROLLED", student__is_active=True)
         .select_related("student")
         .order_by("student__last_name", "student__first_name")
-    ]
-    student_ids = [s.id for s in students]
+    )
+    enr_ids = [e.id for e in enrollments]
 
     log_map: dict[tuple[int, int], tuple[str, str]] = {}
     first_seen_map: dict[int, str] = {}
     started_period_ids: set[int] = set()
 
-    on_campus_ids = set(
+    on_campus_enr_ids = set(
         DailyAttendance.objects.filter(
-            attendance_date=today,
-            student_id__in=student_ids,
+            attendance_date=active_date,
+            enrollment_id__in=enr_ids,
             status__in=["PRESENT", "LATE"],
-        ).values_list("student_id", flat=True)
+        ).values_list("enrollment_id", flat=True)
     )
 
     attendance_rows = (
-        ClassAttendance.objects.filter(attendance_date=today, student_id__in=student_ids)
-        .values("student_id", "class_period_id", "status", "scanned_at", "class_period__subject__code")
+        ClassAttendance.objects.filter(
+            attendance_date=active_date,
+            enrollment_id__in=enr_ids,
+            class_period_id__in=period_ids,
+        )
+        .values("enrollment_id", "class_period_id", "status", "scanned_at", "class_period__subject__code")
         .order_by("scanned_at")
     )
 
@@ -405,81 +369,93 @@ def get_adviser_matrix(*, user, section_id: int | None = None, request=None) -> 
         started_period_ids.add(row["class_period_id"])
         t_str = timezone.localtime(row["scanned_at"]).strftime("%I:%M %p") if row["scanned_at"] else ""
         st_code = row["status"]
-        log_map[(row["student_id"], row["class_period_id"])] = (st_code, t_str)
+        log_map[(row["enrollment_id"], row["class_period_id"])] = (st_code, t_str)
 
         if st_code in ("PRESENT", "LATE"):
-            on_campus_ids.add(row["student_id"])
-            if row["student_id"] not in first_seen_map:
+            on_campus_enr_ids.add(row["enrollment_id"])
+            if row["enrollment_id"] not in first_seen_map:
                 subj_code = row["class_period__subject__code"] or "CLASS"
-                first_seen_map[row["student_id"]] = f"{t_str} ({subj_code})" if t_str else subj_code
+                first_seen_map[row["enrollment_id"]] = f"{t_str} ({subj_code})" if t_str else subj_code
 
     matrix = []
     total_periods = len(periods)
 
-    for idx, st in enumerate(students, start=1):
+    for idx, enr in enumerate(enrollments, start=1):
+        st = enr.student
         attended = cutting = 0
-        in_campus = st.id in on_campus_ids
+        in_campus = enr.id in on_campus_enr_ids
         subj_cells = []
 
         for p in periods:
-            rec = log_map.get((st.id, p.id))
+            rec = log_map.get((enr.id, p.id))
             if rec:
                 st_status, scan_t = rec
                 if st_status in ("PRESENT", "LATE", "EXCUSED"):
                     attended += 1
-                elif st_status in ("ABSENT", "CUTTING") and in_campus:
+                elif st_status == "ABSENT" and in_campus:
                     st_status = "CUTTING"
                     cutting += 1
             else:
                 scan_t = ""
-                if in_campus and (p.id in started_period_ids or (p.start_time and now_time >= p.start_time)):
+                period_elapsed = (
+                    p.id in started_period_ids
+                    or is_past_date
+                    or (not is_future_date and bool(p.start_time and now_time >= p.start_time))
+                )
+                if in_campus and period_elapsed:
                     st_status = "CUTTING"
                     cutting += 1
                 else:
                     st_status = "UNSCANNED"
 
-            subj_cells.append({
-                "schedule_id": p.id,
-                "subject_code": p.subject.code if p.subject else "SUB",
-                "status": st_status,
-                "time": scan_t,
-            })
+            subj_cells.append(
+                {
+                    "schedule_id": p.id,
+                    "subject_code": p.subject.code if p.subject else "SUB",
+                    "status": st_status,
+                    "time": scan_t,
+                }
+            )
 
-        campus_status = first_seen_map.get(st.id) or ("Present Today" if in_campus else "Not Seen Yet")
+        campus_status = first_seen_map.get(enr.id) or ("Present Today" if in_campus else "Not Seen Yet")
 
-        matrix.append({
-            "number": idx,
-            "student_id": st.id,
-            "student_name": st.full_name,
-            "lrn": st.lrn,
-            "photo_url": build_media_url(st.photo, request),
-            "campus_status": campus_status,
-            "presence_state": "ACTIVE" if in_campus else "NONE",
-            "attended_count": attended,
-            "cutting_count": cutting,
-            "total_subjects": total_periods,
-            "compliance_rate": round((attended / total_periods) * 100) if total_periods else 0,
-            "subjects": subj_cells,
-        })
+        matrix.append(
+            {
+                "number": idx,
+                "student_id": st.id,
+                "enrollment_id": enr.id,
+                "student_name": st.full_name,
+                "lrn": st.lrn,
+                "photo_url": build_media_url(st.photo, request),
+                "campus_status": campus_status,
+                "presence_state": "ACTIVE" if in_campus else "NONE",
+                "attended_count": attended,
+                "cutting_count": cutting,
+                "total_subjects": total_periods,
+                "compliance_rate": round((attended / total_periods) * 100) if total_periods else 0,
+                "subjects": subj_cells,
+            }
+        )
 
-    schedules_list = []
-    for p in periods:
-        period_faculty = getattr(p, PERIOD_FACULTY_FIELD, None)
-        schedules_list.append({
+    schedules_list = [
+        {
             "schedule_id": p.id,
             "subject_code": p.subject.code if p.subject else "",
             "subject_name": p.subject.title if p.subject else "",
-            "faculty_name": period_faculty.full_name if period_faculty else "Unassigned",
+            "teacher_name": p.teacher.full_name if p.teacher else "Unassigned",
             "time_window": f"{str(p.start_time)[:5]} - {str(p.end_time)[:5]}" if p.start_time else "",
-        })
+        }
+        for p in periods
+    ]
 
     return {
+        "date": str(active_date),
         "has_advisory_class": True,
         "is_adviser": target.id in advisory_ids,
         "section_id": target.id,
         "section_name": target.name,
         "grade_level": target.grade_level.name if target.grade_level else "",
-        "total_students": len(students),
+        "total_students": len(enrollments),
         "available_sections": available,
         "schedules": schedules_list,
         "matrix": matrix,
@@ -496,7 +472,8 @@ def get_attendance_logs(
     qs = (
         ClassAttendance.objects.filter(attendance_date=target_date)
         .select_related(
-            "student",
+            "enrollment",
+            "enrollment__student",
             "class_period",
             "class_period__subject",
             "class_period__section",
@@ -506,10 +483,10 @@ def get_attendance_logs(
     )
 
     if not is_school_leader(user):
-        faculty_member = resolve_faculty_for_user(user)
-        if not faculty_member:
+        teacher = resolve_teacher_for_user(user)
+        if not teacher:
             return []
-        qs = qs.filter(student_id__in=get_faculty_student_ids(faculty_member))
+        qs = qs.filter(enrollment_id__in=get_teacher_enrollment_ids(teacher))
 
     if section_id:
         qs = qs.filter(class_period__section_id=section_id)
@@ -519,9 +496,10 @@ def get_attendance_logs(
     return [
         {
             "id": item.id,
-            "student_id": item.student_id,
-            "student_name": item.student.full_name,
-            "lrn": item.student.lrn,
+            "enrollment_id": item.enrollment_id,
+            "student_id": item.enrollment.student_id,
+            "student_name": item.enrollment.student.full_name,
+            "lrn": item.enrollment.student.lrn,
             "schedule_id": item.class_period_id,
             "subject_code": item.class_period.subject.code if (item.class_period and item.class_period.subject) else "",
             "section": format_section_label(
@@ -540,33 +518,46 @@ def get_attendance_logs(
 
 
 def get_exit_passes_for_user(*, user, status_filter: str = "ALL", search: str = ""):
-    role = get_user_role(user)
-    qs = ExitPass.objects.select_related("student", PASS_FACULTY_FIELD, "issued_by").order_by("-created_at")
+    now = timezone.now()
+    qs = ExitPass.objects.select_related(
+        "enrollment",
+        "enrollment__student",
+        "enrollment__section",
+        "enrollment__section__grade_level",
+        "teacher",
+        "teacher__user",
+        "issued_by",
+    ).order_by("-issued_at")
 
     if status_filter and status_filter.upper() != "ALL":
         clean_st = status_filter.upper()
-        if clean_st == "DECLINED":
-            qs = qs.filter(status__in=["REVOKED", "DECLINED"])
-        else:
-            qs = qs.filter(status=clean_st)
+        if clean_st == "ACTIVE":
+            qs = qs.filter(is_cancelled=False, returned_at__isnull=True, valid_until__gte=now)
+        elif clean_st == "RETURNED":
+            qs = qs.filter(is_cancelled=False, returned_at__isnull=False)
+        elif clean_st in ("OVERDUE", "EXPIRED"):
+            qs = qs.filter(is_cancelled=False, returned_at__isnull=True, valid_until__lt=now)
+        elif clean_st in ("CANCELLED", "DECLINED"):
+            qs = qs.filter(is_cancelled=True)
+
     if search:
         qs = qs.filter(
             Q(pass_number__icontains=search)
-            | Q(student__first_name__icontains=search)
-            | Q(student__last_name__icontains=search)
-            | Q(**{f"{PASS_FACULTY_FIELD}__first_name__icontains": search})
-            | Q(**{f"{PASS_FACULTY_FIELD}__last_name__icontains": search})
+            | Q(enrollment__student__first_name__icontains=search)
+            | Q(enrollment__student__last_name__icontains=search)
+            | Q(teacher__user__first_name__icontains=search)
+            | Q(teacher__user__last_name__icontains=search)
             | Q(reason__icontains=search)
+            | Q(destination__icontains=search)
         )
-    if role == "PARENT":
-        return qs.filter(student__parent_user=user)
+
     if not is_school_leader(user):
-        faculty_member = resolve_faculty_for_user(user)
-        if not faculty_member:
+        teacher = resolve_teacher_for_user(user)
+        if not teacher:
             return qs.none()
         qs = qs.filter(
-            Q(**{PASS_FACULTY_FIELD: faculty_member})
-            | Q(issued_by=faculty_member)
-            | Q(student_id__in=get_faculty_student_ids(faculty_member))
+            Q(teacher=teacher)
+            | Q(issued_by=user)
+            | Q(enrollment_id__in=get_teacher_enrollment_ids(teacher))
         )
     return qs

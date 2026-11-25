@@ -11,6 +11,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAlert } from '../../context/AlertContext';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
+import { canManageSchoolSetup, getCurrentUserFromStorage, normalizeRole } from '../../utils/permissions';
 import {
   Calendar,
   DoorOpen,
@@ -29,8 +30,10 @@ import {
   UserCheck,
   GraduationCap,
   Sparkles,
+  Printer,
 } from 'lucide-react';
 import { AcademicSetupModal, type TabType as AcademicTabType } from '../modals/AcademicSetupModal';
+import { PrintableExportModal, type SelectableOption } from '../modals/PrintableExportModal';
 
 interface ScheduleItem {
   id: number;
@@ -45,19 +48,21 @@ interface ScheduleItem {
   subject_code?: string;
   subject_name?: string;
   subject_title?: string;
-  faculty_id?: number;
-  faculty?:
+  teacher_id?: number;
+  teacher?:
     | number
     | string
     | { id?: number; full_name?: string; name?: string; photo_url?: string; photo?: string; employee_id?: string }
     | null;
-  faculty_name?: string;
-  faculty_title?: string;
+  teacher_name?: string;
+  teacher_employee_id?: string;
+  teacher_photo_url?: string | null;
   room?: number | string | { id?: number; name?: string; room_number?: string } | null;
   room_name?: string;
   room_number?: string;
   start_time: string;
   end_time: string;
+  day_of_week?: string;
   days_of_week?: string;
 }
 
@@ -84,7 +89,7 @@ interface SectionOption {
   is_adviser?: boolean;
 }
 
-interface FacultyOption {
+interface TeacherOption {
   id: number;
   full_name: string;
   name?: string;
@@ -93,7 +98,7 @@ interface FacultyOption {
   photo_url?: string | null;
   position?: string;
   department?: string;
-  can_teach?: boolean;
+  can_handle_classes?: boolean;
 }
 
 const sanitizeInput = (raw: string, maxLength = 60): string =>
@@ -101,19 +106,6 @@ const sanitizeInput = (raw: string, maxLength = 60): string =>
     .replace(/[\u0000-\u001F\u007F<>]/g, '')
     .trim()
     .slice(0, maxLength);
-
-const getUserRole = (): string => {
-  try {
-    const raw = localStorage.getItem('attendsure_user') || localStorage.getItem('user');
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return String(parsed.role || parsed.system_role || '').toUpperCase();
-    }
-    return String(localStorage.getItem('attendsure_role') || '').toUpperCase();
-  } catch {
-    return '';
-  }
-};
 
 const getSectionDisplayName = (sec: SectionOption): string => {
   return sec.name || sec.section_name || `Section #${sec.id}`;
@@ -133,11 +125,11 @@ export const SchedulesTab: React.FC = () => {
 
   const cachedPeriods = peekApiCache(API_ROUTES.school.periods, { page_size: 500 });
   const cachedSections = peekApiCache(API_ROUTES.school.sections, { page_size: 500 });
-  const cachedFaculty = peekApiCache(API_ROUTES.accounts.facultyDropdown);
+  const cachedTeachers = peekApiCache(API_ROUTES.accounts.teachersDropdown);
 
   const [schedules, setSchedules] = useState<ScheduleItem[]>(() => extractList<ScheduleItem>(cachedPeriods));
   const [sections, setSections] = useState<SectionOption[]>(() => extractList<SectionOption>(cachedSections));
-  const [facultyList, setFacultyList] = useState<FacultyOption[]>(() => extractList<FacultyOption>(cachedFaculty));
+  const [teacherList, setTeacherList] = useState<TeacherOption[]>(() => extractList<TeacherOption>(cachedTeachers));
   const [loading, setLoading] = useState<boolean>(() => !cachedPeriods);
   const [error, setError] = useState<string>('');
 
@@ -147,19 +139,45 @@ export const SchedulesTab: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [modalTab, setModalTab] = useState<AcademicTabType>('SCHEDULE');
   const [editItem, setEditItem] = useState<any>(null);
+  const [selectedPeriodIds, setSelectedPeriodIds] = useState<number[]>([]);
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const isInteracting = useRef(false);
-  isInteracting.current = isModalOpen;
+  isInteracting.current = isModalOpen || isPrintModalOpen;
 
-  const userRole = useMemo(() => getUserRole(), []);
-  // Strict RBAC check: never fail open on empty/unknown role
-  const canManageSchedule = useMemo(() => {
-    return ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
-  }, [userRole]);
+  const currentUser = useMemo(() => getCurrentUserFromStorage(), []);
+  const userRole = normalizeRole(currentUser);
+  const isLeaderRole = ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
+  // Strict RBAC check: ADMIN gets full CRUD; PRINCIPAL gets View-Only (all Create/Edit/Delete hidden)
+  const canManageSchedule = canManageSchoolSetup(currentUser);
 
-  const loggedInFacultyName = useMemo(() => {
-    return (localStorage.getItem('attendsure_faculty_name') || localStorage.getItem('faculty_name') || '')
+  const sectionOptions = useMemo<SelectableOption[]>(
+    () =>
+      sections.map((sec) => ({
+        id: sec.id,
+        label: `${sec.grade_level_name ? `${sec.grade_level_name} - ` : ''}${getSectionDisplayName(sec)}`,
+      })),
+    [sections]
+  );
+
+  const teacherOptions = useMemo<SelectableOption[]>(
+    () =>
+      teacherList.map((t) => ({
+        id: t.id,
+        label: `${t.full_name || t.name || `Teacher #${t.id}`}${t.employee_id ? ` (${t.employee_id})` : ''}`,
+      })),
+    [teacherList]
+  );
+
+  const togglePeriodSelection = (periodId: number) => {
+    setSelectedPeriodIds((prev) =>
+      prev.includes(periodId) ? prev.filter((id) => id !== periodId) : [...prev, periodId]
+    );
+  };
+
+  const loggedInTeacherName = useMemo(() => {
+    return (localStorage.getItem('attendsure_teacher_name') || localStorage.getItem('attendsure_full_name') || '')
       .trim()
       .toLowerCase();
   }, []);
@@ -178,13 +196,13 @@ export const SchedulesTab: React.FC = () => {
         return true;
       }
 
-      if (loggedInFacultyName) {
-        if (sec.adviser_name && sec.adviser_name.toLowerCase().includes(loggedInFacultyName)) return true;
-        if (sec.adviser_full_name && sec.adviser_full_name.toLowerCase().includes(loggedInFacultyName)) return true;
-        if (typeof sec.adviser === 'string' && sec.adviser.toLowerCase().includes(loggedInFacultyName)) return true;
+      if (loggedInTeacherName) {
+        if (sec.adviser_name && sec.adviser_name.toLowerCase().includes(loggedInTeacherName)) return true;
+        if (sec.adviser_full_name && sec.adviser_full_name.toLowerCase().includes(loggedInTeacherName)) return true;
+        if (typeof sec.adviser === 'string' && sec.adviser.toLowerCase().includes(loggedInTeacherName)) return true;
         if (typeof sec.adviser === 'object' && sec.adviser) {
           const advName = (sec.adviser.full_name || sec.adviser.name || '').toLowerCase();
-          if (advName && (advName.includes(loggedInFacultyName) || loggedInFacultyName.includes(advName))) {
+          if (advName && (advName.includes(loggedInTeacherName) || loggedInTeacherName.includes(advName))) {
             return true;
           }
         }
@@ -192,7 +210,7 @@ export const SchedulesTab: React.FC = () => {
 
       return false;
     },
-    [loggedInFacultyName, loggedInUsername]
+    [loggedInTeacherName, loggedInUsername]
   );
 
   const myAdvisorySection = useMemo(() => {
@@ -228,7 +246,7 @@ export const SchedulesTab: React.FC = () => {
           params: { page_size: 500, ...cacheParam },
           signal: controller.signal,
         }),
-        apiClient.get(API_ROUTES.accounts.facultyDropdown, {
+        apiClient.get(API_ROUTES.accounts.teachersDropdown, {
           params: cacheParam,
           signal: controller.signal,
         }),
@@ -238,11 +256,11 @@ export const SchedulesTab: React.FC = () => {
 
       const schedRes = results[0].status === 'fulfilled' ? results[0].value : null;
       const secRes = results[1].status === 'fulfilled' ? results[1].value : null;
-      const facRes = results[2].status === 'fulfilled' ? results[2].value : null;
+      const teacherRes = results[2].status === 'fulfilled' ? results[2].value : null;
 
       if (schedRes?.data) setSchedules(extractList<ScheduleItem>(schedRes.data));
       if (secRes?.data) setSections(extractList<SectionOption>(secRes.data));
-      if (facRes?.data) setFacultyList(extractList<FacultyOption>(facRes.data));
+      if (teacherRes?.data) setTeacherList(extractList<TeacherOption>(teacherRes.data));
 
       if (results[0].status === 'rejected' && results[1].status === 'rejected') {
         const reason = results[0].reason as { name?: string; code?: string };
@@ -274,7 +292,7 @@ export const SchedulesTab: React.FC = () => {
 
   const hasAutoSelectedRef = useRef(false);
   useEffect(() => {
-    if (!hasAutoSelectedRef.current && myAdvisorySection && userRole === 'FACULTY') {
+    if (!hasAutoSelectedRef.current && myAdvisorySection && userRole === 'TEACHER') {
       setSelectedSectionFilter(String(myAdvisorySection.id));
       hasAutoSelectedRef.current = true;
     }
@@ -301,7 +319,7 @@ export const SchedulesTab: React.FC = () => {
 
     showConfirm({
       title: 'Delete Class Schedule',
-      message: `Are you sure you want to delete class period "${code}"? The assigned subject faculty will be unassigned.`,
+      message: `Are you sure you want to delete class period "${code}"? The assigned subject teacher will be unassigned.`,
       confirmLabel: 'Delete Schedule',
       isDestructive: true,
       onConfirm: async () => {
@@ -352,35 +370,33 @@ export const SchedulesTab: React.FC = () => {
     return item.schedule_code || item.code || `SCH-${String(item.id).padStart(4, '0')}`;
   };
 
-  const getFacultyInfo = useCallback(
+  const getTeacherInfo = useCallback(
     (item: ScheduleItem) => {
       let name = 'Unassigned';
-      let photo: string | null = null;
-      let employeeId = '';
+      let photo: string | null = item.teacher_photo_url || null;
+      let employeeId = item.teacher_employee_id || '';
 
-      if (item.faculty_name && item.faculty_name.trim() !== '' && item.faculty_name.trim().toLowerCase() !== 'unassigned') {
-        name = item.faculty_name.trim();
-      } else if (item.faculty_title && item.faculty_title.trim() !== '') {
-        name = item.faculty_title.trim();
-      } else if (typeof item.faculty === 'object' && item.faculty) {
-        name = item.faculty.full_name || item.faculty.name || name;
-        photo = item.faculty.photo_url || item.faculty.photo || null;
-        employeeId = item.faculty.employee_id || '';
+      if (item.teacher_name && item.teacher_name.trim() !== '' && item.teacher_name.trim().toLowerCase() !== 'unassigned') {
+        name = item.teacher_name.trim();
+      } else if (typeof item.teacher === 'object' && item.teacher) {
+        name = item.teacher.full_name || item.teacher.name || name;
+        photo = item.teacher.photo_url || item.teacher.photo || photo;
+        employeeId = item.teacher.employee_id || employeeId;
       }
 
-      let targetFacultyId: number | undefined;
-      if (typeof item.faculty_id === 'number') {
-        targetFacultyId = item.faculty_id;
-      } else if (typeof item.faculty === 'number') {
-        targetFacultyId = item.faculty;
-      } else if (typeof item.faculty === 'string' && !isNaN(Number(item.faculty))) {
-        targetFacultyId = Number(item.faculty);
-      } else if (typeof item.faculty === 'object' && item.faculty && typeof item.faculty.id === 'number') {
-        targetFacultyId = item.faculty.id;
+      let targetTeacherId: number | undefined;
+      if (typeof item.teacher_id === 'number') {
+        targetTeacherId = item.teacher_id;
+      } else if (typeof item.teacher === 'number') {
+        targetTeacherId = item.teacher;
+      } else if (typeof item.teacher === 'string' && !isNaN(Number(item.teacher))) {
+        targetTeacherId = Number(item.teacher);
+      } else if (typeof item.teacher === 'object' && item.teacher && typeof item.teacher.id === 'number') {
+        targetTeacherId = item.teacher.id;
       }
 
-      if (targetFacultyId !== undefined) {
-        const matched = facultyList.find((f) => f.id === targetFacultyId);
+      if (targetTeacherId !== undefined) {
+        const matched = teacherList.find((t) => t.id === targetTeacherId);
         if (matched) {
           name = matched.full_name || matched.name || name;
           photo = matched.photo_url || matched.photo || photo;
@@ -390,7 +406,7 @@ export const SchedulesTab: React.FC = () => {
 
       return { name, photo: isSafeImageUrl(photo) ? photo : null, employeeId };
     },
-    [facultyList]
+    [teacherList]
   );
 
   const getSubjectCode = (item: ScheduleItem) => {
@@ -445,21 +461,21 @@ export const SchedulesTab: React.FC = () => {
         const code = getScheduleCode(s).toLowerCase();
         const sec = getSectionName(s).toLowerCase();
         const sub = `${getSubjectCode(s)} ${getSubjectName(s)}`.toLowerCase();
-        const fac = getFacultyInfo(s).name.toLowerCase();
+        const teacherName = getTeacherInfo(s).name.toLowerCase();
         const rm = getRoomDisplay(s).toLowerCase();
 
         return (
           code.includes(cleanSearchQuery) ||
           sec.includes(cleanSearchQuery) ||
           sub.includes(cleanSearchQuery) ||
-          fac.includes(cleanSearchQuery) ||
+          teacherName.includes(cleanSearchQuery) ||
           rm.includes(cleanSearchQuery)
         );
       }
 
       return true;
     });
-  }, [schedules, selectedSectionFilter, cleanSearchQuery, getFacultyInfo]);
+  }, [schedules, selectedSectionFilter, cleanSearchQuery, getTeacherInfo]);
 
   const currentSelectedSectionObj = useMemo(() => {
     if (selectedSectionFilter === 'ALL') return null;
@@ -497,7 +513,7 @@ export const SchedulesTab: React.FC = () => {
       }
 
       if (adviserId !== undefined) {
-        const match = facultyList.find((f) => f.id === adviserId);
+        const match = teacherList.find((t) => t.id === adviserId);
         if (match) {
           if (!name) name = match.full_name || match.name || '';
           if (!photo) photo = match.photo_url || match.photo || null;
@@ -511,7 +527,7 @@ export const SchedulesTab: React.FC = () => {
         employeeId: employeeId || '',
       };
     },
-    [facultyList]
+    [teacherList]
   );
 
   const resolvedAdviser = useMemo(() => getAdviserDetails(currentSelectedSectionObj), [currentSelectedSectionObj, getAdviserDetails]);
@@ -522,9 +538,9 @@ export const SchedulesTab: React.FC = () => {
     [schedules]
   );
 
-  const uniqueFacultyCount = useMemo(
-    () => new Set(schedules.map((s) => getFacultyInfo(s).name).filter((n) => n !== 'Unassigned')).size,
-    [schedules, getFacultyInfo]
+  const uniqueTeacherCount = useMemo(
+    () => new Set(schedules.map((s) => getTeacherInfo(s).name).filter((n) => n !== 'Unassigned')).size,
+    [schedules, getTeacherInfo]
   );
 
   const uniqueRoomsCount = useMemo(
@@ -550,10 +566,10 @@ export const SchedulesTab: React.FC = () => {
           badge={<Users size={18} color={brand.success} />}
         />
         <StatsCard
-          label="SUBJECT FACULTY"
-          value={uniqueFacultyCount}
+          label="SUBJECT TEACHERS"
+          value={uniqueTeacherCount}
           valueColor={brand.primary}
-          helpText="Faculty with class loads"
+          helpText="Teachers with class loads"
           badge={<GraduationCap size={18} color={brand.primary} />}
         />
         <StatsCard
@@ -617,45 +633,76 @@ export const SchedulesTab: React.FC = () => {
           )}
         </div>
 
-        {canManageSchedule && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {selectedPeriodIds.length > 0 && (
             <button
               type="button"
-              onClick={() => handleOpenModal('SECTION')}
-              style={ui.btnSecondary}
-              title="Add a Section and Assign an Adviser"
+              onClick={() => setSelectedPeriodIds([])}
+              style={{
+                ...ui.btnSecondary,
+                backgroundColor: tokens.primaryLight,
+                borderColor: brand.primary,
+                color: brand.primary,
+              }}
             >
-              <Users size={13} color={brand.primary} /> + Section &amp; Adviser
+              <span>{selectedPeriodIds.length} Selected &times; Clear</span>
             </button>
+          )}
 
-            <button
-              type="button"
-              onClick={() => handleOpenModal('ROOM')}
-              style={ui.btnSecondary}
-              title="Add a Classroom or Laboratory"
-            >
-              <DoorOpen size={13} color={brand.primary} /> + Room
-            </button>
+          <button
+            type="button"
+            onClick={() => setIsPrintModalOpen(true)}
+            style={{ ...ui.btnSecondary, borderColor: brand.primary, color: brand.primary }}
+            title="Download or Print Class Schedules (All or Selected)"
+          >
+            <Printer size={13} color={brand.primary} />
+            <span>
+              {selectedPeriodIds.length > 0
+                ? `Print / Export (${selectedPeriodIds.length})`
+                : 'Print / Export Schedules'}
+            </span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => handleOpenModal('SUBJECT')}
-              style={ui.btnSecondary}
-              title="Add an Academic Subject"
-            >
-              <BookOpen size={13} color={brand.primary} /> + Subject
-            </button>
+          {canManageSchedule && (
+            <>
+              <button
+                type="button"
+                onClick={() => handleOpenModal('SECTION')}
+                style={ui.btnSecondary}
+                title="Add a Section and Assign an Adviser"
+              >
+                <Users size={13} color={brand.primary} /> + Section &amp; Adviser
+              </button>
 
-            <button
-              type="button"
-              onClick={() => handleOpenModal('SCHEDULE')}
-              style={ui.btnPrimary}
-              title="Assign a Subject Faculty to this Section"
-            >
-              <Plus size={15} /> Add Subject Faculty Slot
-            </button>
-          </div>
-        )}
+              <button
+                type="button"
+                onClick={() => handleOpenModal('ROOM')}
+                style={ui.btnSecondary}
+                title="Add a Classroom or Laboratory"
+              >
+                <DoorOpen size={13} color={brand.primary} /> + Room
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleOpenModal('SUBJECT')}
+                style={ui.btnSecondary}
+                title="Add an Academic Subject"
+              >
+                <BookOpen size={13} color={brand.primary} /> + Subject
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleOpenModal('SCHEDULE')}
+                style={ui.btnPrimary}
+                title="Assign a Subject Teacher to this Section"
+              >
+                <Plus size={15} /> Add Subject Teacher Slot
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* 3A. Dedicated Advisory Class Banner */}
@@ -807,7 +854,7 @@ export const SchedulesTab: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
             <div style={{ textAlign: 'right' }}>
               <span style={{ fontSize: '0.68rem', fontWeight: 800, color: tokens.textMuted, display: 'block' }}>
-                SUBJECT FACULTY
+                SUBJECT TEACHERS
               </span>
               <strong style={{ fontSize: '1.05rem', color: brand.primary }}>
                 {filteredSchedules.length} classes scheduled
@@ -840,7 +887,7 @@ export const SchedulesTab: React.FC = () => {
             <input
               type="text"
               maxLength={60}
-              placeholder="Search by section, subject, faculty, room..."
+              placeholder="Search by section, subject, teacher, room..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{ ...ui.input, paddingLeft: 32 }}
@@ -895,7 +942,7 @@ export const SchedulesTab: React.FC = () => {
             </p>
             <p style={{ margin: 0, fontSize: '0.76rem', color: tokens.textMuted }}>
               {canManageSchedule
-                ? 'Click "+ Add Subject Faculty Slot" above to schedule a class for this section.'
+                ? 'Click "+ Add Subject Teacher Slot" above to schedule a class for this section.'
                 : 'No class schedules match your current filter.'}
             </p>
           </div>
@@ -904,10 +951,28 @@ export const SchedulesTab: React.FC = () => {
             <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
                 <tr>
+                  <th style={{ ...ui.th, width: 38, textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all visible schedule rows"
+                      checked={
+                        filteredSchedules.length > 0 &&
+                        filteredSchedules.every((row) => selectedPeriodIds.includes(row.id))
+                      }
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedPeriodIds(filteredSchedules.map((row) => row.id));
+                        } else {
+                          setSelectedPeriodIds([]);
+                        }
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  </th>
                   <th style={ui.th}>Code</th>
                   <th style={ui.th}>Class Section</th>
                   <th style={ui.th}>Subject</th>
-                  <th style={ui.th}>Subject Faculty</th>
+                  <th style={ui.th}>Subject Teacher</th>
                   <th style={ui.th}>Time Period</th>
                   <th style={ui.th}>Room</th>
                   {canManageSchedule && <th style={{ ...ui.th, textAlign: 'center' }}>Actions</th>}
@@ -916,10 +981,19 @@ export const SchedulesTab: React.FC = () => {
               <tbody>
                 {filteredSchedules.map((row) => {
                   const displayCode = getScheduleCode(row);
-                  const facultyInfo = getFacultyInfo(row);
+                  const teacherInfo = getTeacherInfo(row);
 
                   return (
                     <tr key={row.id}>
+                      <td style={{ ...ui.td, textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select schedule ${displayCode}`}
+                          checked={selectedPeriodIds.includes(row.id)}
+                          onChange={() => togglePeriodSelection(row.id)}
+                          style={{ cursor: 'pointer' }}
+                        />
+                      </td>
                       <td style={ui.td}>
                         <span
                           style={{
@@ -960,18 +1034,18 @@ export const SchedulesTab: React.FC = () => {
                       <td style={ui.td}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <ProfileAvatar
-                            photoUrl={facultyInfo.photo}
-                            name={facultyInfo.name}
+                            photoUrl={teacherInfo.photo}
+                            name={teacherInfo.name}
                             size={30}
                             iconSize={15}
                           />
                           <div>
                             <span style={{ fontSize: '0.80rem', fontWeight: 600, color: tokens.textPrimary, display: 'block' }}>
-                              {facultyInfo.name}
+                              {teacherInfo.name}
                             </span>
-                            {facultyInfo.employeeId && (
+                            {teacherInfo.employeeId && (
                               <span style={{ fontSize: '0.68rem', fontFamily: 'monospace', color: tokens.textMuted }}>
-                                {facultyInfo.employeeId}
+                                {teacherInfo.employeeId}
                               </span>
                             )}
                           </div>
@@ -1056,6 +1130,26 @@ export const SchedulesTab: React.FC = () => {
           void loadData(true, true);
           handleCloseModal();
         }}
+      />
+
+      <PrintableExportModal
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        title="Print & Download School Class Schedules"
+        defaultPackType="CLASS_SCHEDULE"
+        allowedPackTypes={['CLASS_SCHEDULE', 'COMPLETE_TEACHER_PACKET']}
+        initialScope={
+          selectedPeriodIds.length > 0 || selectedSectionFilter !== 'ALL' ? 'SELECTED' : 'ALL'
+        }
+        preselectedPeriodIds={selectedPeriodIds}
+        preselectedSectionIds={
+          selectedPeriodIds.length === 0 && selectedSectionFilter !== 'ALL'
+            ? [Number(selectedSectionFilter)]
+            : []
+        }
+        sectionOptions={sectionOptions}
+        teacherOptions={teacherOptions}
+        isSchoolLeader={isLeaderRole}
       />
     </div>
   );

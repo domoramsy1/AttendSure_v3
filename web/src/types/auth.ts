@@ -9,17 +9,19 @@ export interface RegisterPayload {
   first_name: string;
   last_name: string;
   employee_id: string;
-  role: 'FACULTY' | 'REGISTRAR' | 'ADMIN';
+  role: 'TEACHER' | 'DEPT_HEAD' | 'PRINCIPAL' | 'ADMIN';
   password: string;
   confirm_password: string;
 }
 
 export interface AuthResponse {
   token: string;
+  access?: string;
+  refresh?: string;
   user_id: number;
   username: string;
   role: string;
-  faculty_id: string | null;
-  faculty_name: string;
+  teacher_id: number | string | null;
+  teacher_name: string;
   is_superuser: boolean;
 }

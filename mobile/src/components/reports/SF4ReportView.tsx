@@ -14,6 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import { apiClient } from '../../api/client';
+import { ENDPOINTS } from '../../api/endpoints';
 import { useThemeMode } from '../../context/ThemeContext';
 import { cleanText, getFriendlyErrorMessage } from '../../constants/theme';
 import { DepEdReportHeader, DepEdReportFooter } from './DepEdReportHeaderFooter';
@@ -145,7 +146,7 @@ export const SF4ReportView: React.FC<SF4ReportViewProps> = ({
     setLoadError(null);
 
     apiClient
-      .get('reports/sf4/', {
+      .get(ENDPOINTS.REPORT_SF4, {
         params: {
           ...(month ? { month } : {}),
           ...(year ? { year } : {}),

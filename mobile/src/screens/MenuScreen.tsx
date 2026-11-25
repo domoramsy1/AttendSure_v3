@@ -17,10 +17,21 @@ import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
-import { isSafeUrl, type ThemeMode } from '../constants/theme';
+import { type ThemeMode } from '../constants/theme';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { getServerBaseUrl } from '../services/configService';
 import { TabType } from '../navigation/MainTabNavigator';
+import { isCanceledError, resolveMediaUrl } from '../utils/helpers';
+import {
+  canManageUsers,
+  canScanStudentQr,
+  canViewAcademicSetup,
+  canViewClassList,
+  canViewReports,
+  canViewSf4,
+  canViewTeacherDirectory,
+} from '../utils/permissions';
 
 const STATS_CACHE_KEY = 'attendsure_cached_menu_stats';
 
@@ -35,11 +46,6 @@ interface MenuStats {
 interface MenuScreenProps {
   onSelectScreen: (screen: TabType) => void;
 }
-
-const isCanceledError = (err: unknown): boolean => {
-  const e = err as { code?: string; name?: string };
-  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
-};
 
 export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
   const insets = useSafeAreaInsets();
@@ -60,6 +66,14 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
 
   const isMountedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
+
+  const allowClassList = canViewClassList(user);
+  const allowReports = canViewReports(user);
+  const allowSf4 = canViewSf4(user);
+  const allowStudentQr = canScanStudentQr(user);
+  const allowTeachersDir = canViewTeacherDirectory(user);
+  const allowSchedules = canViewAcademicSetup(user);
+  const allowUsers = canManageUsers(user);
 
   const loadStats = useCallback(async (fromCacheFirst = false) => {
     abortRef.current?.abort();
@@ -92,13 +106,13 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
 
     try {
       const [ov, cls] = await Promise.allSettled([
-        apiClient.get('dashboard/overview/', { signal: controller.signal }),
-        apiClient
-          .get('classroom/assigned/', { signal: controller.signal })
-          .catch((err: unknown) => {
-            if (isCanceledError(err) || controller.signal.aborted) throw err;
-            return apiClient.get('classroom/class_list/', { signal: controller.signal });
-          }),
+        apiClient.get(ENDPOINTS.DASHBOARD_OVERVIEW, { signal: controller.signal }),
+        allowClassList
+          ? apiClient.get(ENDPOINTS.ATTENDANCE_CLASSES, {
+              params: { summary: '1' },
+              signal: controller.signal,
+            })
+          : Promise.resolve({ data: [] }),
       ]);
 
       if (!isMountedRef.current || controller.signal.aborted) return;
@@ -122,7 +136,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
           rate: parsedRate,
           scans: d ? Number(d.classroom_scans_today ?? d.scans_today ?? 0) : prev.scans,
           students: d ? Number(d.total_students ?? 0) : prev.students,
-          alerts: d ? Number(d.push_alerts_today ?? 0) : prev.alerts,
+          alerts: d ? Number(d.open_loafing_incidents ?? 0) : prev.alerts,
           classes: clsList !== null ? clsList.length : prev.classes,
         };
         AsyncStorage.setItem(STATS_CACHE_KEY, JSON.stringify(next)).catch(() => {});
@@ -133,7 +147,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
     } finally {
       if (isMountedRef.current) setRefreshing(false);
     }
-  }, []);
+  }, [allowClassList]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -150,22 +164,11 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
     `${user?.first_name || ''} ${user?.last_name || ''}`.trim() ||
     user?.username ||
     '—';
-  const empId = user?.employee_id || user?.faculty_id || user?.username || '—';
+  const empId = user?.employee_id || (user?.teacher_id ? String(user.teacher_id) : '') || user?.username || '—';
   const dept = user?.department || '—';
   const email = user?.email || '—';
 
-  const rawPhoto = user?.photo || user?.avatar || null;
-  const candidatePhoto =
-    typeof rawPhoto === 'string' && rawPhoto.trim()
-      ? rawPhoto.startsWith('http://') ||
-        rawPhoto.startsWith('https://') ||
-        rawPhoto.startsWith('data:')
-        ? rawPhoto.trim()
-        : serverBase
-        ? `${serverBase.replace(/\/+$/, '')}/${rawPhoto.replace(/^\/+/, '')}`
-        : ''
-      : '';
-  const resolvedPhoto = isSafeUrl(candidatePhoto) ? candidatePhoto : null;
+  const resolvedPhoto = resolveMediaUrl(user?.photo_url || user?.photo, serverBase);
 
   useEffect(() => {
     setPhotoError(false);
@@ -183,11 +186,73 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
     sub: string;
     icon: keyof typeof Ionicons.glyphMap;
   }[] = [
+    ...(allowClassList
+      ? [
+          {
+            key: 'students' as TabType,
+            title: 'Students Directory & CRUD',
+            sub: 'Add, edit, enroll students and view QR ID passes',
+            icon: 'school-outline' as keyof typeof Ionicons.glyphMap,
+          },
+          {
+            key: 'class_list' as TabType,
+            title: 'Class List & Cutting Monitor',
+            sub: 'Inspect enrolled students and period attendance',
+            icon: 'book-outline' as keyof typeof Ionicons.glyphMap,
+          },
+          {
+            key: 'sardo_safety' as TabType,
+            title: 'SARDO & Campus Safety',
+            sub: 'Dropout early-warning, emergency roll-call & division export',
+            icon: 'shield-outline' as keyof typeof Ionicons.glyphMap,
+          },
+        ]
+      : []),
+    ...(allowTeachersDir
+      ? [
+          {
+            key: 'teachers' as TabType,
+            title: 'Teachers Directory',
+            sub: 'Manage teacher profiles, photos and 1-to-1 bound phones',
+            icon: 'people-outline' as keyof typeof Ionicons.glyphMap,
+          },
+        ]
+      : []),
+    ...(allowSchedules
+      ? [
+          {
+            key: 'schedules' as TabType,
+            title: 'Academic Setup & Schedules',
+            sub: 'Periods, sections, subjects, rooms, grades, years & holidays',
+            icon: 'calendar-number-outline' as keyof typeof Ionicons.glyphMap,
+          },
+        ]
+      : []),
+    ...(allowUsers
+      ? [
+          {
+            key: 'users' as TabType,
+            title: 'User Accounts & Roles',
+            sub: 'Create, edit and manage teacher login accounts',
+            icon: 'shield-checkmark-outline' as keyof typeof Ionicons.glyphMap,
+          },
+        ]
+      : []),
+    {
+      key: 'geofence',
+      title: 'Campus Geofence Status',
+      sub: 'Live teacher GPS boundary and loafing alerts',
+      icon: 'navigate-outline',
+    },
     {
       key: 'scanner',
-      title: 'Face & Location Check-In',
-      sub: 'Verify your school attendance',
-      icon: 'scan-outline',
+      title: allowStudentQr
+        ? 'Student QR & Teacher Time In / Out'
+        : 'Teacher Time In / Out',
+      sub: allowStudentQr
+        ? 'Scan student QR IDs or record Teacher Time In / Out with Phone Fingerprint & Campus GPS'
+        : 'Record Teacher Time In / Out via Phone Fingerprint / Biometric & Campus GPS',
+      icon: allowStudentQr ? 'scan-outline' : 'finger-print-outline',
     },
     {
       key: 'dtr',
@@ -195,12 +260,16 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
       sub: 'View and submit monthly hours',
       icon: 'time-outline',
     },
-    {
-      key: 'reports',
-      title: 'School Forms (SF1, SF2, SF4)',
-      sub: 'View official attendance forms',
-      icon: 'document-text-outline',
-    },
+    ...(allowReports
+      ? [
+          {
+            key: 'reports' as TabType,
+            title: allowSf4 ? 'DepEd Forms (SF1, SF2, SF4)' : 'DepEd Forms (SF1 & SF2)',
+            sub: 'View official DepEd attendance forms',
+            icon: 'document-text-outline' as keyof typeof Ionicons.glyphMap,
+          },
+        ]
+      : []),
     {
       key: 'calendar',
       title: 'School Calendar',
@@ -210,7 +279,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
     {
       key: 'settings',
       title: 'Settings',
-      sub: 'Password, profile and server address',
+      sub: 'Profile, password and color mode',
       icon: 'settings-outline',
     },
   ];
@@ -424,7 +493,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
 
         {tab === 'INFO' && (
           <View style={ui.card}>
-            <Text style={ui.heading}>Faculty Details</Text>
+            <Text style={ui.heading}>Teacher Details</Text>
             {[
               { k: 'NAME', v: name },
               { k: 'ID NUMBER', v: empId },
@@ -432,7 +501,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
               { k: 'EMAIL', v: email },
               { k: 'ROLE', v: role },
               { k: 'TOTAL STUDENTS', v: String(stats.students) },
-              { k: 'PARENT ALERTS TODAY', v: String(stats.alerts) },
+              { k: 'LOAFING & CUTTING ALERTS', v: String(stats.alerts) },
             ].map((r, i) => (
               <View
                 key={i}
@@ -511,7 +580,7 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
               onPress={() => onSelectScreen('settings')}
             >
               <Ionicons name="key-outline" size={16} color={palette.textPrimary} />
-              <Text style={ui.buttonSecondaryText}>Change Password or Server</Text>
+              <Text style={ui.buttonSecondaryText}>Edit Profile &amp; Password</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[ui.buttonPrimary, { backgroundColor: palette.dangerBg }]}

@@ -1,126 +1,162 @@
+# D:\AttendSure_V3\backend\apps\accounts\services.py
 from django.contrib.auth import authenticate, get_user_model
 from django.db import transaction
 from django.db.models import Q
-from django.utils import timezone
-from django.utils.html import strip_tags
+from rest_framework import serializers as drf_serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from common.audit import record_audit_log
 from common.exceptions import AppError
+from common.media import build_media_url, decode_uploaded_image
+from common.permissions import ALLOWED_ROLES, get_user_role
 from common.phone import normalize_ph_phone
-from .models import SUFFIX_CHOICES, FacultyProfile, UserProfile
-from .selectors import resolve_faculty_for_user
+from common.validators import (
+    clean_text,
+    validate_unique_teacher_phone,
+    validate_unique_user_email,
+)
+from .models import SUFFIX_CHOICES, Department, PositionTitle, TeacherProfile, UserProfile
+from .selectors import resolve_teacher_for_user
 
 User = get_user_model()
 VALID_SUFFIXES = {choice[0] for choice in SUFFIX_CHOICES}
 
 
-def _clean_input(value: object, max_length: int = 120) -> str:
-    return strip_tags(str(value or "")).strip()[:max_length]
+def get_or_create_department(name: str) -> Department | None:
+    clean = clean_text(name, 100)
+    if not clean:
+        return None
+    existing = Department.objects.filter(name__iexact=clean).first()
+    if existing:
+        return existing
+    return Department.objects.create(name=clean)
+
+
+def get_or_create_position(title: str) -> PositionTitle | None:
+    clean = clean_text(title, 100)
+    if not clean:
+        return None
+    existing = PositionTitle.objects.filter(title__iexact=clean).first()
+    if existing:
+        return existing
+    return PositionTitle.objects.create(title=clean)
 
 
 def build_user_session_payload(*, user, request=None) -> dict:
-    """Builds the unified authenticated session payload in minimal queries."""
-    profile = getattr(user, "profile", None) or (
-        UserProfile.objects.select_related(
-            "faculty",
-            "faculty__department_ref",
-            "faculty__position_ref",
-        )
-        .filter(user=user)
-        .first()
-    )
-    faculty = resolve_faculty_for_user(user)
-    role = profile.role if profile else ("ADMIN" if user.is_superuser else "FACULTY")
-    can_handle_classes = (
-        False
-        if role == "PARENT"
-        else (bool(faculty.can_handle_classes) if faculty else True)
-    )
+    """Builds the authenticated teacher/leader session payload in minimal queries."""
+    profile = getattr(user, "profile", None) or UserProfile.objects.filter(user=user).first()
+    teacher = resolve_teacher_for_user(user)
+    role = profile.role if (profile and profile.role in ALLOWED_ROLES) else get_user_role(user)
+    can_handle_classes = bool(teacher.can_handle_classes) if teacher else (role == "TEACHER")
+    photo_url = build_media_url(teacher.photo, request) if (teacher and teacher.photo) else None
 
-    photo_field = (
-        faculty.photo
-        if (faculty and faculty.photo)
-        else (profile.avatar if (profile and profile.avatar) else None)
-    )
-    photo_url = None
-    if photo_field:
-        photo_url = request.build_absolute_uri(photo_field.url) if request else photo_field.url
+    full_name = teacher.full_name if teacher else (user.get_full_name() or user.username).strip()
 
     return {
         "id": user.id,
         "username": user.username,
-        "first_name": user.first_name or (faculty.first_name if faculty else ""),
-        "middle_name": faculty.middle_name if faculty else "",
-        "last_name": user.last_name or (faculty.last_name if faculty else ""),
-        "suffix": faculty.suffix if faculty else "",
-        "full_name": (
-            faculty.full_name
-            if faculty
-            else (user.get_full_name() or user.username).strip()
-        ),
-        "email": user.email or (faculty.email if faculty else ""),
+        "first_name": user.first_name or "",
+        "middle_name": teacher.middle_name if teacher else "",
+        "last_name": user.last_name or "",
+        "suffix": teacher.suffix if teacher else "",
+        "full_name": full_name,
+        "teacher_name": full_name,
+        "email": user.email or "",
         "role": role,
-        "faculty_id": faculty.id if faculty else None,
-        "employee_id": faculty.employee_id if faculty else "",
-        "department": faculty.department if faculty else "",
-        "position": faculty.position if faculty else "",
-        "contact_number": (
-            faculty.contact_number
-            if (faculty and faculty.contact_number)
-            else (profile.phone_number if profile else "")
-        ),
-        "phone_number": (
-            profile.phone_number
-            if (profile and profile.phone_number)
-            else (faculty.contact_number if faculty else "")
-        ),
+        "teacher_id": teacher.id if teacher else None,
+        "employee_id": teacher.employee_id if teacher else "",
+        "department": teacher.department_name if teacher else "",
+        "department_name": teacher.department_name if teacher else "",
+        "position": teacher.position_title if teacher else "",
+        "position_title": teacher.position_title if teacher else "",
+        "contact_number": teacher.contact_number if teacher else "",
+        "phone_number": teacher.contact_number if teacher else "",
+        "photo": photo_url,
         "photo_url": photo_url,
         "can_handle_classes": can_handle_classes,
-        "has_bound_device": bool(faculty and faculty.bound_device_id),
-        "device_model": faculty.device_model if faculty else None,
-        "is_profile_completed": bool(profile and profile.is_profile_completed),
+        "can_teach": can_handle_classes,
+        "has_bound_device": bool(teacher and teacher.bound_device_id),
+        "has_biometric_enrolled": bool(teacher and teacher.biometric_key_id),
+        "device_model": teacher.device_model if teacher else None,
+        "is_profile_completed": bool(user.first_name and user.last_name),
+        "is_staff": bool(user.is_staff),
+        "is_superuser": bool(user.is_superuser),
     }
 
 
 def authenticate_with_identifier(*, identifier: str, password: str, request=None) -> dict:
-    clean_identifier = _clean_input(identifier, 150)
+    clean_identifier = clean_text(identifier, 150)
     if not clean_identifier or not password:
-        raise AppError("MISSING_CREDENTIALS", "Username/Employee ID and password are required.", 400)
+        raise AppError("MISSING_CREDENTIALS", "Username or Employee ID and password are required.", 400)
 
     normalized_phone = normalize_ph_phone(clean_identifier)
     lookup = (
         Q(username__iexact=clean_identifier)
         | Q(email__iexact=clean_identifier)
-        | Q(profile__faculty__employee_id__iexact=clean_identifier)
+        | Q(teacher_profile__employee_id__iexact=clean_identifier)
     )
     if normalized_phone:
-        lookup = lookup | Q(profile__phone_number=normalized_phone)
+        lookup = lookup | Q(teacher_profile__contact_number=normalized_phone)
 
     existing_user = (
         User.objects.select_related(
             "profile",
-            "profile__faculty",
-            "profile__faculty__department_ref",
-            "profile__faculty__position_ref",
+            "teacher_profile",
+            "teacher_profile__department",
+            "teacher_profile__position",
         )
         .filter(lookup)
         .first()
     )
 
-    profile = getattr(existing_user, "profile", None) if existing_user else None
-    if profile and profile.is_locked():
-        raise AppError(
-            "ACCOUNT_LOCKED",
-            "Too many failed sign-in attempts. Please wait 15 minutes or ask an administrator to unlock your account.",
-            423,
+    profile = None
+    if existing_user:
+        profile, _ = UserProfile.objects.get_or_create(
+            user=existing_user,
+            defaults={"role": "ADMIN" if existing_user.is_superuser else "TEACHER"},
         )
+        if profile.role not in ALLOWED_ROLES:
+            raise AppError(
+                "FORBIDDEN_ROLE",
+                "Only authorized school teachers and administrators can sign in to AttendSure.",
+                403,
+            )
+        if profile.is_locked():
+            record_audit_log(
+                request=request,
+                table_name="user_profiles",
+                record_id=existing_user.id,
+                action="LOCKED",
+                new_data={"username": existing_user.username},
+            )
+            raise AppError(
+                "ACCOUNT_LOCKED",
+                "Account temporarily locked after 5 failed sign-in attempts. Please wait 15 minutes or ask an administrator to unlock it.",
+                403,
+            )
 
     target_username = existing_user.username if existing_user else clean_identifier
     authenticated_user = authenticate(request=request, username=target_username, password=password)
 
     if not authenticated_user:
-        if profile:
-            profile.record_failed_attempt()
+        if profile and existing_user:
+            just_locked = profile.record_failed_attempt()
+            record_audit_log(
+                request=request,
+                table_name="user_profiles",
+                record_id=existing_user.id,
+                action="LOCKOUT" if just_locked else "LOGIN_FAIL",
+                new_data={
+                    "username": existing_user.username,
+                    "failed_login_attempts": profile.failed_login_attempts,
+                },
+            )
+            if just_locked:
+                raise AppError(
+                    "ACCOUNT_LOCKED",
+                    "Account locked for 15 minutes after 5 failed sign-in attempts.",
+                    403,
+                )
         raise AppError("INVALID_CREDENTIALS", "Invalid account credentials.", 401)
 
     if not authenticated_user.is_active:
@@ -140,77 +176,106 @@ def authenticate_with_identifier(*, identifier: str, password: str, request=None
 
 @transaction.atomic
 def update_own_profile(*, user, data: dict, files=None, request=None) -> dict:
-    first_name = _clean_input(data.get("first_name", user.first_name), 100)
-    middle_name = _clean_input(data.get("middle_name", ""), 100)
-    last_name = _clean_input(data.get("last_name", user.last_name), 100)
-    suffix = _clean_input(data.get("suffix", ""), 20)
-    if suffix not in VALID_SUFFIXES:
-        suffix = ""
+    first_name = clean_text(data.get("first_name", user.first_name), 100)
+    last_name = clean_text(data.get("last_name", user.last_name), 100)
+    teacher = resolve_teacher_for_user(user)
 
-    email = _clean_input(data.get("email", user.email), 150)
-    raw_phone = data.get("phone_number") or data.get("contact_number")
-    contact = normalize_ph_phone(raw_phone) if raw_phone is not None else None
-
-    if email and User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
+    raw_email = data.get("email", user.email)
+    try:
+        email = validate_unique_user_email(raw_email, exclude_user_id=user.pk)
+    except drf_serializers.ValidationError:
         raise AppError("EMAIL_TAKEN", "This email address is already in use.", 400)
+
+    raw_phone = data.get("contact_number") if "contact_number" in data else data.get("phone_number")
+    contact = None
+    if raw_phone is not None:
+        try:
+            contact = validate_unique_teacher_phone(
+                raw_phone, exclude_teacher_id=teacher.id if teacher else None
+            )
+        except drf_serializers.ValidationError:
+            raise AppError(
+                "PHONE_TAKEN",
+                "This mobile number is already assigned to another staff account.",
+                400,
+            )
 
     user.first_name = first_name
     user.last_name = last_name
     user.email = email
     user.save(update_fields=["first_name", "last_name", "email"])
 
-    photo_file = files.get("photo") or files.get("avatar") if files else None
-    clear_photo = str(data.get("remove_photo", "")).lower() in ("1", "true", "yes")
+    uploaded_file = (files.get("photo") or files.get("avatar")) if files else None
+    raw_photo = uploaded_file if uploaded_file is not None else (
+        data.get("photo") if "photo" in data else data.get("avatar")
+    )
+    explicit_clear = (
+        str(data.get("remove_photo", "")).lower() in ("1", "true", "yes")
+        or (
+            uploaded_file is None
+            and ("photo" in data or "avatar" in data)
+            and raw_photo in (None, "", "null", "undefined")
+        )
+    )
 
-    profile, _ = UserProfile.objects.get_or_create(user=user)
+    if not teacher:
+        emp_code = f"EMP-{user.id:04d}"
+        if TeacherProfile.objects.filter(employee_id__iexact=emp_code).exists():
+            emp_code = f"EMP-{user.id:04d}-{user.id}"
+        teacher = TeacherProfile.objects.create(user=user, employee_id=emp_code)
+        setattr(user, "_resolved_teacher_profile", teacher)
+
+    if "middle_name" in data:
+        teacher.middle_name = clean_text(data.get("middle_name", ""), 100)
+    if "suffix" in data:
+        suffix = clean_text(data.get("suffix", ""), 20)
+        teacher.suffix = suffix if suffix in VALID_SUFFIXES else ""
     if contact is not None:
-        profile.phone_number = contact
-    if clear_photo:
-        profile.avatar = None
-    elif photo_file:
-        profile.avatar = photo_file
-    profile.is_profile_completed = bool(user.first_name and user.last_name)
-    profile.save()
-
-    faculty = resolve_faculty_for_user(user)
-    if faculty:
-        faculty.first_name = first_name or faculty.first_name
-        faculty.middle_name = middle_name
-        faculty.last_name = last_name or faculty.last_name
-        faculty.suffix = suffix
-        faculty.email = email
-        if contact is not None:
-            faculty.contact_number = contact
-        if "department" in data:
-            faculty.department = _clean_input(data.get("department"), 100)
-        if "position" in data:
-            faculty.position = _clean_input(data.get("position"), 100)
-        if clear_photo:
-            faculty.photo = None
-            faculty.photo_updated_at = timezone.now()
-        elif photo_file:
-            faculty.photo = photo_file
-            faculty.photo_updated_at = timezone.now()
-        faculty.save()
+        teacher.contact_number = contact
+    if "department" in data or "department_name" in data:
+        dept_val = data.get("department") if "department" in data else data.get("department_name")
+        teacher.department = get_or_create_department(str(dept_val or ""))
+    if "position" in data or "position_title" in data:
+        pos_val = data.get("position") if "position" in data else data.get("position_title")
+        teacher.position = get_or_create_position(str(pos_val or ""))
+    if explicit_clear:
+        teacher.photo = None
+    elif raw_photo is not None:
+        decoded = decode_uploaded_image(raw_photo, prefix="teacher")
+        if decoded is None:
+            teacher.photo = None
+        elif not isinstance(decoded, drf_serializers.SkipField):
+            teacher.photo = decoded
+    teacher.save()
+    setattr(user, "_resolved_teacher_profile", teacher)
 
     return build_user_session_payload(user=user, request=request)
 
 
 @transaction.atomic
-def reset_faculty_bound_device(*, faculty_id: int) -> FacultyProfile:
-    faculty = FacultyProfile.objects.select_related("account").filter(id=faculty_id).first()
-    if not faculty:
-        raise AppError("FACULTY_NOT_FOUND", "Faculty profile not found.", 404)
-    faculty.bound_device_id = None
-    faculty.device_model = None
-    faculty.device_bound_at = None
-    faculty.save(update_fields=["bound_device_id", "device_model", "device_bound_at", "updated_at"])
-    return faculty
+def reset_teacher_bound_device(*, teacher_id: int) -> TeacherProfile:
+    teacher = TeacherProfile.objects.select_related("user").filter(id=teacher_id).first()
+    if not teacher:
+        raise AppError("TEACHER_NOT_FOUND", "Teacher profile not found.", 404)
+    teacher.bound_device_id = None
+    teacher.device_model = None
+    teacher.device_bound_at = None
+    teacher.biometric_key_id = None
+    teacher.save(
+        update_fields=[
+            "bound_device_id",
+            "device_model",
+            "device_bound_at",
+            "biometric_key_id",
+            "updated_at",
+        ]
+    )
+    return teacher
 
 
 @transaction.atomic
 def unlock_all_locked_accounts() -> int:
     """Clears failed sign-in counters and temporary lockouts across all UserProfiles."""
     return UserProfile.objects.filter(
-        Q(failed_attempts__gt=0) | Q(locked_until__isnull=False)
-    ).update(failed_attempts=0, locked_until=None)
+        Q(failed_login_attempts__gt=0) | Q(locked_until__isnull=False)
+    ).update(failed_login_attempts=0, locked_until=None)

@@ -1,10 +1,11 @@
 /**
  * AttendSure - Reusable Metric Summary Card
- * Replaces duplicate statistic cards across Faculty, Attendance Logs, and Classes tabs.
+ * Replaces duplicate statistic cards across Teachers, Geofence, and Classes tabs.
  * File: web/src/components/common/StatsCard.tsx
  */
 
 import React from 'react';
+import { useTheme } from '../../context/ThemeContext';
 
 interface StatsCardProps {
   label: string;
@@ -18,17 +19,19 @@ export const StatsCard: React.FC<StatsCardProps> = ({
   label,
   value,
   helpText,
-  valueColor = 'var(--text-primary, #0f172a)',
+  valueColor,
   badge,
 }) => {
+  const { tokens } = useTheme();
+
   return (
     <div
       style={{
-        backgroundColor: 'var(--bg-surface, #ffffff)',
+        backgroundColor: tokens.bgSurface,
         borderRadius: 12,
-        border: '1px solid var(--border-subtle, #e2e8f0)',
+        border: `1px solid ${tokens.borderSubtle}`,
         padding: '14px 16px',
-        boxShadow: 'var(--card-shadow, 0 2px 6px rgba(0,0,0,0.03))',
+        boxShadow: tokens.cardShadow,
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'space-between',
@@ -39,7 +42,7 @@ export const StatsCard: React.FC<StatsCardProps> = ({
           style={{
             fontSize: '0.64rem',
             fontWeight: 800,
-            color: 'var(--text-secondary, #64748b)',
+            color: tokens.textSecondary,
             letterSpacing: '0.4px',
             textTransform: 'uppercase',
           }}
@@ -53,7 +56,7 @@ export const StatsCard: React.FC<StatsCardProps> = ({
         style={{
           fontSize: '1.50rem',
           fontWeight: 900,
-          color: valueColor,
+          color: valueColor || tokens.textPrimary,
           marginTop: 4,
           lineHeight: 1.15,
         }}
@@ -61,7 +64,7 @@ export const StatsCard: React.FC<StatsCardProps> = ({
         {value}
       </div>
 
-      <div style={{ fontSize: '0.70rem', color: 'var(--text-muted, #94a3b8)', marginTop: 3 }}>
+      <div style={{ fontSize: '0.70rem', color: tokens.textMuted, marginTop: 3 }}>
         {helpText}
       </div>
     </div>

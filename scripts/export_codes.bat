@@ -55,7 +55,17 @@ def _safe_rel(path: Path, base: Path) -> str:
         return str(path)
 
 
-def is_ignored_file(path: Path) -> bool:
+def is_env_secret_file(path: Path) -> bool:
+    """Returns True for .env and .env.* secret files while keeping .env.example."""
+    name = path.name.lower()
+    if name == ".env.example":
+        return False
+    return name == ".env" or name.startswith(".env.")
+
+
+def is_ignored_file(path: Path, exclude_env: bool = True) -> bool:
+    if exclude_env and is_env_secret_file(path):
+        return True
     if path.name in IGNORED_FILES or path.name.endswith("_codes_export.txt"):
         return True
     if path.suffix.lower() in BINARY_EXTENSIONS:
@@ -69,7 +79,7 @@ def is_ignored_file(path: Path) -> bool:
         return True
 
 
-def get_visible_entries(directory: Path, exclude_env: bool = False):
+def get_visible_entries(directory: Path, exclude_env: bool = True):
     try:
         raw_entries = list(directory.iterdir())
     except OSError:
@@ -83,8 +93,7 @@ def get_visible_entries(directory: Path, exclude_env: bool = False):
             f
             for f in raw_entries
             if f.is_file()
-            and not is_ignored_file(f)
-            and not (exclude_env and f.name == ".env")
+            and not is_ignored_file(f, exclude_env=exclude_env)
         ],
         key=lambda p: p.name.lower(),
     )
@@ -111,7 +120,7 @@ def normalize_targets(targets: list[Path]) -> list[Path]:
     return filtered
 
 
-def collect_multi_tree_and_files(targets: list[Path], exclude_env: bool = False):
+def collect_multi_tree_and_files(targets: list[Path], exclude_env: bool = True):
     targets = normalize_targets(targets)
     tree_lines: list[str] = [f"{PROJECT_ROOT.name}/"]
     collected_files: list[Path] = []
@@ -147,9 +156,11 @@ def collect_multi_tree_and_files(targets: list[Path], exclude_env: bool = False)
         next_prefix = "    " if is_last_target else "|   "
 
         if target.is_file():
+            if is_ignored_file(target, exclude_env=exclude_env):
+                continue
             rel_label = _safe_rel(target, PROJECT_ROOT).replace(os.sep, "/")
             tree_lines.append(f"{top_conn}{rel_label}")
-            if target not in seen_files and not is_ignored_file(target):
+            if target not in seen_files:
                 seen_files.add(target)
                 collected_files.append(target)
                 folder_stats[str(target.parent)] = folder_stats.get(str(target.parent), 0) + 1
@@ -207,7 +218,7 @@ def build_export_labels(targets: list[Path]) -> tuple[str, str, str]:
 def export_targets(
     targets: list[Path],
     print_codes: bool = False,
-    exclude_env: bool = False,
+    exclude_env: bool = True,
 ) -> Path:
     clean_targets = normalize_targets(targets)
     tree_lines, files, folder_stats, folder_count = collect_multi_tree_and_files(
@@ -294,7 +305,7 @@ def export_targets(
     return out_file
 
 
-def export_target(target: Path, print_codes: bool = False, exclude_env: bool = False) -> Path:
+def export_target(target: Path, print_codes: bool = False, exclude_env: bool = True) -> Path:
     return export_targets([target], print_codes=print_codes, exclude_env=exclude_env)
 
 
@@ -378,10 +389,20 @@ def main():
         help="Folder/file name(s), pair expression (e.g. backend+web), 'all', 'each', or 'pairs'.",
     )
     parser.add_argument("-p", "--print-codes", action="store_true")
-    parser.add_argument("--exclude-env", action="store_true")
+    parser.add_argument(
+        "--exclude-env",
+        action="store_true",
+        help="Exclude .env secret files (enabled by default).",
+    )
+    parser.add_argument(
+        "--include-env",
+        action="store_true",
+        help="Include .env secret files (off by default to protect secrets).",
+    )
     args = parser.parse_args()
+    exclude_env = not args.include_env
 
-    subfolders, _ = get_visible_entries(PROJECT_ROOT)
+    subfolders, _ = get_visible_entries(PROJECT_ROOT, exclude_env=exclude_env)
     folder_pairs = build_folder_pairs(subfolders)
 
     if not args.targets:
@@ -413,36 +434,36 @@ def main():
 
         upper_choice = choice.upper()
         if upper_choice in ("A", "ALL"):
-            export_targets([PROJECT_ROOT], args.print_codes, args.exclude_env)
+            export_targets([PROJECT_ROOT], args.print_codes, exclude_env)
         elif upper_choice in ("E", "EACH"):
             for d in subfolders:
-                export_targets([d], args.print_codes, args.exclude_env)
+                export_targets([d], args.print_codes, exclude_env)
         elif upper_choice in ("P", "PAIRS", "ALL PAIRS") and folder_pairs:
             for p1, p2 in folder_pairs:
-                export_targets([p1, p2], args.print_codes, args.exclude_env)
+                export_targets([p1, p2], args.print_codes, exclude_env)
         else:
             parsed = parse_selection_tokens(choice, subfolders, folder_pairs)
             if not parsed:
                 sys.exit(f"[ERROR] Invalid selection or path not found: {choice}")
-            export_targets(parsed, args.print_codes, args.exclude_env)
+            export_targets(parsed, args.print_codes, exclude_env)
         return
 
     joined_arg = "+".join(args.targets).strip()
     key = joined_arg.lower()
 
     if key == "all":
-        export_targets([PROJECT_ROOT], args.print_codes, args.exclude_env)
+        export_targets([PROJECT_ROOT], args.print_codes, exclude_env)
     elif key == "each":
         for d in subfolders:
-            export_targets([d], args.print_codes, args.exclude_env)
+            export_targets([d], args.print_codes, exclude_env)
     elif key in ("pairs", "all-pairs"):
         for p1, p2 in folder_pairs:
-            export_targets([p1, p2], args.print_codes, args.exclude_env)
+            export_targets([p1, p2], args.print_codes, exclude_env)
     else:
         parsed = parse_selection_tokens(joined_arg, subfolders, folder_pairs)
         if not parsed:
             sys.exit(f"[ERROR] Path or folder combination not found: {' '.join(args.targets)}")
-        export_targets(parsed, args.print_codes, args.exclude_env)
+        export_targets(parsed, args.print_codes, exclude_env)
 
 
 if __name__ == "__main__":

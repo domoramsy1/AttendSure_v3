@@ -8,41 +8,44 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const SERVER_URL_STORAGE_KEY = 'attendsure_server_base_url';
 const CUSTOM_SERVER_URL_KEY = 'attendsure_custom_server_url';
-const CACHE_TTL_MS = 2 * 60 * 1000;
+const CACHE_TTL_MS = 15 * 60 * 1000;
 
 const DANGEROUS_SCHEME_RE = /^(javascript|data|file|vbscript|blob|about):/i;
 const ANY_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 
 export const ENDPOINTS = {
-  health: '/health/db/',
+  health: '/v1/health/db/',
   auth: {
-    login: '/auth/login/',
-    logout: '/auth/logout/',
-    userProfile: '/me/',
+    login: '/v1/accounts/login/',
+    logout: '/v1/accounts/logout/',
+    userProfile: '/v1/accounts/me/',
   },
-  faculty: {
-    list: '/v1/accounts/faculty/',
+  teachers: {
+    list: '/v1/accounts/teachers/',
   },
   classroom: {
-    studentList: '/students/',
-    classList: '/classroom/assigned/',
-    takeAttendance: '/classroom/batch-scan/',
-    logs: '/classroom/logs/',
+    studentList: '/v1/students/',
+    classList: '/v1/attendance/classes/',
+    scanQr: '/v1/attendance/scan/',
+    offlineSync: '/v1/attendance/offline-sync/',
+    logs: '/v1/attendance/records/',
   },
   clearance: {
-    list: '/gate-passes/',
+    list: '/v1/attendance/exit-passes/',
   },
-  telemetry: {
-    heartbeat: '/geofence/check-in/',
-    geofenceStatus: '/geofence/status/',
+  campus: {
+    overview: '/v1/campus/overview/',
+    ping: '/v1/campus/ping/',
+    checkIn: '/v1/campus/check-in/',
+    loafing: '/v1/campus/loafing/',
   },
   reports: {
-    dtr: '/dtr/',
+    dtr: '/v1/reports/dtr/',
     sf1: (sectionId: number | string) =>
-      `/reports/sf1/?section_id=${encodeURIComponent(String(sectionId))}`,
+      `/v1/reports/sf1/${encodeURIComponent(String(sectionId))}/`,
     sf2: (sectionId: number | string) =>
-      `/reports/sf2/?section_id=${encodeURIComponent(String(sectionId))}`,
-    sf4: '/reports/sf4/',
+      `/v1/reports/sf2/${encodeURIComponent(String(sectionId))}/`,
+    sf4: '/v1/reports/sf4/',
   },
 };
 
@@ -54,12 +57,19 @@ function stripControlChars(value: string): string {
   return value.replace(/[\u0000-\u001F\u007F]/g, '').trim();
 }
 
+function normalizeAccidentalExpoUrl(raw: string): string {
+  let s = stripControlChars(raw);
+  // Fix accidental "http://exp://192.168.x.x:8081:8000" or "exp://192.168.x.x:8081"
+  s = s.replace(/^https?:\/\/exp:\/\//i, 'http://').replace(/^exp:\/\//i, 'http://');
+  s = s.replace(/:8081:8000$/i, ':8000');
+  return s;
+}
+
 export function isValidServerUrl(url?: string | null): boolean {
   if (!url || typeof url !== 'string') return false;
-  const trimmed = stripControlChars(url);
+  const trimmed = normalizeAccidentalExpoUrl(url);
   if (!trimmed) return false;
 
-  // Reject dangerous or non-HTTP(S) schemes BEFORE normalizing or prepending http://
   if (DANGEROUS_SCHEME_RE.test(trimmed)) return false;
   if (ANY_SCHEME_RE.test(trimmed) && !/^https?:\/\//i.test(trimmed)) {
     return false;
@@ -68,10 +78,10 @@ export function isValidServerUrl(url?: string | null): boolean {
   try {
     const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
     const parsed = new URL(normalized);
-    return (
-      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
-      Boolean(parsed.hostname)
-    );
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (!parsed.hostname || parsed.hostname === 'exp') return false;
+    if (parsed.port && (!/^\d+$/.test(parsed.port) || Number(parsed.port) > 65535)) return false;
+    return true;
   } catch {
     return false;
   }
@@ -83,7 +93,7 @@ export function cleanUrl(rawUrl?: string | null): string {
     return fallback;
   }
 
-  const sanitized = stripControlChars(rawUrl);
+  const sanitized = normalizeAccidentalExpoUrl(rawUrl);
   if (!sanitized || DANGEROUS_SCHEME_RE.test(sanitized)) {
     return fallback;
   }
@@ -93,7 +103,7 @@ export function cleanUrl(rawUrl?: string | null): string {
 
   let trimmed = sanitized
     .replace(/\/+$/, '')
-    .replace(/\/api$/i, '')
+    .replace(/\/api(\/v1)?$/i, '')
     .replace(/\/+$/, '');
 
   if (!/^https?:\/\//i.test(trimmed)) {
@@ -105,7 +115,7 @@ export function cleanUrl(rawUrl?: string | null): string {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return fallback;
     }
-    if (!parsed.hostname) {
+    if (!parsed.hostname || parsed.hostname === 'exp') {
       return fallback;
     }
     return trimmed;
@@ -116,16 +126,26 @@ export function cleanUrl(rawUrl?: string | null): string {
 
 export const sanitizeUrl = cleanUrl;
 
-function getMetroHostIp(): string | null {
+export function getMetroHostIp(): string | null {
   try {
     const Constants = require('expo-constants').default;
     const hostUri =
       Constants?.expoConfig?.hostUri ||
+      Constants?.manifest2?.extra?.expoGo?.debuggerHost ||
       Constants?.manifest?.debuggerHost ||
-      Constants?.manifest2?.extra?.expoGo?.debuggerHost;
+      Constants?.linkingUri;
+
     if (hostUri && typeof hostUri === 'string') {
-      const ip = hostUri.split(':')[0];
-      if (ip && ip !== 'localhost' && ip !== '127.0.0.1' && !ip.includes('expo.app')) {
+      const cleaned = hostUri.replace(/^[a-z]+:\/\//i, '');
+      const ip = cleaned.split(':')[0].split('/')[0];
+      if (
+        ip &&
+        ip !== 'localhost' &&
+        ip !== '127.0.0.1' &&
+        !ip.includes('expo.dev') &&
+        !ip.includes('expo.app') &&
+        !ip.includes('ngrok')
+      ) {
         return ip;
       }
     }
@@ -133,61 +153,31 @@ function getMetroHostIp(): string | null {
   return null;
 }
 
-function loadRootEndpoints(): {
-  active_tunnel_url?: string;
-  lan_servers?: string[];
-  production_domain?: string;
-} {
-  try {
-    return require('../../../endpoints.json');
-  } catch {
-    return {};
-  }
-}
-
 export function getCandidateServers(): string[] {
   const candidates: string[] = [];
-  const rootEndpoints = loadRootEndpoints();
   const isNativeMobile = Platform.OS === 'android' || Platform.OS === 'ios';
 
-  // 1. Local school Wi-Fi servers first (fastest direct route on campus)
-  if (Array.isArray(rootEndpoints.lan_servers)) {
-    for (const lan of rootEndpoints.lan_servers) {
-      if (lan && typeof lan === 'string' && isValidServerUrl(lan)) {
-        candidates.push(cleanUrl(lan));
-      }
-    }
-  }
-
-  // 2. Environment variable from mobile/.env
-  const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
-  if (envUrl && isValidServerUrl(envUrl)) {
-    candidates.push(cleanUrl(envUrl));
-  }
-
-  // 3. Dynamic host IP from Expo Metro bundler during local development
+  // 1. Live Expo Go Metro Bundler Host IP (always matches laptop's current Wi-Fi IP!)
   const metroIp = getMetroHostIp();
   if (metroIp && isValidServerUrl(`http://${metroIp}:8000`)) {
     candidates.push(cleanUrl(`http://${metroIp}:8000`));
   }
 
-  // 4. Configured tunnel URL (skip loopback addresses on physical phones)
-  if (rootEndpoints.active_tunnel_url && isValidServerUrl(rootEndpoints.active_tunnel_url)) {
-    const tunnel = cleanUrl(rootEndpoints.active_tunnel_url);
-    const isLoopback = tunnel.includes('127.0.0.1') || tunnel.includes('localhost');
+  // 2. Environment variable from mobile/.env
+  const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
+  if (envUrl && isValidServerUrl(envUrl)) {
+    const cleanedEnv = cleanUrl(envUrl);
+    const isLoopback = cleanedEnv.includes('127.0.0.1') || cleanedEnv.includes('localhost');
     if (!isNativeMobile || !isLoopback) {
-      candidates.push(tunnel);
+      candidates.push(cleanedEnv);
     }
   }
 
-  // 5. Production school domain
-  if (rootEndpoints.production_domain && isValidServerUrl(rootEndpoints.production_domain)) {
-    candidates.push(cleanUrl(rootEndpoints.production_domain));
-  }
-
-  // 6. Web / Emulator loopback fallback only
+  // 3. Web / Android Emulator loopback fallback
   if (!isNativeMobile) {
     candidates.push('http://127.0.0.1:8000');
+  } else if (Platform.OS === 'android') {
+    candidates.push('http://10.0.2.2:8000');
   }
 
   return Array.from(new Set(candidates.filter((u) => Boolean(u && isValidServerUrl(u)))));
@@ -201,16 +191,68 @@ export const DEFAULT_SERVER_URL = getDefaultBaseUrl();
 
 let cachedUrl: string | null = null;
 let lastCacheTime = 0;
+let inFlightDiscoveryPromise: Promise<string> | null = null;
 
 export function invalidateServerCache(): void {
   cachedUrl = null;
   lastCacheTime = 0;
+  inFlightDiscoveryPromise = null;
 }
 
-export async function resolveFastestServer(): Promise<string> {
-  // Always honor an explicitly configured server URL first
+export function markServerReachable(url?: string | null): void {
+  if (url && isValidServerUrl(url)) {
+    cachedUrl = cleanUrl(url);
+    lastCacheTime = Date.now();
+  } else if (cachedUrl) {
+    lastCacheTime = Date.now();
+  }
+}
+
+const LEGACY_STORAGE_PURGE_KEY = 'attendsure_v3_purged_legacy_55555';
+
+export async function purgeLegacySchoolCacheOnce(): Promise<void> {
+  try {
+    const alreadyPurged = await AsyncStorage.getItem(LEGACY_STORAGE_PURGE_KEY);
+    if (alreadyPurged === 'true') return;
+
+    const cachedSchoolRaw = await AsyncStorage.getItem('attendsure_cached_school');
+    const cachedProfileRaw = await AsyncStorage.getItem('attendsure_cached_school_profile');
+    const combined = `${cachedSchoolRaw || ''} ${cachedProfileRaw || ''}`.toLowerCase();
+
+    if (combined.includes('55555') || combined.includes('lapasan')) {
+      await AsyncStorage.multiRemove([
+        'attendsure_cached_school',
+        'attendsure_cached_school_profile',
+        'attendsure_cached_sections',
+        'attendsure_cached_dtr',
+        'attendsure_cached_geofence',
+        'attendsure_offline_queue',
+        'attendsure_offline_qr_scans',
+        'attendsure_user_profile',
+        'attendsure_user',
+        'user_token',
+        'attendsure_token',
+        SERVER_URL_STORAGE_KEY,
+        CUSTOM_SERVER_URL_KEY,
+      ]);
+    }
+
+    // Also clear any broken exp:// URL saved previously in AsyncStorage
+    const savedCustom = await AsyncStorage.getItem(CUSTOM_SERVER_URL_KEY);
+    if (savedCustom && (savedCustom.includes('exp://') || savedCustom.includes(':8081'))) {
+      await AsyncStorage.multiRemove([SERVER_URL_STORAGE_KEY, CUSTOM_SERVER_URL_KEY]);
+    }
+
+    await AsyncStorage.setItem(LEGACY_STORAGE_PURGE_KEY, 'true');
+  } catch {}
+}
+
+async function runServerDiscovery(): Promise<string> {
+  await purgeLegacySchoolCacheOnce();
+
   const customUrl = await AsyncStorage.getItem(CUSTOM_SERVER_URL_KEY).catch(() => null);
   const candidates = getCandidateServers();
+
   if (customUrl && isValidServerUrl(customUrl)) {
     const cleanedCustom = cleanUrl(customUrl);
     if (!candidates.includes(cleanedCustom)) {
@@ -220,6 +262,7 @@ export async function resolveFastestServer(): Promise<string> {
 
   if (candidates.length === 0) {
     cachedUrl = getDefaultBaseUrl();
+    lastCacheTime = Date.now();
     return cachedUrl;
   }
 
@@ -228,9 +271,9 @@ export async function resolveFastestServer(): Promise<string> {
     externalController?: AbortController
   ): Promise<string> => {
     const controller = externalController || new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2200);
+    const timeoutId = setTimeout(() => controller.abort(), 2800);
     try {
-      const res = await fetch(`${targetUrl}/api/health/db/`, {
+      const res = await fetch(`${targetUrl}/api/v1/health/db/`, {
         method: 'GET',
         headers: { Accept: 'application/json' },
         signal: controller.signal,
@@ -242,7 +285,6 @@ export async function resolveFastestServer(): Promise<string> {
     }
   };
 
-  // If user manually set a custom server, try it first before failing over
   if (customUrl && isValidServerUrl(customUrl)) {
     const cleanedCustom = cleanUrl(customUrl);
     try {
@@ -251,7 +293,7 @@ export async function resolveFastestServer(): Promise<string> {
       lastCacheTime = Date.now();
       return okUrl;
     } catch {
-      // Fall through to race remaining candidates if custom URL is temporarily unreachable
+      // Fall through to auto-detected Metro LAN candidates if old custom IP changed
     }
   }
 
@@ -272,7 +314,6 @@ export async function resolveFastestServer(): Promise<string> {
         return probeServer(url, ctrl);
       })
     );
-    // Cancel all losing probes immediately after the fastest responds
     abortAllProbes();
     cachedUrl = fastestUrl;
     lastCacheTime = Date.now();
@@ -280,22 +321,28 @@ export async function resolveFastestServer(): Promise<string> {
     return fastestUrl;
   } catch {
     abortAllProbes();
-    const stored =
-      customUrl || (await AsyncStorage.getItem(SERVER_URL_STORAGE_KEY).catch(() => null));
-    const fallback = stored && isValidServerUrl(stored) ? cleanUrl(stored) : candidates[0];
+    const fallback = candidates[0];
     cachedUrl = fallback;
+    lastCacheTime = Date.now();
     return fallback;
   }
 }
 
+export async function resolveFastestServer(): Promise<string> {
+  if (inFlightDiscoveryPromise) {
+    return inFlightDiscoveryPromise;
+  }
+  const discovery = runServerDiscovery().finally(() => {
+    if (inFlightDiscoveryPromise === discovery) {
+      inFlightDiscoveryPromise = null;
+    }
+  });
+  inFlightDiscoveryPromise = discovery;
+  return discovery;
+}
+
 export async function getServerBaseUrl(): Promise<string> {
   if (cachedUrl && Date.now() - lastCacheTime < CACHE_TTL_MS) {
-    return cachedUrl;
-  }
-  const customUrl = await AsyncStorage.getItem(CUSTOM_SERVER_URL_KEY).catch(() => null);
-  if (customUrl && isValidServerUrl(customUrl)) {
-    cachedUrl = cleanUrl(customUrl);
-    lastCacheTime = Date.now();
     return cachedUrl;
   }
   return resolveFastestServer();
@@ -350,7 +397,7 @@ export async function testServerConnection(
   const timeoutId = setTimeout(() => controller.abort(), 3000);
 
   try {
-    const response = await fetch(`${target}/api/health/db/`, {
+    const response = await fetch(`${target}/api/v1/health/db/`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -371,8 +418,8 @@ export async function testServerConnection(
     return {
       ok: false,
       message: isAbort
-        ? 'Connection timed out. Checking alternative route...'
-        : 'Cannot reach school server. Verify your network connection.',
+        ? 'Connection timed out. Check Windows Firewall on port 8000.'
+        : 'Cannot reach school server. Verify phone & laptop are on the same Wi-Fi.',
       pingMs,
     };
   } finally {

@@ -1,20 +1,20 @@
 // AttendSure Mobile - Application Entry Point
 // File: mobile/index.ts
 
-import { NativeModules } from 'react-native';
-
-// Polyfill DevLoadingView to prevent hmrUtils crash when Metro reloads
-if (typeof NativeModules !== 'undefined' && NativeModules && !NativeModules.DevLoadingView) {
-  NativeModules.DevLoadingView = {
-    showMessage: () => {},
-    hide: () => {},
-  };
-}
-
+import { Platform } from 'react-native';
+import { Buffer } from 'buffer';
+import * as ExpoSplashScreen from 'expo-splash-screen';
 import { registerRootComponent } from 'expo';
+// Register headless background GPS task before React mounts so sleeping wakeups always fire
+import './src/services/backgroundLocation';
 import App from './App';
 
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
+if (typeof globalThis !== 'undefined' && !(globalThis as { Buffer?: typeof Buffer }).Buffer) {
+  (globalThis as { Buffer?: typeof Buffer }).Buffer = Buffer;
+}
+
+if (Platform.OS !== 'web') {
+  ExpoSplashScreen.preventAutoHideAsync().catch(() => {});
+}
+
 registerRootComponent(App);

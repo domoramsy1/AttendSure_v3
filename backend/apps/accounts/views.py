@@ -1,31 +1,49 @@
 # D:\AttendSure_V3\backend\apps\accounts\views.py
+from datetime import datetime, time as dt_time, timedelta
+import re
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.html import strip_tags
 from rest_framework import permissions, status, viewsets
 from rest_framework.authtoken.models import Token
+from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from common.audit import AuditedModelViewSet, record_audit_log
 from common.exceptions import AppError
-from common.permissions import IsSchoolLeader, get_user_role, is_school_leader
+from common.permissions import (
+    ALLOWED_ROLES,
+    IsAdminOrPrincipal,
+    IsSchoolLeader,
+    IsSystemAdminOrReadOnly,
+    get_user_role,
+    is_admin_or_principal,
+    is_school_leader,
+    is_system_admin,
+)
 from common.phone import normalize_ph_phone
-from .models import AuditLog, FacultyProfile, UserProfile
+from .models import AuditLog, Department, TeacherProfile
 from .serializers import (
-    FacultyDropdownSerializer,
-    FacultyProfileSerializer,
+    AUDIT_MODULE_LABELS,
+    AuditLogSerializer,
+    DepartmentSerializer,
+    TeacherDropdownSerializer,
+    TeacherProfileSerializer,
     UserAccountSerializer,
 )
 from .services import (
     authenticate_with_identifier,
     build_user_session_payload,
-    reset_faculty_bound_device,
+    reset_teacher_bound_device,
     unlock_all_locked_accounts,
     update_own_profile,
 )
@@ -34,7 +52,7 @@ User = get_user_model()
 
 
 class LoginThrottle(AnonRateThrottle):
-    rate = "15/minute"
+    scope = "login"
 
 
 class AccountWriteThrottle(UserRateThrottle):
@@ -42,24 +60,7 @@ class AccountWriteThrottle(UserRateThrottle):
 
 
 def _format_audit_row(item: AuditLog) -> dict:
-    performer = (
-        (item.performed_by.get_full_name() or item.performed_by.username).strip()
-        if item.performed_by
-        else "System"
-    )
-    return {
-        "id": item.id,
-        "table_name": item.table_name,
-        "record_id": item.record_id,
-        "action": item.action,
-        "performed_by": performer,
-        "user": performer,
-        "client_ip": item.client_ip or "",
-        "ip_address": item.client_ip or "",
-        "changed_fields": item.changed_fields,
-        "new_data": item.new_data,
-        "created_at": timezone.localtime(item.created_at).strftime("%Y-%m-%d %I:%M:%S %p"),
-    }
+    return AuditLogSerializer(item).data
 
 
 def _is_judge_demo_enabled() -> bool:
@@ -71,44 +72,98 @@ class LoginView(APIView):
     throttle_classes = [LoginThrottle]
 
     def post(self, request):
-        identifier = (
+        identifier = str(
             request.data.get("username")
             or request.data.get("identifier")
             or request.data.get("email")
             or ""
-        )
-        password = request.data.get("password") or ""
+        ).strip()[:150]
+        password = str(request.data.get("password") or "")
+
         payload = authenticate_with_identifier(
             identifier=identifier,
             password=password,
             request=request,
         )
-        user_obj = User.objects.filter(id=payload["user"]["id"]).first()
-        if user_obj:
-            drf_token, _ = Token.objects.get_or_create(user=user_obj)
+        user_id = payload.get("user", {}).get("id")
+        if user_id:
+            drf_token, _ = Token.objects.get_or_create(user_id=user_id)
             payload["token"] = drf_token.key
 
         record_audit_log(
             request=request,
             table_name="auth_user",
-            record_id=payload["user"]["id"],
+            record_id=user_id or 0,
             action="LOGIN",
-            new_data={"username": payload["user"]["username"], "role": payload["user"]["role"]},
+            new_data={
+                "username": payload["user"]["username"],
+                "role": payload["user"]["role"],
+            },
         )
         return Response(payload, status=status.HTTP_200_OK)
 
 
+class LogoutView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        raw_refresh = str(request.data.get("refresh") or "").strip()
+        if raw_refresh:
+            try:
+                RefreshToken(raw_refresh).blacklist()
+            except TokenError:
+                pass
+
+        if request.user and request.user.is_authenticated:
+            Token.objects.filter(user_id=request.user.id).delete()
+            record_audit_log(
+                request=request,
+                table_name="auth_user",
+                record_id=request.user.id,
+                action="LOGOUT",
+                new_data={"username": request.user.username},
+            )
+        return Response({"ok": True, "message": "Signed out."}, status=status.HTTP_200_OK)
+
+
 class DemoStatusView(APIView):
-    """Reports whether 1-click competition judge login is enabled by server config."""
+    """Checks if demo sign-in is turned on and returns real database staff roles."""
 
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        return Response({"enabled": _is_judge_demo_enabled()})
+        enabled = _is_judge_demo_enabled()
+        roles = (
+            [
+                {
+                    "role": "ADMIN",
+                    "label": "System Admin",
+                    "description": "Full school setup, campus boundary, and security logs",
+                },
+                {
+                    "role": "PRINCIPAL",
+                    "label": "School Principal",
+                    "description": "Campus boundary, cutting-class alerts, and SF4 reports",
+                },
+                {
+                    "role": "DEPT_HEAD",
+                    "label": "Department Head",
+                    "description": "Teacher DTR approval and class attendance checks",
+                },
+                {
+                    "role": "TEACHER",
+                    "label": "Teacher / Adviser",
+                    "description": "Camera QR scanning, class lists, and exit passes",
+                },
+            ]
+            if enabled
+            else []
+        )
+        return Response({"enabled": enabled, "roles": roles})
 
 
 class DemoLoginView(APIView):
-    """Authenticates a real seeded database account ONLY when DEBUG or ENABLE_JUDGE_DEMO is True."""
+    """Signs in an existing active staff account ONLY when DEBUG or ENABLE_JUDGE_DEMO is True."""
 
     permission_classes = [permissions.AllowAny]
     throttle_classes = [LoginThrottle]
@@ -117,42 +172,44 @@ class DemoLoginView(APIView):
         "ADMIN": ("demo_admin", ["ADMIN"]),
         "PRINCIPAL": ("demo_principal", ["PRINCIPAL", "ADMIN"]),
         "DEPT_HEAD": ("demo_dept_head", ["DEPT_HEAD", "PRINCIPAL"]),
-        "FACULTY": ("demo_teacher", ["FACULTY"]),
-        "TEACHER": ("demo_teacher", ["FACULTY"]),
-        "PARENT": ("demo_parent", ["PARENT"]),
+        "TEACHER": ("demo_teacher", ["TEACHER"]),
     }
 
     def post(self, request):
         if not _is_judge_demo_enabled():
             return Response(
-                {"error": "Demo sign-in is disabled in production."},
+                {"error": "Demo sign-in is turned off in production."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
         role_key = str(request.data.get("role") or "ADMIN").strip().upper()
-        preferred_username, allowed_roles = self.ROLE_MAP.get(role_key, ("demo_admin", ["ADMIN"]))
-
-        user_obj = (
-            User.objects.select_related("profile", "profile__faculty")
-            .filter(username__iexact=preferred_username, is_active=True)
-            .first()
-        )
-        if not user_obj:
-            user_obj = (
-                User.objects.select_related("profile", "profile__faculty")
-                .filter(is_active=True, profile__role__in=allowed_roles)
-                .order_by("id")
-                .first()
+        if role_key not in ALLOWED_ROLES:
+            raise AppError(
+                "INVALID_ROLE",
+                "Invalid role selected. Allowed roles are ADMIN, PRINCIPAL, DEPT_HEAD, and TEACHER.",
+                400,
             )
+
+        preferred_username, allowed_roles = self.ROLE_MAP[role_key]
+        base_qs = User.objects.select_related(
+            "profile",
+            "teacher_profile",
+            "teacher_profile__department",
+            "teacher_profile__position",
+        ).filter(is_active=True)
+
+        user_obj = base_qs.filter(username__iexact=preferred_username).first()
+        if not user_obj:
+            user_obj = base_qs.filter(profile__role__in=allowed_roles).order_by("id").first()
         if not user_obj:
             raise AppError(
                 "ACCOUNT_NOT_FOUND",
-                "No active database account exists for this role yet.",
+                "No active staff account exists in the database for this role yet.",
                 404,
             )
 
         refresh = RefreshToken.for_user(user_obj)
-        drf_token, _ = Token.objects.get_or_create(user=user_obj)
+        drf_token, _ = Token.objects.get_or_create(user_id=user_obj.id)
         session_user = build_user_session_payload(user=user_obj, request=request)
 
         record_audit_log(
@@ -160,7 +217,7 @@ class DemoLoginView(APIView):
             table_name="auth_user",
             record_id=user_obj.id,
             action="LOGIN",
-            new_data={"username": user_obj.username, "mode": "JUDGE_DEMO"},
+            new_data={"username": user_obj.username, "mode": "DEMO"},
         )
         return Response(
             {
@@ -173,9 +230,10 @@ class DemoLoginView(APIView):
 
 
 class CurrentUserView(APIView):
-    """Returns and updates the signed-in user's own profile."""
+    """Reads and updates the signed-in user's own profile."""
 
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         return Response(build_user_session_payload(user=request.user, request=request))
@@ -188,13 +246,13 @@ class CurrentUserView(APIView):
             request=request,
         )
         changed_keys = [
-            str(k)
+            strip_tags(str(k))[:50]
             for k in (request.data.keys() if hasattr(request.data, "keys") else ["profile"])
             if str(k) not in ("password", "csrfmiddlewaretoken")
         ]
         record_audit_log(
             request=request,
-            table_name="user_profiles",
+            table_name="teacher_profiles",
             record_id=request.user.id,
             action="PROFILE",
             changed_fields=changed_keys or ["profile"],
@@ -234,92 +292,154 @@ class ChangePasswordView(APIView):
 
         request.user.set_password(new_password)
         request.user.save(update_fields=["password"])
+
+        # Rotate DRF token so older sessions using the old token are signed out
+        Token.objects.filter(user_id=request.user.id).delete()
+        new_token = Token.objects.create(user=request.user)
+
         record_audit_log(
             request=request,
             table_name="auth_user",
             record_id=request.user.id,
             action="PASSWORD",
         )
-        return Response({"ok": True, "message": "Password updated."})
+        return Response({"ok": True, "message": "Password updated.", "token": new_token.key})
+
+
+def _parse_int_id(raw) -> int | None:
+    text = str(raw or "").strip()
+    return int(text) if (text and text.isascii() and text.isdigit()) else None
 
 
 class FieldAvailabilityView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
 
     def get(self, request):
+        from apps.school.models import Room, Subject
+        from apps.students.models import Student
+
         field = str(request.query_params.get("field") or "").strip().lower()
-        value = str(request.query_params.get("value") or "").strip()
-        exclude_id = request.query_params.get("exclude_id")
+        value = str(request.query_params.get("value") or "").strip()[:150]
+        exclude_id = _parse_int_id(request.query_params.get("exclude_id"))
+        exclude_user_id = _parse_int_id(request.query_params.get("exclude_user_id"))
+        exclude_teacher_id = _parse_int_id(request.query_params.get("exclude_teacher_id"))
 
         if not field or not value:
-            return Response({"available": True, "is_taken": False})
+            return Response({"available": True, "is_taken": False, "field": field, "message": ""})
+
+        taken = False
+        message = ""
 
         if field == "username":
             qs = User.objects.filter(username__iexact=value)
+            if exclude_user_id:
+                qs = qs.exclude(id=exclude_user_id)
+            elif exclude_teacher_id:
+                qs = qs.exclude(teacher_profile__id=exclude_teacher_id)
+            elif exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            taken = qs.exists()
+            if taken:
+                message = "This username is already taken."
         elif field == "email":
             qs = User.objects.filter(email__iexact=value)
+            if exclude_user_id:
+                qs = qs.exclude(id=exclude_user_id)
+            elif exclude_teacher_id:
+                qs = qs.exclude(teacher_profile__id=exclude_teacher_id)
+            elif exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            taken = qs.exists()
+            if taken:
+                message = "This email address is already in use."
         elif field == "employee_id":
-            qs = FacultyProfile.objects.filter(employee_id__iexact=value)
+            qs = TeacherProfile.objects.filter(employee_id__iexact=value)
+            if exclude_teacher_id:
+                qs = qs.exclude(id=exclude_teacher_id)
+            elif exclude_user_id:
+                qs = qs.exclude(user_id=exclude_user_id)
+            elif exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            taken = qs.exists()
+            if taken:
+                message = "This Employee ID is already assigned."
         elif field in ("phone", "phone_number", "contact_number"):
             norm = normalize_ph_phone(value)
-            qs = UserProfile.objects.filter(phone_number=norm)
+            if norm:
+                qs = TeacherProfile.objects.filter(contact_number=norm)
+                if exclude_teacher_id:
+                    qs = qs.exclude(id=exclude_teacher_id)
+                elif exclude_user_id:
+                    qs = qs.exclude(user_id=exclude_user_id)
+                elif exclude_id:
+                    qs = qs.exclude(id=exclude_id)
+                taken = qs.exists()
+                if taken:
+                    message = "This mobile number is already assigned to another staff account."
+        elif field == "lrn":
+            digits = re.sub(r"\D+", "", value)
+            if len(digits) == 12:
+                qs = Student.objects.filter(lrn=digits)
+                if exclude_id:
+                    qs = qs.exclude(id=exclude_id)
+                existing_student = qs.only("id", "first_name", "middle_name", "last_name", "suffix", "lrn").first()
+                if existing_student:
+                    taken = True
+                    if is_school_leader(request.user):
+                        message = f"LRN {digits} is already registered to {existing_student.full_name}."
+                    else:
+                        message = f"LRN {digits} is already registered to another student."
+        elif field == "subject_code":
+            qs = Subject.objects.filter(code__iexact=value)
+            if exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            taken = qs.exists()
+            if taken:
+                message = "A subject with this code already exists."
+        elif field == "room_name":
+            qs = Room.objects.filter(name__iexact=value)
+            if exclude_id:
+                qs = qs.exclude(id=exclude_id)
+            taken = qs.exists()
+            if taken:
+                message = "A classroom with this name already exists."
         else:
-            return Response({"available": True, "is_taken": False})
+            return Response({"available": True, "is_taken": False, "field": field, "message": ""})
 
-        if exclude_id and str(exclude_id).isascii() and str(exclude_id).isdigit():
-            qs = qs.exclude(id=int(exclude_id))
-
-        taken = qs.exists()
-        return Response({"available": not taken, "is_taken": taken})
+        return Response(
+            {
+                "available": not taken,
+                "is_taken": taken,
+                "field": field,
+                "message": message,
+            }
+        )
 
 
 ValidateFieldView = FieldAvailabilityView
 
 
-class RegisterPushTokenView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+class ResetBoundDeviceView(APIView):
+    """Clears the phone lock on a teacher profile so a new phone can be linked."""
+
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrPrincipal]
     throttle_classes = [AccountWriteThrottle]
 
-    def post(self, request):
-        token = str(request.data.get("push_token") or request.data.get("token") or "").strip()
-        if token and not token.startswith(("ExponentPushToken[", "ExpoPushToken[")):
-            return Response(
-                {"error": "Invalid mobile push token format."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        profile, _ = UserProfile.objects.get_or_create(user=request.user)
-        profile.push_token = token or None
-        profile.save(update_fields=["push_token"])
-        return Response({"ok": True, "registered": True})
-
-
-SavePushTokenView = RegisterPushTokenView
-
-
-class ResetBoundDeviceView(APIView):
-    """Clears the phone hardware lock on a faculty profile so a replacement phone can be paired."""
-
-    permission_classes = [permissions.IsAuthenticated, IsSchoolLeader]
-
     def post(self, request, pk: int | None = None, **kwargs):
-        target_id = (
-            pk
-            or kwargs.get("faculty_id")
-            or request.data.get("faculty_id")
-            or request.data.get("teacher_id")
-        )
+        target_id = pk or kwargs.get("teacher_id") or request.data.get("teacher_id")
         if not target_id or not str(target_id).isascii() or not str(target_id).isdigit():
-            raise AppError("INVALID_ID", "Valid faculty profile ID is required.", 400)
+            raise AppError("INVALID_ID", "A valid teacher ID is required.", 400)
 
-        faculty = reset_faculty_bound_device(faculty_id=int(target_id))
+        teacher = reset_teacher_bound_device(teacher_id=int(target_id))
         record_audit_log(
             request=request,
-            table_name=faculty._meta.db_table,
-            record_id=faculty.id,
+            table_name=teacher._meta.db_table,
+            record_id=teacher.id,
             action="RESET_DEV",
-            new_data={"employee_id": faculty.employee_id},
+            new_data={"employee_id": teacher.employee_id},
         )
-        return Response({"ok": True, "message": f"Phone lock cleared for {faculty.full_name}."})
+        return Response({"ok": True, "message": f"Phone lock cleared for {teacher.full_name}."})
 
 
 ResetDeviceBindingView = ResetBoundDeviceView
@@ -327,6 +447,7 @@ ResetDeviceBindingView = ResetBoundDeviceView
 
 class UnlockAccountsView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsSchoolLeader]
+    throttle_classes = [AccountWriteThrottle]
 
     def post(self, request):
         unlocked_count = unlock_all_locked_accounts()
@@ -340,66 +461,145 @@ class UnlockAccountsView(APIView):
         return Response({"ok": True, "unlocked_count": unlocked_count})
 
 
-class FacultyDropdownView(APIView):
+class TeacherDropdownView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        from apps.school.models import SchoolYear, Section
+        from apps.school.selectors import format_section_label
+
         qs = (
-            FacultyProfile.objects.select_related("department_ref", "position_ref")
-            .filter(is_active=True)
-            .order_by("last_name", "first_name")
+            TeacherProfile.objects.select_related("user", "department", "position")
+            .only(
+                "id",
+                "employee_id",
+                "middle_name",
+                "suffix",
+                "contact_number",
+                "photo",
+                "can_handle_classes",
+                "user__id",
+                "user__username",
+                "user__first_name",
+                "user__last_name",
+                "user__email",
+                "user__is_active",
+                "department__id",
+                "department__name",
+                "position__id",
+                "position__title",
+            )
+            .filter(user__is_active=True)
+            .order_by("user__last_name", "user__first_name")
         )
-        return Response(FacultyDropdownSerializer(qs, many=True).data)
+
+        active_sy = SchoolYear.objects.filter(is_active=True).first()
+        sec_qs = Section.objects.filter(is_active=True, adviser__isnull=False).select_related("grade_level")
+        if active_sy:
+            sec_qs = sec_qs.filter(school_year=active_sy)
+
+        advised_map: dict[int, list[str]] = {}
+        for sec in sec_qs.order_by("grade_level__level_number", "name"):
+            label = format_section_label(sec.grade_level.name if sec.grade_level else "", sec.name)
+            advised_map.setdefault(sec.adviser_id, []).append(label)
+
+        return Response(
+            TeacherDropdownSerializer(
+                qs,
+                many=True,
+                context={"request": request, "advised_map": advised_map},
+            ).data
+        )
 
 
-class FacultyProfileViewSet(AuditedModelViewSet):
-    serializer_class = FacultyProfileSerializer
+class TeacherProfileViewSet(AuditedModelViewSet):
+    serializer_class = TeacherProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
-        qs = FacultyProfile.objects.select_related(
-            "account",
-            "department_ref",
-            "position_ref",
-        ).order_by("last_name", "first_name")
+        qs = TeacherProfile.objects.select_related(
+            "user",
+            "user__profile",
+            "department",
+            "position",
+        ).order_by("user__last_name", "user__first_name")
 
-        search = str(self.request.query_params.get("search") or "").strip()
+        if not is_school_leader(self.request.user):
+            return qs.filter(user_id=self.request.user.id)
+
+        search = str(self.request.query_params.get("search") or "").strip()[:100]
         if search:
             qs = qs.filter(
                 Q(employee_id__icontains=search)
-                | Q(first_name__icontains=search)
-                | Q(last_name__icontains=search)
-                | Q(department_ref__name__icontains=search)
+                | Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(department__name__icontains=search)
             )
 
         active_only = str(self.request.query_params.get("is_active") or "").strip().lower()
         if active_only in ("1", "true", "yes"):
-            qs = qs.filter(is_active=True)
+            qs = qs.filter(user__is_active=True)
 
         return qs
 
     def check_permissions(self, request):
         super().check_permissions(request)
-        if request.method not in permissions.SAFE_METHODS and not is_school_leader(request.user):
-            self.permission_denied(request, message="Only school leaders can modify faculty records.")
+        if request.method not in permissions.SAFE_METHODS:
+            if getattr(self, "action", None) == "reset_device":
+                if not is_admin_or_principal(request.user):
+                    self.permission_denied(
+                        request,
+                        message="Only System Admins or School Principals can reset phone locks.",
+                    )
+            elif not is_system_admin(request.user):
+                self.permission_denied(
+                    request,
+                    message="Only System Admins can add, edit, or delete teacher records.",
+                )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reset-device",
+        permission_classes=[permissions.IsAuthenticated, IsAdminOrPrincipal],
+    )
+    def reset_device(self, request, pk=None):
+        teacher = self.get_object()
+        reset_teacher_bound_device(teacher_id=teacher.id)
+        record_audit_log(
+            request=request,
+            table_name=teacher._meta.db_table,
+            record_id=teacher.id,
+            action="RESET_DEV",
+            new_data={"employee_id": teacher.employee_id},
+        )
+        return Response({"ok": True, "message": f"Phone lock cleared for {teacher.full_name}."})
+
+
+class DepartmentViewSet(AuditedModelViewSet):
+    queryset = Department.objects.order_by("name")
+    serializer_class = DepartmentSerializer
+    permission_classes = [permissions.IsAuthenticated, IsSystemAdminOrReadOnly]
 
 
 class UserAccountViewSet(AuditedModelViewSet):
     serializer_class = UserAccountSerializer
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         qs = User.objects.select_related(
             "profile",
-            "profile__faculty",
-            "profile__faculty__department_ref",
-            "profile__faculty__position_ref",
+            "teacher_profile",
+            "teacher_profile__department",
+            "teacher_profile__position",
         ).order_by("username")
 
         if get_user_role(self.request.user) != "ADMIN" and not self.request.user.is_superuser:
             return qs.filter(id=self.request.user.id)
 
-        search = str(self.request.query_params.get("search") or "").strip()
+        search = str(self.request.query_params.get("search") or "").strip()[:100]
         if search:
             qs = qs.filter(
                 Q(username__icontains=search)
@@ -411,11 +611,10 @@ class UserAccountViewSet(AuditedModelViewSet):
 
     def check_permissions(self, request):
         super().check_permissions(request)
-        if request.method not in permissions.SAFE_METHODS:
-            if get_user_role(request.user) != "ADMIN" and not request.user.is_superuser:
-                self.permission_denied(
-                    request, message="Only system administrators can manage user accounts."
-                )
+        if not is_system_admin(request.user):
+            self.permission_denied(
+                request, message="Only System Admins can view or manage staff user accounts."
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -425,18 +624,79 @@ class UserAccountViewSet(AuditedModelViewSet):
 
 
 class AuditLogListView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsSchoolLeader]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrPrincipal]
 
     def get(self, request):
-        limit_raw = str(request.query_params.get("limit") or "100")
+        limit_raw = str(request.query_params.get("limit") or "100").strip()
         limit = min(int(limit_raw), 500) if (limit_raw.isascii() and limit_raw.isdigit()) else 100
-        logs = AuditLog.objects.select_related("performed_by").order_by("-created_at")[:limit]
-        results = [_format_audit_row(item) for item in logs]
-        return Response({"results": results, "records": results, "count": len(results)})
+
+        qs = AuditLog.objects.select_related("performed_by").only(
+            "id",
+            "table_name",
+            "record_id",
+            "action",
+            "client_ip",
+            "user_agent",
+            "changed_fields",
+            "new_data",
+            "created_at",
+            "performed_by__id",
+            "performed_by__username",
+            "performed_by__first_name",
+            "performed_by__last_name",
+        )
+
+        action_filter = str(request.query_params.get("action") or "").strip().upper()[:16]
+        if action_filter and action_filter != "ALL":
+            qs = qs.filter(action__iexact=action_filter)
+
+        date_filter = str(request.query_params.get("date") or "").strip()
+        if date_filter:
+            try:
+                parsed_date = datetime.strptime(date_filter, "%Y-%m-%d").date()
+            except ValueError:
+                parsed_date = None
+            if parsed_date is not None:
+                tz = timezone.get_current_timezone()
+                start_dt = timezone.make_aware(datetime.combine(parsed_date, dt_time.min), tz)
+                end_dt = start_dt + timedelta(days=1)
+                qs = qs.filter(created_at__gte=start_dt, created_at__lt=end_dt)
+
+        search_term = str(request.query_params.get("search") or "").strip()[:100]
+        if search_term:
+            search_q = (
+                Q(performed_by__username__icontains=search_term)
+                | Q(performed_by__first_name__icontains=search_term)
+                | Q(performed_by__last_name__icontains=search_term)
+                | Q(table_name__icontains=search_term)
+                | Q(client_ip__icontains=search_term)
+                | Q(action__icontains=search_term)
+            )
+            if search_term.isascii() and search_term.isdigit():
+                search_q |= Q(record_id=int(search_term))
+            lowered = search_term.lower()
+            matched_tables = [
+                tbl for tbl, label in AUDIT_MODULE_LABELS.items() if lowered in label.lower()
+            ]
+            if matched_tables:
+                search_q |= Q(table_name__in=matched_tables)
+            qs = qs.filter(search_q)
+
+        logs = qs.order_by("-created_at")[:limit]
+        results = AuditLogSerializer(logs, many=True).data
+        return Response(
+            {
+                "results": results,
+                "records": results,
+                "count": len(results),
+                "is_admin": is_admin_or_principal(request.user),
+            }
+        )
 
 
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [permissions.IsAuthenticated, IsSchoolLeader]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrPrincipal]
+    serializer_class = AuditLogSerializer
     queryset = AuditLog.objects.select_related("performed_by").order_by("-created_at")
 
     def list(self, request, *args, **kwargs):

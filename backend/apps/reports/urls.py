@@ -6,6 +6,7 @@ from .views import (
     DropoutRiskView,
     EdFiExportView,
     MonthlyDtrView,
+    PrintPackView,
     ReportAuditLogView,
     ReportExportView,
     SdgImpactView,
@@ -13,6 +14,7 @@ from .views import (
     Sf1ReportView,
     Sf2ReportView,
     Sf4ReportView,
+    StandardDataExportView,
     SystemStatusView,
 )
 
@@ -27,7 +29,9 @@ urlpatterns = [
     path("dtr/", MonthlyDtrView.as_view(), name="dtr"),
     path("dtr/<int:pk>/", MonthlyDtrView.as_view(), name="dtr-detail"),
     path("export/", ReportExportView.as_view(), name="report-export"),
+    path("print-pack/", PrintPackView.as_view(), name="report-print-pack"),
     path("edfi-export/", EdFiExportView.as_view(), name="edfi-export"),
+    path("division-export/", StandardDataExportView.as_view(), name="division-export"),
     path("audit-logs/", ReportAuditLogView.as_view(), name="report-audit-logs"),
     path("dropout-risk/", DropoutRiskView.as_view(), name="dropout-risk"),
     path("sdg-impact/", SdgImpactView.as_view(), name="sdg-impact"),

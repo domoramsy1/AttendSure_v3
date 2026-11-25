@@ -3,10 +3,11 @@
  * File: web/src/components/layout/Sidebar.tsx
  */
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTheme } from '../../context/ThemeContext';
 import { useCompliance } from '../../context/ComplianceContext';
-import { isSafeImageUrl } from '../../theme/tokens';
+import { isSafeImageUrl, SEAL_COLORS } from '../../theme/tokens';
+import { canViewTab } from '../../utils/permissions';
 import type { UserSession } from '../../types/section';
 import type { TabBadgeCounts } from './Header';
 import {
@@ -17,7 +18,6 @@ import {
   CalendarDays,
   FileSpreadsheet,
   Settings,
-  Bell,
   Ticket,
   Clock,
   MapPin,
@@ -27,7 +27,6 @@ import {
   ChevronRight,
   QrCode,
   LayoutGrid,
-  MessageSquare,
 } from 'lucide-react';
 
 export type NavItemKey =
@@ -36,18 +35,13 @@ export type NavItemKey =
   | 'classroom-scanner'
   | 'my-classes'
   | 'advisory-monitor'
-  | 'attendance-logs'
   | 'students'
-  | 'facultys'
+  | 'teachers'
   | 'users'
   | 'gate-passes'
   | 'schedules'
   | 'dtr'
   | 'geofence'
-  | 'scanners'
-  | 'push'
-  | 'messages'
-  | 'notifications'
   | 'reports'
   | 'settings';
 
@@ -84,7 +78,11 @@ const getSchoolAbbreviation = (name?: string): string => {
   const words = name.trim().split(/\s+/).filter((w) => !ignore.has(w.toLowerCase()));
   return words.length === 1
     ? words[0].slice(0, 4).toUpperCase()
-    : words.map((w) => w[0]).join('').toUpperCase().slice(0, 6);
+    : words
+        .map((w) => w[0])
+        .join('')
+        .toUpperCase()
+        .slice(0, 6);
 };
 
 const formatBadge = (count?: number): string => {
@@ -105,11 +103,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   schoolLogo,
   canTeach = false,
   allowedTabs,
-  badgeCounts: propBadgeCounts,
+  badgeCounts = {},
 }) => {
-  const { mode, tokens, brand } = useTheme();
-  const { isGlobalMode, t } = useCompliance();
-  const [liveBadges, setLiveBadges] = useState<TabBadgeCounts>({});
+  const { tokens, brand } = useTheme();
+  const { t } = useCompliance();
   const [internalCollapsed, setInternalCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem('attendsure_sidebar_collapsed') === 'true';
@@ -119,17 +116,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   });
 
   const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
-  const role = (session?.role || 'FACULTY').toUpperCase();
-  const isLeadership = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(role);
-
-  useEffect(() => {
-    const onSync = (e: Event) => {
-      const detail = (e as CustomEvent<TabBadgeCounts>).detail;
-      if (detail) setLiveBadges(detail);
-    };
-    window.addEventListener('attendsure:notifications-sync', onSync);
-    return () => window.removeEventListener('attendsure:notifications-sync', onSync);
-  }, []);
+  const role = (session?.role || 'TEACHER').toUpperCase();
+  const isTeacherOnly = role === 'TEACHER';
 
   const handleToggle = () => {
     const next = !isCollapsed;
@@ -142,7 +130,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onToggleCollapse?.();
   };
 
-  const mergedBadges: TabBadgeCounts = { ...liveBadges, ...propBadgeCounts };
   const schoolAbbr = useMemo(() => getSchoolAbbreviation(schoolName), [schoolName]);
 
   const allGroups: NavGroup[] = useMemo(
@@ -151,7 +138,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         groupTitle: t('group_overview', 'OVERVIEW'),
         items: [
           { key: 'dashboard', label: t('nav_dashboard', 'Dashboard'), icon: <LayoutDashboard size={17} /> },
-          { key: 'impact', label: t('nav_impact', 'Impact & Safety'), icon: <Globe size={17} /> },
+          { key: 'impact', label: t('nav_impact', 'SARDO & Safety'), icon: <Globe size={17} /> },
         ],
       },
       {
@@ -159,24 +146,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         items: [
           { key: 'classroom-scanner', label: t('nav_scanner', 'QR Scanner'), icon: <QrCode size={17} /> },
           { key: 'my-classes', label: t('nav_my_classes', 'My Classes'), icon: <BookOpen size={17} /> },
-          { key: 'advisory-monitor', label: t('nav_advisory', 'Advisory Matrix'), icon: <LayoutGrid size={17} /> },
+          { key: 'advisory-monitor', label: t('nav_advisory', 'Advisory'), icon: <LayoutGrid size={17} /> },
           { key: 'students', label: t('nav_students', 'Students'), icon: <GraduationCap size={17} /> },
-          { key: 'facultys', label: t('nav_faculty', 'Faculty & Staff'), icon: <Users size={17} /> },
-          { key: 'schedules', label: t('nav_schedules', 'Schedules'), icon: <CalendarDays size={17} /> },
+          { key: 'teachers', label: t('nav_teachers', 'Teachers'), icon: <Users size={17} /> },
+          { key: 'schedules', label: t('nav_schedules', 'Academic Setup'), icon: <CalendarDays size={17} /> },
         ],
       },
       {
-        groupTitle: t('group_alerts', 'ATTENDANCE & ALERTS'),
+        groupTitle: t('group_monitoring', 'GEOFENCING & PASSES'),
         items: [
-          { key: 'messages', label: t('nav_messages', 'Parent Chat'), icon: <MessageSquare size={17} /> },
-          { key: 'push', label: t('nav_push', 'Push Alerts'), icon: <Bell size={17} /> },
-          { key: 'gate-passes', label: t('nav_gate_passes', 'Exit Passes'), icon: <Ticket size={17} /> },
+          { key: 'geofence', label: t('nav_geofence', 'Geofence & Loafing'), icon: <MapPin size={17} /> },
+          { key: 'gate-passes', label: t('nav_gate_passes', 'Exit & Travel Passes'), icon: <Ticket size={17} /> },
           {
             key: 'dtr',
-            label: isGlobalMode ? t('nav_dtr_global', 'Staff Timesheets') : t('nav_dtr_deped', 'Monthly DTR'),
+            label: isTeacherOnly ? t('nav_my_dtr', 'My DTR') : t('nav_dtr_deped', 'DTR'),
             icon: <Clock size={17} />,
           },
-          { key: 'geofence', label: t('nav_geofence', 'Campus GPS'), icon: <MapPin size={17} /> },
         ],
       },
       {
@@ -184,34 +169,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
         items: [
           {
             key: 'reports',
-            label: isGlobalMode ? t('nav_reports_global', 'Compliance Reports') : t('nav_reports_deped', 'DepEd Reports'),
+            label: t('nav_reports_deped', 'DepEd Reports'),
             icon: <FileSpreadsheet size={19} />,
           },
           { key: 'users', label: t('nav_users', 'User Accounts'), icon: <UserCheck size={17} /> },
-          { key: 'settings', label: t('nav_settings', 'School Settings'), icon: <Settings size={17} /> },
+          { key: 'settings', label: t('nav_settings', 'System Settings'), icon: <Settings size={17} /> },
         ],
       },
     ],
-    [isGlobalMode, t]
+    [isTeacherOnly, t]
   );
 
   const visibleGroups = useMemo(() => {
+    const permUser = { role, can_handle_classes: canTeach, can_teach: canTeach };
     return allGroups
       .map((group) => ({
         ...group,
         items: group.items.filter((item) => {
           if (allowedTabs && allowedTabs.length > 0) return allowedTabs.includes(item.key);
-          if (item.key === 'users') return ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN'].includes(role);
-          if (['settings', 'push', 'geofence'].includes(item.key)) {
-            return ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL'].includes(role);
-          }
-          if (['facultys', 'schedules'].includes(item.key)) return isLeadership;
-          if (item.key === 'my-classes') return canTeach || isLeadership;
-          return true;
+          return canViewTab(permUser, item.key);
         }),
       }))
       .filter((group) => group.items.length > 0);
-  }, [allGroups, allowedTabs, canTeach, isLeadership, role]);
+  }, [allGroups, allowedTabs, canTeach, role]);
 
   const safeLogo = isSafeImageUrl(schoolLogo) ? schoolLogo : null;
   const safeUserPhoto = isSafeImageUrl(userPhoto) ? userPhoto : null;
@@ -279,11 +259,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {safeLogo ? (
-          <img
-            src={safeLogo}
-            alt="School Seal"
-            style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', border: `2px solid ${brand.primary}` }}
-          />
+          <div
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: '50%',
+              backgroundColor: SEAL_COLORS.white,
+              border: `2px solid ${brand.primary}`,
+              padding: 3,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+              boxSizing: 'border-box',
+              flexShrink: 0,
+            }}
+          >
+            <img
+              src={safeLogo}
+              alt="School Seal"
+              style={{
+                maxWidth: '100%',
+                maxHeight: '100%',
+                width: 'auto',
+                height: 'auto',
+                display: 'block',
+                objectFit: 'contain',
+              }}
+            />
+          </div>
         ) : (
           <div
             style={{
@@ -291,7 +295,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               height: 32,
               borderRadius: '50%',
               backgroundColor: brand.buttonBg,
-              color: '#fff',
+              color: tokens.onPrimary,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -319,17 +323,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      <nav style={{ flex: 1, overflowY: 'auto', padding: isCollapsed ? '8px 6px' : '8px 8px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <nav
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: isCollapsed ? '8px 6px' : '8px 8px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
         {visibleGroups.map((group) => (
           <div key={group.groupTitle} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {!isCollapsed && (
-              <div style={{ fontSize: '0.60rem', fontWeight: 800, color: tokens.textMuted, padding: '3px 8px', letterSpacing: '0.5px' }}>
+              <div
+                style={{
+                  fontSize: '0.60rem',
+                  fontWeight: 800,
+                  color: tokens.textMuted,
+                  padding: '3px 8px',
+                  letterSpacing: '0.5px',
+                }}
+              >
                 {group.groupTitle}
               </div>
             )}
             {group.items.map((item) => {
               const active = activeTab === item.key;
-              const badge = formatBadge(mergedBadges[item.key]);
+              const badge = formatBadge(badgeCounts[item.key]);
               return (
                 <button
                   key={item.key}
@@ -349,18 +370,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     borderWidth: 0,
                     borderStyle: 'none',
                     backgroundColor: active ? brand.buttonBg : 'transparent',
-                    color: active ? '#ffffff' : tokens.textSecondary,
+                    color: active ? tokens.onPrimary : tokens.textSecondary,
                     cursor: 'pointer',
                     position: 'relative',
                   }}
                 >
-                  <span style={{ display: 'flex', color: active ? '#ffffff' : tokens.textMuted }}>{item.icon}</span>
+                  <span style={{ display: 'flex', color: active ? tokens.onPrimary : tokens.textMuted }}>{item.icon}</span>
                   {!isCollapsed && (
                     <span
                       style={{
                         fontSize: '0.78rem',
                         fontWeight: active ? 800 : 600,
-                        color: active ? '#ffffff' : tokens.textPrimary,
+                        color: active ? tokens.onPrimary : tokens.textPrimary,
                         flex: 1,
                         textAlign: 'left',
                         whiteSpace: 'nowrap',
@@ -374,8 +395,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {badge && (
                     <span
                       style={{
-                        backgroundColor: mode === 'dark' ? '#dc2626' : brand.danger,
-                        color: '#ffffff',
+                        backgroundColor: brand.danger,
+                        color: tokens.onPrimary,
                         fontSize: '0.58rem',
                         fontWeight: 800,
                         borderRadius: 9999,
@@ -404,19 +425,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
           gap: 8,
         }}
       >
-        <div style={{ width: 30, height: 30, borderRadius: '50%', overflow: 'hidden', backgroundColor: tokens.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <div
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: '50%',
+            overflow: 'hidden',
+            backgroundColor: tokens.primaryLight,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
           {safeUserPhoto ? (
             <img src={safeUserPhoto} alt="User" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           ) : (
             <span style={{ fontWeight: 800, fontSize: '0.78rem', color: brand.primary }}>
-              {(session?.faculty_name || session?.username || 'U').charAt(0).toUpperCase()}
+              {(session?.teacher_name || session?.username || 'U').charAt(0).toUpperCase()}
             </span>
           )}
         </div>
         {!isCollapsed && (
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 800, color: tokens.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {session?.faculty_name || session?.username || 'User'}
+            <div
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 800,
+                color: tokens.textPrimary,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {session?.teacher_name || session?.username || 'Teacher'}
             </div>
             <div style={{ fontSize: '0.60rem', fontWeight: 700, color: tokens.textMuted }}>{role}</div>
           </div>

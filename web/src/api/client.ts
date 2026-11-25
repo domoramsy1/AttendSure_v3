@@ -1,5 +1,5 @@
 /**
- * AttendSure Web API Client - Strict /api/v1/ Enforcement, SWR Cache & JWT Layer
+ * AttendSure Web API Client - Strict /api/v1/ Enforcement, Request Deduplication & JWT Layer
  * File: web/src/api/client.ts
  */
 
@@ -28,15 +28,12 @@ const responseCache = new Map<string, CacheEntry>();
 const inflightGetMap = new Map<string, Promise<AxiosResponse>>();
 const cacheListeners = new Map<string, Set<CacheListener>>();
 
-// Maps any legacy unversioned path to its canonical /api/v1/ endpoint
 const LEGACY_TO_V1_PREFIXES: ReadonlyArray<[RegExp, string]> = [
   [/^me\/?$/i, 'v1/accounts/me/'],
   [/^users(\/|$)/i, 'v1/accounts/users$1'],
-  [/^faculties(\/|$)/i, 'v1/accounts/faculty$1'],
-  [/^facultys(\/|$)/i, 'v1/accounts/faculty$1'],
-  [/^faculty\/dropdown\/?$/i, 'v1/accounts/faculty/dropdown/'],
-  [/^faculty\/(\d+)\/reset-device\/?$/i, 'v1/accounts/faculty/$1/reset-device/'],
-  [/^faculty(\/|$)/i, 'v1/accounts/faculty$1'],
+  [/^teachers\/dropdown\/?$/i, 'v1/accounts/teachers/dropdown/'],
+  [/^teachers\/(\d+)\/reset-device\/?$/i, 'v1/accounts/teachers/$1/reset-device/'],
+  [/^teachers(\/|$)/i, 'v1/accounts/teachers$1'],
   [/^activity-logs(\/|$)/i, 'v1/accounts/audit-logs$1'],
   [/^settings\/school\/?$/i, 'v1/school/settings/'],
   [/^academic-years(\/|$)/i, 'v1/school/school-years$1'],
@@ -50,7 +47,7 @@ const LEGACY_TO_V1_PREFIXES: ReadonlyArray<[RegExp, string]> = [
   [/^classroom\/adviser-matrix\/?$/i, 'v1/attendance/adviser-matrix/'],
   [/^classroom\/(student_list|class_list)\/?$/i, 'v1/attendance/classes/'],
   [/^geofence\/audit\/?$/i, 'v1/campus/audit/'],
-  [/^geofence(\/|$)/i, 'v1/campus/boundary$1'],
+  [/^geofence(\/|$)/i, 'v1/campus/overview$1'],
   [/^enterprise\/emergency-roll-?call\/?$/i, 'v1/campus/roll-call/'],
   [/^enterprise\/sdg-impact\/?$/i, 'v1/reports/sdg-impact/'],
   [/^enterprise\/edfi-export\/?$/i, 'v1/reports/edfi-export/'],
@@ -58,9 +55,6 @@ const LEGACY_TO_V1_PREFIXES: ReadonlyArray<[RegExp, string]> = [
   [/^dashboard\/overview\/?$/i, 'v1/reports/dashboard/'],
   [/^system\/status\/?$/i, 'v1/reports/system-status/'],
   [/^reports(\/|$)/i, 'v1/reports$1'],
-  [/^notifications(\/|$)/i, 'v1/messaging/notifications$1'],
-  [/^chat\/threads\/?$/i, 'v1/messaging/threads/'],
-  [/^chat\/messages\/?$/i, 'v1/messaging/messages/'],
   [/^core\/maintenance\/db-check\/?$/i, 'v1/health/db/'],
   [/^core\/maintenance\/flush-cache\/?$/i, 'v1/cache/flush/'],
   [/^core\/maintenance\/unlock-accounts\/?$/i, 'v1/accounts/unlock-accounts/'],
@@ -89,10 +83,6 @@ export const clearApiClientCache = (): void => {
   inflightGetMap.clear();
 };
 
-/**
- * Evicts cached GET entries completely so immediate post-mutation refetches
- * always read fresh database state instead of stale SWR snapshots.
- */
 export const invalidateApiCache = (): void => {
   responseCache.clear();
   inflightGetMap.clear();
@@ -218,7 +208,7 @@ const clearStoredAuth = (): void => {
     'auth_token',
     'token',
     'attendsure_username',
-    'attendsure_faculty_name',
+    'attendsure_teacher_name',
     'attendsure_role',
     'attendsure_user_id',
     'attendsure_user_photo',
@@ -234,8 +224,52 @@ const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+let refreshPromise: Promise<string | null> | null = null;
+
+const isJwtExpiringSoon = (token: string, bufferSeconds = 60): boolean => {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
+    const payload = JSON.parse(atob(padded)) as { exp?: number };
+    if (typeof payload.exp !== 'number') return false;
+    return payload.exp * 1000 - Date.now() < bufferSeconds * 1000;
+  } catch {
+    return false;
+  }
+};
+
+const refreshJwtAccessToken = (): Promise<string | null> => {
+  const refreshToken = localStorage.getItem('attendsure_refresh')?.trim();
+  if (!refreshToken) return Promise.resolve(null);
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post(
+        `${resolveBaseUrl()}/api/v1/accounts/token/refresh/`,
+        { refresh: refreshToken },
+        { timeout: 6000 }
+      )
+      .then((res) => {
+        const nextAccess = res.data?.access as string | undefined;
+        const nextRefresh = res.data?.refresh as string | undefined;
+        if (nextAccess) {
+          localStorage.setItem('attendsure_access', nextAccess);
+          if (nextRefresh) localStorage.setItem('attendsure_refresh', nextRefresh);
+          return nextAccess;
+        }
+        return null;
+      })
+      .catch(() => null)
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+};
+
 apiClient.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => {
+  async (config: InternalAxiosRequestConfig) => {
     config.baseURL = resolveBaseUrl();
     config.url = normalizeApiPath(config.url || '');
 
@@ -244,8 +278,18 @@ apiClient.interceptors.request.use(
       invalidateApiCache();
     }
 
+    const reqUrl = config.url || '';
+    const isAuthRoute =
+      reqUrl.includes('/login/') || reqUrl.includes('/token/') || reqUrl.includes('/public-branding/');
+
     if (config.headers && !config.headers.Authorization) {
-      const jwtAccess = localStorage.getItem('attendsure_access')?.trim().replace(/[\r\n]/g, '');
+      let jwtAccess = localStorage.getItem('attendsure_access')?.trim().replace(/[\r\n]/g, '') || '';
+      if (jwtAccess && !isAuthRoute && isJwtExpiringSoon(jwtAccess)) {
+        const refreshed = await refreshJwtAccessToken();
+        if (refreshed) {
+          jwtAccess = refreshed;
+        }
+      }
       const legacyToken = (
         localStorage.getItem('attendsure_token') ||
         localStorage.getItem('auth_token') ||
@@ -267,8 +311,6 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-let refreshPromise: Promise<string | null> | null = null;
-
 type RetriableConfig = InternalAxiosRequestConfig & {
   _jwtRetried?: boolean;
   _tokenRetried?: boolean;
@@ -278,7 +320,6 @@ apiClient.interceptors.response.use(
   (response) => {
     const method = (response.config.method || 'get').toLowerCase();
     if (method !== 'get') {
-      // Clear cache AFTER mutation commits so follow-up GETs never read pre-mutation snapshots
       invalidateApiCache();
     }
     return response;
@@ -286,32 +327,14 @@ apiClient.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as RetriableConfig | undefined;
     const reqUrl = originalRequest?.url || '';
-    const isAuthRoute = reqUrl.includes('/login/') || reqUrl.includes('/token/') || reqUrl.includes('/public-branding/');
+    const isAuthRoute =
+      reqUrl.includes('/login/') || reqUrl.includes('/token/') || reqUrl.includes('/public-branding/');
 
     if (error.response?.status === 401 && originalRequest && !isAuthRoute) {
       const refreshToken = localStorage.getItem('attendsure_refresh')?.trim();
       if (refreshToken && !originalRequest._jwtRetried) {
         originalRequest._jwtRetried = true;
-        if (!refreshPromise) {
-          refreshPromise = axios
-            .post(`${resolveBaseUrl()}/api/v1/accounts/token/refresh/`, { refresh: refreshToken }, { timeout: 6000 })
-            .then((res) => {
-              const nextAccess = res.data?.access as string | undefined;
-              const nextRefresh = res.data?.refresh as string | undefined;
-              if (nextAccess) {
-                localStorage.setItem('attendsure_access', nextAccess);
-                if (nextRefresh) localStorage.setItem('attendsure_refresh', nextRefresh);
-                return nextAccess;
-              }
-              return null;
-            })
-            .catch(() => null)
-            .finally(() => {
-              refreshPromise = null;
-            });
-        }
-
-        const newAccess = await refreshPromise;
+        const newAccess = await refreshJwtAccessToken();
         if (newAccess) {
           originalRequest.headers.Authorization = `Bearer ${newAccess}`;
           return apiClient(originalRequest);
@@ -410,11 +433,17 @@ apiClient.get = function swrGet<T = any, R = AxiosResponse<T>, D = any>(
   if (!forceNetwork) {
     const hit = responseCache.get(key);
     if (hit && hit.freshUntil > now) {
-      return withCallerAbort(Promise.resolve(hit.response as unknown as R), config?.signal as GenericAbortSignal);
+      return withCallerAbort(
+        Promise.resolve(hit.response as unknown as R),
+        config?.signal as GenericAbortSignal
+      );
     }
     if (hit && hit.staleUntil > now) {
       void fetchAndPopulateCache<T, D>(url, key, config).catch(() => {});
-      return withCallerAbort(Promise.resolve(hit.response as unknown as R), config?.signal as GenericAbortSignal);
+      return withCallerAbort(
+        Promise.resolve(hit.response as unknown as R),
+        config?.signal as GenericAbortSignal
+      );
     }
   }
 
@@ -441,7 +470,7 @@ export const warmupRoleEndpoints = (role: string, canHandleClasses: boolean): vo
   lastWarmupUser = userScope;
 
   const upper = role.toUpperCase();
-  const isLeader = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(upper);
+  const isLeader = ['ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(upper);
   const now = new Date();
 
   const queue: Array<[string, Record<string, unknown>?]> = [
@@ -452,7 +481,6 @@ export const warmupRoleEndpoints = (role: string, canHandleClasses: boolean): vo
     [API_ROUTES.school.gradeLevels, { page_size: 200 }],
     [API_ROUTES.attendance.exitPasses, undefined],
     [API_ROUTES.reports.dtr, { month: now.getMonth() + 1, year: now.getFullYear() }],
-    [API_ROUTES.messaging.threads, undefined],
     [API_ROUTES.reports.sdgImpact, undefined],
     [API_ROUTES.reports.dropoutRisk, undefined],
   ];
@@ -464,14 +492,15 @@ export const warmupRoleEndpoints = (role: string, canHandleClasses: boolean): vo
   }
 
   if (isLeader) {
-    queue.push([API_ROUTES.accounts.faculty, { page: 1, page_size: 25 }]);
-    queue.push([API_ROUTES.accounts.facultyDropdown, undefined]);
+    queue.push([API_ROUTES.accounts.teachers, { page: 1, page_size: 25 }]);
+    queue.push([API_ROUTES.accounts.teachersDropdown, undefined]);
     queue.push([API_ROUTES.school.periods, { page_size: 500 }]);
-    queue.push([API_ROUTES.campus.boundary, undefined]);
+    queue.push([API_ROUTES.campus.overview, undefined]);
+    queue.push([API_ROUTES.campus.loafing, undefined]);
     queue.push([API_ROUTES.school.settings, undefined]);
   }
 
-  if (['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN'].includes(upper)) {
+  if (upper === 'ADMIN') {
     queue.push([API_ROUTES.accounts.users, { page_size: 'ALL' }]);
   }
 
@@ -479,4 +508,5 @@ export const warmupRoleEndpoints = (role: string, canHandleClasses: boolean): vo
     setTimeout(() => prefetchApiGet(endpoint, params), 80 + index * 90);
   });
 };
+
 export default apiClient;

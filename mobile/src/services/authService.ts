@@ -4,10 +4,26 @@
  */
 
 import { Platform } from 'react-native';
-import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import type * as SecureStoreType from 'expo-secure-store';
 import { apiClient } from '../api/client';
 import { ENDPOINTS } from '../api/endpoints';
 import { cleanText, getFriendlyErrorMessage } from '../constants/theme';
+
+let cachedSecureStore: typeof SecureStoreType | null | undefined;
+const getSecureStore = (): typeof SecureStoreType | null => {
+  if (cachedSecureStore !== undefined) return cachedSecureStore;
+  if (Platform.OS === 'web') {
+    cachedSecureStore = null;
+    return null;
+  }
+  try {
+    cachedSecureStore = require('expo-secure-store') as typeof SecureStoreType;
+  } catch {
+    cachedSecureStore = null;
+  }
+  return cachedSecureStore;
+};
 
 export interface UserAccount {
   id: number;
@@ -39,8 +55,15 @@ const safeStorage = {
         return null;
       }
     }
+    const store = getSecureStore();
+    if (store) {
+      try {
+        const val = await store.getItemAsync(key);
+        if (val !== null) return val;
+      } catch {}
+    }
     try {
-      return await SecureStore.getItemAsync(key);
+      return await AsyncStorage.getItem(key);
     } catch {
       return null;
     }
@@ -55,8 +78,14 @@ const safeStorage = {
       } catch {}
       return;
     }
+    const store = getSecureStore();
+    if (store) {
+      try {
+        await store.setItemAsync(key, value);
+      } catch {}
+    }
     try {
-      await SecureStore.setItemAsync(key, value);
+      await AsyncStorage.setItem(key, value);
     } catch {}
   },
 
@@ -69,8 +98,14 @@ const safeStorage = {
       } catch {}
       return;
     }
+    const store = getSecureStore();
+    if (store) {
+      try {
+        await store.deleteItemAsync(key);
+      } catch {}
+    }
     try {
-      await SecureStore.deleteItemAsync(key);
+      await AsyncStorage.removeItem(key);
     } catch {}
   },
 };

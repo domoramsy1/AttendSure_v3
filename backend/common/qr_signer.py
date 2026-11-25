@@ -1,7 +1,8 @@
-import hashlib
-import hmac
 from dataclasses import dataclass
-from django.conf import settings
+from django.core.signing import BadSignature, Signer
+
+QR_SIGNER_SALT = "attendsure.student.qr.hmac.v1"
+QR_PREFIX = "ATTENDSURE:"
 
 
 @dataclass(frozen=True)
@@ -11,31 +12,43 @@ class VerifiedQrData:
     is_signed: bool
 
 
+def _get_signer() -> Signer:
+    return Signer(salt=QR_SIGNER_SALT)
+
+
 def sign_student_qr(lrn: str, qr_token: str) -> str:
+    """Signs a student's LRN and secret qr_token with HMAC-SHA256 tied to SECRET_KEY."""
     clean_lrn = str(lrn or "").strip()
     clean_token = str(qr_token or "").strip()
-    payload = f"{clean_lrn}:{clean_token}".encode("utf-8")
-    sig = hmac.new(settings.SECRET_KEY.encode("utf-8"), payload, hashlib.sha256).hexdigest()[:12].upper()
-    return f"ATTENDSURE:{clean_lrn}:{clean_token}:{sig}"
+    signed_value = _get_signer().sign(f"{clean_lrn}|{clean_token}")
+    return f"{QR_PREFIX}{signed_value}"
 
 
-def verify_student_qr(raw_scan: str, *, allow_legacy_unsigned: bool | None = None) -> VerifiedQrData | None:
-    if allow_legacy_unsigned is None:
-        allow_legacy_unsigned = bool(getattr(settings, "ALLOW_LEGACY_UNSIGNED_QR", False))
-    clean = str(raw_scan or "").strip().replace("\r", "").replace("\n", "").replace("\0", "")[:128]
-    if not clean:
+def verify_student_qr(raw_scan: str) -> VerifiedQrData | None:
+    """
+    Verifies a cryptographically signed student QR payload.
+    Unsigned raw LRNs, forged signatures, and tampered tokens are strictly rejected.
+    """
+    clean = str(raw_scan or "").strip().replace("\r", "").replace("\n", "").replace("\0", "")[:256]
+    if not clean or not clean.startswith(QR_PREFIX):
         return None
 
-    parts = clean.split(":")
-    if len(parts) == 4 and parts[0].upper() == "ATTENDSURE":
-        _, lrn, token, provided_sig = parts
-        expected_sig = sign_student_qr(lrn, token).rsplit(":", 1)[-1]
-        if not hmac.compare_digest(provided_sig.upper(), expected_sig):
-            return None
-        return VerifiedQrData(lrn=lrn.strip(), qr_token=token.strip(), is_signed=True)
-
-    if not allow_legacy_unsigned:
+    signed_body = clean[len(QR_PREFIX):]
+    if not signed_body:
         return None
 
-    token_only = parts[-1].strip()
-    return VerifiedQrData(lrn=token_only, qr_token=token_only, is_signed=False)
+    try:
+        unsigned = _get_signer().unsign(signed_body)
+    except BadSignature:
+        return None
+
+    if "|" not in unsigned:
+        return None
+
+    lrn, token = unsigned.split("|", 1)
+    clean_lrn = lrn.strip()
+    clean_token = token.strip()
+    if not clean_lrn or not clean_token:
+        return None
+
+    return VerifiedQrData(lrn=clean_lrn, qr_token=clean_token, is_signed=True)

@@ -1,48 +1,67 @@
-# AttendSure v3.1 — Zero-Hardware Campus Attendance, Safety & Dropout Early-Warning OS
+# AttendSure v3 — Pure-Software DepEd Attendance, Campus Safety & SARDO Early-Warning System
 
-> **Every Student Accounted For. Zero Gate Hardware Required.**  
-> Pure-software school attendance, 30-day AI dropout early-warning, emergency campus evacuation roll-call, parent safety alerts, and dual regulatory compliance (**Ed-Fi Data Standard v6.0 + GDPR** alongside **DepEd Philippines SF1 / SF2 / SF4 / CSC Form 48**).
-
-[![Architecture](https://img.shields.io/badge/Architecture-Pure%20Software%20%240%20Hardware-0284c7)]()
-[![Interoperability](https://img.shields.io/badge/Standard-Ed--Fi%20v6.0%20%2B%20GDPR%20Art.%2025-10b981)]()
-[![UN SDGs](https://img.shields.io/badge/UN%20SDGs-4%20%7C%205%20%7C%208%20%7C%2011%20%7C%2012--13%20%7C%2016-7c3aed)]()
-[![Deploy](https://img.shields.io/badge/Deploy-Docker%20Blue--Green%20Zero--Downtime-0f172a)]()
+> **Every Teacher On Duty. Every Student Accounted For. Pure Software — Zero Extra Devices Required.**  
+> Built for Philippine public and private schools using everyday teacher laptops, PC webcams, and mobile phones — paired with official DepEd **SF1**, **SF2**, **SF4**, and **CSC Form 48 (DTR)** workflows.
 
 ---
 
 ## Why AttendSure Exists
 
-Over **85% of public schools globally** cannot afford legacy RFID turnstiles (\$5,500–\$18,000+ upfront CapEx per campus) or recurring SMS parent-notification gateways. As a result, schools rely on paper registers that conceal chronic absenteeism, period-by-period cutting classes, and invisible dropout trajectories until it is too late.
+Many schools still track student attendance and teacher time records using paper logbooks and manual spreadsheets. Paper records make it hard to spot students who arrive in the morning and skip later class periods, delay early support for students at risk of dropping out (**SARDO**), and take hours of manual encoding at the end of every month.
 
-**AttendSure eliminates 100% of gate hardware CapEx** by turning existing teacher laptops, webcams, \$15 USB QR readers, and staff smartphones into an encrypted, offline-capable campus operating system.
+**AttendSure replaces paper logbooks with a pure-software school platform** that runs on devices teachers already own:
 
-| Capability | Legacy RFID Turnstiles | AttendSure v3.1 |
+| Everyday School Need | Paper Logbooks & Manual Sheets | AttendSure v3 |
 |---|---|---|
-| **Upfront Gate Hardware Cost** | \$5,500 – \$18,000+ / school | **\$0** (Pure Software) |
-| **Parent Alert Cost** | \$0.02 – \$0.05 / SMS | **\$0** (Mobile Push + Offline Queue) |
-| **Classroom / Period Cutting Detection** | Gate-only blind spot | **Per-period HMAC-signed QR scans** |
-| **Faculty Presence Verification** | Wall biometric clock (proxy risk) | **Hardware-bound GPS + Mock-GPS detection** |
-| **Global Data Interoperability** | Proprietary lock-in | **Ed-Fi v6.0 JSON + GDPR Art. 25 Pseudonymization** |
-| **National Statutory Forms** | Manual re-encoding | **Auto-generated DepEd SF1, SF2, SF4 & CSC Form 48** |
-| **Emergency Disaster Safety** | Paper binders | **1-Click Live Emergency Campus Roll-Call** |
+| **Extra Equipment Cost** | High printing & manual clerical cost | **\$0 extra devices** (runs on existing teacher laptops, webcams, and phones) |
+| **Period-by-Period Student Check** | Hard to compare across subjects | **Built-in camera QR scanning** (`jsqr` webcam & `expo-camera` phone back camera) with signed student QR IDs |
+| **Offline Reliability** | Lost or late sheets during outages | **Local offline queue** on web and mobile that syncs automatically when internet returns |
+| **Teacher Duty Verification** | Handwritten logbooks open to proxy entries | **On-device face/fingerprint/PIN check** + **1-to-1 phone binding** + **campus GPS boundary** |
+| **Teacher Loafing & Student Cutting Alerts** | Discovered days or weeks later | **Automatic weekday-aware alerts** for teacher loafing outside campus, students cutting class, and expired exit passes |
+| **Official DepEd Reports** | Hours of manual monthly counting | **Print-ready DepEd SF1, SF2, SF4 & CSC Form 48 (DTR)** with submission and approval |
+| **Emergency Evacuation Check** | Slow paper headcounts | **1-Click Emergency Roll-Call** of every student and teacher verified on campus today |
 
 ---
 
-## Core Modules & International Competition Features
+## Core Features Built Into the Repository
 
-1. **UN SDG Impact & Safety Command Center** (`Impact & Safety` tab):
-   - Live PostgreSQL metrics for **SDG 4** (Quality Education), **SDG 5 & 10** (Gender Attendance Parity Index & Social Aid/CCT monitoring), **SDG 8** (Teacher hours reclaimed & CapEx avoided), **SDG 12 & 13** (Paper & gate e-waste CO2e reduction), and **SDG 16** (Hardware-verified faculty GPS & tamper-evident audit logs).
-   - **30-Day Dropout Early-Warning Engine** scoring absences, period cutting, and morning tardiness into `CRITICAL_SARDO` and `EARLY_WARNING` intervention rosters.
-   - **SDG 11 Emergency Evacuation Campus Roll-Call**: Instant live headcount checklist of all students and faculty verified inside the campus today.
-2. **Dual Compliance Mode + Multi-Language UI (`EN` / `FIL` / `ES` / `FR`)**:
-   - Instant top-bar toggle between **Global Ed-Fi v6.0** terminology/USD metrics and **DepEd Philippines** statutory workflows (`SF1`, `SF2`, `SF4`, `CSC Form 48`).
-   - One-click **Ed-Fi Data Standard v6.0 JSON Export** (`/api/v1/reports/edfi-export/?days=30&anonymize=1`) with deterministic SHA-256 GDPR Art. 25 pseudonymization.
-3. **1-Click Judge Demo Mode (Environment-Gated)**:
-   - Public Product Showcase landing page with instant role launchers (**System Admin**, **School Principal**, **Class Adviser**) backed by real database records.
-   - Strictly disabled (`HTTP 404`) in production whenever `DEBUG=False` and `ENABLE_JUDGE_DEMO=False`.
-4. **Offline-First Classroom Scanner & Mobile App**:
-   - HMAC-SHA256 signed QR cards (`common/qr_signer.py`) prevent forged badges.
-   - Automatic client-side offline queue syncs batch scans and telemetry heartbeats upon reconnection.
+1. **Built-In Camera Student Attendance (`QR` + Manual Class List)**
+   - Teachers scan HMAC-SHA256 signed student QR ID cards (`ATTENDSURE:...`) using their laptop/PC webcam (`jsqr` in the web portal) or phone back camera (`expo-camera` in the mobile app).
+   - Every scan checks the teacher's assigned classes, prevents forged or unsigned QR badges, and saves to a local offline queue (`localStorage` on web, `AsyncStorage` on mobile) whenever school Wi-Fi drops, syncing cleanly through `POST /api/v1/attendance/offline-sync/`.
+   - Homeroom advisers monitor period-by-period attendance in the **Adviser Matrix**, filtered strictly to class periods scheduled on that weekday (`ALL_WEEKDAYS`, `MWF`, `TTH`, or single days `1`–`7`).
+
+2. **Teacher Campus GPS Check-In & Adaptive Duty Tracking**
+   - Inside the AttendSure mobile app on their own phone, teachers verify their identity using their phone's built-in **face unlock, fingerprint sensor, or screen-lock PIN/pattern** (`expo-local-authentication` + `expo-secure-store`) before clocking in or out.
+   - **Zero raw face photos or biometric templates** are ever sent to or stored on the server — only a public SHA-256 key ID (`biometric_key_id`) and a 1-to-1 phone ID (`bound_device_id`) are stored.
+   - Server-side Haversine boundary checks reject mock GPS, impossible coordinates, and weak GPS readings (> 250 m accuracy). While clocked in during duty hours, the app sends adaptive **45-second campus GPS pings** and automatically opens or resolves outside-campus alerts unless an approved **Official Locator Slip / Exit Pass** is active.
+
+3. **5-Role Staff Access Control (Synchronized Across Backend, Web & Mobile)**
+   - **`ADMIN`** (System Administrator): Full school setup, user account management, teacher directory CRUD, device lock reset, campus boundary editing, and audit logs.
+   - **`PRINCIPAL`** (School Principal): Full school visibility, student management, campus boundary editing, device lock reset, loafing resolution, SF4, and audit logs (view-only on Academic Setup and Teacher Directory).
+   - **`DEPT_HEAD`** (Department Head): Department oversight, classroom QR scanning, DTR approval, exit pass / locator slip approval, loafing resolution, and SF4.
+   - **Teaching `TEACHER` (`can_handle_classes=True`)**: Assigned classroom QR scanning, class lists, adviser matrix, student exit passes, SF1/SF2 for assigned classes, personal campus GPS check-in, and personal DTR. Homeroom advisers can also add/edit students in their own advised section.
+   - **Non-Teaching `TEACHER` (`can_handle_classes=False`)**: Focused view for non-teaching school staff (Dashboard, personal Campus GPS Check-In / Geofence, personal Official Locator Slips / Exit Passes, and personal DTR), with student class lists and classroom QR tools hidden.
+
+4. **Official DepEd Forms, SARDO Early-Warning & Campus Safety**
+   - Print-ready **DepEd SF1** (School Register), **SF2** (Daily Attendance Report of Learners), **SF4** (Monthly Learner Movement and Attendance), and **CSC Form 48 (Daily Time Record / DTR)** with teacher submission and Department Head approval.
+   - **DepEd Division Data Export** (`JSON` / `CSV`) with optional personal ID masking.
+   - **30-Day SARDO Risk Tracker** identifying `CRITICAL_SARDO` and `EARLY_WARNING` students from recent absences, cutting-class alerts, and late arrivals.
+   - **1-Click Emergency Roll-Call** (`/api/v1/campus/roll-call/`) listing every student and teacher verified on campus today with live assembly-point safe checkboxes.
+   - **Language Support (`EN` / `FIL`)** and **3 Color Modes** (`Light`, `Dark`, `High-Contrast`) across the web portal.
+
+---
+
+## Strict 3NF Database Structure
+
+AttendSure stores school records in **6 focused Django apps** with zero duplicated columns and database-level integrity constraints:
+
+- **`accounts`**: `UserProfile` (role + 5-strike login lockout), `Department`, `PositionTitle`, `TeacherProfile` (name, email, and active flag stay strictly in `auth.User`; stores 1-to-1 `bound_device_id` and public SHA-256 `biometric_key_id`), and `AuditLog`.
+- **`school`**: `SchoolYear`, `AdministrativeDivision`, `SchoolSettings`, `SchoolHoliday`, `Building`, `Room`, `GradeLevel`, `Subject`, `Section`, and `ClassPeriod` (with shared weekday helpers `expand_schedule_days` and `period_runs_on_weekday`).
+- **`students`**: `AddressLocation` (normalized `barangay`, `municipality_city`, `province`), `Student` (personal info + plain-text guardian details for SF1; never duplicates section or grade level), and `Enrollment` (links `Student` + `Section`, deriving school year and grade level from `Section`).
+- **`attendance`**: `DailyAttendance` (unique per `Enrollment` + `attendance_date`), `ClassAttendance` (unique per `Enrollment` + `ClassPeriod` + `attendance_date`, plus `client_scan_uuid` for duplicate-safe offline sync), and `ExitPass` (enforces the `ck_exitpass_xor_bearer` database check constraint so every pass belongs to either a `STUDENT` enrollment or a `TEACHER`, never both, and computes `pass_status` dynamically).
+- **`campus`**: `CampusBoundary`, `TeacherDailyAttendance`, `TeacherLocationPing` (stores raw GPS coordinates and computes `distance_meters` and `is_inside` dynamically), `LoafingIncident` (derives display names and distances from joined tables), and `MonthlyTimeRecord` (CSC Form 48 submission and approval workflow).
+- **`reports`**: Read-optimized selectors and print/export engines for Dashboard, SF1, SF2, SF4, DTR, SARDO risk, campus impact summary, and Division Data Export.
+- **`common/`**: Shared helpers for role permissions (`permissions.py`), HMAC QR signing (`qr_signer.py`), Haversine GPS checks (`gps.py`), audit trails (`audit.py`), image validation (`media.py`), phone formatting (`phone.py`), security headers (`security.py`), and request logging (`request_logger.py`).
 
 ---
 
@@ -50,42 +69,54 @@ Over **85% of public schools globally** cannot afford legacy RFID turnstiles (\$
 
 ```text
 AttendSure_V3/
-├── backend/                     # Django 6 + DRF + SimpleJWT + Celery + Redis + PostgreSQL
+├── backend/                     # Django 6 + DRF + SimpleJWT + Celery + Redis + PostgreSQL/SQLite
 │   ├── apps/
-│   │   ├── accounts/            # RBAC, device lock, audit logs, DemoLoginView, tests.py
-│   │   ├── school/              # School settings, sections, schedules, seed_competition_demo
-│   │   ├── students/            # Student directory, enrollments, signed QR cards, parent portal
-│   │   ├── attendance/          # Signed QR scan, offline batch sync, adviser matrix, exit passes
-│   │   ├── campus/              # Haversine geofencing, mock-GPS defense, DTR, emergency roll-call
-│   │   ├── messaging/           # Expo push worker, announcements, parent-teacher direct chat
-│   │   └── reports/             # SF1, SF2, SF4, DTR, SDG Impact, Dropout Risk, Ed-Fi v6.0 engine
-│   ├── common/                  # Audit middleware, GPS math, E.164 phone, HMAC QR signer
+│   │   ├── accounts/            # Staff roles, TeacherProfile, 5-strike lockout, AuditLog, tests
+│   │   ├── school/              # School settings, sections, schedules, weekday rules, demo seeder
+│   │   ├── students/            # Student directory, AddressLocation, Enrollment, signed QR IDs
+│   │   ├── attendance/          # Signed QR scan, offline sync, adviser matrix, cutting detector, exit passes
+│   │   ├── campus/              # Campus boundary, Haversine GPS pings, teacher check-in, loafing, roll-call
+│   │   └── reports/             # SF1, SF2, SF4, CSC Form 48 (DTR), 30-Day SARDO Risk, Division Export
+│   ├── common/                  # Permissions, HMAC QR signer, GPS math, audit helpers, image & phone checks
 │   ├── config/                  # settings.py, urls.py, legacy_urls.py, wsgi.py, asgi.py, celery.py
 │   ├── Dockerfile               # Non-root Python 3.12 production container
-│   └── gunicorn.conf.py         # Blue/Green/Standalone Gunicorn config
-├── web/                         # React 19 + TypeScript + Vite executive & faculty web portal
+│   └── gunicorn.conf.py         # Gunicorn worker configuration
+├── web/                         # React 19 + TypeScript + Vite 8 web portal
 │   └── src/
-│       ├── components/showcase/ # Public competition showcase & 1-Click Judge Demo launcher
-│       ├── components/dashboard/# Live Dashboard + UN SDG Impact & Early-Warning Command Center
-│       ├── components/tabs/     # Scanner, Students, Faculty, Schedules, Geofence, SF1/SF2/SF4/DTR
-│       └── context/             # ThemeContext (Light/Dark/High-Contrast) + ComplianceContext (Global/DepEd + i18n)
-├── mobile/                      # React Native / Expo companion app (Faculty GPS + Parent Portal)
-├── deploy/                      # Nginx reverse proxy + Blue-Green zero-downtime switch scripts
+│       ├── components/dashboard/# Live Dashboard + SARDO Risk & 1-Click Emergency Roll-Call panel
+│       ├── components/scanner/  # Built-in webcam QR scanner (jsqr) with offline local queue
+│       ├── components/tabs/     # Students, Teachers, Schedules, Geofence, Exit Passes, SF1/SF2/SF4/DTR, Users, Settings
+│       ├── components/showcase/ # School portal overview & environment-gated role preview launcher
+│       ├── context/             # ThemeContext (Light/Dark/High-Contrast), ComplianceContext (EN/FIL), AlertContext, SchoolContext
+│       └── utils/permissions.ts # 5-profile Web access control matrix
+├── mobile/                      # Expo (SDK 58) + React Native 0.88 staff companion app
+│   ├── AGENTS.md                # Mobile architecture, navigation, theme tokens, and security guide
+│   └── src/
+│       ├── navigation/          # AppNavigator (@react-navigation/native-stack) + 5-tab MainTabNavigator
+│       ├── screens/             # Dashboard, Scanner/Check-In, Geofence, Passes, Account, Matrix, Reports, DTR, Calendar, Settings
+│       ├── services/            # biometricService, deviceService, telemetryService, backgroundLocation, offlineQueue
+│       ├── theme/tokens.ts      # Centralized palette & font tokens (re-exported by constants/theme.ts)
+│       └── utils/permissions.ts # 5-profile Mobile access control matrix
+├── deploy/                      # Nginx config + Blue-Green zero-downtime switch scripts (switch.sh / switch.ps1)
 ├── docs/
-│   ├── COMPETITION_PITCH_PACK.md    # 10-slide pitch deck blueprint, TAM/SAM/SOM & 3-min demo script
-│   └── ARCHITECTURE_AND_SECURITY.md # Mermaid architecture, GDPR/FERPA/RA 10173 & Ed-Fi v6.0 spec
-└── docker-compose.yml           # PostgreSQL 16 + Redis 7 + Blue/Green Web + Nginx + Celery
+│   ├── ARCHITECTURE_AND_SECURITY.md # System topology, 3NF schema, RBAC, anti-spoofing & RA 10173 privacy
+│   └── COMPETITION_PITCH_PACK.md    # 10-slide presentation guide, live walkthrough script & Q&A prep
+├── scripts/
+│   ├── audit_codebase.py        # 8-gate automated codebase, RBAC, UI token, vocabulary & schedule auditor
+│   └── database/                # Database check, index optimization, and seeding utilities
+└── docker-compose.yml           # PostgreSQL 16 + Redis 7 + Blue/Green Gunicorn + Nginx + Celery
 ```
 
 ---
 
-## 5-Minute Quickstart (Local Competition Demo)
+## Quickstart (Local Development)
 
-### 1. Backend Setup & Competition Demo Seeder
+### 1. Backend Setup & Demo Data
 
 ```bash
 cd backend
 python -m venv venv
+
 # Windows PowerShell:
 .\venv\Scripts\Activate.ps1
 # macOS / Linux:
@@ -97,9 +128,9 @@ python manage.py seed_competition_demo
 python manage.py runserver 0.0.0.0:8000
 ```
 
-> **Seeded Demo Accounts** (password: `AttendSure2026!`):  
-> `demo_admin` (Admin) · `demo_principal` (Principal) · `demo_teacher` (Class Adviser) · `demo_parent` (Parent Mobile)  
-> 1-Click Judge Demo buttons work automatically when `DEBUG=True` or `ENABLE_JUDGE_DEMO=True`.
+> **Seeded Staff Preview Accounts** (password: `AttendSure2026!`):  
+> `demo_admin` (System Administrator) · `demo_principal` (School Principal) · `demo_dept_head` (Department Head) · `demo_teacher` (Teacher / Class Adviser)  
+> One-click role preview buttons on the landing page work only when `DEBUG=True` or `ENABLE_JUDGE_DEMO=True`, and return `HTTP 404` when disabled in production.
 
 ### 2. Web Portal
 
@@ -109,9 +140,17 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` to view the **Public Startup Showcase & 1-Click Judge Demo Launcher**.
+Open `http://localhost:5173` in your browser.
 
-### 3. Production Zero-Downtime Docker Deployment (Blue-Green)
+### 3. Mobile App (Expo)
+
+```bash
+cd mobile
+npm install
+npx expo start
+```
+
+### 4. Production Deployment (Blue-Green Zero-Downtime Docker)
 
 ```bash
 cp backend/.env.example backend/.env   # Set SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD, DEBUG=False
@@ -119,22 +158,32 @@ docker compose up -d --build
 docker compose exec web_blue python manage.py migrate --noinput
 docker compose exec web_blue python manage.py collectstatic --noinput
 
-# Subsequent zero-downtime releases:
-# Linux/macOS: ./deploy/switch.sh
+# Subsequent zero-downtime updates:
 # Windows:     .\deploy\switch.ps1
-```
-
-### 4. Automated Test Suite
-
-```bash
-cd backend
-python manage.py check
-python manage.py test apps.accounts.tests --verbosity=2
+# Linux/macOS: ./deploy/switch.sh
 ```
 
 ---
 
-## Competition Documentation Pack
+## Verification & Automated Audit
 
-- **[Competition Pitch Pack & 3-Minute Live Demo Script](docs/COMPETITION_PITCH_PACK.md)** — 10-slide deck structure, unit economics, market sizing, competitive moat, and judge Q&A prep.
-- **[Architecture, Security & Privacy Whitepaper](docs/ARCHITECTURE_AND_SECURITY.md)** — System topology, HMAC QR verification, mock-GPS & device-lock defense, GDPR/FERPA/COPPA/RA 10173 matrix, and Ed-Fi v6.0 schema reference.
+Run the backend test suite and the 8-gate repository auditor:
+
+```bash
+# 1. Run all Django unit and integration tests
+cd backend
+python manage.py check
+python manage.py test --verbosity=2
+
+# 2. Run the 8-gate master codebase auditor (migrations, routes, 184 RBAC checks, dialogs, colors, vocabulary, schedules)
+cd ..
+python scripts/audit_codebase.py
+```
+
+---
+
+## Documentation
+
+- **[Architecture, 3NF Schema & Security Guide](docs/ARCHITECTURE_AND_SECURITY.md)** — System diagram, 3NF tables, 5-role access matrix, signed QR verification, on-device phone lock & campus GPS controls, and RA 10173 privacy safeguards.
+- **[School & Competition Presentation Pack](docs/COMPETITION_PITCH_PACK.md)** — 10-slide presentation outline, 3-minute live walkthrough script, sustainability model, and reviewer Q&A guide.
+- **[Mobile App Developer Guide](mobile/AGENTS.md)** — React Navigation stack and 5-tab layout, theme token rules, offline queue design, and mobile security checks.

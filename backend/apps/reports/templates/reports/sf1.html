@@ -29,7 +29,7 @@
     <thead>
       <tr>
         <th>#</th><th>LRN</th><th>Learner's Name</th><th>Sex</th><th>Birth Date</th>
-        <th>Age</th><th>Address</th><th>Parent / Guardian</th><th>Contact</th><th>Remarks</th>
+        <th>Age</th><th>Address</th><th>Guardian</th><th>Contact</th><th>Remarks</th>
       </tr>
     </thead>
     <tbody>
@@ -37,8 +37,8 @@
       {% for r in males %}
       <tr>
         <td>{{ forloop.counter }}</td><td>{{ r.lrn }}</td><td class="left">{{ r.name }}</td>
-        <td>M</td><td>{{ r.birthdate }}</td><td>{{ r.age }}</td><td class="left">{{ r.address }}</td>
-        <td class="left">{{ r.guardian_name|default:r.mother_maiden_name }}</td><td>{{ r.parent_contact }}</td><td>{{ r.remarks }}</td>
+        <td>M</td><td>{{ r.birth_date }}</td><td>{{ r.age }}</td><td class="left">{{ r.address }}</td>
+        <td class="left">{{ r.guardian_name|default:r.mother_maiden_name }}</td><td>{{ r.guardian_contact }}</td><td>{{ r.remarks }}</td>
       </tr>
       {% empty %}
       <tr><td colspan="10">No male learners enrolled.</td></tr>
@@ -47,8 +47,8 @@
       {% for r in females %}
       <tr>
         <td>{{ forloop.counter }}</td><td>{{ r.lrn }}</td><td class="left">{{ r.name }}</td>
-        <td>F</td><td>{{ r.birthdate }}</td><td>{{ r.age }}</td><td class="left">{{ r.address }}</td>
-        <td class="left">{{ r.guardian_name|default:r.mother_maiden_name }}</td><td>{{ r.parent_contact }}</td><td>{{ r.remarks }}</td>
+        <td>F</td><td>{{ r.birth_date }}</td><td>{{ r.age }}</td><td class="left">{{ r.address }}</td>
+        <td class="left">{{ r.guardian_name|default:r.mother_maiden_name }}</td><td>{{ r.guardian_contact }}</td><td>{{ r.remarks }}</td>
       </tr>
       {% empty %}
       <tr><td colspan="10">No female learners enrolled.</td></tr>

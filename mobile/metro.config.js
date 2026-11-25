@@ -1,4 +1,6 @@
 // AttendSure Mobile - Metro Bundler Configuration
+// Safely shims expo async-require/hmrUtils on native so Expo Go on React Native 0.88
+// never throws "Cannot read property 'hide' of undefined".
 // File: mobile/metro.config.js
 
 const path = require('path');
@@ -6,70 +8,46 @@ const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
 
-// 1. Enable static SVG asset resolution for expo-image
-const { assetExts, sourceExts } = config.resolver;
-if (!assetExts.includes('svg')) {
-  config.resolver.assetExts = [...assetExts, 'svg'];
-}
-config.resolver.sourceExts = sourceExts.filter((ext) => ext !== 'svg');
+const hmrUtilsShimPath = path.resolve(__dirname, 'src/shims/hmrUtils.native.js');
+const expoCryptoShimPath = path.resolve(__dirname, 'src/shims/expoCryptoShim.js');
+const upstreamResolveRequest = config.resolver.resolveRequest;
 
-// 2. Custom module resolution shims
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  // 1. Safe web resolution for expo-splash-screen
-  if (platform === 'web' && moduleName === 'expo-splash-screen') {
+  const normalizedModule = String(moduleName || '').replace(/\\/g, '/');
+  const normalizedOrigin = String(context.originModulePath || '').replace(/\\/g, '/');
+
+  if (normalizedModule === 'expo-crypto' && normalizedOrigin !== expoCryptoShimPath.replace(/\\/g, '/')) {
     return {
-      filePath: path.resolve(__dirname, 'src/shims/splash-screen.web.js'),
+      filePath: expoCryptoShimPath,
       type: 'sourceFile',
     };
   }
 
-  // 2. Resolve 'buffer' for react-native-svg & QR code generation
-  if (moduleName === 'buffer') {
-    return {
-      filePath: path.resolve(__dirname, 'src/shims/buffer.js'),
-      type: 'sourceFile',
-    };
-  }
+  if (platform !== 'web') {
+    const isRelativeHmrUtils =
+      (normalizedModule === './hmrUtils' ||
+        normalizedModule === './hmrUtils.native' ||
+        normalizedModule === './hmrUtils.js' ||
+        normalizedModule === './hmrUtils.native.js') &&
+      normalizedOrigin.includes('/async-require/');
 
-  // 3. Resolve React Native internal exports for Expo Asset on Android / iOS
-  if (moduleName.includes('unstable-internals-do-not-use')) {
-    return {
-      filePath: path.resolve(__dirname, 'src/shims/unstable-internals.js'),
-      type: 'sourceFile',
-    };
-  }
+    const isDirectHmrUtils =
+      normalizedModule.endsWith('/async-require/hmrUtils') ||
+      normalizedModule.endsWith('/async-require/hmrUtils.native') ||
+      normalizedModule.endsWith('/async-require/hmrUtils.js') ||
+      normalizedModule.endsWith('/async-require/hmrUtils.native.js');
 
-  // 4. Resolve AssetRegistry for web platform
-  if (platform === 'web' && moduleName.includes('AssetRegistry')) {
-    try {
+    if (isRelativeHmrUtils || isDirectHmrUtils) {
       return {
-        filePath: require.resolve('react-native-web/dist/modules/AssetRegistry'),
+        filePath: hmrUtilsShimPath,
         type: 'sourceFile',
       };
-    } catch (e) {}
-  }
-
-  // 5. Resolve AssetRegistry for Android and iOS
-  if (
-    moduleName === 'react-native/asset-registry' ||
-    moduleName === 'react-native/Libraries/Image/AssetRegistry' ||
-    moduleName.endsWith('/asset-registry')
-  ) {
-    try {
-      return {
-        filePath: require.resolve('@react-native/assets-registry/registry.js'),
-        type: 'sourceFile',
-      };
-    } catch (e) {
-      try {
-        return {
-          filePath: require.resolve('react-native/Libraries/Image/AssetRegistry'),
-          type: 'sourceFile',
-        };
-      } catch (err) {}
     }
   }
 
+  if (typeof upstreamResolveRequest === 'function') {
+    return upstreamResolveRequest(context, moduleName, platform);
+  }
   return context.resolveRequest(context, moduleName, platform);
 };
 

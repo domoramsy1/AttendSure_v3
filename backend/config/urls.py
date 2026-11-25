@@ -10,7 +10,9 @@ from common.security import clear_system_cache_view, database_health_view
 def serve_cached_media(request, path):
     response = serve(request, path, document_root=settings.MEDIA_ROOT)
     response["Cache-Control"] = "public, max-age=86400"
-    response["Access-Control-Allow-Origin"] = "*"
+    origin = request.headers.get("Origin", "")
+    if origin and origin in getattr(settings, "CORS_ALLOWED_ORIGINS", []):
+        response["Access-Control-Allow-Origin"] = origin
     return response
 
 
@@ -22,7 +24,6 @@ v1_patterns = [
     path("students/", include("apps.students.urls")),
     path("attendance/", include("apps.attendance.urls")),
     path("campus/", include("apps.campus.urls")),
-    path("messaging/", include("apps.messaging.urls")),
     path("reports/", include("apps.reports.urls")),
 ]
 

@@ -8,8 +8,8 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
 app.conf.beat_schedule = {
-    "flush-location-logs-every-5-seconds": {
-        "task": "apps.campus.tasks.flush_location_queue",
-        "schedule": 5.0,
+    "run-daily-loafing-audit-every-15-minutes": {
+        "task": "apps.campus.tasks.run_scheduled_loafing_audit",
+        "schedule": 900.0,
     },
 }

@@ -1,5 +1,3 @@
-# D:\AttendSure_V3\backend\apps\reports\sf2.py
-
 import calendar
 from datetime import date, datetime, timedelta
 
@@ -56,8 +54,16 @@ def has_five_consecutive_absences(att_map: dict, school_day_nums: list[int]) -> 
     return False
 
 
-def generate_sf2_report(*, section_id: int, month_name: str = "October", year: int = 2026, request=None) -> dict:
-    section = Section.objects.select_related("grade_level", "school_year", "adviser").filter(id=section_id).first()
+def generate_sf2_report(
+    *, section_id: int, month_name: str = "October", year: int = 2026, request=None
+) -> dict:
+    section = (
+        Section.objects.select_related(
+            "grade_level", "school_year", "adviser", "adviser__user"
+        )
+        .filter(id=section_id)
+        .first()
+    )
     if not section:
         raise AppError("SECTION_NOT_FOUND", f"Section {section_id} not found.", 404)
 
@@ -69,7 +75,9 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
     month_start, month_end = date(year, month_num, 1), date(year, month_num, num_days)
 
     holiday_dates = set(
-        SchoolHoliday.objects.filter(holiday_date__range=(month_start, month_end)).values_list("holiday_date", flat=True)
+        SchoolHoliday.objects.filter(
+            holiday_date__range=(month_start, month_end)
+        ).values_list("holiday_date", flat=True)
     )
     abbr = {0: "M", 1: "T", 2: "W", 3: "TH", 4: "F"}
     school_days, day_nums = [], []
@@ -77,7 +85,9 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
         dt = date(year, month_num, d)
         if dt.weekday() < 5 and dt not in holiday_dates:
             day_nums.append(d)
-            school_days.append({"dateNumber": d, "dayOfWeek": abbr[dt.weekday()], "fullDate": str(dt)})
+            school_days.append(
+                {"dateNumber": d, "dayOfWeek": abbr[dt.weekday()], "fullDate": str(dt)}
+            )
     school_day_set = set(day_nums)
 
     enrollments = list(
@@ -85,34 +95,39 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
         .select_related("student")
         .order_by("student__last_name", "student__first_name")
     )
-    student_ids = [e.student_id for e in enrollments]
+    enrollment_ids = [e.id for e in enrollments]
 
-    records_by_st: dict[int, dict[int, str]] = {}
-    if student_ids:
+    records_by_enr: dict[int, dict[int, str]] = {}
+    if enrollment_ids:
         for row in DailyAttendance.objects.filter(
-            student_id__in=student_ids, attendance_date__range=(month_start, month_end)
-        ).values("student_id", "attendance_date", "status"):
+            enrollment_id__in=enrollment_ids,
+            attendance_date__range=(month_start, month_end),
+        ).values("enrollment_id", "attendance_date", "status"):
             day_val = row["attendance_date"].day
             if day_val in school_day_set:
-                records_by_st.setdefault(row["student_id"], {})[day_val] = row["status"].lower()
+                records_by_enr.setdefault(row["enrollment_id"], {})[day_val] = row[
+                    "status"
+                ].lower()
 
         for row in (
             ClassAttendance.objects.filter(
                 class_period__section=section,
-                student_id__in=student_ids,
+                enrollment_id__in=enrollment_ids,
                 attendance_date__range=(month_start, month_end),
             )
             .order_by("scanned_at")
-            .values("student_id", "attendance_date", "status")
+            .values("enrollment_id", "attendance_date", "status")
         ):
             day_val = row["attendance_date"].day
             if day_val in school_day_set:
-                records_by_st.setdefault(row["student_id"], {}).setdefault(day_val, row["status"].lower())
+                records_by_enr.setdefault(row["enrollment_id"], {}).setdefault(
+                    day_val, row["status"].lower()
+                )
 
     sy = section.school_year
     sy_start_year = year
-    if sy and sy.code and "-" in sy.code and sy.code.split("-")[0].isdigit():
-        sy_start_year = int(sy.code.split("-")[0])
+    if sy and sy.name and "-" in sy.name and sy.name.split("-")[0].isdigit():
+        sy_start_year = int(sy.name.split("-")[0])
     elif sy and sy.start_date:
         sy_start_year = sy.start_date.year
     june_1 = date(sy_start_year, 6, 1)
@@ -130,8 +145,8 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
 
     for enr in enrollments:
         st = enr.student
-        is_m = str(st.sex or "").upper().startswith("M")
-        enr_date = _as_date(enr.enrollment_date) or month_start
+        is_m = str(st.gender or "").upper().startswith("M")
+        enr_date = _as_date(enr.enrolled_date) or month_start
         exit_dt = _as_date(enr.status_date)
         st_code = str(enr.status or "").upper()
 
@@ -140,15 +155,23 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
         if st_code in ("DROPPED", "TRANSFERRED_OUT") and exit_dt and exit_dt < month_start:
             continue
 
-        att = {d: v for d, v in records_by_st.get(st.id, {}).items() if d in school_day_set}
+        att = {
+            d: v
+            for d, v in records_by_enr.get(enr.id, {}).items()
+            if d in school_day_set
+        }
         rec = {
             "id": st.id,
             "lrn": st.lrn,
             "name": st.full_name,
             "sex": "M" if is_m else "F",
             "attendance": att,
-            "total_absent": sum(1 for d in day_nums if att.get(d, "") in ("absent", "x", "a")),
-            "total_tardy": sum(1 for d in day_nums if att.get(d, "") in ("late", "tardy", "t")),
+            "total_absent": sum(
+                1 for d in day_nums if att.get(d, "") in ("absent", "x", "a")
+            ),
+            "total_tardy": sum(
+                1 for d in day_nums if att.get(d, "") in ("late", "tardy", "t")
+            ),
             "remarks": enr.remarks,
         }
         if is_m:
@@ -170,13 +193,17 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
                 late_f += 1
 
         exited_this_month = False
-        if st_code == "DROPPED" and (not exit_dt or (month_start <= exit_dt <= month_end)):
+        if st_code == "DROPPED" and (
+            not exit_dt or (month_start <= exit_dt <= month_end)
+        ):
             exited_this_month = True
             if is_m:
                 drop_m += 1
             else:
                 drop_f += 1
-        elif st_code == "TRANSFERRED_OUT" and (not exit_dt or (month_start <= exit_dt <= month_end)):
+        elif st_code == "TRANSFERRED_OUT" and (
+            not exit_dt or (month_start <= exit_dt <= month_end)
+        ):
             exited_this_month = True
             if is_m:
                 tout_m += 1
@@ -195,13 +222,25 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
                 reg_f += 1
 
     n_days = len(school_days) or 1
-    present_vals = {"present", "late", "tardy", "cutting", "excused"}
+    present_vals = {"present", "late", "tardy", "excused"}
     ada_m = round(
-        sum(1 for m in males for d in day_nums if m["attendance"].get(d, "") in present_vals) / n_days,
+        sum(
+            1
+            for m in males
+            for d in day_nums
+            if m["attendance"].get(d, "") in present_vals
+        )
+        / n_days,
         1,
     )
     ada_f = round(
-        sum(1 for f in females for d in day_nums if f["attendance"].get(d, "") in present_vals) / n_days,
+        sum(
+            1
+            for f in females
+            for d in day_nums
+            if f["attendance"].get(d, "") in present_vals
+        )
+        / n_days,
         1,
     )
     ada_tot = round(ada_m + ada_f, 1)
@@ -211,7 +250,7 @@ def generate_sf2_report(*, section_id: int, month_name: str = "October", year: i
 
     return {
         **get_school_metadata(request),
-        "academic_year": section.school_year.code if section.school_year else "",
+        "academic_year": section.school_year.name if section.school_year else "",
         "grade_level": section.grade_level.name if section.grade_level else "",
         "section_name": section.name,
         "month": clean_month,

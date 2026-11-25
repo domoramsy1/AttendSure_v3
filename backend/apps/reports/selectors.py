@@ -6,32 +6,32 @@ from django.db.models import Count, Q
 from django.db.models.functions import ExtractHour
 from django.utils import timezone
 
-from common.exceptions import AppError
-from common.media import build_media_url
-from common.permissions import get_user_role, is_school_leader
-from apps.accounts.models import AuditLog, FacultyProfile, UserProfile
+from apps.accounts.models import AuditLog, TeacherProfile
 from apps.accounts.selectors import (
-    get_faculty_section_ids,
-    get_faculty_student_ids,
-    resolve_faculty_for_user,
+    get_teacher_enrollment_ids,
+    get_teacher_section_ids,
+    resolve_teacher_for_user,
 )
-from apps.attendance.models import ClassAttendance, DailyAttendance
+from apps.attendance.models import ClassAttendance, DailyAttendance, ExitPass
 from apps.campus.models import (
-    BoundaryAlert,
     CampusBoundary,
-    FacultyAttendanceLog,
+    LoafingIncident,
     MonthlyTimeRecord,
+    TeacherDailyAttendance,
+    TeacherLocationPing,
 )
-from apps.messaging.models import Notification
 from apps.school.models import ClassPeriod, Section
 from apps.school.selectors import format_section_label, get_school_metadata
 from apps.students.models import Enrollment, Student
+from common.exceptions import AppError
+from common.media import build_media_url
+from common.permissions import get_user_role, is_school_leader
 
 
 def get_dashboard_overview(*, user, request=None) -> dict:
     started = time_module.perf_counter()
     leader = is_school_leader(user)
-    cache_key = "dashboard:leader" if leader else f"dashboard:faculty:{user.id}"
+    cache_key = "dashboard:leader" if leader else f"dashboard:teacher:{user.id}"
     cached = cache.get(cache_key)
     if cached:
         cached["analytics"]["average_latency_ms"] = max(
@@ -40,70 +40,86 @@ def get_dashboard_overview(*, user, request=None) -> dict:
         return cached
 
     today = timezone.localdate()
-    today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+    now = timezone.now()
 
     if leader:
         total_students = Student.objects.filter(is_active=True).count()
         present_ids = set(
             DailyAttendance.objects.filter(
                 attendance_date=today, status__in=["PRESENT", "LATE"]
-            ).values_list("student_id", flat=True)
+            ).values_list("enrollment__student_id", flat=True)
         )
-        cutting_count = DailyAttendance.objects.filter(
-            attendance_date=today, status="CUTTING"
+        cutting_count = LoafingIncident.objects.filter(
+            incident_type="STUDENT_CUTTING_CLASS",
+            detected_at__date=today,
         ).count()
-        total_faculty = FacultyProfile.objects.filter(is_active=True).count()
+        open_loafing_incidents = LoafingIncident.objects.filter(status="OPEN").count()
+        total_teachers = TeacherProfile.objects.filter(user__is_active=True).count()
 
-        # <-- ADDED HERE (School Leader branch)
-        present_faculty = (
-            FacultyAttendanceLog.objects.filter(log_date=today, is_within_boundary=True)
-            .values("faculty_id")
-            .distinct()
-            .count()
+        checked_in_ids = set(
+            TeacherDailyAttendance.objects.filter(
+                attendance_date=today, time_in__isnull=False
+            ).values_list("teacher_id", flat=True)
         )
+        inside_ping_ids = set(
+            TeacherLocationPing.objects.filter(
+                recorded_at__date=today, zone_status="INSIDE"
+            ).values_list("teacher_id", flat=True)
+        )
+        teachers_on_duty = len(checked_in_ids | inside_ping_ids)
 
+        active_exit_passes = ExitPass.objects.filter(
+            is_cancelled=False, returned_at__isnull=True, valid_until__gte=now
+        ).count()
         recent_qs = ClassAttendance.objects.filter(attendance_date=today)
-        alerts_today = Notification.objects.filter(created_at__gte=today_start).count()
-        linked_parents = UserProfile.objects.filter(
-            role="PARENT", user__is_active=True
-        ).count()
     else:
-        faculty_member = resolve_faculty_for_user(user)
-        student_ids = get_faculty_student_ids(faculty_member)
-        total_students = len(student_ids)
+        teacher = resolve_teacher_for_user(user)
+        enrollment_ids = get_teacher_enrollment_ids(teacher)
+        total_students = len(enrollment_ids)
         present_ids = set(
             DailyAttendance.objects.filter(
                 attendance_date=today,
-                student_id__in=student_ids,
+                enrollment_id__in=enrollment_ids,
                 status__in=["PRESENT", "LATE"],
-            ).values_list("student_id", flat=True)
+            ).values_list("enrollment__student_id", flat=True)
         )
-        cutting_count = DailyAttendance.objects.filter(
-            attendance_date=today, student_id__in=student_ids, status="CUTTING"
+        cutting_count = LoafingIncident.objects.filter(
+            incident_type="STUDENT_CUTTING_CLASS",
+            enrollment_id__in=enrollment_ids,
+            detected_at__date=today,
         ).count()
-        total_faculty = 1
-
-        # <-- ADDED HERE (Individual Faculty branch)
-        present_faculty = int(
+        open_loafing_incidents = (
+            LoafingIncident.objects.filter(status="OPEN")
+            .filter(Q(teacher=teacher) | Q(enrollment_id__in=enrollment_ids))
+            .count()
+            if teacher
+            else 0
+        )
+        total_teachers = 1 if teacher else 0
+        teachers_on_duty = int(
             bool(
-                faculty_member
-                and FacultyAttendanceLog.objects.filter(
-                    faculty=faculty_member, log_date=today, is_within_boundary=True
-                ).exists()
+                teacher
+                and (
+                    TeacherDailyAttendance.objects.filter(
+                        teacher=teacher, attendance_date=today, time_in__isnull=False
+                    ).exists()
+                    or TeacherLocationPing.objects.filter(
+                        teacher=teacher, recorded_at__date=today, zone_status="INSIDE"
+                    ).exists()
+                )
             )
         )
-
-        recent_qs = ClassAttendance.objects.filter(
-            attendance_date=today, student_id__in=student_ids
-        )
-        alerts_today = Notification.objects.filter(
-            student_id__in=student_ids, created_at__gte=today_start
-        ).count()
-        linked_parents = (
-            Student.objects.filter(id__in=student_ids, parent_user__isnull=False)
-            .values("parent_user_id")
-            .distinct()
+        active_exit_passes = (
+            ExitPass.objects.filter(
+                is_cancelled=False, returned_at__isnull=True, valid_until__gte=now
+            )
+            .filter(Q(teacher=teacher) | Q(enrollment_id__in=enrollment_ids))
             .count()
+            if teacher
+            else 0
+        )
+        recent_qs = ClassAttendance.objects.filter(
+            attendance_date=today, enrollment_id__in=enrollment_ids
         )
 
     hour_rows = (
@@ -125,7 +141,7 @@ def get_dashboard_overview(*, user, request=None) -> dict:
 
     recent_logs = list(
         recent_qs.select_related(
-            "student",
+            "enrollment__student",
             "class_period__subject",
             "class_period__section",
             "class_period__section__grade_level",
@@ -134,8 +150,8 @@ def get_dashboard_overview(*, user, request=None) -> dict:
     recent_scans = [
         {
             "id": item.id,
-            "person_name": item.student.full_name,
-            "photo_url": build_media_url(item.student.photo, request),
+            "person_name": item.enrollment.student.full_name,
+            "photo_url": build_media_url(item.enrollment.student.photo, request),
             "status": item.status,
             "subject_code": item.class_period.subject.code
             if (item.class_period and item.class_period.subject)
@@ -167,11 +183,11 @@ def get_dashboard_overview(*, user, request=None) -> dict:
         "attendance_rate": round((present_count / total_students) * 100, 1)
         if total_students
         else 0.0,
-        "faculty_on_duty": present_faculty,
-        "total_faculty": total_faculty,
+        "teachers_on_duty": teachers_on_duty,
+        "total_teachers": total_teachers,
         "classroom_scans_today": sum(hour_map.values()),
-        "push_alerts_today": alerts_today,
-        "mobile_parents_connected": linked_parents,
+        "open_loafing_incidents": open_loafing_incidents,
+        "active_exit_passes": active_exit_passes,
         "hourly_scans": hourly_scans,
         "recent_scans": recent_scans,
         "analytics": {
@@ -192,12 +208,12 @@ def get_dropout_risk_report(
     window_start = today - timedelta(days=30)
 
     qs = Enrollment.objects.filter(
-        status="ENROLLED", student__is_active=True
+        status__in=["ENROLLED", "TRANSFERRED_IN"], student__is_active=True
     ).select_related("student", "section", "section__grade_level")
 
     if not is_school_leader(user):
-        faculty_member = resolve_faculty_for_user(user)
-        if not faculty_member:
+        teacher = resolve_teacher_for_user(user)
+        if not teacher:
             return {
                 "window_days": 30,
                 "total_evaluated": 0,
@@ -205,48 +221,59 @@ def get_dropout_risk_report(
                 "early_warning_count": 0,
                 "at_risk_students": [],
             }
-        qs = qs.filter(section_id__in=get_faculty_section_ids(faculty_member))
+        qs = qs.filter(section_id__in=get_teacher_section_ids(teacher))
     if section_id:
         qs = qs.filter(section_id=section_id)
 
     enrollments = list(qs)
-    student_ids = [e.student_id for e in enrollments]
+    enrollment_ids = [e.id for e in enrollments]
 
     stats = {
-        r["student_id"]: r
+        r["enrollment_id"]: r
         for r in DailyAttendance.objects.filter(
-            student_id__in=student_ids, attendance_date__gte=window_start
+            enrollment_id__in=enrollment_ids, attendance_date__gte=window_start
         )
-        .values("student_id")
+        .values("enrollment_id")
         .annotate(
             absences=Count("id", filter=Q(status="ABSENT")),
-            cutting=Count("id", filter=Q(status="CUTTING")),
             lates=Count("id", filter=Q(status="LATE")),
         )
     }
+    cutting_counts = dict(
+        LoafingIncident.objects.filter(
+            incident_type="STUDENT_CUTTING_CLASS",
+            enrollment_id__in=enrollment_ids,
+            detected_at__date__gte=window_start,
+        )
+        .values("enrollment_id")
+        .annotate(cnt=Count("id"))
+        .values_list("enrollment_id", "cnt")
+    )
     morning_lates = dict(
         ClassAttendance.objects.filter(
-            student_id__in=student_ids,
+            enrollment_id__in=enrollment_ids,
             attendance_date__gte=window_start,
             status="LATE",
             class_period__start_time__lte=time(8, 30),
         )
-        .values("student_id")
+        .values("enrollment_id")
         .annotate(cnt=Count("id"))
-        .values_list("student_id", "cnt")
+        .values_list("enrollment_id", "cnt")
     )
 
     at_risk = []
     critical = warning = 0
     for enr in enrollments:
         st = enr.student
-        row = stats.get(st.id, {})
+        row = stats.get(enr.id, {})
         absences = row.get("absences", 0)
-        cutting = row.get("cutting", 0)
+        cutting = cutting_counts.get(enr.id, 0)
         lates = row.get("lates", 0)
-        m_lates = morning_lates.get(st.id, 0)
+        m_lates = morning_lates.get(enr.id, 0)
 
-        score = min(100, (absences * 15) + (cutting * 20) + (lates * 5) + (m_lates * 3))
+        score = min(
+            100, (absences * 15) + (cutting * 20) + (lates * 5) + (m_lates * 3)
+        )
         if score < 20:
             continue
 
@@ -268,7 +295,8 @@ def get_dropout_risk_report(
                     enr.section.name if enr.section else "",
                 ),
                 "is_4ps_beneficiary": enr.is_cct_recipient,
-                "parent_contact": st.parent_contact,
+                "guardian_name": st.guardian_name,
+                "guardian_contact": st.guardian_contact,
                 "photo_url": build_media_url(st.photo, request),
                 "absent_days_30d": absences,
                 "cutting_days_30d": cutting,
@@ -276,9 +304,9 @@ def get_dropout_risk_report(
                 "risk_score": score,
                 "risk_level": "CRITICAL_SARDO" if is_crit else "EARLY_WARNING",
                 "recommended_intervention": (
-                    "Immediate parent conference and home visitation required."
+                    "Immediate guardian conference and home visit required."
                     if is_crit
-                    else "Adviser counseling and parent mobile app follow-up."
+                    else "Adviser counseling and guardian phone follow-up."
                 ),
             }
         )
@@ -298,43 +326,44 @@ def get_monthly_dtr_data(
     user,
     month: int,
     year: int,
-    faculty_id: int | None = None,
+    teacher_id: int | None = None,
     list_only: bool = False,
     request=None,
 ) -> dict:
-    """Computes Civil Service Form 48 rows strictly from real database GPS logs and boundary alerts."""
+    """Computes Civil Service Form 48 rows from real database check-in logs, GPS pings, and loafing incidents."""
     month = max(1, min(12, int(month)))
     year = int(year)
     role = get_user_role(user)
     leader = is_school_leader(user)
-    own_faculty = resolve_faculty_for_user(user)
+    own_teacher = resolve_teacher_for_user(user)
 
-    if list_only and not faculty_id:
-        faculty_list = (
+    if list_only and not teacher_id:
+        teacher_list = (
             list(
-                FacultyProfile.objects.filter(is_active=True)
-                .select_related("department_ref", "position_ref")
-                .order_by("last_name", "first_name")
+                TeacherProfile.objects.filter(user__is_active=True)
+                .select_related("user", "department", "position")
+                .order_by("user__last_name", "user__first_name")
             )
             if leader
-            else ([own_faculty] if own_faculty else [])
+            else ([own_teacher] if own_teacher else [])
         )
-        f_ids = [f.id for f in faculty_list]
-        present_counts = dict(
-            FacultyAttendanceLog.objects.filter(
-                faculty_id__in=f_ids,
-                log_date__year=year,
-                log_date__month=month,
-                is_within_boundary=True,
+        t_ids = [t.id for t in teacher_list]
+
+        daily_counts = dict(
+            TeacherDailyAttendance.objects.filter(
+                teacher_id__in=t_ids,
+                attendance_date__year=year,
+                attendance_date__month=month,
+                time_in__isnull=False,
             )
-            .values("faculty_id")
-            .annotate(days=Count("log_date", distinct=True))
-            .values_list("faculty_id", "days")
+            .values("teacher_id")
+            .annotate(days=Count("attendance_date", distinct=True))
+            .values_list("teacher_id", "days")
         )
         existing_dtrs = {
-            d.faculty_id: d
+            d.teacher_id: d
             for d in MonthlyTimeRecord.objects.filter(
-                faculty_id__in=f_ids, month=month, year=year
+                teacher_id__in=t_ids, month=month, year=year
             )
         }
         return {
@@ -343,75 +372,99 @@ def get_monthly_dtr_data(
             "year": year,
             "records": [
                 {
-                    "id": existing_dtrs[f.id].id if f.id in existing_dtrs else f.id,
-                    "faculty_id": f.id,
-                    "employee_id": f.employee_id,
-                    "faculty_name": f.full_name,
-                    "position": f.position,
-                    "department": f.department,
+                    "id": existing_dtrs[t.id].id if t.id in existing_dtrs else t.id,
+                    "teacher_id": t.id,
+                    "employee_id": t.employee_id,
+                    "teacher_name": t.full_name,
+                    "position": t.position_title,
+                    "department": t.department_name,
                     "month": month,
                     "year": year,
-                    "days_present": present_counts.get(f.id, 0),
+                    "days_present": daily_counts.get(t.id, 0),
                     "is_submitted": bool(
-                        f.id in existing_dtrs and existing_dtrs[f.id].is_submitted
+                        t.id in existing_dtrs and existing_dtrs[t.id].is_submitted
                     ),
                     "is_dept_head_approved": bool(
-                        f.id in existing_dtrs
-                        and existing_dtrs[f.id].is_dept_head_approved
+                        t.id in existing_dtrs
+                        and existing_dtrs[t.id].is_dept_head_approved
                     ),
                 }
-                for f in faculty_list
+                for t in teacher_list
             ],
         }
 
-    if faculty_id:
-        if not leader and (not own_faculty or own_faculty.id != faculty_id):
+    if teacher_id:
+        if not leader and (not own_teacher or own_teacher.id != teacher_id):
             raise AppError(
                 "FORBIDDEN", "You can only view your own Daily Time Record.", 403
             )
-        faculty_member = (
-            FacultyProfile.objects.select_related("department_ref", "position_ref")
-            .filter(id=faculty_id)
+        teacher = (
+            TeacherProfile.objects.select_related("user", "department", "position")
+            .filter(id=teacher_id)
             .first()
         )
     else:
-        faculty_member = own_faculty or (
-            FacultyProfile.objects.select_related("department_ref", "position_ref")
-            .filter(is_active=True)
-            .order_by("last_name", "first_name")
+        teacher = own_teacher or (
+            TeacherProfile.objects.select_related("user", "department", "position")
+            .filter(user__is_active=True)
+            .order_by("user__last_name", "user__first_name")
             .first()
             if leader
             else None
         )
 
-    if not faculty_member:
+    if not teacher:
         raise AppError(
-            "FACULTY_NOT_FOUND", "No faculty profile is linked to this account.", 404
+            "TEACHER_NOT_FOUND", "No teacher profile is linked to this account.", 404
         )
 
-    # Read-only lookup on GET (no unnecessary database writes)
     dtr = MonthlyTimeRecord.objects.filter(
-        faculty=faculty_member, month=month, year=year
+        teacher=teacher, month=month, year=year
     ).first()
 
     _, num_days = calendar.monthrange(year, month)
-    pings_by_day: dict[int, list] = {}
-    for log in FacultyAttendanceLog.objects.filter(
-        faculty=faculty_member,
-        log_date__year=year,
-        log_date__month=month,
-        is_within_boundary=True,
-    ).order_by("recorded_at"):
-        local_dt = timezone.localtime(log.recorded_at)
-        pings_by_day.setdefault(log.log_date.day, []).append(local_dt)
+    timestamps_by_day: dict[int, list[datetime]] = {}
+    verified_days: set[int] = set()
 
-    alerts_by_day: dict[int, BoundaryAlert] = {}
-    for alert in BoundaryAlert.objects.filter(
-        faculty=faculty_member,
-        incident_date__year=year,
-        incident_date__month=month,
-    ).order_by("-left_at"):
-        alerts_by_day.setdefault(alert.incident_date.day, alert)
+    for daily in TeacherDailyAttendance.objects.filter(
+        teacher=teacher,
+        attendance_date__year=year,
+        attendance_date__month=month,
+    ):
+        day_num = daily.attendance_date.day
+        if daily.time_in:
+            verified_days.add(day_num)
+            timestamps_by_day.setdefault(day_num, []).append(
+                timezone.localtime(daily.time_in)
+            )
+        if daily.time_out:
+            verified_days.add(day_num)
+            timestamps_by_day.setdefault(day_num, []).append(
+                timezone.localtime(daily.time_out)
+            )
+
+    if verified_days:
+        for ping in TeacherLocationPing.objects.filter(
+            teacher=teacher,
+            recorded_at__year=year,
+            recorded_at__month=month,
+            zone_status="INSIDE",
+        ).order_by("recorded_at"):
+            local_dt = timezone.localtime(ping.recorded_at)
+            if local_dt.day in verified_days:
+                timestamps_by_day.setdefault(local_dt.day, []).append(local_dt)
+
+    for day_list in timestamps_by_day.values():
+        day_list.sort()
+
+    incidents_by_day: dict[int, LoafingIncident] = {}
+    for inc in LoafingIncident.objects.filter(
+        teacher=teacher,
+        detected_at__year=year,
+        detected_at__month=month,
+    ).order_by("-detected_at"):
+        inc_day = timezone.localtime(inc.detected_at).day
+        incidents_by_day.setdefault(inc_day, inc)
 
     rows = []
     days_present = 0
@@ -440,16 +493,16 @@ def get_monthly_dtr_data(
 
         dt_obj = date(year, month, day_num)
         is_weekend = dt_obj.weekday() >= 5
-        day_pings = pings_by_day.get(day_num, [])
-        am_pings = [p for p in day_pings if p.hour < 12]
-        pm_pings = [p for p in day_pings if p.hour >= 12]
+        day_stamps = timestamps_by_day.get(day_num, [])
+        am_stamps = [p for p in day_stamps if p.hour < 12]
+        pm_stamps = [p for p in day_stamps if p.hour >= 12]
 
-        if day_pings:
+        if day_stamps:
             days_present += 1
 
-        alert = alerts_by_day.get(day_num)
-        has_alert = alert is not None
-        is_excused = bool(alert and str(alert.status).upper() == "EXCUSED")
+        inc = incidents_by_day.get(day_num)
+        has_inc = inc is not None
+        is_excused = bool(inc and str(inc.status).upper() == "EXCUSED")
 
         rows.append(
             {
@@ -457,22 +510,22 @@ def get_monthly_dtr_data(
                 "date_str": dt_obj.strftime("%Y-%m-%d"),
                 "day_of_week": dt_obj.strftime("%a"),
                 "is_weekend": is_weekend,
-                "am_arrival": am_pings[0].strftime("%I:%M") if am_pings else "",
-                "am_departure": am_pings[-1].strftime("%I:%M")
-                if len(am_pings) > 1
+                "am_arrival": am_stamps[0].strftime("%I:%M") if am_stamps else "",
+                "am_departure": am_stamps[-1].strftime("%I:%M")
+                if len(am_stamps) > 1
                 else "",
-                "pm_arrival": pm_pings[0].strftime("%I:%M") if pm_pings else "",
-                "pm_departure": pm_pings[-1].strftime("%I:%M")
-                if len(pm_pings) > 1
+                "pm_arrival": pm_stamps[0].strftime("%I:%M") if pm_stamps else "",
+                "pm_departure": pm_stamps[-1].strftime("%I:%M")
+                if len(pm_stamps) > 1
                 else "",
                 "undertime_hours": "",
                 "undertime_minutes": "",
                 "status": "PRESENT"
-                if day_pings
+                if day_stamps
                 else ("WEEKEND" if is_weekend else "NO_LOG"),
-                "is_loafing": has_alert,
+                "is_loafing": has_inc,
                 "loafing_excused": is_excused,
-                "loafing_remarks": alert.remarks if alert else "",
+                "loafing_remarks": inc.remarks if inc else "",
             }
         )
 
@@ -484,12 +537,12 @@ def get_monthly_dtr_data(
     approved = bool(dtr and dtr.is_dept_head_approved)
 
     return {
-        "id": dtr.id if dtr else faculty_member.id,
-        "faculty_id": faculty_member.id,
-        "employee_id": faculty_member.employee_id,
-        "faculty_name": faculty_member.full_name,
-        "position": faculty_member.position,
-        "department": faculty_member.department,
+        "id": dtr.id if dtr else teacher.id,
+        "teacher_id": teacher.id,
+        "employee_id": teacher.employee_id,
+        "teacher_name": teacher.full_name,
+        "position": teacher.position_title,
+        "department": teacher.department_name,
         "month": calendar.month_name[month],
         "month_number": month,
         "year": year,
@@ -522,36 +575,44 @@ def get_sdg_impact_summary() -> dict:
 
     active_students_qs = Student.objects.filter(is_active=True)
     total_students = active_students_qs.count()
-    linked_parents = active_students_qs.filter(parent_user__isnull=False).count()
-    parent_coverage = (
-        round((linked_parents / total_students) * 100, 1) if total_students else 0.0
+    guardian_contacts_recorded = active_students_qs.exclude(
+        guardian_contact=""
+    ).count()
+    guardian_coverage = (
+        round((guardian_contacts_recorded / total_students) * 100, 1)
+        if total_students
+        else 0.0
     )
 
-    male_q = Q(sex__iexact="M") | Q(sex__iexact="Male")
-    female_q = Q(sex__iexact="F") | Q(sex__iexact="Female")
+    male_q = Q(gender__iexact="M") | Q(gender__iexact="Male")
+    female_q = Q(gender__iexact="F") | Q(gender__iexact="Female")
     male_learners = active_students_qs.filter(male_q).count()
     female_learners = active_students_qs.filter(female_q).count()
 
     present_today_qs = DailyAttendance.objects.filter(
         attendance_date=today, status__in=["PRESENT", "LATE"]
-    ).select_related("student")
+    ).select_related("enrollment__student")
     male_present_today = (
         present_today_qs.filter(
-            Q(student__sex__iexact="M") | Q(student__sex__iexact="Male")
+            Q(enrollment__student__gender__iexact="M")
+            | Q(enrollment__student__gender__iexact="Male")
         )
-        .values("student_id")
+        .values("enrollment__student_id")
         .distinct()
         .count()
     )
     female_present_today = (
         present_today_qs.filter(
-            Q(student__sex__iexact="F") | Q(student__sex__iexact="Female")
+            Q(enrollment__student__gender__iexact="F")
+            | Q(enrollment__student__gender__iexact="Female")
         )
-        .values("student_id")
+        .values("enrollment__student_id")
         .distinct()
         .count()
     )
-    total_present_today = present_today_qs.values("student_id").distinct().count()
+    total_present_today = (
+        present_today_qs.values("enrollment__student_id").distinct().count()
+    )
 
     male_rate_today = (
         round((male_present_today / male_learners) * 100, 1) if male_learners else 0.0
@@ -567,9 +628,7 @@ def get_sdg_impact_summary() -> dict:
         else 0.0
     )
     gender_parity_index = (
-        round(female_rate_today / male_rate_today, 2)
-        if male_rate_today > 0
-        else 1.0
+        round(female_rate_today / male_rate_today, 2) if male_rate_today > 0 else 1.0
     )
 
     cct_monitored = (
@@ -587,26 +646,29 @@ def get_sdg_impact_summary() -> dict:
     total_daily_records = DailyAttendance.objects.count()
     active_sections = Section.objects.filter(is_active=True).count()
     active_schedules = ClassPeriod.objects.filter(is_active=True).count()
-    active_faculty = FacultyProfile.objects.filter(is_active=True).count()
+    active_teachers = TeacherProfile.objects.filter(user__is_active=True).count()
 
-    faculty_gps_today = (
-        FacultyAttendanceLog.objects.filter(log_date=today, is_within_boundary=True)
-        .values("faculty_id")
-        .distinct()
-        .count()
+    teachers_gps_today = len(
+        set(
+            TeacherDailyAttendance.objects.filter(
+                attendance_date=today, time_in__isnull=False
+            ).values_list("teacher_id", flat=True)
+        )
+        | set(
+            TeacherLocationPing.objects.filter(
+                recorded_at__date=today, zone_status="INSIDE"
+            ).values_list("teacher_id", flat=True)
+        )
     )
     audit_logs_month = AuditLog.objects.filter(created_at__gte=month_start).count()
-    push_total = Notification.objects.count()
-    push_delivered = Notification.objects.filter(is_pushed=True).count()
-    active_parent_accounts = UserProfile.objects.filter(
-        role="PARENT", user__is_active=True
-    ).count()
+    open_loafing = LoafingIncident.objects.filter(status="OPEN").count()
+    resolved_loafing = LoafingIncident.objects.exclude(status="OPEN").count()
 
     paper_sheets_saved = (
         (total_qr_scans // 25)
         + (total_daily_records // 20)
         + (active_sections * 24)
-        + (active_faculty * 4)
+        + (active_teachers * 4)
     )
     paper_co2_kg = round(paper_sheets_saved * 0.005, 1)
     hardware_ewaste_avoided_kg = 18.5 if total_students > 0 else 0.0
@@ -614,22 +676,20 @@ def get_sdg_impact_summary() -> dict:
         paper_co2_kg + (150.0 if total_students > 0 else 0.0), 1
     )
     estimated_trees_saved = round(paper_sheets_saved / 8333.0, 2)
-    faculty_hours_saved_monthly = round(active_faculty * 4.0, 1)
-    estimated_annual_savings_usd = int(
-        3200 + (active_sections * 45) + (push_total * 0.03)
-    )
+    teacher_hours_saved_monthly = round(active_teachers * 4.0, 1)
+    estimated_annual_savings_usd = int(3200 + (active_sections * 45))
     estimated_annual_savings_php = int(estimated_annual_savings_usd * 56)
 
     return {
         "status": "success",
         "metrics": {
             "total_active_students": total_students,
-            "linked_parent_students": linked_parents,
-            "parent_app_coverage_percent": parent_coverage,
-            "active_parent_accounts": active_parent_accounts,
-            "total_push_alerts_sent": push_total,
+            "guardian_contacts_recorded": guardian_contacts_recorded,
+            "guardian_contact_coverage_percent": guardian_coverage,
             "active_sections": active_sections,
             "active_schedules": active_schedules,
+            "open_loafing_incidents": open_loafing,
+            "resolved_loafing_incidents": resolved_loafing,
         },
         "sdg_metrics": {
             "sdg_4_quality_education": {
@@ -637,7 +697,7 @@ def get_sdg_impact_summary() -> dict:
                 "daily_attendance_records": total_daily_records,
                 "attendance_rate_today": overall_rate_today,
                 "active_sections_monitored": active_sections,
-                "parent_app_coverage_percent": parent_coverage,
+                "guardian_contact_coverage_percent": guardian_coverage,
             },
             "sdg_5_and_10_equality_and_inclusion": {
                 "male_learners": male_learners,
@@ -648,7 +708,7 @@ def get_sdg_impact_summary() -> dict:
                 "cct_4ps_beneficiaries_monitored": cct_monitored,
             },
             "sdg_8_decent_work": {
-                "faculty_hours_saved_monthly": faculty_hours_saved_monthly,
+                "teacher_hours_saved_monthly": teacher_hours_saved_monthly,
                 "active_schedules": active_schedules,
                 "automated_forms_ready": [
                     "SF1",
@@ -666,64 +726,81 @@ def get_sdg_impact_summary() -> dict:
                 "hardware_ewaste_avoided_kg": hardware_ewaste_avoided_kg,
                 "estimated_annual_savings_php": estimated_annual_savings_php,
                 "estimated_annual_savings_usd": estimated_annual_savings_usd,
-                "mobile_push_alerts_delivered": push_delivered or push_total,
             },
             "sdg_16_accountable_institutions": {
-                "faculty_face_gps_verified_today": faculty_gps_today,
-                "total_active_faculty": active_faculty,
+                "teachers_face_gps_verified_today": teachers_gps_today,
+                "total_active_teachers": active_teachers,
                 "tamper_evident_audit_logs_this_month": audit_logs_month,
-                "active_parent_accounts": active_parent_accounts,
+                "open_loafing_incidents": open_loafing,
+                "resolved_loafing_incidents": resolved_loafing,
             },
         },
         "sdg_alignment": {
-            "goal_4": "Quality Education — Real-time signed QR attendance and 30-day dropout early-warning scoring",
+            "goal_4": "Quality Education — Real-time camera QR attendance and 30-day dropout early-warning scoring",
             "goal_5": "Gender Equality — Live sex-disaggregated attendance parity and equity monitoring",
-            "goal_8": "Decent Work — Eliminates manual attendance roll-ups and automates statutory forms",
-            "goal_12_13": "Climate Action — Pure-software setup avoiding hardware e-waste and paper registers",
-            "goal_16": "Strong Institutions — Audit logs, GPS/device verification, and Ed-Fi v6 open standards",
+            "goal_8": "Decent Work — Eliminates manual attendance roll-ups and automates official school forms",
+            "goal_12_13": "Climate Action — Software-only setup avoiding hardware e-waste and paper registers",
+            "goal_16": "Strong Institutions — Audit logs, GPS boundary monitoring, and Ed-Fi v6 open standards",
         },
     }
 
 
 def get_system_status() -> dict:
-    """Returns 100% live PostgreSQL operational metrics (cached 10s, zero mock numbers)."""
+    """Returns 100% live database operational metrics (cached 10s, zero mock numbers)."""
     cache_key = "reports:system_status"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
     today = timezone.localdate()
+    now = timezone.now()
     boundary = (
-        CampusBoundary.objects.filter(is_active=True).only("radius_meters").first()
+        CampusBoundary.objects.filter(is_active=True)
+        .only("campus_name", "radius_meters")
+        .first()
     )
 
-    alerts_today = Notification.objects.filter(created_at__date=today).count()
-    pushed_today = Notification.objects.filter(
-        created_at__date=today, is_pushed=True
-    ).count()
     active_scanners_today = (
         ClassAttendance.objects.filter(attendance_date=today)
         .values("recorded_by_id")
         .distinct()
         .count()
     )
-    total_class_faculty = FacultyProfile.objects.filter(
-        is_active=True, can_handle_classes=True
+    total_class_teachers = TeacherProfile.objects.filter(
+        user__is_active=True, can_handle_classes=True
     ).count()
+    online_teachers_today = len(
+        set(
+            TeacherDailyAttendance.objects.filter(
+                attendance_date=today, time_in__isnull=False
+            ).values_list("teacher_id", flat=True)
+        )
+        | set(
+            TeacherLocationPing.objects.filter(
+                recorded_at__date=today, zone_status="INSIDE"
+            ).values_list("teacher_id", flat=True)
+        )
+    )
+    open_loafing = LoafingIncident.objects.filter(status="OPEN").count()
+    active_exit_passes = ExitPass.objects.filter(
+        is_cancelled=False, returned_at__isnull=True, valid_until__gte=now
+    ).count()
+    active_teachers_count = TeacherProfile.objects.filter(user__is_active=True).count()
 
     data = {
         "architecture": "PURE_SOFTWARE",
         "status": "ONLINE",
-        "online_count": active_scanners_today,
-        "total_scanners": total_class_faculty,
-        "sent_today": alerts_today,
-        "delivered_today": pushed_today,
-        "pending_queue": max(0, alerts_today - pushed_today),
-        "failed_today": 0,
-        "push_alerts_today": alerts_today,
-        "push_delivered_today": pushed_today,
+        "active_scanners_today": active_scanners_today,
+        "total_class_teachers": total_class_teachers,
+        "online_teachers_today": online_teachers_today,
+        "online_teachers": online_teachers_today,
+        "teachers_timed_in": online_teachers_today,
+        "open_loafing_incidents": open_loafing,
+        "active_exit_passes": active_exit_passes,
         "active_students": Student.objects.filter(is_active=True).count(),
-        "active_faculty": FacultyProfile.objects.filter(is_active=True).count(),
+        "active_teachers": active_teachers_count,
+        "total_teachers": active_teachers_count,
+        "campus_name": boundary.campus_name if boundary else "Main Campus",
         "campus_radius_meters": boundary.radius_meters if boundary else 150,
     }
     cache.set(cache_key, data, timeout=10)

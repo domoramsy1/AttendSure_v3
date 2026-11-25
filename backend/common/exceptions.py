@@ -1,6 +1,7 @@
 # D:\AttendSure_V3\backend\common\exceptions.py
 
 import logging
+from django.db import InterfaceError, OperationalError, close_old_connections
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
@@ -56,6 +57,24 @@ def custom_exception_handler(exc, context):
             "details": raw_details,
         }
         return response
+
+    if isinstance(exc, (OperationalError, InterfaceError)):
+        view_name = context.get("view").__class__.__name__ if context.get("view") else "UnknownView"
+        logger.warning("Database connection error in %s: %s", view_name, exc)
+        try:
+            close_old_connections()
+        except Exception:
+            pass
+        return Response(
+            {
+                "ok": False,
+                "error_code": "DATABASE_UNAVAILABLE",
+                "message": "The school database is temporarily busy or unavailable. Please try again in a moment.",
+                "detail": "The school database is temporarily busy or unavailable. Please try again in a moment.",
+                "error": "The school database is temporarily busy or unavailable. Please try again in a moment.",
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     view_name = context.get("view").__class__.__name__ if context.get("view") else "UnknownView"
     logger.exception("Unhandled server error in %s: %s", view_name, exc)

@@ -1,5 +1,5 @@
 /**
- * AttendSure Mobile - Role-Aware Main Tab Navigator (Faculty & Parent Modes)
+ * AttendSure Mobile - Main 5-Tab Navigator (Teachers & School Leaders Only)
  * File: mobile/src/navigation/MainTabNavigator.tsx
  */
 
@@ -13,52 +13,80 @@ import {
   ScrollView,
   RefreshControl,
   ActivityIndicator,
-  Alert,
+  TextInput,
+  DeviceEventEmitter,
+  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
+import { ENDPOINTS } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
 import { getFriendlyErrorMessage, type ThemePalette } from '../constants/theme';
+import { canScanStudentQr, canViewTab, canViewTeacherDirectory } from '../utils/permissions';
+import { isCanceledError, showNotice } from '../utils/helpers';
+import {
+  isTeacherOnDutyStored,
+  setTeacherOnDutyFlag,
+  startContinuousGpsHeartbeat,
+  stopContinuousGpsHeartbeat,
+} from '../services/backgroundLocation';
+import {
+  ADAPTIVE_PING_INTERVAL_MS,
+  sendLiveHeartbeat,
+} from '../services/telemetryService';
+import {
+  startScheduleAlarmLoop,
+  stopScheduleAlarmLoop,
+  type AlarmToneKind,
+} from '../services/soundService';
+import {
+  buildTestMobileAlarm,
+  evaluateDueMobileAlarm,
+  fireOptionalLocalAlert,
+  getLocalDateStamp,
+  getMobileAlarmsEnabled,
+  markMobileAlarmDismissed,
+  type MobileAlarmEvent,
+  type MobileAlarmPeriod,
+  type MobileAlarmSnapshot,
+} from '../services/scheduleAlarmService';
+import ScheduleAlarmModal from '../components/common/ScheduleAlarmModal';
 
 import DashboardScreen from '../screens/DashboardScreen';
-import ParentPortalScreen from '../screens/ParentPortalScreen';
-import CalendarScreen from '../screens/CalendarScreen';
 import ScannerScreen from '../screens/ScannerScreen';
-import ReportsScreen from '../screens/ReportsScreen';
-import MenuScreen from '../screens/MenuScreen';
-import SettingsScreen from '../screens/SettingsScreen';
+import GeofenceStatusScreen from '../screens/GeofenceStatusScreen';
 import GatePassScreen from '../screens/GatePassScreen';
-import ChatScreen from '../screens/ChatScreen';
+import MenuScreen from '../screens/MenuScreen';
+import CalendarScreen from '../screens/CalendarScreen';
+import ReportsScreen from '../screens/ReportsScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 import AdvisoryMatrixScreen from '../screens/AdvisoryMatrixScreen';
+import StudentsScreen from '../screens/StudentsScreen';
+import TeachersScreen from '../screens/TeachersScreen';
+import SchedulesScreen from '../screens/SchedulesScreen';
+import UsersScreen from '../screens/UsersScreen';
+import SardoSafetyScreen from '../screens/SardoSafetyScreen';
 import DTRReportView, { DTRReportData } from '../components/reports/DTRReportView';
 
 export type TabType =
   | 'home'
-  | 'class_list'
-  | 'gate_pass'
-  | 'chat'
-  | 'menu'
   | 'scanner'
+  | 'geofence'
+  | 'gate_pass'
+  | 'menu'
+  | 'class_list'
+  | 'students'
+  | 'teachers'
+  | 'schedules'
+  | 'users'
   | 'reports'
   | 'calendar'
   | 'settings'
+  | 'sardo_safety'
   | 'dtr';
-
-const isCanceledError = (err: unknown): boolean => {
-  const e = err as { code?: string; name?: string };
-  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError';
-};
-
-const showNotice = (title: string, message: string): void => {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.alert(`${title}: ${message}`);
-  } else {
-    Alert.alert(title, message);
-  }
-};
 
 export const MainTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -67,29 +95,349 @@ export const MainTabNavigator: React.FC = () => {
   const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
   const [activeTab, setActiveTab] = useState<TabType>('home');
 
-  const isParentUser = useMemo(() => {
-    const role = String(user?.role || user?.system_role || '').trim().toUpperCase();
-    return role === 'PARENT';
-  }, [user?.role, user?.system_role]);
+  useEffect(() => {
+    if (!canViewTab(user, activeTab)) {
+      setActiveTab('home');
+    }
+  }, [user, activeTab]);
+
+  // Duty-aware foreground + background GPS heartbeat: runs ONLY while teacher is clocked in on duty
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    const dutyAbort = new AbortController();
+
+    const triggerHeartbeatIfOnDuty = async (forcePing = false) => {
+      if (!active) return;
+      const onDuty = await isTeacherOnDutyStored();
+      if (!active || !onDuty) return;
+      await sendLiveHeartbeat(undefined, forcePing).catch(() => {});
+    };
+
+    const syncDutyAndTracking = async (forcePing = false) => {
+      if (!active) return;
+
+      // Resume background GPS right away if already marked on-duty locally (e.g. offline app restart)
+      const storedOnDuty = await isTeacherOnDutyStored();
+      if (!active) return;
+      if (storedOnDuty) {
+        void startContinuousGpsHeartbeat().catch(() => {});
+      }
+
+      // Sync real duty status from the campus overview endpoint
+      try {
+        const res = await apiClient.get<{
+          teacher_list?: Array<{
+            id?: number;
+            teacher_id?: number;
+            user_id?: number;
+            employee_id?: string;
+            is_clocked_in?: boolean;
+            time_in?: string | null;
+            time_out?: string | null;
+          }>;
+        }>(ENDPOINTS.CAMPUS_OVERVIEW, { signal: dutyAbort.signal });
+
+        if (!active || dutyAbort.signal.aborted) return;
+        const rows = Array.isArray(res.data?.teacher_list) ? res.data.teacher_list : [];
+        const ownRow =
+          rows.find(
+            (t) =>
+              (user.teacher_id &&
+                (Number(t.teacher_id) === Number(user.teacher_id) ||
+                  Number(t.id) === Number(user.teacher_id))) ||
+              (user.id && t.user_id && Number(t.user_id) === Number(user.id)) ||
+              (user.employee_id &&
+                t.employee_id &&
+                String(t.employee_id).toLowerCase() === String(user.employee_id).toLowerCase())
+          ) || (rows.length === 1 && String(user.role || '').toUpperCase() === 'TEACHER' ? rows[0] : undefined);
+
+        if (ownRow) {
+          const isClockedIn = Boolean(
+            ownRow.is_clocked_in || (ownRow.time_in && !ownRow.time_out)
+          );
+          await setTeacherOnDutyFlag(isClockedIn);
+          if (isClockedIn && active) {
+            await triggerHeartbeatIfOnDuty(forcePing);
+          }
+          return;
+        }
+      } catch {
+        // Offline or unreachable: honor the locally stored duty state
+      }
+
+      if (storedOnDuty && active) {
+        await triggerHeartbeatIfOnDuty(forcePing);
+      } else if (!storedOnDuty && active) {
+        await stopContinuousGpsHeartbeat().catch(() => {});
+      }
+    };
+
+    void syncDutyAndTracking(true);
+
+    const intervalId = setInterval(() => {
+      void triggerHeartbeatIfOnDuty(false);
+    }, ADAPTIVE_PING_INTERVAL_MS);
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void syncDutyAndTracking(true);
+      }
+    });
+
+    const dutyUpdateSub = DeviceEventEmitter.addListener('attendsure:attendance-updated', () => {
+      void syncDutyAndTracking(false);
+    });
+
+    return () => {
+      active = false;
+      dutyAbort.abort();
+      clearInterval(intervalId);
+      appStateSub.remove();
+      dutyUpdateSub.remove();
+    };
+  }, [user]);
 
   const [dtrMonth, setDtrMonth] = useState<number>(new Date().getMonth() + 1);
   const [dtrYear, setDtrYear] = useState<number>(new Date().getFullYear());
+  const [dtrTeachers, setDtrTeachers] = useState<Array<{ id: number; full_name: string; employee_id?: string }>>([]);
+  const [selectedDtrTeacherId, setSelectedDtrTeacherId] = useState<number | null>(null);
+  const [dtrRegularHours, setDtrRegularHours] = useState<string>('8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM');
+  const [dtrSaturdayHours, setDtrSaturdayHours] = useState<string>('As Required');
   const [dtrData, setDtrData] = useState<DTRReportData | null>(null);
   const [dtrLoading, setDtrLoading] = useState<boolean>(false);
   const [dtrSubmitting, setDtrSubmitting] = useState<boolean>(false);
+  const allowDtrSwitcher = canViewTeacherDirectory(user);
 
   const isMounted = useRef<boolean>(true);
   const dtrAbortRef = useRef<AbortController | null>(null);
 
+  const [alarmsEnabled, setAlarmsEnabled] = useState<boolean>(true);
+  const alarmsEnabledRef = useRef<boolean>(true);
+  alarmsEnabledRef.current = alarmsEnabled;
+
+  const [activeAlarm, setActiveAlarm] = useState<MobileAlarmEvent | null>(null);
+  const activeAlarmRef = useRef<MobileAlarmEvent | null>(null);
+  activeAlarmRef.current = activeAlarm;
+
+  const alarmSnapshotRef = useRef<MobileAlarmSnapshot>({
+    dutyStartTime: '',
+    dutyEndTime: '',
+    isTimedInToday: false,
+    periods: [],
+  });
+  const alarmSnoozeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const triggerMobileAlarm = useCallback((ev: MobileAlarmEvent) => {
+    if (!isMounted.current) return;
+    setActiveAlarm(ev);
+    startScheduleAlarmLoop(ev.kind);
+    fireOptionalLocalAlert(ev.title, `${ev.timeLabel} — ${ev.detail}`);
+  }, []);
+
+  const handleDismissAlarm = useCallback(() => {
+    stopScheduleAlarmLoop();
+    if (alarmSnoozeTimerRef.current) {
+      clearTimeout(alarmSnoozeTimerRef.current);
+      alarmSnoozeTimerRef.current = null;
+    }
+    const current = activeAlarmRef.current;
+    if (current && !current.id.startsWith('TEST_')) {
+      void markMobileAlarmDismissed(getLocalDateStamp(), current.id);
+    }
+    setActiveAlarm(null);
+  }, []);
+
+  const handleSnoozeAlarm = useCallback(() => {
+    stopScheduleAlarmLoop();
+    const current = activeAlarmRef.current;
+    setActiveAlarm(null);
+    if (!current) return;
+    if (alarmSnoozeTimerRef.current) {
+      clearTimeout(alarmSnoozeTimerRef.current);
+    }
+    alarmSnoozeTimerRef.current = setTimeout(() => {
+      alarmSnoozeTimerRef.current = null;
+      if (isMounted.current && alarmsEnabledRef.current) {
+        triggerMobileAlarm({ ...current, subtitle: `${current.subtitle} (Snoozed)` });
+      }
+    }, 5 * 60 * 1000);
+  }, [triggerMobileAlarm]);
+
+  useEffect(() => {
+    void getMobileAlarmsEnabled().then((enabled) => {
+      if (isMounted.current) setAlarmsEnabled(enabled);
+    });
+
+    const toggleSub = DeviceEventEmitter.addListener(
+      'attendsure:alarms-enabled-changed',
+      (payload?: { enabled?: boolean }) => {
+        const next = payload?.enabled !== false;
+        setAlarmsEnabled(next);
+        if (!next) {
+          stopScheduleAlarmLoop();
+          if (alarmSnoozeTimerRef.current) {
+            clearTimeout(alarmSnoozeTimerRef.current);
+            alarmSnoozeTimerRef.current = null;
+          }
+          setActiveAlarm(null);
+        }
+      }
+    );
+
+    const testSub = DeviceEventEmitter.addListener(
+      'attendsure:test-alarm',
+      (payload?: { kind?: AlarmToneKind }) => {
+        const kind: AlarmToneKind = payload?.kind || 'TIME_IN';
+        triggerMobileAlarm(buildTestMobileAlarm(kind));
+      }
+    );
+
+    return () => {
+      toggleSub.remove();
+      testSub.remove();
+      stopScheduleAlarmLoop();
+      if (alarmSnoozeTimerRef.current) {
+        clearTimeout(alarmSnoozeTimerRef.current);
+        alarmSnoozeTimerRef.current = null;
+      }
+    };
+  }, [triggerMobileAlarm]);
+
+  useEffect(() => {
+    if (!user || !alarmsEnabled) {
+      stopScheduleAlarmLoop();
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+
+    const syncAlarmData = async () => {
+      try {
+        const [campusRes, classesRes] = await Promise.allSettled([
+          apiClient.get<{
+            duty_start_time?: string;
+            duty_end_time?: string;
+            teacher_list?: Array<{
+              teacher_id?: number;
+              user_id?: number;
+              is_clocked_in?: boolean;
+              time_in?: string | null;
+              time_out?: string | null;
+            }>;
+          }>(ENDPOINTS.CAMPUS_OVERVIEW, { signal: controller.signal }),
+          canScanStudentQr(user)
+            ? apiClient.get<
+                | Array<{
+                    id: number;
+                    subject_code?: string;
+                    subject_title?: string;
+                    subject_name?: string;
+                    section_name?: string;
+                    room_number?: string;
+                    room?: string;
+                    start_time?: string;
+                    end_time?: string;
+                    day_of_week?: string;
+                  }>
+                | { results?: Array<Record<string, unknown>> }
+              >(ENDPOINTS.ATTENDANCE_CLASSES, {
+                params: { summary: 1 },
+                signal: controller.signal,
+              })
+            : Promise.resolve({ data: [] }),
+        ]);
+
+        if (!active || controller.signal.aborted) return;
+
+        let dutyStartTime = '';
+        let dutyEndTime = '';
+        let isTimedInToday = false;
+
+        if (campusRes.status === 'fulfilled' && campusRes.value?.data) {
+          const campus = campusRes.value.data;
+          const ownTeacher = Array.isArray(campus.teacher_list)
+            ? campus.teacher_list.find(
+                (t) =>
+                  (user.teacher_id && Number(t.teacher_id) === Number(user.teacher_id)) ||
+                  (user.id && Number(t.user_id) === Number(user.id))
+              )
+            : undefined;
+
+          if (ownTeacher || String(user.role || '').toUpperCase() === 'TEACHER') {
+            dutyStartTime = String(campus.duty_start_time || '');
+            dutyEndTime = String(campus.duty_end_time || '');
+            isTimedInToday = Boolean(
+              ownTeacher?.is_clocked_in || (ownTeacher?.time_in && !ownTeacher?.time_out)
+            );
+          }
+        }
+
+        let periods: MobileAlarmPeriod[] = [];
+        if (classesRes.status === 'fulfilled' && classesRes.value?.data) {
+          const rawData = classesRes.value.data;
+          const rawList = Array.isArray(rawData)
+            ? rawData
+            : Array.isArray((rawData as { results?: unknown[] }).results)
+              ? (rawData as { results: Array<Record<string, unknown>> }).results
+              : [];
+          periods = rawList
+            .filter((item) => Boolean(item && item.start_time))
+            .map((item) => ({
+              id: Number(item.id || 0),
+              subject_code: String(item.subject_code || ''),
+              subject_name: String(item.subject_title || item.subject_name || item.subject_code || 'Class Period'),
+              section_name: String(item.section_name || ''),
+              room: String(item.room_number || item.room || ''),
+              start_time: String(item.start_time || ''),
+              end_time: String(item.end_time || ''),
+              day_of_week: String(item.day_of_week || 'ALL_WEEKDAYS'),
+            }));
+        }
+
+        alarmSnapshotRef.current = {
+          dutyStartTime,
+          dutyEndTime,
+          isTimedInToday,
+          periods,
+        };
+      } catch {
+        // Ignore transient network errors while syncing alarm schedule
+      }
+    };
+
+    const tickEvaluate = async () => {
+      if (!active || activeAlarmRef.current || !alarmsEnabledRef.current) return;
+      const due = await evaluateDueMobileAlarm(alarmSnapshotRef.current, new Date());
+      if (due && active && !activeAlarmRef.current) {
+        triggerMobileAlarm(due);
+      }
+    };
+
+    void syncAlarmData().then(() => void tickEvaluate());
+    const syncInterval = setInterval(() => void syncAlarmData(), 5 * 60 * 1000);
+    const tickInterval = setInterval(() => void tickEvaluate(), 15 * 1000);
+    const attUpdateSub = DeviceEventEmitter.addListener('attendsure:attendance-updated', () => {
+      void syncAlarmData();
+    });
+
+    return () => {
+      active = false;
+      controller.abort();
+      clearInterval(syncInterval);
+      clearInterval(tickInterval);
+      attUpdateSub.remove();
+    };
+  }, [user, alarmsEnabled, triggerMobileAlarm]);
+
   const fetchDTR = useCallback(
     async (silent = false) => {
-      if (isParentUser) return;
       dtrAbortRef.current?.abort();
       const controller = new AbortController();
       dtrAbortRef.current = controller;
 
       if (!silent && isMounted.current) setDtrLoading(true);
-      const cacheKey = `attendsure_dtr_menu_${dtrMonth}_${dtrYear}`;
+      const cacheKey = `attendsure_dtr_menu_${selectedDtrTeacherId || 'self'}_${dtrMonth}_${dtrYear}`;
 
       try {
         const cached = await AsyncStorage.getItem(cacheKey);
@@ -99,13 +447,31 @@ export const MainTabNavigator: React.FC = () => {
       } catch {}
 
       try {
-        const res = await apiClient.get<DTRReportData>('reports/dtr/', {
-          params: { month: dtrMonth, year: dtrYear },
-          signal: controller.signal,
-        });
+        const params: Record<string, number> = { month: dtrMonth, year: dtrYear };
+        if (allowDtrSwitcher && selectedDtrTeacherId) {
+          params.teacher_id = selectedDtrTeacherId;
+        }
+        const [res, teachersRes] = await Promise.allSettled([
+          apiClient.get<DTRReportData>(ENDPOINTS.EMPLOYEE_DTR, {
+            params,
+            signal: controller.signal,
+          }),
+          allowDtrSwitcher && dtrTeachers.length === 0
+            ? apiClient.get(ENDPOINTS.TEACHERS_DROPDOWN, { signal: controller.signal })
+            : Promise.resolve(null),
+        ]);
         if (isMounted.current && !controller.signal.aborted) {
-          setDtrData(res.data);
-          await AsyncStorage.setItem(cacheKey, JSON.stringify(res.data)).catch(() => {});
+          if (teachersRes.status === 'fulfilled' && teachersRes.value?.data) {
+            const rawT = teachersRes.value.data;
+            setDtrTeachers(Array.isArray(rawT) ? rawT : Array.isArray(rawT?.results) ? rawT.results : []);
+          }
+          if (res.status === 'fulfilled' && res.value?.data) {
+            const payload = res.value.data;
+            setDtrData(payload);
+            if (payload.regular_days_hours) setDtrRegularHours(payload.regular_days_hours);
+            if (payload.saturdays_hours) setDtrSaturdayHours(payload.saturdays_hours);
+            await AsyncStorage.setItem(cacheKey, JSON.stringify(payload)).catch(() => {});
+          }
         }
       } catch (err: unknown) {
         if (isCanceledError(err)) return;
@@ -115,7 +481,7 @@ export const MainTabNavigator: React.FC = () => {
         }
       }
     },
-    [dtrMonth, dtrYear, isParentUser]
+    [dtrMonth, dtrYear, allowDtrSwitcher, selectedDtrTeacherId, dtrTeachers.length]
   );
 
   useEffect(() => {
@@ -127,33 +493,38 @@ export const MainTabNavigator: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'dtr' && !isParentUser) {
+    if (activeTab === 'dtr') {
       void fetchDTR(false);
     }
     return () => {
       dtrAbortRef.current?.abort();
     };
-  }, [activeTab, fetchDTR, isParentUser]);
+  }, [activeTab, fetchDTR]);
 
-  const handleSubmitDtr = async () => {
+  const handleSubmitDtr = async (action: 'SUBMIT_DTR' | 'APPROVE_DEPT_HEAD' = 'SUBMIT_DTR') => {
     if (!dtrData || dtrSubmitting) return;
     setDtrSubmitting(true);
     try {
-      const encodedFacultyId = encodeURIComponent(String(dtrData.faculty_id));
-      await apiClient.post(`reports/dtr/${encodedFacultyId}/`, {
-        action: 'SUBMIT_DTR',
-        faculty_id: dtrData.faculty_id,
+      const encodedTeacherId = encodeURIComponent(String(dtrData.teacher_id));
+      await apiClient.post(`${ENDPOINTS.EMPLOYEE_DTR}${encodedTeacherId}/`, {
+        action,
+        teacher_id: dtrData.teacher_id,
         month: dtrData.month_number,
         year: dtrData.year,
-        regular_days_hours: dtrData.regular_days_hours,
-        saturdays_hours: dtrData.saturdays_hours,
+        regular_days_hours: dtrRegularHours.trim() || dtrData.regular_days_hours,
+        saturdays_hours: dtrSaturdayHours.trim() || dtrData.saturdays_hours,
       });
-      showNotice('Submitted', 'Your Daily Time Record has been sent to your Department Head.');
+      showNotice(
+        action === 'APPROVE_DEPT_HEAD' ? 'Approved' : 'Submitted',
+        action === 'APPROVE_DEPT_HEAD'
+          ? 'Daily Time Record approved and verified.'
+          : 'Your Daily Time Record has been sent to your Department Head.'
+      );
       void fetchDTR(true);
     } catch (err: unknown) {
       showNotice(
-        'Unable to Submit',
-        getFriendlyErrorMessage(err, 'Could not submit your Daily Time Record right now.')
+        'Unable to Update DTR',
+        getFriendlyErrorMessage(err, 'Could not submit Daily Time Record right now.')
       );
     } finally {
       if (isMounted.current) setDtrSubmitting(false);
@@ -172,7 +543,7 @@ export const MainTabNavigator: React.FC = () => {
           <Ionicons name="arrow-back" size={20} color={palette.onPrimary} />
         </TouchableOpacity>
         <View style={styles.subHeaderTextWrap}>
-          <Text style={styles.subHeaderEyebrow}>PROFILE &amp; TOOLS</Text>
+          <Text style={styles.subHeaderEyebrow}>ACCOUNT &amp; TOOLS</Text>
           <Text style={styles.subHeaderTitle} numberOfLines={1}>
             {title}
           </Text>
@@ -184,80 +555,109 @@ export const MainTabNavigator: React.FC = () => {
     </View>
   );
 
+  const allowStudentQr = canScanStudentQr(user);
+
+  // Strict 5-Tab Bottom Dock: Overview, Scanner/Time In/Out, Geofence, Passes, Account
   const navItems: Array<{
     key: TabType;
     label: string;
     icon: keyof typeof Ionicons.glyphMap;
     activeIcon: keyof typeof Ionicons.glyphMap;
   }> = useMemo(
-    () =>
-      isParentUser
-        ? [
-            { key: 'home', label: 'Children', icon: 'people-outline', activeIcon: 'people' },
-            { key: 'gate_pass', label: 'Passes', icon: 'clipboard-outline', activeIcon: 'clipboard' },
-            { key: 'chat', label: 'Messages', icon: 'chatbubble-outline', activeIcon: 'chatbubble' },
-            { key: 'settings', label: 'Account', icon: 'person-outline', activeIcon: 'person' },
-          ]
-        : [
-            { key: 'home', label: 'Home', icon: 'home-outline', activeIcon: 'home' },
-            { key: 'class_list', label: 'Classes', icon: 'book-outline', activeIcon: 'book' },
-            { key: 'gate_pass', label: 'Passes', icon: 'clipboard-outline', activeIcon: 'clipboard' },
-            { key: 'chat', label: 'Messages', icon: 'chatbubble-outline', activeIcon: 'chatbubble' },
-            { key: 'menu', label: 'Profile', icon: 'person-outline', activeIcon: 'person' },
-          ],
-    [isParentUser]
+    () => [
+      { key: 'home', label: 'Overview', icon: 'home-outline', activeIcon: 'home' },
+      {
+        key: 'scanner',
+        label: allowStudentQr ? 'Scanner' : 'Time In/Out',
+        icon: allowStudentQr ? 'scan-outline' : 'finger-print-outline',
+        activeIcon: allowStudentQr ? 'scan' : 'finger-print',
+      },
+      { key: 'geofence', label: 'Geofence', icon: 'navigate-outline', activeIcon: 'navigate' },
+      { key: 'gate_pass', label: 'Passes', icon: 'clipboard-outline', activeIcon: 'clipboard' },
+      { key: 'menu', label: 'Account', icon: 'person-outline', activeIcon: 'person' },
+    ],
+    [allowStudentQr]
   );
 
-  const menuSubTabs: TabType[] = ['menu', 'settings', 'calendar', 'dtr', 'reports', 'scanner'];
-  const resolvedNavKey: TabType = isParentUser
-    ? activeTab
-    : menuSubTabs.includes(activeTab)
-      ? 'menu'
-      : activeTab;
+  const accountSubTabs: TabType[] = [
+    'menu',
+    'class_list',
+    'students',
+    'teachers',
+    'schedules',
+    'users',
+    'settings',
+    'sardo_safety',
+    'calendar',
+    'dtr',
+    'reports',
+  ];
+  const resolvedNavKey: TabType = accountSubTabs.includes(activeTab) ? 'menu' : activeTab;
 
   return (
     <View style={styles.container}>
       <View style={styles.screenContainer}>
-        {activeTab === 'home' &&
-          (isParentUser ? (
-            <ParentPortalScreen onNavigate={setActiveTab} />
-          ) : (
-            <DashboardScreen onNavigate={setActiveTab} />
-          ))}
-        {activeTab === 'class_list' && !isParentUser && <AdvisoryMatrixScreen />}
-        {activeTab === 'gate_pass' && <GatePassScreen onBack={() => setActiveTab('home')} />}
-        {activeTab === 'chat' && <ChatScreen />}
-        {activeTab === 'menu' && !isParentUser && <MenuScreen onSelectScreen={setActiveTab} />}
-        {activeTab === 'scanner' && !isParentUser && (
-          <ScannerScreen onBack={() => setActiveTab('menu')} />
-        )}
-        {activeTab === 'reports' && !isParentUser && (
+        {activeTab === 'home' && <DashboardScreen onNavigate={setActiveTab} />}
+        {activeTab === 'scanner' && <ScannerScreen />}
+        {activeTab === 'geofence' && <GeofenceStatusScreen onNavigate={setActiveTab} />}
+        {activeTab === 'gate_pass' && <GatePassScreen />}
+        {activeTab === 'menu' && <MenuScreen onSelectScreen={setActiveTab} />}
+
+        {activeTab === 'class_list' && canViewTab(user, 'class_list') && (
           <View style={styles.subScreenFill}>
-            {renderSubHeader('School Reports', 'SF1, SF2, SF4 and Form 48 records', 'menu')}
+            {renderSubHeader('Class List & Matrix', 'Adviser & subject attendance tracking', 'menu')}
+            <AdvisoryMatrixScreen />
+          </View>
+        )}
+        {activeTab === 'students' && canViewTab(user, 'students') && (
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('Students Directory', 'Add, edit, enroll and view QR ID passes', 'menu')}
+            <StudentsScreen />
+          </View>
+        )}
+        {activeTab === 'teachers' && canViewTab(user, 'teachers') && (
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('Teachers', 'Manage teacher profiles and bound phones', 'menu')}
+            <TeachersScreen />
+          </View>
+        )}
+        {activeTab === 'schedules' && canViewTab(user, 'schedules') && (
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('Academic Setup & Schedules', 'Sections, subjects and class periods', 'menu')}
+            <SchedulesScreen />
+          </View>
+        )}
+        {activeTab === 'users' && canViewTab(user, 'users') && (
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('User Accounts & Roles', 'Create, update and manage login accounts', 'menu')}
+            <UsersScreen />
+          </View>
+        )}
+        {activeTab === 'reports' && canViewTab(user, 'reports') && (
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('DepEd School Forms', 'SF1, SF2, SF4 and Form 48 records', 'menu')}
             <ReportsScreen embedded />
           </View>
         )}
         {activeTab === 'calendar' && (
           <View style={styles.subScreenFill}>
-            {renderSubHeader(
-              'School Calendar',
-              'Suspensions, holidays and schedules',
-              isParentUser ? 'home' : 'menu'
-            )}
+            {renderSubHeader('School Calendar', 'Suspensions, holidays and schedules', 'menu')}
             <CalendarScreen />
           </View>
         )}
         {activeTab === 'settings' && (
           <View style={styles.subScreenFill}>
-            {renderSubHeader(
-              'Settings',
-              'Profile, color mode and server address',
-              isParentUser ? 'home' : 'menu'
-            )}
+            {renderSubHeader('Settings & School Setup', 'Profile, logos, alarms, maintenance & logs', 'menu')}
             <SettingsScreen />
           </View>
         )}
-        {activeTab === 'dtr' && !isParentUser && (
+        {activeTab === 'sardo_safety' && canViewTab(user, 'sardo_safety') && (
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('SARDO & Campus Safety', 'Early-warning, roll-call & division export', 'menu')}
+            <SardoSafetyScreen />
+          </View>
+        )}
+        {activeTab === 'dtr' && (
           <View style={styles.subScreenFill}>
             {renderSubHeader('Daily Time Record', 'Civil Service Form No. 48', 'menu')}
             <ScrollView
@@ -272,6 +672,80 @@ export const MainTabNavigator: React.FC = () => {
                 />
               }
             >
+              {/* Leader Teacher Switcher (Parity with Web DTRTab) */}
+              {allowDtrSwitcher && dtrTeachers.length > 0 && (
+                <View style={styles.dtrControlsCard}>
+                  <Text style={styles.dtrControlsLabel}>INSPECT TEACHER DTR</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ gap: 6, paddingVertical: 4 }}
+                  >
+                    <TouchableOpacity
+                      style={[
+                        styles.dtrChip,
+                        selectedDtrTeacherId === null && styles.dtrChipActive,
+                      ]}
+                      onPress={() => setSelectedDtrTeacherId(null)}
+                    >
+                      <Text
+                        style={[
+                          styles.dtrChipText,
+                          selectedDtrTeacherId === null && styles.dtrChipTextActive,
+                        ]}
+                      >
+                        My DTR
+                      </Text>
+                    </TouchableOpacity>
+                    {dtrTeachers.map((t) => {
+                      const active = selectedDtrTeacherId === t.id;
+                      return (
+                        <TouchableOpacity
+                          key={t.id}
+                          style={[styles.dtrChip, active && styles.dtrChipActive]}
+                          onPress={() => setSelectedDtrTeacherId(t.id)}
+                        >
+                          <Text style={[styles.dtrChipText, active && styles.dtrChipTextActive]}>
+                            {t.full_name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Prescribed Working Hours Inputs (Parity with Web DTRTab) */}
+              {dtrData && (
+                <View style={styles.dtrControlsCard}>
+                  <Text style={styles.dtrControlsLabel}>PRESCRIBED WORKING HOURS</Text>
+                  <TextInput
+                    style={styles.dtrHoursInput}
+                    value={dtrRegularHours}
+                    onChangeText={setDtrRegularHours}
+                    placeholder="Regular Days (e.g. 8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM)"
+                    placeholderTextColor={palette.textMuted}
+                  />
+                  <TextInput
+                    style={styles.dtrHoursInput}
+                    value={dtrSaturdayHours}
+                    onChangeText={setDtrSaturdayHours}
+                    placeholder="Saturdays (e.g. As Required)"
+                    placeholderTextColor={palette.textMuted}
+                  />
+                  {dtrData.can_approve_dept && !dtrData.dept_head_approved && (
+                    <TouchableOpacity
+                      style={[styles.dtrApproveBtn, dtrSubmitting && { opacity: 0.65 }]}
+                      disabled={dtrSubmitting}
+                      onPress={() => void handleSubmitDtr('APPROVE_DEPT_HEAD')}
+                    >
+                      <Ionicons name="shield-checkmark-outline" size={16} color={palette.onPrimary} />
+                      <Text style={styles.dtrApproveBtnText}>Approve DTR (Dept Head / Principal)</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+
               {dtrLoading && !dtrData ? (
                 <View style={styles.loadingBox}>
                   <ActivityIndicator size="small" color={palette.primary} />
@@ -279,7 +753,15 @@ export const MainTabNavigator: React.FC = () => {
                 </View>
               ) : (
                 <DTRReportView
-                  data={dtrData}
+                  data={
+                    dtrData
+                      ? {
+                          ...dtrData,
+                          regular_days_hours: dtrRegularHours,
+                          saturdays_hours: dtrSaturdayHours,
+                        }
+                      : null
+                  }
                   selectedMonth={dtrMonth}
                   selectedYear={dtrYear}
                   onMonthChange={(m, y) => {
@@ -287,7 +769,7 @@ export const MainTabNavigator: React.FC = () => {
                     setDtrYear(y);
                   }}
                   submitting={dtrSubmitting}
-                  onSubmit={handleSubmitDtr}
+                  onSubmit={() => void handleSubmitDtr('SUBMIT_DTR')}
                   onRefreshNeeded={() => void fetchDTR(true)}
                 />
               )}
@@ -296,7 +778,7 @@ export const MainTabNavigator: React.FC = () => {
         )}
       </View>
 
-      {/* Floating Bottom Navigation Dock */}
+      {/* Floating 5-Tab Bottom Navigation Dock */}
       <View
         style={[
           styles.floatingDockWrapper,
@@ -304,7 +786,7 @@ export const MainTabNavigator: React.FC = () => {
         ]}
         pointerEvents="box-none"
       >
-        <View style={styles.floatingDock}>
+        <View style={styles.floatingDock} pointerEvents="auto">
           {navItems.map((item) => {
             const isFocused = resolvedNavKey === item.key;
             return (
@@ -332,6 +814,15 @@ export const MainTabNavigator: React.FC = () => {
           })}
         </View>
       </View>
+      <ScheduleAlarmModal
+        alarm={activeAlarm}
+        onDismiss={handleDismissAlarm}
+        onSnooze={handleSnoozeAlarm}
+        onAction={(targetTab) => {
+          handleDismissAlarm();
+          setActiveTab(targetTab);
+        }}
+      />
     </View>
   );
 };
@@ -386,6 +877,57 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     subScreenScroll: {
       padding: 14,
       paddingBottom: 120,
+      gap: 10,
+    },
+    dtrControlsCard: {
+      backgroundColor: palette.surface,
+      borderRadius: 14,
+      padding: 12,
+      borderWidth: 1,
+      borderColor: palette.border,
+      gap: 6,
+    },
+    dtrControlsLabel: {
+      fontSize: fonts.xxs,
+      fontWeight: fonts.weight.extrabold,
+      color: palette.textMuted,
+      letterSpacing: 0.4,
+    },
+    dtrChip: {
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+      backgroundColor: palette.surfaceSubtle,
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    dtrChipActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
+    dtrChipText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.textSecondary },
+    dtrChipTextActive: { color: palette.onPrimary },
+    dtrHoursInput: {
+      backgroundColor: palette.surfaceSubtle,
+      borderWidth: 1,
+      borderColor: palette.borderStrong,
+      borderRadius: 9,
+      paddingHorizontal: 10,
+      height: 38,
+      fontSize: fonts.xs,
+      color: palette.textPrimary,
+    },
+    dtrApproveBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      height: 40,
+      borderRadius: 10,
+      backgroundColor: palette.success,
+      marginTop: 4,
+    },
+    dtrApproveBtnText: {
+      color: palette.onPrimary,
+      fontSize: fonts.xs,
+      fontWeight: fonts.weight.extrabold,
     },
     loadingBox: {
       alignItems: 'center',
@@ -417,7 +959,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       borderColor: palette.border,
       ...Platform.select({
         ios: {
-          shadowColor: palette.isDark ? '#000000' : '#0f172a',
+          shadowColor: palette.shadowColor,
           shadowOffset: { width: 0, height: 8 },
           shadowOpacity: palette.isDark ? 0.35 : 0.12,
           shadowRadius: 16,
@@ -435,11 +977,11 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       gap: 6,
     },
     navPillBtnActive: {
-      paddingHorizontal: 16,
+      paddingHorizontal: 14,
       backgroundColor: palette.primarySoft,
     },
     navPillText: {
-      fontSize: fonts.sm,
+      fontSize: fonts.xs,
       fontWeight: fonts.weight.extrabold,
       color: palette.primary,
     },

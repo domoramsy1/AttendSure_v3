@@ -7,7 +7,7 @@ import React, { memo, useState, useEffect, useMemo } from 'react';
 import { School } from 'lucide-react';
 import { useSchool } from '../../context/SchoolContext';
 import { useTheme } from '../../context/ThemeContext';
-import { isSafeImageUrl, sanitizeText } from '../../theme/tokens';
+import { isSafeImageUrl, sanitizeText, SEAL_COLORS } from '../../theme/tokens';
 import { BRAND_ASSETS } from './BrandAssets';
 
 export interface SchoolTenantBadgeProps {
@@ -109,10 +109,10 @@ export const SchoolTenantBadge: React.FC<SchoolTenantBadgeProps> = memo(
             width: sealBoxSize,
             height: sealBoxSize,
             borderRadius: '50%',
-            backgroundColor: '#ffffff',
+            backgroundColor: SEAL_COLORS.white,
             borderWidth: 1,
             borderStyle: 'solid',
-            borderColor: mode === 'dark' ? 'rgba(56, 189, 248, 0.45)' : '#e2e8f0',
+            borderColor: mode === 'dark' ? 'rgba(56, 189, 248, 0.45)' : SEAL_COLORS.subtleBorder,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -144,7 +144,7 @@ export const SchoolTenantBadge: React.FC<SchoolTenantBadgeProps> = memo(
               }}
             />
           ) : (
-            <School size={compact ? 13 : 15} color="#004b87" aria-hidden="true" />
+            <School size={compact ? 13 : 15} color={SEAL_COLORS.navy} aria-hidden="true" />
           )}
         </div>
 

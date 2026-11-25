@@ -1,5 +1,3 @@
-# D:\AttendSure_V3\backend\apps\students\services.py
-
 import csv
 import io
 import re
@@ -23,7 +21,7 @@ def _clean_cell(raw: object, max_len: int = 120) -> str:
     return text[:max_len]
 
 
-def _parse_csv_birthdate(raw_val: str) -> date:
+def _parse_csv_birth_date(raw_val: str) -> date:
     clean = _clean_cell(raw_val, 30)
     if not clean:
         return date(2012, 1, 1)
@@ -32,29 +30,66 @@ def _parse_csv_birthdate(raw_val: str) -> date:
             return datetime.strptime(clean, fmt).date()
         except ValueError:
             continue
-    raise ValueError(f"Invalid birthdate '{clean}' (use YYYY-MM-DD or MM/DD/YYYY).")
+    raise ValueError(f"Invalid birth date '{clean}' (use YYYY-MM-DD or MM/DD/YYYY).")
 
 
-def _normalize_sex(raw_val: str) -> str:
+def _normalize_gender(raw_val: str) -> str:
     val = _clean_cell(raw_val, 15).upper()
     if val in ("F", "FEMALE", "GIRL"):
         return "Female"
     return "Male"
 
 
-def sync_student_enrollment(*, student: Student, section_id: int | None) -> None:
-    if not section_id:
-        return
-    sec = Section.objects.select_related("school_year").filter(id=section_id).first()
-    if not sec:
-        return
-    existing = Enrollment.objects.filter(student=student, section__school_year=sec.school_year).first()
-    if existing:
-        existing.section = sec
-        existing.status = "ENROLLED"
-        existing.save(update_fields=["section", "status", "updated_at"])
-    else:
-        Enrollment.objects.create(student=student, section=sec, status="ENROLLED")
+VALID_ENROLLMENT_STATUSES = {"ENROLLED", "TRANSFERRED_IN", "TRANSFERRED_OUT", "DROPPED"}
+
+
+def sync_student_enrollment(
+    *,
+    student: Student,
+    section_id: int | None,
+    enrollment_status: str | None = None,
+) -> Enrollment | None:
+    clean_status = str(enrollment_status or "").strip().upper()
+    if clean_status and clean_status not in VALID_ENROLLMENT_STATUSES:
+        clean_status = ""
+
+    if section_id:
+        sec = Section.objects.select_related("school_year").filter(id=section_id).first()
+        if not sec:
+            return None
+        existing = Enrollment.objects.filter(
+            student=student, section__school_year=sec.school_year
+        ).first()
+        if existing:
+            existing.section = sec
+            if clean_status:
+                existing.status = clean_status
+                if clean_status != "ENROLLED":
+                    existing.status_date = date.today()
+            existing.save(update_fields=["section", "status", "status_date", "updated_at"])
+            return existing
+        return Enrollment.objects.create(
+            student=student,
+            section=sec,
+            status=clean_status or "ENROLLED",
+            status_date=date.today() if (clean_status and clean_status != "ENROLLED") else None,
+        )
+
+    if clean_status:
+        latest = (
+            Enrollment.objects.filter(student=student)
+            .select_related("section__school_year")
+            .order_by("-section__school_year__is_active", "-id")
+            .first()
+        )
+        if latest:
+            latest.status = clean_status
+            if clean_status != "ENROLLED":
+                latest.status_date = date.today()
+            latest.save(update_fields=["status", "status_date", "updated_at"])
+            return latest
+    return None
+
 
 def bulk_import_students_csv(
     *,
@@ -90,9 +125,9 @@ def bulk_import_students_csv(
     school_year = SchoolYear.objects.filter(is_active=True).first() or SchoolYear.objects.first()
     if not school_year:
         today = date.today()
-        sy_code = f"{today.year}-{today.year + 1}" if today.month >= 6 else f"{today.year - 1}-{today.year}"
+        sy_name = f"{today.year}-{today.year + 1}" if today.month >= 6 else f"{today.year - 1}-{today.year}"
         school_year = SchoolYear.objects.create(
-            code=sy_code,
+            name=sy_name,
             start_date=date(today.year, 6, 1),
             baseline_cutoff_date=date(today.year, 6, 5),
             end_date=date(today.year + 1, 3, 31),
@@ -114,7 +149,7 @@ def bulk_import_students_csv(
         grades_by_key[gl.code.strip().lower()] = gl
 
     existing_students: dict[str, Student] = {
-        st.lrn: st for st in Student.objects.all()
+        st.lrn: st for st in Student.objects.select_related("location").all()
     }
 
     created_count = 0
@@ -143,40 +178,36 @@ def bulk_import_students_csv(
         raw_lrn = re.sub(r"\D+", "", str(norm.get("lrn") or ""))
         if len(raw_lrn) != 12:
             skipped_count += 1
-            errors.append({
-                "row": idx,
-                "lrn": _clean_cell(norm.get("lrn"), 20),
-                "reason": "LRN must be exactly 12 digits.",
-            })
+            errors.append(
+                {
+                    "row": idx,
+                    "lrn": _clean_cell(norm.get("lrn"), 20),
+                    "reason": "LRN must be exactly 12 digits.",
+                }
+            )
             continue
 
         first_name = _clean_cell(norm.get("first_name") or norm.get("firstname"), 100)
         last_name = _clean_cell(norm.get("last_name") or norm.get("lastname"), 100)
         if not first_name or not last_name:
             skipped_count += 1
-            errors.append({
-                "row": idx,
-                "lrn": raw_lrn,
-                "reason": "Both first_name and last_name are required.",
-            })
+            errors.append(
+                {
+                    "row": idx,
+                    "lrn": raw_lrn,
+                    "reason": "Both first_name and last_name are required.",
+                }
+            )
             continue
 
         raw_phone = _clean_cell(
-            norm.get("parent_contact") or norm.get("contact_number") or norm.get("phone"),
+            norm.get("guardian_contact") or norm.get("contact_number") or norm.get("phone"),
             40,
         )
         normalized_phone = normalize_ph_phone(raw_phone) if raw_phone else ""
-        if not normalized_phone:
-            skipped_count += 1
-            errors.append({
-                "row": idx,
-                "lrn": raw_lrn,
-                "reason": "Valid parent_contact phone number is required.",
-            })
-            continue
 
         try:
-            birthdate = _parse_csv_birthdate(str(norm.get("birthdate") or norm.get("birth_date") or ""))
+            birth_date = _parse_csv_birth_date(str(norm.get("birth_date") or norm.get("birthdate") or ""))
         except ValueError as exc:
             skipped_count += 1
             errors.append({"row": idx, "lrn": raw_lrn, "reason": str(exc)})
@@ -199,11 +230,11 @@ def bulk_import_students_csv(
                     grade_obj = grades_by_key.get(g_code.lower())
                     if not grade_obj:
                         grade_obj, _ = GradeLevel.objects.get_or_create(
-                            code=g_code[:20],
+                            level_number=lvl_num,
                             defaults={
+                                "code": g_code[:20],
                                 "name": g_name[:100],
                                 "stage": "SHS" if lvl_num >= 11 else "JHS",
-                                "level_order": lvl_num,
                             },
                         )
                         grades_by_key[g_code.lower()] = grade_obj
@@ -219,11 +250,13 @@ def bulk_import_students_csv(
 
         if not target_section:
             skipped_count += 1
-            errors.append({
-                "row": idx,
-                "lrn": raw_lrn,
-                "reason": "No target section found (provide section_name or select a default section).",
-            })
+            errors.append(
+                {
+                    "row": idx,
+                    "lrn": raw_lrn,
+                    "reason": "No target section found (provide section_name or select a default section).",
+                }
+            )
             continue
 
         barangay_val = _clean_cell(norm.get("barangay"), 100)
@@ -235,8 +268,8 @@ def bulk_import_students_csv(
             "middle_name": _clean_cell(norm.get("middle_name") or norm.get("middlename"), 100),
             "last_name": last_name,
             "suffix": _clean_cell(norm.get("suffix"), 20),
-            "sex": _normalize_sex(str(norm.get("sex") or norm.get("gender") or "Male")),
-            "birthdate": birthdate,
+            "gender": _normalize_gender(str(norm.get("gender") or norm.get("sex") or "Male")),
+            "birth_date": birth_date,
             "mother_tongue": _clean_cell(norm.get("mother_tongue"), 100),
             "ethnic_group": _clean_cell(norm.get("ethnic_group"), 100),
             "religion": _clean_cell(norm.get("religion"), 100),
@@ -245,7 +278,7 @@ def bulk_import_students_csv(
             "mother_maiden_name": _clean_cell(norm.get("mother_maiden_name"), 200),
             "guardian_name": _clean_cell(norm.get("guardian_name"), 200),
             "guardian_relationship": _clean_cell(norm.get("guardian_relationship"), 50),
-            "parent_contact": normalized_phone,
+            "guardian_contact": normalized_phone,
             "is_active": True,
         }
 
@@ -254,7 +287,7 @@ def bulk_import_students_csv(
                 existing = existing_students.get(raw_lrn)
                 if existing:
                     for attr, val in student_fields.items():
-                        if val != "" or attr in ("first_name", "last_name", "sex", "birthdate", "parent_contact", "is_active"):
+                        if val != "" or attr in ("first_name", "last_name", "gender", "birth_date", "is_active"):
                             setattr(existing, attr, val)
                     if barangay_val or city_val or province_val:
                         existing.set_address_location(
@@ -262,14 +295,10 @@ def bulk_import_students_csv(
                             municipality_city=city_val or existing.municipality_city,
                             province=province_val or existing.province,
                         )
-                    if actor and getattr(actor, "is_authenticated", False):
-                        existing.updated_by = actor
                     existing.save()
                     student_obj = existing
                     updated_count += 1
                 else:
-                    if actor and getattr(actor, "is_authenticated", False):
-                        student_fields["created_by"] = actor
                     student_obj = Student(lrn=raw_lrn, **student_fields)
                     student_obj.set_address_location(
                         barangay=barangay_val,
@@ -283,11 +312,13 @@ def bulk_import_students_csv(
                 sync_student_enrollment(student=student_obj, section_id=target_section.id)
         except Exception as exc:
             skipped_count += 1
-            errors.append({
-                "row": idx,
-                "lrn": raw_lrn,
-                "reason": _clean_cell(str(exc), 140) or "Could not save row.",
-            })
+            errors.append(
+                {
+                    "row": idx,
+                    "lrn": raw_lrn,
+                    "reason": _clean_cell(str(exc), 140) or "Could not save row.",
+                }
+            )
 
     return {
         "ok": True,

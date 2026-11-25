@@ -10,12 +10,28 @@
  */
 
 import { Platform } from 'react-native';
-import * as SecureStore from 'expo-secure-store';
+import type * as SecureStoreType from 'expo-secure-store';
+import type * as ApplicationType from 'expo-application';
 import * as Crypto from 'expo-crypto';
-import * as Application from 'expo-application';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const SECURE_DEVICE_UUID_KEY = 'attendsure_hardware_device_uuid';
+
+function getSecureStore(): typeof SecureStoreType | null {
+  try {
+    return require('expo-secure-store') as typeof SecureStoreType;
+  } catch {
+    return null;
+  }
+}
+
+function getApplicationModule(): typeof ApplicationType | null {
+  try {
+    return require('expo-application') as typeof ApplicationType;
+  } catch {
+    return null;
+  }
+}
 
 // In-memory cache to prevent repeated storage disk reads
 let cachedDeviceUuid: string | null = null;
@@ -39,7 +55,7 @@ function writeWebStorageSafe(key: string, value: string): void {
 
 /**
  * Generates or retrieves a single canonical, hardware-backed device UUID
- * shared across faculty facial check-ins, foreground location verification,
+ * shared across teacher phone biometric check-ins, foreground location verification,
  * and background campus presence updates.
  */
 export const getOrCreateDeviceUuid = async (): Promise<string> => {
@@ -64,8 +80,13 @@ export const getOrCreateDeviceUuid = async (): Promise<string> => {
       return webUuid;
     }
 
-    // 1. Prefer hardware-encrypted SecureStore
-    const secureExisting = await SecureStore.getItemAsync(SECURE_DEVICE_UUID_KEY).catch(() => null);
+    const SecureStore = getSecureStore();
+    const Application = getApplicationModule();
+
+    // 1. Prefer hardware-encrypted SecureStore when available
+    const secureExisting = SecureStore
+      ? await SecureStore.getItemAsync(SECURE_DEVICE_UUID_KEY).catch(() => null)
+      : null;
     if (secureExisting && secureExisting.trim().length > 0) {
       const clean = secureExisting.trim();
       cachedDeviceUuid = clean;
@@ -78,18 +99,20 @@ export const getOrCreateDeviceUuid = async (): Promise<string> => {
     if (asyncExisting && asyncExisting.trim().length > 0) {
       const clean = asyncExisting.trim();
       cachedDeviceUuid = clean;
-      SecureStore.setItemAsync(SECURE_DEVICE_UUID_KEY, clean, {
-        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
-      }).catch(() => {});
+      if (SecureStore) {
+        SecureStore.setItemAsync(SECURE_DEVICE_UUID_KEY, clean, {
+          keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+        }).catch(() => {});
+      }
       return clean;
     }
 
     // 3. Derive stable hardware ID when available, otherwise generate cryptographic entropy
     let hardwareSeed: string | null = null;
     try {
-      if (Platform.OS === 'android') {
+      if (Application && Platform.OS === 'android' && typeof Application.getAndroidId === 'function') {
         hardwareSeed = Application.getAndroidId();
-      } else if (Platform.OS === 'ios') {
+      } else if (Application && Platform.OS === 'ios' && typeof Application.getIosIdForVendorAsync === 'function') {
         hardwareSeed = await Application.getIosIdForVendorAsync();
       }
     } catch {}
@@ -106,12 +129,17 @@ export const getOrCreateDeviceUuid = async (): Promise<string> => {
       generated = `DEV-${Platform.OS.toUpperCase()}-${hex.substring(0, 8)}-${hex.substring(8, 16)}`;
     }
 
-    await Promise.allSettled([
-      SecureStore.setItemAsync(SECURE_DEVICE_UUID_KEY, generated, {
-        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
-      }),
+    const writeOps: Array<Promise<unknown>> = [
       AsyncStorage.setItem(SECURE_DEVICE_UUID_KEY, generated),
-    ]);
+    ];
+    if (SecureStore) {
+      writeOps.push(
+        SecureStore.setItemAsync(SECURE_DEVICE_UUID_KEY, generated, {
+          keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+        })
+      );
+    }
+    await Promise.allSettled(writeOps);
 
     cachedDeviceUuid = generated;
     return generated;

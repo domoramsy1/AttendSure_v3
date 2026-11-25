@@ -1,10 +1,10 @@
 """
-AttendSure - Ed-Fi Data Standard v6.0 Interoperability & GDPR Export Engine
+AttendSure - Ed-Fi Data Standard v6.0 Interoperability & Privacy Export Engine
 File: backend/apps/reports/edfi.py
 
-Produces standards-compliant Ed-Fi v6.0 JSON bundles with optional GDPR Art. 25
-pseudonymization (`anonymize=True`) so districts, ministries, and international
-NGOs can ingest live attendance, roster, and staff telemetry without vendor lock-in.
+Produces standards-compliant Ed-Fi v6.0 JSON bundles with optional pseudonymization
+(`anonymize=True`) so districts and ministries can ingest live attendance, class list,
+and teacher data without vendor lock-in.
 """
 
 from datetime import timedelta
@@ -12,7 +12,7 @@ import hashlib
 from django.conf import settings
 from django.utils import timezone
 
-from apps.accounts.models import FacultyProfile
+from apps.accounts.models import TeacherProfile
 from apps.attendance.models import ClassAttendance, DailyAttendance
 from apps.school.models import SchoolYear, Section
 from apps.school.selectors import get_school_metadata
@@ -23,7 +23,6 @@ ATTENDANCE_DESCRIPTOR_MAP = {
     "PRESENT": "uri://ed-fi.org/AttendanceEventCategoryDescriptor#In Attendance",
     "LATE": "uri://ed-fi.org/AttendanceEventCategoryDescriptor#Tardy",
     "ABSENT": "uri://ed-fi.org/AttendanceEventCategoryDescriptor#Unexcused Absence",
-    "CUTTING": "uri://ed-fi.org/AttendanceEventCategoryDescriptor#Early departure",
     "EXCUSED": "uri://ed-fi.org/AttendanceEventCategoryDescriptor#Excused Absence",
 }
 
@@ -52,32 +51,46 @@ def build_edfi_v6_export(
     start_date = today - timedelta(days=days - 1)
     meta = get_school_metadata(request)
     active_sy = SchoolYear.objects.filter(is_active=True).first()
-    sy_code = active_sy.code if active_sy else f"{today.year}-{today.year + 1}"
+    sy_name = active_sy.name if active_sy else f"{today.year}-{today.year + 1}"
     school_id_raw = str(meta.get("school_id") or "ATTENDSURE-001")
     school_numeric_id = int(school_id_raw) if school_id_raw.isdigit() else school_id_raw
 
-    sections_qs = Section.objects.filter(is_active=True).select_related("grade_level", "adviser").order_by("id")
+    sections_qs = Section.objects.filter(is_active=True).select_related(
+        "grade_level", "adviser", "adviser__user"
+    ).order_by("id")
     students_qs = Student.objects.filter(is_active=True).order_by("id")[:2000]
     enrollments_qs = list(
-        Enrollment.objects.filter(status__in=["ENROLLED", "TRANSFERRED_IN"], student__is_active=True)
-        .select_related("student", "section", "section__grade_level", "section__school_year")
+        Enrollment.objects.filter(
+            status__in=["ENROLLED", "TRANSFERRED_IN"], student__is_active=True
+        )
+        .select_related(
+            "student", "section", "section__grade_level", "section__school_year"
+        )
         .order_by("id")[:2000]
     )
-    student_section_map = {enr.student_id: enr.section_id for enr in enrollments_qs if enr.section_id}
     teachers_qs = (
-        FacultyProfile.objects.filter(is_active=True)
-        .select_related("department_ref", "position_ref")
+        TeacherProfile.objects.filter(user__is_active=True)
+        .select_related("user", "department", "position")
         .order_by("id")[:500]
     )
 
     daily_qs = (
-        DailyAttendance.objects.filter(attendance_date__gte=start_date, attendance_date__lte=today)
-        .select_related("student")
+        DailyAttendance.objects.filter(
+            attendance_date__gte=start_date, attendance_date__lte=today
+        )
+        .select_related("enrollment__student", "enrollment__section")
         .order_by("-attendance_date", "id")[:5000]
     )
     class_qs = (
-        ClassAttendance.objects.filter(attendance_date__gte=start_date, attendance_date__lte=today)
-        .select_related("student", "class_period", "class_period__section", "class_period__subject")
+        ClassAttendance.objects.filter(
+            attendance_date__gte=start_date, attendance_date__lte=today
+        )
+        .select_related(
+            "enrollment__student",
+            "class_period",
+            "class_period__section",
+            "class_period__subject",
+        )
         .order_by("-attendance_date", "-scanned_at")[:5000]
     )
 
@@ -85,7 +98,7 @@ def build_edfi_v6_export(
         raw = st.lrn or str(st.id)
         return _pseudonymize("STU", raw) if anonymize else raw
 
-    def staff_uid(t: FacultyProfile) -> str:
+    def staff_uid(t: TeacherProfile) -> str:
         raw = t.employee_id or str(t.id)
         return _pseudonymize("STF", raw) if anonymize else raw
 
@@ -117,11 +130,17 @@ def build_edfi_v6_export(
 
     students_payload = []
     for st in students_qs:
-        sex_key = str(st.sex or "").strip().upper()
+        sex_key = str(st.gender or "").strip().upper()
         entry = {
             "studentUniqueId": student_uid(st),
-            "sexDescriptor": SEX_DESCRIPTOR_MAP.get(sex_key, "uri://ed-fi.org/SexDescriptor#Not Selected"),
-            "birthDate": f"{st.birthdate.year}-01-01" if (anonymize and st.birthdate) else (str(st.birthdate) if st.birthdate else None),
+            "sexDescriptor": SEX_DESCRIPTOR_MAP.get(
+                sex_key, "uri://ed-fi.org/SexDescriptor#Not Selected"
+            ),
+            "birthDate": (
+                f"{st.birth_date.year}-01-01"
+                if (anonymize and st.birth_date)
+                else (str(st.birth_date) if st.birth_date else None)
+            ),
         }
         if not anonymize:
             entry["firstName"] = st.first_name
@@ -136,9 +155,13 @@ def build_edfi_v6_export(
                 "schoolId": school_numeric_id,
                 "sectionIdentifier": f"SEC-{enr.section_id}" if enr.section_id else "",
             },
-            "beginDate": str(enr.enrollment_date),
+            "beginDate": str(enr.enrolled_date),
             "enrollmentStatus": enr.status,
-            "schoolYear": enr.school_year.code if enr.school_year else sy_code,
+            "schoolYear": (
+                enr.section.school_year.name
+                if (enr.section and enr.section.school_year)
+                else sy_name
+            ),
             "isConditionalCashTransferRecipient": bool(enr.is_cct_recipient),
         }
         for enr in enrollments_qs
@@ -148,18 +171,18 @@ def build_edfi_v6_export(
     for t in teachers_qs:
         entry = {
             "staffUniqueId": staff_uid(t),
-            "positionTitle": t.position or "Faculty",
-            "department": t.department or "",
+            "positionTitle": t.position_title or "Teacher",
+            "department": t.department_name or "",
             "canTeach": bool(t.can_handle_classes),
         }
         if not anonymize:
-            entry["firstName"] = t.first_name
-            entry["lastSurname"] = t.last_name
+            entry["firstName"] = t.user.first_name
+            entry["lastSurname"] = t.user.last_name
         staff_payload.append(entry)
 
     school_attendance_events = [
         {
-            "studentReference": {"studentUniqueId": student_uid(row.student)},
+            "studentReference": {"studentUniqueId": student_uid(row.enrollment.student)},
             "schoolReference": {"schoolId": school_numeric_id},
             "eventDate": str(row.attendance_date),
             "attendanceEventCategoryDescriptor": ATTENDANCE_DESCRIPTOR_MAP.get(
@@ -167,7 +190,7 @@ def build_edfi_v6_export(
                 "uri://ed-fi.org/AttendanceEventCategoryDescriptor#In Attendance",
             ),
             "sectionIdentifier": (
-                f"SEC-{student_section_map[row.student_id]}" if row.student_id in student_section_map else ""
+                f"SEC-{row.enrollment.section_id}" if row.enrollment.section_id else ""
             ),
             "attendanceEventReason": row.remarks or "",
         }
@@ -176,11 +199,19 @@ def build_edfi_v6_export(
 
     section_attendance_events = [
         {
-            "studentReference": {"studentUniqueId": student_uid(row.student)},
+            "studentReference": {"studentUniqueId": student_uid(row.enrollment.student)},
             "sectionReference": {
                 "schoolId": school_numeric_id,
-                "sectionIdentifier": f"SEC-{row.class_period.section_id}" if (row.class_period and row.class_period.section_id) else "",
-                "subjectCode": row.class_period.subject.code if (row.class_period and row.class_period.subject) else "",
+                "sectionIdentifier": (
+                    f"SEC-{row.class_period.section_id}"
+                    if (row.class_period and row.class_period.section_id)
+                    else ""
+                ),
+                "subjectCode": (
+                    row.class_period.subject.code
+                    if (row.class_period and row.class_period.subject)
+                    else ""
+                ),
             },
             "eventDate": str(row.attendance_date),
             "attendanceEventCategoryDescriptor": ATTENDANCE_DESCRIPTOR_MAP.get(
@@ -209,7 +240,7 @@ def build_edfi_v6_export(
             "startDate": str(start_date),
             "endDate": str(today),
             "days": days,
-            "schoolYear": sy_code,
+            "schoolYear": sy_name,
         },
         "recordCounts": {
             "schools": len(schools_payload),

@@ -1,8 +1,7 @@
-# D:\AttendSure_V3\backend\apps\school\selectors.py
 from django.core.cache import cache
 from django.db.models import Count, Q
 
-from apps.accounts.selectors import get_faculty_section_ids, resolve_faculty_for_user
+from apps.accounts.selectors import get_teacher_section_ids, resolve_teacher_for_user
 from common.media import build_media_url, save_base64_logo_to_disk
 from common.permissions import is_school_leader
 from .models import ClassPeriod, SchoolSettings, SchoolYear, Section
@@ -20,7 +19,7 @@ def format_section_label(grade_name: str, section_name: str) -> str:
 
 
 def migrate_inline_logos_to_files(school: SchoolSettings) -> SchoolSettings:
-    """Replaces raw Base64 logo strings in PostgreSQL with lightweight /media/ paths."""
+    """Replaces raw Base64 logo strings in DB with lightweight /media/ paths."""
     updates = {}
     for field_name in ("school_logo", "left_logo", "right_logo"):
         val = getattr(school, field_name, None)
@@ -46,9 +45,10 @@ def get_school_metadata(request=None, school: SchoolSettings | None = None) -> d
                 "division_ref",
                 "active_school_year",
                 "campus_boundary",
-                "principal_faculty",
-                "principal_faculty__position_ref",
-                "principal_faculty__department_ref",
+                "principal_teacher",
+                "principal_teacher__user",
+                "principal_teacher__position",
+                "principal_teacher__department",
             ).first()
         )
         if not school:
@@ -59,7 +59,8 @@ def get_school_metadata(request=None, school: SchoolSettings | None = None) -> d
                 "region": "",
                 "division": "",
                 "district": "",
-                "academic_year": active_sy.code if active_sy else "",
+                "school_year": active_sy.name if active_sy else "",
+                "academic_year": active_sy.name if active_sy else "",
                 "school_address": "",
                 "school_contact": "",
                 "school_email": "",
@@ -74,16 +75,19 @@ def get_school_metadata(request=None, school: SchoolSettings | None = None) -> d
                 "latitude": 8.4858,
                 "longitude": 124.6567,
                 "geofence_radius_meters": 150,
+                "weekend_rest_enabled": True,
                 "is_configured": False,
             }
 
         school = migrate_inline_logos_to_files(school)
         div = school.division_ref
         sy = school.active_school_year or SchoolYear.objects.filter(is_active=True).first()
-        principal = school.principal_faculty
+        principal = school.principal_teacher
         boundary = school.campus_boundary
         head_name = principal.full_name if principal else ""
-        head_title = (principal.position if principal and principal.position else "School Principal")
+        head_title = (
+            principal.position_title if (principal and principal.position_title) else "School Principal"
+        )
 
         raw = {
             "school_id": school.school_id,
@@ -91,7 +95,8 @@ def get_school_metadata(request=None, school: SchoolSettings | None = None) -> d
             "region": div.region if div else "",
             "division": div.division if div else "",
             "district": div.district if div else "",
-            "academic_year": sy.code if sy else "",
+            "school_year": sy.name if sy else "",
+            "academic_year": sy.name if sy else "",
             "school_address": school.address,
             "school_contact": school.contact_number,
             "school_email": school.email,
@@ -103,8 +108,8 @@ def get_school_metadata(request=None, school: SchoolSettings | None = None) -> d
             "left_logo_path": school.left_logo,
             "right_logo_path": school.right_logo,
             "school_logo_path": school.school_logo,
-            "latitude": float(boundary.center_lat) if boundary else 8.4858,
-            "longitude": float(boundary.center_lng) if boundary else 124.6567,
+            "latitude": float(boundary.center_latitude) if boundary else 8.4858,
+            "longitude": float(boundary.center_longitude) if boundary else 124.6567,
             "geofence_radius_meters": int(boundary.radius_meters) if boundary else 150,
             "weekend_rest_enabled": bool(school.weekend_rest_enabled),
             "is_configured": bool(school.school_name and school.school_id),
@@ -117,6 +122,7 @@ def get_school_metadata(request=None, school: SchoolSettings | None = None) -> d
         "region": raw["region"],
         "division": raw["division"],
         "district": raw["district"],
+        "school_year": raw["school_year"],
         "academic_year": raw["academic_year"],
         "school_address": raw["school_address"],
         "school_contact": raw["school_contact"],
@@ -142,7 +148,7 @@ def get_sections_for_user(user, *, include_inactive: bool = False):
     if not (include_inactive and is_school_leader(user)):
         qs = qs.filter(is_active=True)
     qs = (
-        qs.select_related("grade_level", "school_year", "adviser", "room", "room__building_ref")
+        qs.select_related("grade_level", "school_year", "adviser", "adviser__user")
         .annotate(
             enrolled_count=Count(
                 "enrollments",
@@ -151,36 +157,36 @@ def get_sections_for_user(user, *, include_inactive: bool = False):
                     enrollments__student__is_active=True,
                 ),
                 distinct=True,
-            )
+            ),
+            active_periods_count=Count(
+                "class_periods",
+                filter=Q(class_periods__is_active=True),
+                distinct=True,
+            ),
         )
-        .order_by("grade_level__level_order", "name")
+        .order_by("grade_level__level_number", "name")
     )
     if not is_school_leader(user):
-        faculty = resolve_faculty_for_user(user)
-        qs = qs.filter(id__in=get_faculty_section_ids(faculty)) if faculty else qs.none()
+        teacher = resolve_teacher_for_user(user)
+        qs = qs.filter(id__in=get_teacher_section_ids(teacher)) if teacher else qs.none()
     return qs
 
 
 def get_class_periods_for_user(user, section_id: int | None = None):
-    qs = (
-        ClassPeriod.objects.select_related(
-            "section",
-            "section__grade_level",
-            "section__room",
-            "subject",
-            "faculty",
-            "room",
-        )
-        .prefetch_related("days")
-        .order_by("start_time")
-    )
+    qs = ClassPeriod.objects.select_related(
+        "section",
+        "section__grade_level",
+        "subject",
+        "teacher",
+        "teacher__user",
+    ).order_by("start_time")
     if section_id:
         qs = qs.filter(section_id=section_id)
     if not is_school_leader(user):
-        faculty = resolve_faculty_for_user(user)
-        if faculty:
+        teacher = resolve_teacher_for_user(user)
+        if teacher:
             qs = qs.filter(
-                Q(faculty=faculty) | Q(section_id__in=get_faculty_section_ids(faculty))
+                Q(teacher=teacher) | Q(section_id__in=get_teacher_section_ids(teacher))
             ).distinct()
         else:
             qs = qs.none()

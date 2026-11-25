@@ -5,6 +5,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useTheme } from '../../context/ThemeContext';
+import { canViewSf4, getCurrentUserFromStorage } from '../../utils/permissions';
 import {
   FileText,
   CalendarCheck,
@@ -174,15 +175,15 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const userRole = (localStorage.getItem('attendsure_role') || '').toUpperCase();
-  const isSchoolLeader = ['ADMIN', 'SUPERADMIN', 'FACULTY_ADMIN', 'PRINCIPAL', 'DEPT_HEAD'].includes(userRole);
+  const currentUser = getCurrentUserFromStorage();
+  const allowSf4 = canViewSf4(currentUser);
 
   const filteredReports = useMemo(() => {
     return reports.filter((rep) => {
-      if (rep.id === 'sf4' && !isSchoolLeader) return false;
+      if (rep.id === 'sf4' && !allowSf4) return false;
       return true;
     });
-  }, [reports, isSchoolLeader]);
+  }, [reports, allowSf4]);
 
   useEffect(() => {
     if (!isExportDropdownOpen) return;
@@ -279,7 +280,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                   alignItems: 'center',
                   gap: 6,
                   backgroundColor: isActive ? brand.buttonBg : 'transparent',
-                  color: isActive ? '#FFFFFF' : tokens.textSecondary,
+                  color: isActive ? tokens.onPrimary : tokens.textSecondary,
                   boxShadow: isActive ? tokens.cardShadow : 'none',
                   transition: 'all 0.15s ease',
                 }}
@@ -708,7 +709,7 @@ export const ReportNavBar: React.FC<ReportNavBarProps> = ({
                 borderRadius: 6,
                 fontSize: '0.80rem',
                 fontWeight: 700,
-                color: '#FFFFFF',
+                color: tokens.onPrimary,
                 cursor: 'pointer',
               }}
             >

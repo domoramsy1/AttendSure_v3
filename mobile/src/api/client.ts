@@ -4,13 +4,29 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
+import type * as SecureStoreType from 'expo-secure-store';
 import {
   getServerBaseUrl,
   resolveFastestServer,
   invalidateServerCache,
+  markServerReachable,
   cleanUrl,
 } from '../services/configService';
+
+let cachedSecureStore: typeof SecureStoreType | null | undefined;
+const getSecureStore = (): typeof SecureStoreType | null => {
+  if (cachedSecureStore !== undefined) return cachedSecureStore;
+  if (Platform.OS === 'web') {
+    cachedSecureStore = null;
+    return null;
+  }
+  try {
+    cachedSecureStore = require('expo-secure-store') as typeof SecureStoreType;
+  } catch {
+    cachedSecureStore = null;
+  }
+  return cachedSecureStore;
+};
 
 export const AUTH_TOKEN_KEY = 'attendsure_auth_token';
 const LEGACY_TOKEN_KEYS = ['user_token', 'attendsure_token'];
@@ -34,9 +50,10 @@ function notifyAuthExpired(): void {
 }
 
 async function readStoredAuthToken(): Promise<string | null> {
-  if (Platform.OS !== 'web') {
+  const store = getSecureStore();
+  if (store) {
     try {
-      const secureToken = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+      const secureToken = await store.getItemAsync(AUTH_TOKEN_KEY);
       if (secureToken) return secureToken;
     } catch {}
   }
@@ -96,7 +113,8 @@ apiClient.interceptors.request.use(
       const token = await readStoredAuthToken();
       if (token) {
         const sanitizedToken = token.trim().replace(/[\r\n]/g, '');
-        config.headers.Authorization = `Token ${sanitizedToken}`;
+        const scheme = sanitizedToken.split('.').length === 3 ? 'Bearer' : 'Token';
+        config.headers.Authorization = `${scheme} ${sanitizedToken}`;
       }
     }
 
@@ -106,7 +124,10 @@ apiClient.interceptors.request.use(
 );
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    markServerReachable(response.config?.baseURL);
+    return response;
+  },
   async (error: AxiosError) => {
     // Never retry or invalidate server cache when a request was intentionally cancelled on unmount
     if (axios.isCancel(error) || error.code === 'ERR_CANCELED') {
@@ -120,7 +141,7 @@ apiClient.interceptors.response.use(
     // Clear stored credentials on 401 Unauthorized (except login endpoint itself)
     if (error.response?.status === 401) {
       const reqUrl = String(originalRequest?.url || '');
-      if (!reqUrl.includes('/auth/login')) {
+      if (!reqUrl.includes('/login')) {
         await AsyncStorage.multiRemove([
           AUTH_TOKEN_KEY,
           'user_token',
@@ -129,9 +150,10 @@ apiClient.interceptors.response.use(
           'attendsure_user',
           'attendsure_role',
         ]);
-        if (Platform.OS !== 'web') {
+        const store = getSecureStore();
+        if (store) {
           try {
-            await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+            await store.deleteItemAsync(AUTH_TOKEN_KEY);
           } catch {}
         }
         notifyAuthExpired();

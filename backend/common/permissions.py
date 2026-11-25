@@ -1,9 +1,8 @@
-# D:\AttendSure_V3\backend\common\permissions.py
-
 from rest_framework import permissions
 
-LEADERSHIP_ROLES = {"ADMIN", "SUPERADMIN", "PRINCIPAL", "DEPT_HEAD"}
-STAFF_AND_FACULTY_ROLES = {"ADMIN", "SUPERADMIN", "PRINCIPAL", "DEPT_HEAD", "FACULTY"}
+ALLOWED_ROLES = {"ADMIN", "PRINCIPAL", "DEPT_HEAD", "TEACHER"}
+LEADERSHIP_ROLES = {"ADMIN", "PRINCIPAL", "DEPT_HEAD"}
+EXECUTIVE_ROLES = {"ADMIN", "PRINCIPAL"}
 
 
 def get_user_role(user) -> str:
@@ -12,12 +11,27 @@ def get_user_role(user) -> str:
     profile = getattr(user, "profile", None)
     if profile and profile.role:
         role = str(profile.role).upper()
-        if user.is_superuser and role not in {"SUPERADMIN", "ADMIN"}:
-            return "SUPERADMIN"
-        return role
-    if user.is_superuser:
-        return "SUPERADMIN"
-    return "ADMIN" if user.is_staff else "FACULTY"
+        if role in ALLOWED_ROLES:
+            return role
+    if user.is_superuser or user.is_staff:
+        return "ADMIN"
+    return "TEACHER"
+
+
+def is_system_admin(user) -> bool:
+    return bool(
+        user
+        and user.is_authenticated
+        and (user.is_superuser or get_user_role(user) == "ADMIN")
+    )
+
+
+def is_admin_or_principal(user) -> bool:
+    return bool(
+        user
+        and user.is_authenticated
+        and (user.is_superuser or get_user_role(user) in EXECUTIVE_ROLES)
+    )
 
 
 def is_school_leader(user) -> bool:
@@ -28,52 +42,68 @@ def is_school_leader(user) -> bool:
     )
 
 
-def is_staff_or_faculty(user) -> bool:
+def is_teacher_or_leader(user) -> bool:
     return bool(
         user
         and user.is_authenticated
-        and (user.is_superuser or get_user_role(user) in STAFF_AND_FACULTY_ROLES)
+        and (user.is_superuser or get_user_role(user) in ALLOWED_ROLES)
     )
 
 
 class IsSchoolLeader(permissions.BasePermission):
-    """Allows access only to Admin, Superadmin, Principal, or Department Head."""
+    """Allows access only to System Administrator, School Principal, or Department Head."""
 
     def has_permission(self, request, view):
         return is_school_leader(request.user)
 
 
-class IsStaffOrFaculty(permissions.BasePermission):
-    """Blocks PARENT accounts from internal staff/faculty endpoints."""
+class IsTeacherOrLeader(permissions.BasePermission):
+    """Allows access to authenticated teachers and school leaders."""
 
     def has_permission(self, request, view):
-        return is_staff_or_faculty(request.user)
+        return is_teacher_or_leader(request.user)
 
 
 class IsLeadershipOrReadOnly(permissions.BasePermission):
+    """Read access for authenticated teachers and school leaders; write access for leaders only."""
+
     def has_permission(self, request, view):
-        if not request.user or not request.user.is_authenticated:
+        if not is_teacher_or_leader(request.user):
             return False
         if request.method in permissions.SAFE_METHODS:
             return True
         return is_school_leader(request.user)
 
 
-class IsLeadershipOrStaffReadOnly(permissions.BasePermission):
-    """Read access for school staff/faculty (excludes PARENT); write access for school leaders."""
+class IsAdminOrPrincipal(permissions.BasePermission):
+    """Allows access only to System Administrator or School Principal."""
 
     def has_permission(self, request, view):
-        if not is_staff_or_faculty(request.user):
+        return is_admin_or_principal(request.user)
+
+
+class IsAdminOrPrincipalOrReadOnly(permissions.BasePermission):
+    """Read access for authenticated school staff; write access for Admin or Principal only."""
+
+    def has_permission(self, request, view):
+        if not is_teacher_or_leader(request.user):
             return False
         if request.method in permissions.SAFE_METHODS:
             return True
-        return is_school_leader(request.user)
+        return is_admin_or_principal(request.user)
 
 
 class IsSystemAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and (request.user.is_superuser or get_user_role(request.user) in {"ADMIN", "SUPERADMIN"})
-        )
+        return is_system_admin(request.user)
+
+
+class IsSystemAdminOrReadOnly(permissions.BasePermission):
+    """Read access for authenticated school staff; write access strictly for System Admin."""
+
+    def has_permission(self, request, view):
+        if not is_teacher_or_leader(request.user):
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return is_system_admin(request.user)
