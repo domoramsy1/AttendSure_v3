@@ -1,3 +1,6 @@
+# AttendSure Backend - Common QR Signer
+# File: D:\AttendSure_V3\backend\common\qr_signer.py
+
 from dataclasses import dataclass
 from django.core.signing import BadSignature, Signer
 

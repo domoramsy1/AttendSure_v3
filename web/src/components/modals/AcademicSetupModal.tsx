@@ -1,3 +1,6 @@
+// AttendSure Web - Academic Setup Modal
+// File: D:\AttendSure_V3\web\src\components\modals\AcademicSetupModal.tsx
+
 /**
  * AttendSure - Academic Structure Setup Modal (Themed)
  * File: web/src/components/modals/AcademicSetupModal.tsx

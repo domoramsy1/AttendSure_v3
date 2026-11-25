@@ -1,7 +1,12 @@
+# AttendSure Backend - Accounts Business Logic Services
+# File: D:\AttendSure_V3\backend\apps\accounts\services.py
+
 # D:\AttendSure_V3\backend\apps\accounts\services.py
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -51,6 +56,15 @@ def build_user_session_payload(*, user, request=None) -> dict:
     photo_url = build_media_url(teacher.photo, request) if (teacher and teacher.photo) else None
 
     full_name = teacher.full_name if teacher else (user.get_full_name() or user.username).strip()
+    current_onboarding_version = int(getattr(settings, "ONBOARDING_CURRENT_VERSION", 1) or 1)
+    onboarding_completed = bool(profile and profile.onboarding_completed)
+    onboarding_version = int(profile.onboarding_version) if profile else 0
+    onboarding_completed_at = (
+        timezone.localtime(profile.onboarding_completed_at).isoformat()
+        if (profile and profile.onboarding_completed_at)
+        else None
+    )
+    needs_onboarding = (not onboarding_completed) or (onboarding_version < current_onboarding_version)
 
     return {
         "id": user.id,
@@ -77,8 +91,14 @@ def build_user_session_payload(*, user, request=None) -> dict:
         "can_teach": can_handle_classes,
         "has_bound_device": bool(teacher and teacher.bound_device_id),
         "has_biometric_enrolled": bool(teacher and teacher.biometric_key_id),
+        "has_asymmetric_key": bool(teacher and (teacher.biometric_public_key or "").strip()),
         "device_model": teacher.device_model if teacher else None,
         "is_profile_completed": bool(user.first_name and user.last_name),
+        "onboarding_completed": onboarding_completed,
+        "onboarding_completed_at": onboarding_completed_at,
+        "onboarding_version": onboarding_version,
+        "current_onboarding_version": current_onboarding_version,
+        "needs_onboarding": needs_onboarding,
         "is_staff": bool(user.is_staff),
         "is_superuser": bool(user.is_superuser),
     }
@@ -211,6 +231,7 @@ def update_own_profile(*, user, data: dict, files=None, request=None) -> dict:
     )
     explicit_clear = (
         str(data.get("remove_photo", "")).lower() in ("1", "true", "yes")
+        or str(data.get("clear_photo", "")).lower() in ("1", "true", "yes")
         or (
             uploaded_file is None
             and ("photo" in data or "avatar" in data)
@@ -261,12 +282,16 @@ def reset_teacher_bound_device(*, teacher_id: int) -> TeacherProfile:
     teacher.device_model = None
     teacher.device_bound_at = None
     teacher.biometric_key_id = None
+    teacher.biometric_public_key = ""
+    teacher.biometric_key_algorithm = ""
     teacher.save(
         update_fields=[
             "bound_device_id",
             "device_model",
             "device_bound_at",
             "biometric_key_id",
+            "biometric_public_key",
+            "biometric_key_algorithm",
             "updated_at",
         ]
     )

@@ -1,3 +1,6 @@
+// AttendSure Web - Audit Logs Panel
+// File: D:\AttendSure_V3\web\src\components\tabs\settings\AuditLogsPanel.tsx
+
 /**
  * AttendSure - User Activity & System Audit Logs Panel
  * File: web/src/components/tabs/settings/AuditLogsPanel.tsx
@@ -5,6 +8,7 @@
 
 import React from 'react';
 import { useTheme } from '../../../context/ThemeContext';
+import { formatDateTime12h, formatTime12h } from '../../../utils/timeFormat';
 import { FileSpreadsheet, History, RefreshCw, Search } from 'lucide-react';
 import type { ActivityRecord } from './types';
 
@@ -33,6 +37,7 @@ export const AUDIT_ACTION_OPTIONS: ReadonlyArray<{ value: string; label: string 
   { value: 'DELETE', label: 'Deleted' },
   { value: 'APPROVE', label: 'Approved' },
   { value: 'RESOLVE', label: 'Resolved' },
+  { value: 'BULK_ABSENT', label: 'Marked Unscanned Students Absent' },
   { value: 'EXCUSE', label: 'Excused' },
   { value: 'SUBMIT', label: 'Submitted' },
   { value: 'VIEW', label: 'Viewed' },
@@ -62,7 +67,10 @@ const ACTION_LABEL_MAP: Record<string, string> = {
   UPDATE: 'Updated',
   DELETE: 'Deleted',
   APPROVE: 'Approved',
+  RETURN: 'Marked Returned',
+  CANCEL: 'Cancelled',
   RESOLVE: 'Resolved',
+  BULK_ABSENT: 'Marked Unscanned Students Absent',
   EXCUSE: 'Excused',
   SUBMIT: 'Submitted',
   VIEW: 'Viewed',
@@ -100,6 +108,7 @@ const MODULE_LABEL_MAP: Record<string, string> = {
   class_attendance: 'Student Attendance',
   daily_attendance: 'Daily Attendance',
   exit_passes: 'Exit Passes',
+  monthly_time_records: 'Monthly DTR',
   teacher_monthly_dtr: 'Monthly DTR',
   deped_reports: 'DepEd Reports',
   edfi_export: 'Division Export',
@@ -135,17 +144,19 @@ export function formatAuditTimestamp(log: ActivityRecord): {
   }
 
   const fallbackDate = String(log.date_only || '').trim();
-  const fallbackTime = String(log.time_only || '').trim();
+  const rawFallbackTime = String(log.time_only || '').trim();
+  const fallbackTime = rawFallbackTime ? formatTime12h(rawFallbackTime, { fallback: rawFallbackTime }) : '';
   if (fallbackDate || fallbackTime) {
     const fullText = [fallbackDate, fallbackTime].filter(Boolean).join(' • ');
     return { dateText: fallbackDate, timeText: fallbackTime, fullText };
   }
 
-  const fallbackTs = String(log.timestamp || '').trim();
+  const rawTs = String(log.timestamp || '').trim();
+  const formattedTs = rawTs ? formatDateTime12h(rawTs, { fallback: rawTs }) : '—';
   return {
-    dateText: fallbackTs || '—',
+    dateText: formattedTs,
     timeText: '',
-    fullText: fallbackTs || '—',
+    fullText: formattedTs,
   };
 }
 
@@ -254,7 +265,7 @@ export const AuditLogsPanel: React.FC<AuditLogsPanelProps> = ({
     } else if (code === 'CREATE' || code === 'APPROVE' || code === 'RESOLVE' || code === 'BIO_ENROLL' || code === 'UNLOCK_ALL') {
       bg = tokens.successLight;
       color = brand.success;
-    } else if (code === 'UPDATE' || code === 'RESET_DEV' || code === 'PASSWORD' || code === 'PROFILE' || code === 'EXCUSE') {
+    } else if (code === 'UPDATE' || code === 'RESET_DEV' || code === 'PASSWORD' || code === 'PROFILE' || code === 'EXCUSE' || code === 'BULK_ABSENT') {
       bg = tokens.warningLight;
       color = brand.warning;
     } else if (code === 'EXPORT' || code === 'PRINT' || code === 'IMPORT' || code === 'VIEW') {

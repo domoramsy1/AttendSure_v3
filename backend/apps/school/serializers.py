@@ -1,3 +1,6 @@
+# AttendSure Backend - School Data Serializers
+# File: D:\AttendSure_V3\backend\apps\school\serializers.py
+
 from decimal import Decimal
 import math
 from django.core.cache import cache

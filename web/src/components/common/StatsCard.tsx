@@ -1,3 +1,6 @@
+// AttendSure Web - Stats Card
+// File: D:\AttendSure_V3\web\src\components\common\StatsCard.tsx
+
 /**
  * AttendSure - Reusable Metric Summary Card
  * Replaces duplicate statistic cards across Teachers, Geofence, and Classes tabs.

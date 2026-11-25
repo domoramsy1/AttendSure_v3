@@ -1,3 +1,6 @@
+// AttendSure Web - Modal
+// File: D:\AttendSure_V3\web\src\components\ui\Modal.tsx
+
 /**
  * AttendSure - Accessible Theme-Adaptive Dialog Modal
  * File: web/src/components/ui/Modal.tsx

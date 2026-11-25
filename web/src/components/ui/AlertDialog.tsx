@@ -1,3 +1,6 @@
+// AttendSure Web - Alert Dialog Component
+// File: D:\AttendSure_V3\web\src\components\ui\AlertDialog.tsx
+
 /**
  * AttendSure - Resilient Modal Dialog
  * File: web/src/components/ui/AlertDialog.tsx

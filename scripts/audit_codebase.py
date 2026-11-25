@@ -1,3 +1,6 @@
+# AttendSure Scripts - Automated Quality Gate Auditor
+# File: D:\AttendSure_V3\scripts\audit_codebase.py
+
 r"""
 AttendSure - Master Automated Codebase, RBAC Matrix, UI Token & DepEd Positioning Auditor
 Run: .\backend\venv\Scripts\python.exe .\scripts\audit_codebase.py

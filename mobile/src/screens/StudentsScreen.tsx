@@ -1,3 +1,6 @@
+// AttendSure Mobile - Students Screen
+// File: D:\AttendSure_V3\mobile\src\screens\StudentsScreen.tsx
+
 /**
  * AttendSure Mobile - Students Directory & Full CRUD (100% Web Parity)
  * File: mobile/src/screens/StudentsScreen.tsx
@@ -113,6 +116,8 @@ export const StudentsScreen: React.FC = () => {
   const [editingStudent, setEditingStudent] = useState<StudentRow | null>(null);
   const [detailStudent, setDetailStudent] = useState<StudentRow | null>(null);
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [birthDateError, setBirthDateError] = useState<string | null>(null);
 
   const [photoBase64, setPhotoBase64] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -220,6 +225,8 @@ export const StudentsScreen: React.FC = () => {
     setPhotoBase64(null);
     setPhotoPreview(null);
     setPhotoRemoved(false);
+    setFormError(null);
+    setBirthDateError(null);
 
     const defaultSecId =
       advisedSectionIds.length > 0
@@ -234,7 +241,7 @@ export const StudentsScreen: React.FC = () => {
       last_name: '',
       suffix: '',
       gender: 'Male',
-      birth_date: '2012-01-15',
+      birth_date: '',
       section_id: defaultSecId,
       enrollment_status: 'ENROLLED',
       house_street_sitio: '',
@@ -259,6 +266,8 @@ export const StudentsScreen: React.FC = () => {
     setPhotoBase64(null);
     setPhotoPreview(stu.photo_url || stu.photo || null);
     setPhotoRemoved(false);
+    setFormError(null);
+    setBirthDateError(null);
 
     setForm({
       lrn: stu.lrn || '',
@@ -289,21 +298,65 @@ export const StudentsScreen: React.FC = () => {
     setModalOpen(true);
   };
 
+  const validatePastBirthDate = (raw: string): string | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return 'Birth date is required (YYYY-MM-DD).';
+    }
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if (!match) {
+      return 'Use YYYY-MM-DD format (for example, 2013-06-15).';
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const parsed = new Date(year, month - 1, day);
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (
+      parsed.getFullYear() !== year ||
+      parsed.getMonth() !== month - 1 ||
+      parsed.getDate() !== day ||
+      year < 1950 ||
+      parsed >= todayMidnight
+    ) {
+      return 'Enter a valid past birth date before today.';
+    }
+    return null;
+  };
+
   const handleSave = async () => {
+    setFormError(null);
+    setBirthDateError(null);
+
+    if (lrnCheck.checking) {
+      setFormTab('BASIC');
+      setFormError('Please wait while we finish checking the LRN.');
+      return;
+    }
+
+    if (lrnCheck.isTaken) {
+      setFormTab('BASIC');
+      setFormError(lrnCheck.warning || 'LRN is already registered.');
+      return;
+    }
+
     const cleanLrn = form.lrn.replace(/\D/g, '');
     if (cleanLrn.length !== 12) {
       setFormTab('BASIC');
-      showNotice('Invalid LRN', 'Please enter a valid 12-digit DepEd LRN.');
+      setFormError('Please enter a valid 12-digit DepEd LRN.');
       return;
     }
     if (!form.first_name.trim() || !form.last_name.trim()) {
       setFormTab('BASIC');
-      showNotice('Missing Name', 'First name and last name are required.');
+      setFormError('First name and last name are required.');
       return;
     }
-    if (!editingStudent && !form.birth_date.trim()) {
+    const birthValidationErr = validatePastBirthDate(form.birth_date);
+    if (birthValidationErr) {
       setFormTab('BASIC');
-      showNotice('Birth Date Required', 'Please enter the student birth date (YYYY-MM-DD).');
+      setBirthDateError(birthValidationErr);
+      setFormError(birthValidationErr);
       return;
     }
 
@@ -498,6 +551,7 @@ export const StudentsScreen: React.FC = () => {
         </View>
       ) : (
         <FlatList
+          style={styles.listFlex}
           data={filtered}
           keyExtractor={(item) => String(item.id)}
           contentContainerStyle={styles.listContent}
@@ -636,6 +690,13 @@ export const StudentsScreen: React.FC = () => {
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ gap: 10, paddingBottom: 18 }}
             >
+              {formError ? (
+                <View style={styles.errorBanner}>
+                  <Ionicons name="alert-circle" size={16} color={palette.danger} />
+                  <Text style={styles.errorBannerText}>{formError}</Text>
+                </View>
+              ) : null}
+
               {formTab === 'BASIC' && (
                 <>
                   <ImageUploadField
@@ -729,12 +790,21 @@ export const StudentsScreen: React.FC = () => {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.inputLabel}>Birth Date *</Text>
                       <TextInput
-                        style={styles.input}
+                        style={[styles.input, birthDateError ? { borderColor: palette.danger } : null]}
                         value={form.birth_date}
-                        onChangeText={(v) => setForm((p) => ({ ...p, birth_date: v }))}
+                        onChangeText={(v) => {
+                          setForm((p) => ({ ...p, birth_date: v }));
+                          if (birthDateError) setBirthDateError(null);
+                          if (formError) setFormError(null);
+                        }}
                         placeholder="YYYY-MM-DD"
                         placeholderTextColor={palette.textMuted}
                       />
+                      {birthDateError ? (
+                        <Text style={styles.warnText}>{birthDateError}</Text>
+                      ) : !form.birth_date ? (
+                        <Text style={styles.helperText}>Required for DepEd SF1</Text>
+                      ) : null}
                     </View>
                   </View>
 
@@ -886,11 +956,11 @@ export const StudentsScreen: React.FC = () => {
               )}
 
               <TouchableOpacity
-                style={[styles.saveBtn, saving && { opacity: 0.6 }]}
+                style={[styles.saveBtn, (saving || lrnCheck.checking || lrnCheck.isTaken) && { opacity: 0.6 }]}
                 onPress={() => void handleSave()}
-                disabled={saving}
+                disabled={saving || lrnCheck.checking || lrnCheck.isTaken}
               >
-                {saving ? (
+                {saving || lrnCheck.checking ? (
                   <ActivityIndicator size="small" color={palette.onPrimary} />
                 ) : (
                   <Text style={styles.saveBtnText}>
@@ -1009,6 +1079,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
   StyleSheet.create({
     container: { flex: 1, backgroundColor: palette.background },
     metricsBar: {
+      flexShrink: 0,
       flexDirection: 'row',
       alignItems: 'center',
       marginHorizontal: 14,
@@ -1023,7 +1094,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     metricDivider: { width: 1, height: 24, backgroundColor: palette.border },
     metricValue: { fontSize: fonts.md, fontWeight: fonts.weight.black, color: palette.primary },
     metricLabel: { fontSize: fonts.xxs, color: palette.textMuted, fontWeight: fonts.weight.bold },
-    toolbar: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
+    toolbar: { flexShrink: 0, flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
     searchWrap: {
       flex: 1,
       flexDirection: 'row',
@@ -1048,9 +1119,10 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       justifyContent: 'center',
     },
     addBtnText: { color: palette.onPrimary, fontSize: fonts.xs, fontWeight: fonts.weight.extrabold },
-    filterStrip: { flexGrow: 0, maxHeight: 38 },
-    statusStrip: { flexGrow: 0, maxHeight: 34, marginTop: 4 },
-    filterRow: { paddingHorizontal: 14, gap: 6, alignItems: 'center' },
+    filterStrip: { flexGrow: 0, flexShrink: 0, paddingVertical: 4 },
+    statusStrip: { flexGrow: 0, flexShrink: 0, paddingVertical: 4, marginBottom: 4 },
+    filterRow: { paddingHorizontal: 14, gap: 8, alignItems: 'center' },
+    listFlex: { flex: 1 },
     chip: {
       paddingVertical: 6,
       paddingHorizontal: 11,
@@ -1176,6 +1248,24 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       color: palette.textPrimary,
     },
     warnText: { fontSize: fonts.xs, color: palette.danger, fontWeight: fonts.weight.bold },
+    helperText: { fontSize: fonts.xxs, color: palette.textMuted, fontWeight: fonts.weight.semibold, marginTop: 2 },
+    errorBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      backgroundColor: palette.dangerLight,
+      borderWidth: 1,
+      borderColor: palette.danger,
+      borderRadius: 10,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+    },
+    errorBannerText: {
+      flex: 1,
+      fontSize: fonts.xs,
+      color: palette.danger,
+      fontWeight: fonts.weight.bold,
+    },
     infoNote: { fontSize: fonts.xxs, color: palette.primary, fontWeight: fonts.weight.bold },
     saveBtn: {
       backgroundColor: palette.buttonBg,

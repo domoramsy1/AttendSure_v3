@@ -1,5 +1,9 @@
+// AttendSure Web - Students Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\StudentsTab.tsx
+
 /**
  * AttendSure - Students Directory, DepEd SF1 Enrollment & Bulk CSV Class List Import
+ * Modularized with StudentsFilterBar, StudentCsvImportModal, StudentFormModal, and StudentQrBadgeModal.
  * File: web/src/components/tabs/StudentsTab.tsx
  */
 
@@ -8,16 +12,11 @@ import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
-import { isSafeImageUrl, QR_COLORS } from '../../theme/tokens';
+import { isSafeImageUrl } from '../../theme/tokens';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
-import { AvatarUploadField } from '../common/AvatarUploadField';
 import { StatusBadge } from '../common/StatusBadge';
-import { QrCodeSvg } from '../common/QrCodeSvg';
 import { Pagination, exportToCsv, ALL_ROWS_SIZE } from '../common/Pagination';
-import { ControlSwitch } from '../ui/ControlSwitch';
-import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
 import { PrintableExportModal, type SelectableOption } from '../modals/PrintableExportModal';
 import { useAlert } from '../../context/AlertContext';
 import { useCopyFeedback } from '../../utils/clipboard';
@@ -29,6 +28,20 @@ import {
   getCurrentUserFromStorage,
   isAdminOrPrincipal,
 } from '../../utils/permissions';
+import { StudentsFilterBar } from './students/StudentsFilterBar';
+import { StudentCsvImportModal } from './students/StudentCsvImportModal';
+import { StudentFormModal } from './students/StudentFormModal';
+import { StudentQrBadgeModal } from './students/StudentQrBadgeModal';
+import {
+  maskQrToken,
+  type CsvImportSummary,
+  type GradeLevelItem,
+  type MetricsData,
+  type ModalFormTab,
+  type SectionItem,
+  type StudentFormData,
+  type StudentRecord,
+} from './students/types';
 import {
   User,
   Pencil,
@@ -39,88 +52,10 @@ import {
   Copy,
   Check,
   Phone,
-  Printer,
   AlertCircle,
-  Download,
-  Upload,
-  FileSpreadsheet,
-  Plus,
   BookOpen,
-  Search,
-  Home,
-  Users2,
   GraduationCap,
-  ShieldCheck,
 } from 'lucide-react';
-
-interface Student {
-  id: number;
-  lrn: string;
-  first_name: string;
-  middle_name?: string;
-  last_name: string;
-  suffix?: string;
-  full_name: string;
-  sex: string;
-  birthdate?: string;
-  mother_tongue?: string;
-  ethnic_group?: string;
-  religion?: string;
-  house_street_sitio?: string;
-  barangay?: string;
-  municipality_city?: string;
-  province?: string;
-  father_name?: string;
-  mother_maiden_name?: string;
-  guardian_name?: string;
-  guardian_relationship?: string;
-  guardian_contact: string;
-  qr_token?: string;
-  qr_payload?: string;
-  current_section?: string;
-  current_section_id?: number | null;
-  section_id?: number;
-  enrollment_status?: 'ENROLLED' | 'TRANSFERRED_IN' | 'TRANSFERRED_OUT' | 'DROPPED';
-  grade_level_name?: string;
-  photo?: string | null;
-  photo_url?: string | null;
-  is_active: boolean;
-}
-
-interface GradeLevelItem {
-  id: number;
-  code: string;
-  name: string;
-}
-
-interface SectionItem {
-  id: number;
-  name: string;
-  code?: string;
-  display_label?: string;
-  grade_level?: number | { id: number; name: string };
-  grade_level_name?: string;
-  adviser_id?: number | null;
-  is_adviser?: boolean;
-  scheduled_subjects_count?: number;
-}
-
-interface MetricsData {
-  total: number;
-  active: number;
-  paired: number;
-  total_sections: number;
-}
-
-interface CsvImportSummary {
-  ok: boolean;
-  created_count: number;
-  updated_count: number;
-  skipped_count: number;
-  errors: Array<{ row: number; lrn: string; reason: string }>;
-}
-
-type ModalFormTab = 'BASIC' | 'ADDRESS' | 'GUARDIAN' | 'DEPED';
 
 const sanitizeInput = (raw: string, maxLength = 150): string =>
   String(raw || '')
@@ -128,10 +63,31 @@ const sanitizeInput = (raw: string, maxLength = 150): string =>
     .trim()
     .slice(0, maxLength);
 
-const maskQrToken = (token?: string): string => {
-  const clean = String(token || '').trim();
-  if (!clean) return '';
-  return clean.length <= 4 ? 'Linked' : `••••${clean.slice(-4)}`;
+const EMPTY_STUDENT_FORM: StudentFormData = {
+  lrn: '',
+  first_name: '',
+  middle_name: '',
+  last_name: '',
+  suffix: '',
+  sex: 'Male',
+  birthdate: '',
+  grade_level_id: '',
+  section_id: '',
+  enrollment_status: 'ENROLLED',
+  qr_token: '',
+  photo: null,
+  house_street_sitio: '',
+  barangay: '',
+  municipality_city: '',
+  province: '',
+  father_name: '',
+  mother_maiden_name: '',
+  guardian_name: '',
+  guardian_relationship: 'Mother',
+  guardian_contact: '',
+  mother_tongue: '',
+  ethnic_group: '',
+  religion: '',
 };
 
 export const StudentsTab: React.FC = () => {
@@ -149,7 +105,7 @@ export const StudentsTab: React.FC = () => {
   const cachedGradesPayload = peekApiCache<any>(API_ROUTES.school.gradeLevels, { page_size: 200 });
   const cachedSectionsPayload = peekApiCache<any>(API_ROUTES.school.sections, { page_size: 300 });
 
-  const [students, setStudents] = useState<Student[]>(() => {
+  const [students, setStudents] = useState<StudentRecord[]>(() => {
     if (cachedStudentsPayload && 'results' in cachedStudentsPayload) return cachedStudentsPayload.results || [];
     if (Array.isArray(cachedStudentsPayload)) return cachedStudentsPayload;
     return [];
@@ -182,7 +138,7 @@ export const StudentsTab: React.FC = () => {
   const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [selectedSectionFilter, setSelectedSectionFilter] = useState<string>('ALL');
   const { copiedKey: copiedValue, copy } = useCopyFeedback();
-  const [badgeStudent, setBadgeStudent] = useState<Student | null>(null);
+  const [badgeStudent, setBadgeStudent] = useState<StudentRecord | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
@@ -213,37 +169,11 @@ export const StudentsTab: React.FC = () => {
 
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [formTab, setFormTab] = useState<ModalFormTab>('BASIC');
-  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [editingStudent, setEditingStudent] = useState<StudentRecord | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [photoRemoved, setPhotoRemoved] = useState<boolean>(false);
-
-  const [formData, setFormData] = useState({
-    lrn: '',
-    first_name: '',
-    middle_name: '',
-    last_name: '',
-    suffix: '',
-    sex: 'Male',
-    birthdate: '2012-01-01',
-    grade_level_id: '',
-    section_id: '',
-    enrollment_status: 'ENROLLED' as 'ENROLLED' | 'TRANSFERRED_IN' | 'TRANSFERRED_OUT' | 'DROPPED',
-    qr_token: '',
-    photo: null as string | null,
-    house_street_sitio: '',
-    barangay: '',
-    municipality_city: '',
-    province: '',
-    father_name: '',
-    mother_maiden_name: '',
-    guardian_name: '',
-    guardian_relationship: 'Mother',
-    guardian_contact: '',
-    mother_tongue: '',
-    ethnic_group: '',
-    religion: '',
-  });
+  const [formData, setFormData] = useState<StudentFormData>(EMPTY_STUDENT_FORM);
 
   const abortRef = useRef<AbortController | null>(null);
   const metricsAbortRef = useRef<AbortController | null>(null);
@@ -295,17 +225,12 @@ export const StudentsTab: React.FC = () => {
     return () => controller.abort();
   }, [loadAcademicLookups]);
 
-  useEffect(() => {
-    return () => {
-      metricsAbortRef.current?.abort();
-    };
-  }, []);
+  useEffect(() => () => metricsAbortRef.current?.abort(), []);
 
   const loadMetrics = useCallback(async (bypassCache = false) => {
     metricsAbortRef.current?.abort();
     const controller = new AbortController();
     metricsAbortRef.current = controller;
-
     try {
       const res = await apiClient.get(API_ROUTES.students.metrics, {
         params: bypassCache ? { nocache: 1 } : undefined,
@@ -320,9 +245,7 @@ export const StudentsTab: React.FC = () => {
           total_sections: Number(res.data.total_sections ?? 0),
         });
       }
-    } catch {
-      // Keep existing metrics if offline or canceled
-    }
+    } catch {}
   }, []);
 
   const loadStudents = useCallback(
@@ -357,13 +280,8 @@ export const StudentsTab: React.FC = () => {
       try {
         const params: Record<string, string | number> = { ...baseParams };
         if (bypassCache) params.nocache = 1;
-
-        const res = await apiClient.get(API_ROUTES.students.list, {
-          params,
-          signal: controller.signal,
-        });
+        const res = await apiClient.get(API_ROUTES.students.list, { params, signal: controller.signal });
         if (controller.signal.aborted) return;
-
         if (res.data && 'results' in res.data) {
           setStudents(res.data.results);
           setTotalCount(Number(res.data.count) || 0);
@@ -373,9 +291,7 @@ export const StudentsTab: React.FC = () => {
         }
       } catch (err: unknown) {
         const anyErr = err as { name?: string; code?: string };
-        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') {
-          return;
-        }
+        if (controller.signal.aborted || anyErr?.name === 'CanceledError' || anyErr?.code === 'ERR_CANCELED') return;
         if (!silent) setError(extractApiError(err, 'Could not load student directory.'));
       } finally {
         if (!controller.signal.aborted && !silent) setLoading(false);
@@ -390,9 +306,7 @@ export const StudentsTab: React.FC = () => {
 
   useEffect(() => {
     void loadStudents(currentPage, pageSize, false, false);
-    return () => {
-      abortRef.current?.abort();
-    };
+    return () => abortRef.current?.abort();
   }, [currentPage, pageSize, loadStudents]);
 
   useEffect(() => {
@@ -414,7 +328,7 @@ export const StudentsTab: React.FC = () => {
 
   const canAddStudent = canManageStudentsPerm(currentUser, advisedSectionIds);
   const canEditStudentRow = useCallback(
-    (st: Student) =>
+    (st: StudentRecord) =>
       canManageStudentsPerm(currentUser, advisedSectionIds, st.current_section_id ?? st.section_id ?? null),
     [currentUser, advisedSectionIds]
   );
@@ -511,9 +425,7 @@ export const StudentsTab: React.FC = () => {
     try {
       const payload = new FormData();
       payload.append('file', csvFile);
-      if (importDefaultSectionId) {
-        payload.append('section_id', importDefaultSectionId);
-      }
+      if (importDefaultSectionId) payload.append('section_id', importDefaultSectionId);
       payload.append('auto_create_sections', String(autoCreateSections));
 
       const res = await apiClient.post<CsvImportSummary>(API_ROUTES.students.bulkImport, payload, {
@@ -537,10 +449,8 @@ export const StudentsTab: React.FC = () => {
       const params: Record<string, string | number> = { page_size: 'ALL' };
       if (debouncedSearch) params.search = debouncedSearch;
       if (selectedSectionFilter !== 'ALL') params.section_id = selectedSectionFilter;
-
       const res = await apiClient.get(API_ROUTES.students.list, { params });
-      const list: Student[] = Array.isArray(res.data) ? res.data : res.data?.results || [];
-
+      const list: StudentRecord[] = Array.isArray(res.data) ? res.data : res.data?.results || [];
       exportToCsv(
         `AttendSure_Students_${new Date().toISOString().slice(0, 10)}.csv`,
         [
@@ -593,35 +503,14 @@ export const StudentsTab: React.FC = () => {
         ? defaultAdvisedSec.grade_level.id
         : defaultAdvisedSec?.grade_level;
     setFormData({
-      lrn: '',
-      first_name: '',
-      middle_name: '',
-      last_name: '',
-      suffix: '',
-      sex: 'Male',
-      birthdate: '2012-01-01',
+      ...EMPTY_STUDENT_FORM,
       grade_level_id: defaultGl ? String(defaultGl) : gradeLevels[0] ? String(gradeLevels[0].id) : '',
       section_id: defaultAdvisedSec ? String(defaultAdvisedSec.id) : '',
-      enrollment_status: 'ENROLLED',
-      qr_token: '',
-      photo: null,
-      house_street_sitio: '',
-      barangay: '',
-      municipality_city: '',
-      province: '',
-      father_name: '',
-      mother_maiden_name: '',
-      guardian_name: '',
-      guardian_relationship: 'Mother',
-      guardian_contact: '',
-      mother_tongue: '',
-      ethnic_group: '',
-      religion: '',
     });
     setIsModalOpen(true);
   };
 
-  const handleOpenEdit = (st: Student) => {
+  const handleOpenEdit = (st: StudentRecord) => {
     setEditingStudent(st);
     setFormError(null);
     setPhotoRemoved(false);
@@ -643,7 +532,7 @@ export const StudentsTab: React.FC = () => {
       last_name: st.last_name || '',
       suffix: st.suffix || '',
       sex: st.sex === 'Female' || st.sex === 'F' ? 'Female' : 'Male',
-      birthdate: st.birthdate || '2012-01-01',
+      birthdate: st.birthdate || '',
       grade_level_id: glVal ? String(glVal) : gradeLevels[0] ? String(gradeLevels[0].id) : '',
       section_id: exactSecId ? String(exactSecId) : matchedSec ? String(matchedSec.id) : '',
       enrollment_status: st.enrollment_status || 'ENROLLED',
@@ -674,6 +563,11 @@ export const StudentsTab: React.FC = () => {
       setFormTab('BASIC');
       return;
     }
+    if (lrnCheck.checking) {
+      setFormError('Please wait while we finish checking this LRN.');
+      setFormTab('BASIC');
+      return;
+    }
     if (lrnCheck.is_taken) {
       setFormError(lrnCheck.message || 'This 12-digit LRN is already registered to another student.');
       setFormTab('BASIC');
@@ -684,6 +578,37 @@ export const StudentsTab: React.FC = () => {
       setFormTab('BASIC');
       return;
     }
+
+    const rawBirthdate = formData.birthdate.trim();
+    if (!rawBirthdate) {
+      setFormError('Birthdate is required. Please pick the student’s date of birth.');
+      setFormTab('BASIC');
+      return;
+    }
+    const birthMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(rawBirthdate);
+    if (!birthMatch) {
+      setFormError('Please enter a valid birthdate (YYYY-MM-DD).');
+      setFormTab('BASIC');
+      return;
+    }
+    const bYear = Number(birthMatch[1]);
+    const bMonth = Number(birthMatch[2]);
+    const bDay = Number(birthMatch[3]);
+    const parsedBirth = new Date(bYear, bMonth - 1, bDay);
+    const todayLocal = new Date();
+    const todayMidnight = new Date(todayLocal.getFullYear(), todayLocal.getMonth(), todayLocal.getDate());
+    if (
+      parsedBirth.getFullYear() !== bYear ||
+      parsedBirth.getMonth() !== bMonth - 1 ||
+      parsedBirth.getDate() !== bDay ||
+      bYear < 1950 ||
+      parsedBirth >= todayMidnight
+    ) {
+      setFormError('Birthdate must be a valid date in the past.');
+      setFormTab('BASIC');
+      return;
+    }
+
     if (!formData.section_id) {
       setFormError('Please select a class section.');
       setFormTab('BASIC');
@@ -748,7 +673,7 @@ export const StudentsTab: React.FC = () => {
     }
   };
 
-  const handleDelete = (st: Student) => {
+  const handleDelete = (st: StudentRecord) => {
     showConfirm({
       title: 'Delete Student Record',
       message: `Permanently delete ${st.full_name} (LRN: ${st.lrn})?`,
@@ -802,112 +727,26 @@ export const StudentsTab: React.FC = () => {
         />
       </div>
 
-      <div
-        style={{
-          ...ui.card,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 12,
-          padding: '12px 16px',
+      <StudentsFilterBar
+        sections={sections}
+        selectedSectionFilter={selectedSectionFilter}
+        onSectionFilterChange={(val) => {
+          setSelectedSectionFilter(val);
+          setCurrentPage(1);
         }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <select
-            aria-label="Filter by class section"
-            value={selectedSectionFilter}
-            onChange={(e) => {
-              setSelectedSectionFilter(e.target.value);
-              setCurrentPage(1);
-            }}
-            style={{ ...ui.input, width: 'auto', minWidth: 220, fontWeight: 700, cursor: 'pointer' }}
-          >
-            <option value="ALL">All Class Sections</option>
-            {sections.map((sec) => (
-              <option key={sec.id} value={sec.id}>
-                {sec.grade_level_name ? `${sec.grade_level_name} - ` : ''}
-                {sec.name}
-              </option>
-            ))}
-          </select>
-
-          <div style={{ position: 'relative', width: 250 }}>
-            <Search
-              size={14}
-              color={tokens.textMuted}
-              style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }}
-            />
-            <input
-              type="text"
-              maxLength={60}
-              placeholder="Search student name or LRN..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ ...ui.input, paddingLeft: 32 }}
-            />
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {selectedStudentIds.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setSelectedStudentIds([])}
-              style={{
-                ...ui.btnSecondary,
-                backgroundColor: tokens.primaryLight,
-                borderColor: brand.primary,
-                color: brand.primary,
-              }}
-            >
-              <span>{selectedStudentIds.length} Selected &times; Clear</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setIsPrintModalOpen(true)}
-            disabled={totalCount === 0}
-            style={{ ...ui.btnSecondary, borderColor: brand.primary, color: brand.primary }}
-          >
-            <Printer size={14} color={brand.primary} />
-            <span>
-              {selectedStudentIds.length > 0
-                ? `Print Class List & QR (${selectedStudentIds.length})`
-                : 'Print / Export Class List & QR'}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            disabled={isExporting || totalCount === 0}
-            style={ui.btnSecondary}
-          >
-            {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-            <span>Export CSV ({totalCount.toLocaleString()})</span>
-          </button>
-
-          {canBulkImport && (
-            <button
-              type="button"
-              onClick={handleOpenCsvImport}
-              style={ui.btnSecondary}
-            >
-              <Upload size={14} color={brand.primary} />
-              <span>Import CSV Class List</span>
-            </button>
-          )}
-
-          {canAddStudent && (
-            <button type="button" onClick={handleOpenCreate} style={ui.btnPrimary}>
-              <Plus size={15} />
-              <span>Add Student</span>
-            </button>
-          )}
-        </div>
-      </div>
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
+        selectedStudentCount={selectedStudentIds.length}
+        onClearSelection={() => setSelectedStudentIds([])}
+        totalCount={totalCount}
+        isExporting={isExporting}
+        canBulkImport={canBulkImport}
+        canAddStudent={canAddStudent}
+        onOpenPrintModal={() => setIsPrintModalOpen(true)}
+        onExportCsv={() => void handleExportCsv()}
+        onOpenCsvImport={handleOpenCsvImport}
+        onOpenCreate={handleOpenCreate}
+      />
 
       <div style={{ ...ui.card, padding: 0, overflow: 'hidden' }}>
         {error && (
@@ -949,10 +788,7 @@ export const StudentsTab: React.FC = () => {
                     <input
                       type="checkbox"
                       aria-label="Select all students on this page"
-                      checked={
-                        students.length > 0 &&
-                        students.every((row) => selectedStudentIds.includes(row.id))
-                      }
+                      checked={students.length > 0 && students.every((row) => selectedStudentIds.includes(row.id))}
                       onChange={(e) => {
                         const pageIds = students.map((row) => row.id);
                         if (e.target.checked) {
@@ -1020,7 +856,7 @@ export const StudentsTab: React.FC = () => {
                           <span>{row.lrn}</span>
                           <button
                             type="button"
-                            onClick={() => handleCopy(row.lrn)}
+                            onClick={() => void handleCopy(row.lrn)}
                             title="Copy LRN"
                             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}
                           >
@@ -1042,17 +878,7 @@ export const StudentsTab: React.FC = () => {
 
                       <td style={ui.td}>
                         {row.qr_token ? (
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              fontWeight: 700,
-                              color: brand.success,
-                              fontFamily: fonts.mono,
-                              fontSize: fonts.size.sm,
-                            }}
-                          >
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: brand.success, fontFamily: fonts.mono, fontSize: fonts.size.sm }}>
                             <CreditCard size={13} /> {maskQrToken(row.qr_token)}
                           </span>
                         ) : (
@@ -1069,9 +895,7 @@ export const StudentsTab: React.FC = () => {
                       </td>
 
                       <td style={ui.td}>
-                        <StatusBadge
-                          status={row.enrollment_status || (row.is_active ? 'ENROLLED' : 'INACTIVE')}
-                        />
+                        <StatusBadge status={row.enrollment_status || (row.is_active ? 'ENROLLED' : 'INACTIVE')} />
                       </td>
 
                       <td style={{ ...ui.td, textAlign: 'right' }}>
@@ -1131,542 +955,51 @@ export const StudentsTab: React.FC = () => {
         />
       </div>
 
-      {/* Bulk CSV Class List Import Modal */}
-      <Modal
+      <StudentCsvImportModal
         isOpen={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
-        title="Bulk Import CSV Class List"
-      >
-        <form onSubmit={handleRunCsvImport} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div
-            style={{
-              ...ui.subtleBox,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: 10,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <FileSpreadsheet size={20} color={brand.primary} />
-              <div>
-                <div style={{ fontSize: fonts.size.sm, fontWeight: 800, color: tokens.textPrimary }}>
-                  2-Minute School Onboarding
-                </div>
-                <div style={{ fontSize: fonts.size.xs, color: tokens.textSecondary }}>
-                  Upload up to 2,000 students at once (.csv, max 5 MB). Signed QR IDs generate automatically.
-                </div>
-              </div>
-            </div>
+        sections={sections}
+        csvFile={csvFile}
+        importDefaultSectionId={importDefaultSectionId}
+        autoCreateSections={autoCreateSections}
+        importingCsv={importingCsv}
+        importSummary={importSummary}
+        importError={importError}
+        onSelectFile={(file) => {
+          setCsvFile(file);
+          setImportSummary(null);
+          setImportError(null);
+        }}
+        onChangeDefaultSection={setImportDefaultSectionId}
+        onChangeAutoCreate={setAutoCreateSections}
+        onDownloadTemplate={handleDownloadCsvTemplate}
+        onSubmit={handleRunCsvImport}
+      />
 
-            <button
-              type="button"
-              onClick={handleDownloadCsvTemplate}
-              style={ui.btnSecondary}
-            >
-              <Download size={13} />
-              <span>Download Sample CSV Template</span>
-            </button>
-          </div>
-
-          {importError && (
-            <div
-              style={{
-                ...ui.subtleBox,
-                backgroundColor: tokens.dangerLight,
-                borderColor: brand.danger,
-                color: brand.danger,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                fontWeight: 600,
-              }}
-            >
-              <AlertCircle size={15} />
-              <span>{importError}</span>
-            </div>
-          )}
-
-          <div>
-            <label style={ui.label}>Select CSV File *</label>
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(e) => {
-                setCsvFile(e.target.files?.[0] || null);
-                setImportSummary(null);
-                setImportError(null);
-              }}
-              style={ui.input}
-            />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 10 }}>
-            <div>
-              <label style={ui.label}>Fallback Section (If row has no section_name)</label>
-              <select
-                value={importDefaultSectionId}
-                onChange={(e) => setImportDefaultSectionId(e.target.value)}
-                style={ui.input}
-              >
-                <option value="">-- Use section_name from CSV --</option>
-                {sections.map((sec) => (
-                  <option key={sec.id} value={sec.id}>
-                    {sec.grade_level_name ? `${sec.grade_level_name} - ` : ''}
-                    {sec.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', paddingTop: 18 }}>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: fonts.size.sm, fontWeight: 600, color: tokens.textPrimary, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={autoCreateSections}
-                  onChange={(e) => setAutoCreateSections(e.target.checked)}
-                  style={{ accentColor: brand.primary }}
-                />
-                Auto-create new sections from CSV
-              </label>
-            </div>
-          </div>
-
-          {importSummary && (
-            <div
-              style={{
-                ...ui.subtleBox,
-                backgroundColor: tokens.successLight,
-                borderColor: brand.success,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div style={{ fontWeight: 800, color: brand.success, fontSize: fonts.size.sm }}>
-                Import Complete: {importSummary.created_count} Created &bull; {importSummary.updated_count} Updated &bull; {importSummary.skipped_count} Skipped
-              </div>
-              {importSummary.errors.length > 0 && (
-                <div
-                  style={{
-                    maxHeight: 130,
-                    overflowY: 'auto',
-                    backgroundColor: tokens.bgSurface,
-                    padding: 8,
-                    borderRadius: 6,
-                    fontSize: fonts.size.xs,
-                    color: tokens.textSecondary,
-                  }}
-                >
-                  {importSummary.errors.map((errItem, idx) => (
-                    <div key={`${errItem.row}-${idx}`}>
-                      Row {errItem.row} ({errItem.lrn || 'No LRN'}): {errItem.reason}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
-            <Button variant="secondary" type="button" onClick={() => setIsImportModalOpen(false)}>
-              Close
-            </Button>
-            <Button variant="primary" type="submit" loading={importingCsv} disabled={!csvFile}>
-              Upload &amp; Import Class List
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal
+      <StudentFormModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingStudent ? `Edit Student: ${editingStudent.full_name}` : 'Enroll New Student (DepEd SF1)'}
-      >
-        <form onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {formError && (
-            <div
-              style={{
-                ...ui.subtleBox,
-                backgroundColor: tokens.dangerLight,
-                borderColor: brand.danger,
-                color: brand.danger,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <AlertCircle size={15} /> <span>{formError}</span>
-            </div>
-          )}
+        editingStudent={editingStudent}
+        formTab={formTab}
+        onChangeTab={setFormTab}
+        formData={formData}
+        onChangeFormData={setFormData}
+        formError={formError}
+        onSetFormError={setFormError}
+        onMarkPhotoRemoved={setPhotoRemoved}
+        saving={saving}
+        lrnCheck={lrnCheck}
+        gradeLevels={gradeLevels}
+        modalAvailableSections={modalAvailableSections}
+        selectedModalSection={selectedModalSection}
+        onSubmit={handleSubmit}
+      />
 
-          <ControlSwitch<ModalFormTab>
-            options={[
-              { value: 'BASIC', label: '1. Basic', icon: <User size={13} /> },
-              { value: 'ADDRESS', label: '2. Address', icon: <Home size={13} /> },
-              { value: 'GUARDIAN', label: '3. Guardian', icon: <Users2 size={13} /> },
-              { value: 'DEPED', label: '4. DepEd', icon: <GraduationCap size={13} /> },
-            ]}
-            value={formTab}
-            onChange={setFormTab}
-            size="sm"
-          />
-
-          {formTab === 'BASIC' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <AvatarUploadField
-                previewUrl={formData.photo}
-                displayName={`${formData.first_name} ${formData.last_name}`.trim() || 'Student'}
-                label="Student ID Photo"
-                size={54}
-                disabled={saving}
-                onSelectPhoto={(_file, dataUri) => {
-                  setFormError(null);
-                  setPhotoRemoved(false);
-                  setFormData((prev) => ({ ...prev, photo: dataUri }));
-                }}
-                onRemovePhoto={() => {
-                  setFormData((p) => ({ ...p, photo: null }));
-                  setPhotoRemoved(true);
-                }}
-                onValidationError={(msg) => setFormError(msg)}
-              />
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
-                <div>
-                  <label style={ui.label}>12-Digit LRN *</label>
-                  <input
-                    maxLength={12}
-                    value={formData.lrn}
-                    onChange={(e) => setFormData({ ...formData, lrn: e.target.value.replace(/\D/g, '') })}
-                    style={{
-                      ...ui.input,
-                      borderColor: lrnCheck.is_taken
-                        ? brand.danger
-                        : lrnCheck.available
-                          ? brand.success
-                          : tokens.borderStrong,
-                    }}
-                    placeholder="Enter 12-digit LRN"
-                  />
-                  {lrnCheck.checking && (
-                    <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', color: tokens.textMuted, fontWeight: 600 }}>
-                      Checking LRN availability...
-                    </span>
-                  )}
-                  {lrnCheck.is_taken && (
-                    <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', color: brand.danger, fontWeight: 700 }}>
-                      {lrnCheck.message || 'This 12-digit LRN is already registered.'}
-                    </span>
-                  )}
-                  {!lrnCheck.checking && lrnCheck.available && (
-                    <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', color: brand.success, fontWeight: 700 }}>
-                      LRN is available.
-                    </span>
-                  )}
-                </div>
-                <div>
-                  <label style={ui.label}>Birthdate *</label>
-                  <input
-                    type="date"
-                    value={formData.birthdate}
-                    onChange={(e) => setFormData({ ...formData, birthdate: e.target.value })}
-                    style={ui.input}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
-                <div>
-                  <label style={ui.label}>First Name *</label>
-                  <input maxLength={100} value={formData.first_name} onChange={(e) => setFormData({ ...formData, first_name: e.target.value })} style={ui.input} />
-                </div>
-                <div>
-                  <label style={ui.label}>Last Name *</label>
-                  <input maxLength={100} value={formData.last_name} onChange={(e) => setFormData({ ...formData, last_name: e.target.value })} style={ui.input} />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 10 }}>
-                <div>
-                  <label style={ui.label}>Middle Name</label>
-                  <input maxLength={100} value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })} style={ui.input} />
-                </div>
-                <div>
-                  <label style={ui.label}>Suffix</label>
-                  <select value={formData.suffix} onChange={(e) => setFormData({ ...formData, suffix: e.target.value })} style={ui.input}>
-                    <option value="">None</option>
-                    <option value="Jr.">Jr.</option>
-                    <option value="Sr.">Sr.</option>
-                    <option value="II">II</option>
-                    <option value="III">III</option>
-                    <option value="IV">IV</option>
-                    <option value="V">V</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={ui.label}>Sex *</label>
-                  <select value={formData.sex} onChange={(e) => setFormData({ ...formData, sex: e.target.value })} style={ui.input}>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
-                <div>
-                  <label style={ui.label}>Grade Level *</label>
-                  <select
-                    value={formData.grade_level_id}
-                    onChange={(e) => setFormData({ ...formData, grade_level_id: e.target.value, section_id: '' })}
-                    style={ui.input}
-                  >
-                    <option value="">-- Select Grade --</option>
-                    {gradeLevels.map((gl) => (
-                      <option key={gl.id} value={gl.id}>
-                        {gl.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label style={ui.label}>Class Section *</label>
-                  <select
-                    value={formData.section_id}
-                    onChange={(e) => setFormData({ ...formData, section_id: e.target.value })}
-                    style={ui.input}
-                  >
-                    <option value="">-- Select Section --</option>
-                    {modalAvailableSections.map((sec) => (
-                      <option key={sec.id} value={sec.id}>
-                        {sec.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label style={ui.label}>Enrollment Status (DepEd SF1) *</label>
-                  <select
-                    value={formData.enrollment_status}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        enrollment_status: e.target.value as
-                          | 'ENROLLED'
-                          | 'TRANSFERRED_IN'
-                          | 'TRANSFERRED_OUT'
-                          | 'DROPPED',
-                      })
-                    }
-                    style={ui.input}
-                  >
-                    <option value="ENROLLED">Enrolled</option>
-                    <option value="TRANSFERRED_IN">Transferred In</option>
-                    <option value="TRANSFERRED_OUT">Transferred Out</option>
-                    <option value="DROPPED">Dropped</option>
-                  </select>
-                </div>
-              </div>
-
-              {selectedModalSection && (
-                <div
-                  style={{
-                    ...ui.subtleBox,
-                    backgroundColor: tokens.infoLight,
-                    borderColor: brand.primary,
-                    color: brand.primary,
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 8,
-                    fontSize: fonts.size.xs,
-                    fontWeight: 700,
-                  }}
-                >
-                  <BookOpen size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-                  <span>
-                    Auto-Enrollment Active: Enrolling in{' '}
-                    {selectedModalSection.display_label ||
-                      (selectedModalSection.grade_level_name
-                        ? `${selectedModalSection.grade_level_name} - ${selectedModalSection.name}`
-                        : selectedModalSection.name)}{' '}
-                    automatically includes this student in all{' '}
-                    {Number(selectedModalSection.scheduled_subjects_count ?? 0)} scheduled subject periods and class lists for this section.
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {formTab === 'ADDRESS' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div>
-                <label style={ui.label}>House # / Street / Sitio</label>
-                <input maxLength={150} value={formData.house_street_sitio} onChange={(e) => setFormData({ ...formData, house_street_sitio: e.target.value })} style={ui.input} />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
-                <div>
-                  <label style={ui.label}>Barangay</label>
-                  <input maxLength={100} value={formData.barangay} onChange={(e) => setFormData({ ...formData, barangay: e.target.value })} style={ui.input} />
-                </div>
-                <div>
-                  <label style={ui.label}>Municipality / City</label>
-                  <input maxLength={100} value={formData.municipality_city} onChange={(e) => setFormData({ ...formData, municipality_city: e.target.value })} style={ui.input} />
-                </div>
-              </div>
-              <div>
-                <label style={ui.label}>Province</label>
-                <input maxLength={100} value={formData.province} onChange={(e) => setFormData({ ...formData, province: e.target.value })} style={ui.input} />
-              </div>
-            </div>
-          )}
-
-          {formTab === 'GUARDIAN' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
-                <div>
-                  <label style={ui.label}>Father&apos;s Name (SF1)</label>
-                  <input maxLength={150} value={formData.father_name} onChange={(e) => setFormData({ ...formData, father_name: e.target.value })} style={ui.input} />
-                </div>
-                <div>
-                  <label style={ui.label}>Mother&apos;s Maiden Name (SF1)</label>
-                  <input maxLength={150} value={formData.mother_maiden_name} onChange={(e) => setFormData({ ...formData, mother_maiden_name: e.target.value })} style={ui.input} />
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
-                <div>
-                  <label style={ui.label}>Guardian Name (SF1)</label>
-                  <input maxLength={150} value={formData.guardian_name} onChange={(e) => setFormData({ ...formData, guardian_name: e.target.value })} style={ui.input} />
-                </div>
-                <div>
-                  <label style={ui.label}>Relationship</label>
-                  <input maxLength={60} value={formData.guardian_relationship} onChange={(e) => setFormData({ ...formData, guardian_relationship: e.target.value })} style={ui.input} />
-                </div>
-              </div>
-              <div>
-                <label style={ui.label}>Guardian Contact Number (11 Digits, SF1 Record) *</label>
-                <input
-                  maxLength={20}
-                  value={formData.guardian_contact}
-                  onChange={(e) => setFormData({ ...formData, guardian_contact: e.target.value })}
-                  style={ui.input}
-                  placeholder="Enter 11-digit guardian contact number"
-                />
-              </div>
-            </div>
-          )}
-
-          {formTab === 'DEPED' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10 }}>
-                <div>
-                  <label style={ui.label}>Mother Tongue</label>
-                  <input maxLength={80} value={formData.mother_tongue} onChange={(e) => setFormData({ ...formData, mother_tongue: e.target.value })} style={ui.input} />
-                </div>
-                <div>
-                  <label style={ui.label}>IP / Ethnic Group</label>
-                  <input maxLength={80} value={formData.ethnic_group} onChange={(e) => setFormData({ ...formData, ethnic_group: e.target.value })} style={ui.input} />
-                </div>
-              </div>
-              <div>
-                <label style={ui.label}>Religion</label>
-                <input maxLength={80} value={formData.religion} onChange={(e) => setFormData({ ...formData, religion: e.target.value })} style={ui.input} />
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-            <Button variant="secondary" type="button" onClick={() => setIsModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" type="submit" loading={saving} disabled={saving || lrnCheck.is_taken || lrnCheck.checking}>
-              {editingStudent ? 'Save Changes' : 'Enroll Student'}
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
-      {badgeStudent && (
-        <Modal isOpen={Boolean(badgeStudent)} onClose={() => setBadgeStudent(null)} title="Student QR ID Card">
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-            <div
-              style={{
-                width: 292,
-                backgroundColor: tokens.bgSurface,
-                borderWidth: 2,
-                borderStyle: 'solid',
-                borderColor: brand.primary,
-                borderRadius: 14,
-                overflow: 'hidden',
-                boxShadow: tokens.cardShadow,
-              }}
-            >
-              <div style={{ backgroundColor: brand.buttonBg, color: tokens.onPrimary, padding: '12px 14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: fonts.size.xs, fontWeight: 800 }}>
-                  <ShieldCheck size={14} /> OFFICIAL STUDENT QR PASS
-                </div>
-                <div style={{ fontSize: '0.64rem', opacity: 0.9, marginTop: 2 }}>{activeSchoolName}</div>
-              </div>
-
-              <div style={{ padding: '16px 14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
-                  <ProfileAvatar photoUrl={badgeStudent.photo_url || badgeStudent.photo} name={badgeStudent.full_name} size={56} iconSize={26} />
-                </div>
-                <div style={{ fontSize: fonts.size.md, fontWeight: 800, color: tokens.textPrimary }}>{badgeStudent.full_name}</div>
-                <div style={{ fontSize: fonts.size.sm, color: tokens.textSecondary, marginTop: 2 }}>
-                  {badgeStudent.current_section || 'Enrolled Student'}
-                </div>
-                <div
-                  style={{
-                    margin: '8px auto',
-                    padding: '3px 10px',
-                    backgroundColor: tokens.bgSurfaceSubtle,
-                    borderRadius: 6,
-                    fontFamily: fonts.mono,
-                    fontWeight: 700,
-                    fontSize: fonts.size.sm,
-                    display: 'inline-block',
-                  }}
-                >
-                  LRN: {badgeStudent.lrn}
-                </div>
-                <div
-                  style={{
-                    width: 124,
-                    height: 124,
-                    margin: '8px auto',
-                    padding: 6,
-                    backgroundColor: QR_COLORS.background,
-                    borderWidth: 1,
-                    borderStyle: 'solid',
-                    borderColor: tokens.borderSubtle,
-                    borderRadius: 10,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <QrCodeSvg
-                    value={badgeStudent.qr_payload || badgeStudent.lrn}
-                    size={112}
-                    label={`QR code for ${badgeStudent.full_name}`}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-              <Button variant="secondary" type="button" onClick={() => setBadgeStudent(null)}>
-                Close
-              </Button>
-              <Button variant="primary" type="button" onClick={() => window.print()} icon={<Printer size={14} />}>
-                Print Pass
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      <StudentQrBadgeModal
+        student={badgeStudent}
+        schoolName={activeSchoolName}
+        onClose={() => setBadgeStudent(null)}
+      />
 
       <PrintableExportModal
         isOpen={isPrintModalOpen}

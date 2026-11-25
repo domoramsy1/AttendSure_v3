@@ -1,3 +1,6 @@
+# AttendSure Backend - Attendance App Configuration
+# File: D:\AttendSure_V3\backend\apps\attendance\apps.py
+
 from django.apps import AppConfig
 
 

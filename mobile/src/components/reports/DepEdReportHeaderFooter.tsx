@@ -1,3 +1,6 @@
+// AttendSure Mobile - Dep Ed Report Header Footer Component
+// File: D:\AttendSure_V3\mobile\src\components\reports\DepEdReportHeaderFooter.tsx
+
 /**
  * AttendSure - DepEd Manual of Style (DMOS) Mobile Header & Footer
  * File: mobile/src/components/reports/DepEdReportHeaderFooter.tsx

@@ -1,3 +1,6 @@
+# AttendSure Backend - Accounts URL Routes
+# File: D:\AttendSure_V3\backend\apps\accounts\urls.py
+
 # D:\AttendSure_V3\backend\apps\accounts\urls.py
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
@@ -14,6 +17,8 @@ from .views import (
     FieldAvailabilityView,
     LoginView,
     LogoutView,
+    OnboardingCompleteView,
+    OnboardingResetView,
     ResetBoundDeviceView,
     TeacherDropdownView,
     TeacherProfileViewSet,
@@ -37,6 +42,8 @@ urlpatterns = [
     path("me/", CurrentUserView.as_view(), name="auth-me"),
     path("profile/", CurrentProfileView.as_view(), name="auth-profile"),
     path("change-password/", ChangePasswordView.as_view(), name="auth-change-password"),
+    path("onboarding/complete/", OnboardingCompleteView.as_view(), name="auth-onboarding-complete"),
+    path("onboarding/reset/", OnboardingResetView.as_view(), name="auth-onboarding-reset"),
     path("check-availability/", FieldAvailabilityView.as_view(), name="auth-check-availability"),
     path("validate-field/", FieldAvailabilityView.as_view(), name="auth-validate-field"),
     path("teachers/dropdown/", TeacherDropdownView.as_view(), name="teachers-dropdown"),

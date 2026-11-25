@@ -1,3 +1,6 @@
+# AttendSure Backend - Campus Read Queries
+# File: D:\AttendSure_V3\backend\apps\campus\selectors.py
+
 # D:\AttendSure_V3\backend\apps\campus\selectors.py
 from datetime import timedelta
 from django.core.cache import cache
@@ -14,6 +17,13 @@ from apps.school.models import SchoolSettings
 from apps.school.selectors import format_section_label
 from common.media import build_media_url
 from common.permissions import is_school_leader
+from common.time_utils import (
+    format_datetime_12h,
+    format_time_12h,
+    format_time_range_12h,
+    local_day_bounds,
+    parse_local_date,
+)
 from .models import CampusBoundary, LoafingIncident, TeacherDailyAttendance, TeacherLocationPing
 
 ONLINE_WINDOW_MINUTES = 5
@@ -72,7 +82,16 @@ def format_loafing_incident(inc: LoafingIncident) -> dict:
 
     period_label = ""
     if inc.class_period_id and inc.class_period and inc.class_period.subject:
-        period_label = f"{inc.class_period.subject.code} ({str(inc.class_period.start_time)[:5]}-{str(inc.class_period.end_time)[:5]})"
+        time_window = format_time_range_12h(
+            inc.class_period.start_time,
+            inc.class_period.end_time,
+            fallback="",
+        )
+        period_label = (
+            f"{inc.class_period.subject.code} ({time_window})"
+            if time_window
+            else inc.class_period.subject.code
+        )
 
     local_det = timezone.localtime(inc.detected_at)
     local_res = timezone.localtime(inc.resolved_at) if inc.resolved_at else None
@@ -93,9 +112,13 @@ def format_loafing_incident(inc: LoafingIncident) -> dict:
         "exit_pass_id": inc.exit_pass_id,
         "distance_meters": inc.distance_meters,
         "incident_date": str(local_det.date()),
-        "detected_at": local_det.strftime("%Y-%m-%d %I:%M:%S %p"),
-        "detected_time": local_det.strftime("%I:%M %p"),
-        "resolved_at": local_res.strftime("%Y-%m-%d %I:%M:%S %p") if local_res else None,
+        "detected_at": format_datetime_12h(local_det, include_seconds=True, date_format="%Y-%m-%d"),
+        "detected_time": format_time_12h(local_det),
+        "resolved_at": (
+            format_datetime_12h(local_res, include_seconds=True, date_format="%Y-%m-%d")
+            if local_res
+            else None
+        ),
         "remarks": inc.remarks,
         "reviewed_by_name": (
             (inc.reviewed_by.get_full_name() or inc.reviewed_by.username).strip()
@@ -113,6 +136,7 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
     """
     now_dt = timezone.now()
     today = timezone.localdate()
+    today_start, today_end = local_day_bounds(today)
     online_cutoff = now_dt - timedelta(minutes=ONLINE_WINDOW_MINUTES)
 
     boundary = get_active_campus_boundary()
@@ -157,9 +181,24 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
             time_out__isnull=True,
         ).values_list("teacher_id", flat=True)
     )
+    timed_out_today_ids = set(
+        TeacherDailyAttendance.objects.filter(
+            attendance_date=today,
+            time_out__isnull=False,
+        ).values_list("teacher_id", flat=True)
+    )
+    signal_lost_today_ids = set(
+        LoafingIncident.objects.filter(
+            incident_type="TEACHER_SIGNAL_LOST",
+            status="OPEN",
+            detected_at__gte=today_start,
+            detected_at__lt=today_end,
+            teacher_id__isnull=False,
+        ).values_list("teacher_id", flat=True)
+    )
 
     incidents_qs = (
-        LoafingIncident.objects.filter(detected_at__date=today)
+        LoafingIncident.objects.filter(detected_at__gte=today_start, detected_at__lt=today_end)
         .select_related(
             "teacher",
             "teacher__user",
@@ -198,9 +237,21 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
         latest = latest_pings_by_id.get(t.latest_ping_id) if t.latest_ping_id else None
         local_seen = timezone.localtime(latest.recorded_at) if latest else None
         ping_is_today = bool(local_seen and local_seen.date() == today)
-        is_online = bool(latest and latest.recorded_at >= online_cutoff)
+        has_timed_out_today = t.id in timed_out_today_ids
+        is_clocked_in = t.id in clocked_in_today_ids and not has_timed_out_today
+        is_online = bool(latest and latest.recorded_at >= online_cutoff and not has_timed_out_today)
+        has_signal_lost = bool(
+            is_clocked_in and not is_online and t.id in signal_lost_today_ids
+        )
 
-        inside = bool(ping_is_today and latest and latest.is_inside)
+        inside = bool(
+            ping_is_today
+            and latest
+            and not has_timed_out_today
+            and not has_signal_lost
+            and latest.zone_status != "OFF_DUTY"
+            and latest.is_inside
+        )
         dist = latest.distance_meters if (ping_is_today and latest) else None
         acc = latest.accuracy_meters if (ping_is_today and latest) else None
         ping_lat = float(latest.latitude) if (ping_is_today and latest) else None
@@ -208,13 +259,16 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
 
         if is_online:
             online_count += 1
-        if ping_is_today and latest:
+        if ping_is_today and latest and not has_timed_out_today and not has_signal_lost:
             if inside:
                 verified_inside_count += 1
             else:
                 outside_count += 1
 
-        if not ping_is_today or not latest:
+        if has_signal_lost:
+            zone_status = "SIGNAL_LOST"
+            row_status = "SIGNAL_LOST"
+        elif not ping_is_today or not latest or has_timed_out_today:
             zone_status = "OFF_DUTY"
             row_status = "OFFLINE"
         elif inside:
@@ -232,9 +286,9 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
 
         if local_seen:
             last_seen_str = (
-                local_seen.strftime("%I:%M:%S %p")
+                format_time_12h(local_seen, include_seconds=True)
                 if ping_is_today
-                else local_seen.strftime("%b %d, %I:%M %p")
+                else format_datetime_12h(local_seen, date_format="%b %d,", zero_pad_hour=True)
             )
         else:
             last_seen_str = "No ping yet"
@@ -243,6 +297,7 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
             {
                 "id": t.id,
                 "teacher_id": t.id,
+                "user_id": t.user_id,
                 "employee_id": t.employee_id,
                 "full_name": t.full_name,
                 "teacher_name": t.full_name,
@@ -250,7 +305,9 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
                 "position": t.position_title,
                 "photo_url": build_media_url(t.photo, request),
                 "is_online": is_online,
-                "is_clocked_in": t.id in clocked_in_today_ids,
+                "is_clocked_in": is_clocked_in,
+                "has_timed_out": has_timed_out_today,
+                "has_signal_lost": has_signal_lost,
                 "zone_status": zone_status,
                 "status": row_status,
                 "is_inside": inside,
@@ -261,16 +318,29 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
                 "latitude": ping_lat,
                 "longitude": ping_lon,
                 "last_seen": last_seen_str,
-                "recorded_at": local_seen.strftime("%I:%M:%S %p") if (ping_is_today and local_seen) else None,
+                "recorded_at": (
+                    format_time_12h(local_seen, include_seconds=True)
+                    if (ping_is_today and local_seen)
+                    else None
+                ),
                 "bound_device_id": t.bound_device_id,
+                "has_bound_device": bool(t.bound_device_id),
                 "is_device_bound": bool(t.bound_device_id),
                 "device_model": t.device_model or "",
+                "battery_percent": latest.battery_percent if (ping_is_today and latest) else None,
+                "is_charging": latest.is_charging if (ping_is_today and latest) else None,
+                "is_low_power_mode": latest.is_low_power_mode if (ping_is_today and latest) else None,
+                "network_type": latest.network_type if (ping_is_today and latest) else "UNKNOWN",
+                "is_gps_enabled": latest.is_gps_enabled if (ping_is_today and latest) else None,
+                "app_state": latest.app_state if (ping_is_today and latest) else "UNKNOWN",
+                "ping_source": latest.ping_source if (ping_is_today and latest) else None,
             }
         )
 
     offline_count = max(len(teachers) - online_count, 0)
 
     return {
+        "today_date": str(today),
         "campus_name": name,
         "name": name,
         "latitude": lat,
@@ -282,6 +352,8 @@ def get_campus_boundary_overview(*, user, request=None) -> dict:
         "loafing_grace_minutes": boundary.loafing_grace_minutes,
         "duty_start_time": str(boundary.duty_start_time)[:5],
         "duty_end_time": str(boundary.duty_end_time)[:5],
+        "duty_start_time_display": format_time_12h(boundary.duty_start_time),
+        "duty_end_time_display": format_time_12h(boundary.duty_end_time),
         "enforce_geofence_checkin": boundary.enforce_geofence_checkin,
         "is_active": boundary.is_active,
         "inside_count": verified_inside_count,
@@ -347,9 +419,19 @@ def get_campus_audit_history(*, user, request=None) -> dict:
         date_from = request.query_params.get("date_from")
         date_to = request.query_params.get("date_to")
         if date_from:
-            pings_qs = pings_qs.filter(recorded_at__date__gte=date_from)
+            parsed_from = parse_local_date(date_from)
+            if parsed_from is not None:
+                from_start, _ = local_day_bounds(parsed_from)
+                pings_qs = pings_qs.filter(recorded_at__gte=from_start)
+            else:
+                pings_qs = pings_qs.none()
         if date_to:
-            pings_qs = pings_qs.filter(recorded_at__date__lte=date_to)
+            parsed_to = parse_local_date(date_to)
+            if parsed_to is not None:
+                _, to_end = local_day_bounds(parsed_to)
+                pings_qs = pings_qs.filter(recorded_at__lt=to_end)
+            else:
+                pings_qs = pings_qs.none()
         teacher_id = request.query_params.get("teacher_id")
         if teacher_id and str(teacher_id).isdigit():
             pings_qs = pings_qs.filter(teacher_id=int(teacher_id))
@@ -392,9 +474,9 @@ def get_campus_audit_history(*, user, request=None) -> dict:
                 "distance": dist,
                 "accuracy_meters": p.accuracy_meters,
                 "device_id": p.device_id,
-                "timestamp": local_rec.strftime("%Y-%m-%d %I:%M:%S %p"),
+                "timestamp": format_datetime_12h(local_rec, include_seconds=True, date_format="%Y-%m-%d"),
                 "date_only": str(local_rec.date()),
-                "time_only": local_rec.strftime("%I:%M:%S %p"),
+                "time_only": format_time_12h(local_rec, include_seconds=True),
                 "details": f"{readable_zone} ({dist_label} from school center)",
             }
         )
@@ -411,7 +493,7 @@ def get_campus_audit_history(*, user, request=None) -> dict:
             "action": item.action,
             "table_name": item.table_name,
             "ip_address": item.client_ip or "",
-            "timestamp": timezone.localtime(item.created_at).strftime("%Y-%m-%d %I:%M:%S %p"),
+            "timestamp": format_datetime_12h(item.created_at, include_seconds=True, date_format="%Y-%m-%d"),
         }
         for item in audit_qs[:60]
     ]
@@ -459,12 +541,18 @@ def get_loafing_incidents_queryset(*, user, incident_type: str = "", status_filt
     if status_filter and status_filter.upper() != "ALL":
         qs = qs.filter(status=status_filter.upper())
     if date_str:
-        qs = qs.filter(detected_at__date=date_str)
+        parsed_day = parse_local_date(date_str)
+        if parsed_day is not None:
+            day_start, day_end = local_day_bounds(parsed_day)
+            qs = qs.filter(detected_at__gte=day_start, detected_at__lt=day_end)
+        else:
+            return qs.none()
     return qs
 
 
 def get_emergency_roll_call(*, request=None) -> dict:
     today = timezone.localdate()
+    today_start, today_end = local_day_bounds(today)
     now = timezone.now()
 
     departed_enr_ids = set(
@@ -472,7 +560,8 @@ def get_emergency_roll_call(*, request=None) -> dict:
             pass_scope="STUDENT",
             is_cancelled=False,
             returned_at__isnull=True,
-            issued_at__date=today,
+            issued_at__gte=today_start,
+            issued_at__lt=today_end,
             valid_until__gte=now,
         ).values_list("enrollment_id", flat=True)
     )
@@ -508,13 +597,24 @@ def get_emergency_roll_call(*, request=None) -> dict:
         )
     students.sort(key=lambda item: (item["section"], item["full_name"]))
 
+    timed_out_teacher_ids = set(
+        TeacherDailyAttendance.objects.filter(
+            attendance_date=today,
+            time_out__isnull=False,
+        ).values_list("teacher_id", flat=True)
+    )
     latest_ping_subquery = Subquery(
-        TeacherLocationPing.objects.filter(teacher_id=OuterRef("pk"), recorded_at__date=today)
+        TeacherLocationPing.objects.filter(
+            teacher_id=OuterRef("pk"),
+            recorded_at__gte=today_start,
+            recorded_at__lt=today_end,
+        )
         .order_by("-recorded_at", "-id")
         .values("zone_status")[:1]
     )
     teachers_inside = (
         TeacherProfile.objects.filter(user__is_active=True)
+        .exclude(id__in=timed_out_teacher_ids)
         .select_related("user", "department")
         .annotate(latest_zone=latest_ping_subquery)
         .filter(latest_zone="INSIDE")
@@ -532,7 +632,7 @@ def get_emergency_roll_call(*, request=None) -> dict:
     ]
 
     return {
-        "timestamp": timezone.localtime().strftime("%Y-%m-%d %I:%M:%S %p"),
+        "timestamp": format_datetime_12h(timezone.localtime(), include_seconds=True, date_format="%Y-%m-%d"),
         "total_people_on_campus": len(students) + len(teachers_payload),
         "students_count": len(students),
         "teachers_count": len(teachers_payload),

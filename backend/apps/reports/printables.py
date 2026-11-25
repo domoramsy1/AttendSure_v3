@@ -1,3 +1,6 @@
+# AttendSure Backend - Reports Printables
+# File: D:\AttendSure_V3\backend\apps\reports\printables.py
+
 """
 AttendSure - Printable & Downloadable Class Schedules, Class Lists, QR ID Cards, and Teacher Directory
 File: backend/apps/reports/printables.py
@@ -29,6 +32,7 @@ from common.exceptions import AppError
 from common.media import build_media_url
 from common.permissions import get_user_role, is_school_leader
 from common.qr_signer import sign_student_qr
+from common.time_utils import format_datetime_12h, format_time_12h, format_time_range_12h
 
 VALID_PACK_TYPES = {
     "CLASS_SCHEDULE",
@@ -82,13 +86,7 @@ def apply_html_security_headers(response: HttpResponse) -> HttpResponse:
 
 
 def _format_time_12h(val: time | None) -> str:
-    if not val:
-        return ""
-    hour = val.hour
-    minute = val.minute
-    ampm = "PM" if hour >= 12 else "AM"
-    hour12 = hour % 12 or 12
-    return f"{hour12:02d}:{minute:02d} {ampm}"
+    return format_time_12h(val, fallback="")
 
 
 def _format_day_label(day_of_week: str | None) -> str:
@@ -409,9 +407,9 @@ def _build_class_schedule_data(
             "employee_id": employee_id,
             "day_of_week": p.day_of_week,
             "day_label": _format_day_label(p.day_of_week),
-            "start_time": p.start_time.strftime("%H:%M") if p.start_time else "",
-            "end_time": p.end_time.strftime("%H:%M") if p.end_time else "",
-            "time_range": f"{_format_time_12h(p.start_time)} - {_format_time_12h(p.end_time)}",
+            "start_time": f"{p.start_time.hour:02d}:{p.start_time.minute:02d}" if p.start_time else "",
+            "end_time": f"{p.end_time.hour:02d}:{p.end_time.minute:02d}" if p.end_time else "",
+            "time_range": format_time_range_12h(p.start_time, p.end_time, fallback=""),
             "room_name": p.room_name or "Main Room",
             "weekly_hours": weekly_hours,
         }
@@ -685,7 +683,7 @@ def _build_qr_id_cards_data(
         sec_label = format_section_label(grade_name, sec_name)
         adviser_name = sec.adviser.full_name if sec and sec.adviser_id and sec.adviser else "Unassigned"
         sy_name = sec.school_year.name if sec and sec.school_year_id else default_sy
-        photo_url = build_media_url(stu.photo.url, request) if stu.photo else None
+        photo_url = build_media_url(stu.photo, request) if stu.photo else None
         signed_payload = sign_student_qr(stu.lrn, stu.qr_token)
 
         cards.append(
@@ -976,7 +974,7 @@ def build_print_pack_payload(*, request, params: Any) -> dict[str, Any]:
         "pack_type": pack_type,
         "scope": scope,
         "export_format": export_format,
-        "generated_at": timezone.localtime().strftime("%Y-%m-%d %I:%M %p"),
+        "generated_at": format_datetime_12h(timezone.localtime(), date_format="%Y-%m-%d"),
         "generated_by": generated_by,
         "school": meta,
         **body,

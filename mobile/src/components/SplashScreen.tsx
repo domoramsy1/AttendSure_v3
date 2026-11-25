@@ -1,3 +1,6 @@
+// AttendSure Mobile - Splash Screen Component
+// File: D:\AttendSure_V3\mobile\src\components\SplashScreen.tsx
+
 /**
  * AttendSure Mobile - Seamless Branded Splash Screen
  * File: mobile/src/components/SplashScreen.tsx

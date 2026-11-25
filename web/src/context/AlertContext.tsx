@@ -1,3 +1,6 @@
+// AttendSure Web - Alert Context
+// File: D:\AttendSure_V3\web\src\context\AlertContext.tsx
+
 /**
  * AttendSure - Global Alert & Confirmation System (Referentially Stable)
  * File: web/src/context/AlertContext.tsx
@@ -216,7 +219,7 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const primaryBtnStyle: React.CSSProperties = {
     backgroundColor: brand.buttonBg,
-    color: '#ffffff',
+    color: tokens.onPrimary,
     border: 'none',
     borderRadius: 6,
     padding: '7px 16px',
@@ -362,7 +365,7 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 onClick={handleConfirmAction}
                 style={{
                   ...primaryBtnStyle,
-                  backgroundColor: confirmData.isDestructive ? '#dc2626' : brand.buttonBg,
+                  backgroundColor: confirmData.isDestructive ? brand.danger : brand.buttonBg,
                 }}
               >
                 {isConfirmLoading ? (

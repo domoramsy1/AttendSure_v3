@@ -1,3 +1,6 @@
+// AttendSure Web - QR Code SVG Component
+// File: D:\AttendSure_V3\web\src\components\common\QrCodeSvg.tsx
+
 /**
  * AttendSure - Zero-Dependency Local QR Code SVG Generator (ISO/IEC 18004)
  * File: web/src/components/common/QrCodeSvg.tsx

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Optimize Web Assets
+# File: D:\AttendSure_V3\scripts\optimize_web_assets.py
+
 r"""
 AttendSure - Web Brand Asset Optimizer
 Downscales high-DPI embedded Base64 rasters (including >89MP exports inside techblazer.svg).

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Calendar Screen
+// File: D:\AttendSure_V3\mobile\src\screens\CalendarScreen.tsx
+
 /**
  * AttendSure Mobile - School Calendar & Schedule Overrides
  * File: mobile/src/screens/CalendarScreen.tsx

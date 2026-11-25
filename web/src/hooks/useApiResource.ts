@@ -1,3 +1,6 @@
+// AttendSure Web - Use API Resource Hook
+// File: D:\AttendSure_V3\web\src\hooks\useApiResource.ts
+
 /**
  * AttendSure - Zero-Lag SWR Data Hook (Instant Cache Hydration + Keep-Previous-Data)
  * File: web/src/hooks/useApiResource.ts
@@ -69,6 +72,7 @@ export function useApiResource<T>(
           params: reqParams,
           signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
         hasDataRef.current = true;
         setData(res.data);
       } catch (err: unknown) {

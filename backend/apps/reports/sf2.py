@@ -1,11 +1,17 @@
+# AttendSure Backend - Reports SF2
+# File: D:\AttendSure_V3\backend\apps\reports\sf2.py
+
 import calendar
 from datetime import date, datetime, timedelta
+from django.utils import timezone
 
 from apps.attendance.models import ClassAttendance, DailyAttendance
+from apps.campus.models import LoafingIncident
 from apps.school.models import SchoolHoliday, Section
 from apps.school.selectors import get_school_metadata
 from apps.students.models import Enrollment
 from common.exceptions import AppError
+from common.time_utils import local_month_bounds
 
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
@@ -73,6 +79,7 @@ def generate_sf2_report(
     month_num, clean_month = resolve_month(month_name)
     _, num_days = calendar.monthrange(year, month_num)
     month_start, month_end = date(year, month_num, 1), date(year, month_num, num_days)
+    today = timezone.localdate()
 
     holiday_dates = set(
         SchoolHoliday.objects.filter(
@@ -86,9 +93,18 @@ def generate_sf2_report(
         if dt.weekday() < 5 and dt not in holiday_dates:
             day_nums.append(d)
             school_days.append(
-                {"dateNumber": d, "dayOfWeek": abbr[dt.weekday()], "fullDate": str(dt)}
+                {
+                    "dateNumber": d,
+                    "dayOfWeek": abbr[dt.weekday()],
+                    "fullDate": str(dt),
+                    "isFuture": dt > today,
+                }
             )
     school_day_set = set(day_nums)
+    if year == today.year and month_num == today.month:
+        elapsed_day_nums = [d for d in day_nums if date(year, month_num, d) <= today]
+    else:
+        elapsed_day_nums = list(day_nums)
 
     enrollments = list(
         Enrollment.objects.filter(section=section, student__is_active=True)
@@ -123,6 +139,23 @@ def generate_sf2_report(
                 records_by_enr.setdefault(row["enrollment_id"], {}).setdefault(
                     day_val, row["status"].lower()
                 )
+
+        month_start_dt, month_end_dt = local_month_bounds(year, month_num)
+        for enr_id, det_at in (
+            LoafingIncident.objects.filter(
+                incident_type="STUDENT_CUTTING_CLASS",
+                enrollment_id__in=enrollment_ids,
+                detected_at__gte=month_start_dt,
+                detected_at__lt=month_end_dt,
+            )
+            .exclude(status="EXCUSED")
+            .values_list("enrollment_id", "detected_at")
+        ):
+            if det_at is None:
+                continue
+            day_val = timezone.localtime(det_at).day
+            if day_val in school_day_set:
+                records_by_enr.setdefault(enr_id, {})[day_val] = "cutting"
 
     sy = section.school_year
     sy_start_year = year
@@ -167,19 +200,21 @@ def generate_sf2_report(
             "sex": "M" if is_m else "F",
             "attendance": att,
             "total_absent": sum(
-                1 for d in day_nums if att.get(d, "") in ("absent", "x", "a")
+                1 for d in elapsed_day_nums if att.get(d, "") in ("absent", "x", "a")
             ),
             "total_tardy": sum(
-                1 for d in day_nums if att.get(d, "") in ("late", "tardy", "t")
+                1
+                for d in elapsed_day_nums
+                if att.get(d, "") in ("late", "tardy", "t", "cutting", "cc", "c")
             ),
             "remarks": enr.remarks,
         }
         if is_m:
             males.append(rec)
-            consec_m += int(has_five_consecutive_absences(att, day_nums))
+            consec_m += int(has_five_consecutive_absences(att, elapsed_day_nums))
         else:
             females.append(rec)
-            consec_f += int(has_five_consecutive_absences(att, day_nums))
+            consec_f += int(has_five_consecutive_absences(att, elapsed_day_nums))
 
         if enr_date <= cutoff:
             if is_m:
@@ -221,13 +256,13 @@ def generate_sf2_report(
             else:
                 reg_f += 1
 
-    n_days = len(school_days) or 1
-    present_vals = {"present", "late", "tardy", "excused"}
+    n_days = len(elapsed_day_nums) or 1
+    present_vals = {"present", "late", "tardy", "excused", "cutting"}
     ada_m = round(
         sum(
             1
             for m in males
-            for d in day_nums
+            for d in elapsed_day_nums
             if m["attendance"].get(d, "") in present_vals
         )
         / n_days,
@@ -237,7 +272,7 @@ def generate_sf2_report(
         sum(
             1
             for f in females
-            for d in day_nums
+            for d in elapsed_day_nums
             if f["attendance"].get(d, "") in present_vals
         )
         / n_days,
@@ -248,6 +283,11 @@ def generate_sf2_report(
     reg_all = reg_m + reg_f
     tot_june = june_m + june_f
 
+    def _enrolment_pct(reg_count: int, june_count: int) -> float | None:
+        if june_count > 0:
+            return round((reg_count / june_count) * 100, 1)
+        return None
+
     return {
         **get_school_metadata(request),
         "academic_year": section.school_year.name if section.school_year else "",
@@ -257,6 +297,8 @@ def generate_sf2_report(
         "year": year,
         "adviser_name": section.adviser.full_name if section.adviser else "",
         "school_days": school_days,
+        "elapsed_school_days_count": len(elapsed_day_nums),
+        "total_school_days_count": len(school_days),
         "has_enrolled_students": len(males) + len(females) > 0,
         "males": males,
         "females": females,
@@ -265,9 +307,9 @@ def generate_sf2_report(
             "late_enrolment": make_metric(late_m, late_f),
             "registered_end": make_metric(reg_m, reg_f),
             "percentage_enrolment": {
-                "m": round((reg_m / june_m) * 100, 1) if june_m else 0.0,
-                "f": round((reg_f / june_f) * 100, 1) if june_f else 0.0,
-                "total": round((reg_all / tot_june) * 100, 1) if tot_june else 0.0,
+                "m": _enrolment_pct(reg_m, june_m),
+                "f": _enrolment_pct(reg_f, june_f),
+                "total": _enrolment_pct(reg_all, tot_june),
             },
             "average_daily_attendance": {"m": ada_m, "f": ada_f, "total": ada_tot},
             "percentage_attendance": {

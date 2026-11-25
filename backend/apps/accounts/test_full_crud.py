@@ -1,3 +1,6 @@
+# AttendSure Backend - Accounts Test Full Crud
+# File: D:\AttendSure_V3\backend\apps\accounts\test_full_crud.py
+
 """
 AttendSure - Comprehensive 3NF Full-System CRUD & DepEd Reports Test Suite
 Run: python manage.py test apps.accounts.test_full_crud --verbosity=2
@@ -465,6 +468,8 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
             format="json",
         )
         self.assertEqual(ep_c.status_code, 201)
+        self.assertFalse(ep_c.data["is_approved"])
+        self.assertEqual(ep_c.data["pass_status"], "PENDING_APPROVAL")
         ep_id = ep_c.data["id"]
 
         ep_p = self.client.patch(
@@ -474,6 +479,9 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         self.assertEqual(ep_p.data["reason"], "Updated Seminar Venue")
 
         self.assertEqual(self.client.get("/api/v1/attendance/exit-passes/").status_code, 200)
+        self.client.force_authenticate(user=self.admin_user)
+        self.assertEqual(self.client.post(f"/api/v1/attendance/exit-passes/{ep_id}/approve/").status_code, 200)
+        self.client.force_authenticate(user=self.teacher_user)
         self.assertEqual(self.client.post(f"/api/v1/attendance/exit-passes/{ep_id}/mark-returned/").status_code, 200)
 
         self.client.force_authenticate(user=self.admin_user)
@@ -489,6 +497,18 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         self.assertEqual(b_put.status_code, 200)
         self.assertEqual(b_put.data["radius_meters"], 220)
 
+        import time as time_module
+        from common.device_crypto import generate_ed25519_keypair, sign_checkin_payload_ed25519
+
+        priv_key, pub_hex, key_id = generate_ed25519_keypair()
+        ts_in = int(time_module.time() * 1000)
+        sig_in = sign_checkin_payload_ed25519(
+            private_key=priv_key,
+            user_id=self.teacher_user.id,
+            device_id="DEV-ORIG-001",
+            timestamp_ms=ts_in,
+            action="TIME_IN",
+        )
         self.client.force_authenticate(user=self.teacher_user)
         chk_in = self.client.post(
             "/api/v1/campus/check-in/",
@@ -498,6 +518,12 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
                 "longitude": 124.6567,
                 "accuracy_meters": 10,
                 "face_verified_on_device": True,
+                "biometric_verified_on_device": True,
+                "biometric_key_id": key_id,
+                "biometric_public_key": pub_hex,
+                "biometric_key_algorithm": "ED25519",
+                "biometric_signature": sig_in,
+                "biometric_timestamp_ms": ts_in,
                 "device_id": "DEV-ORIG-001",
             },
             format="json",
@@ -505,6 +531,14 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
         self.assertEqual(chk_in.status_code, 201)
         self.assertTrue(chk_in.data["is_inside"])
 
+        ts_out = int(time_module.time() * 1000) + 1
+        sig_out = sign_checkin_payload_ed25519(
+            private_key=priv_key,
+            user_id=self.teacher_user.id,
+            device_id="DEV-ORIG-001",
+            timestamp_ms=ts_out,
+            action="TIME_OUT",
+        )
         chk_out = self.client.post(
             "/api/v1/campus/check-in/",
             {
@@ -513,6 +547,12 @@ class FullSystemCrudAndFeaturesTestSuite(APITestCase):
                 "longitude": 124.6567,
                 "accuracy_meters": 10,
                 "face_verified_on_device": True,
+                "biometric_verified_on_device": True,
+                "biometric_key_id": key_id,
+                "biometric_public_key": pub_hex,
+                "biometric_key_algorithm": "ED25519",
+                "biometric_signature": sig_out,
+                "biometric_timestamp_ms": ts_out,
                 "device_id": "DEV-ORIG-001",
             },
             format="json",

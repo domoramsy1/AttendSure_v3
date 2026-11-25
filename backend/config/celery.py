@@ -1,3 +1,6 @@
+# AttendSure Backend - Background Task Runner Setup
+# File: D:\AttendSure_V3\backend\config\celery.py
+
 import os
 from celery import Celery
 

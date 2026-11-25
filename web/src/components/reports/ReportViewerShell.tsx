@@ -1,3 +1,6 @@
+// AttendSure Web - Report Viewer Shell Component
+// File: D:\AttendSure_V3\web\src\components\reports\ReportViewerShell.tsx
+
 /**
  * AttendSure - Shared Official Report Header, Switcher Bar, Page Dimensions & Viewer Shell
  * File: web/src/components/reports/ReportViewerShell.tsx

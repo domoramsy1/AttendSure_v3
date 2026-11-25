@@ -1,3 +1,6 @@
+# AttendSure Backend - Attendance Business Logic Services
+# File: D:\AttendSure_V3\backend\apps\attendance\services.py
+
 # D:\AttendSure_V3\backend\apps\attendance\services.py
 from datetime import datetime, time as dt_time, timedelta
 import uuid as uuid_lib
@@ -13,14 +16,15 @@ from apps.accounts.selectors import (
     resolve_teacher_for_user,
 )
 from apps.campus.selectors import get_active_campus_coords
-from apps.school.models import ClassPeriod, Subject, period_runs_on_weekday
+from apps.school.models import ClassPeriod, SchoolHoliday, Subject, period_runs_on_weekday
 from apps.school.selectors import format_section_label
-from apps.students.models import Enrollment, Student
+from apps.students.models import ACTIVE_ENROLLMENT_STATUSES, Enrollment, Student
 from common.exceptions import AppError
 from common.gps import verify_campus_gps
 from common.media import build_media_url
 from common.permissions import is_school_leader
 from common.qr_signer import verify_student_qr
+from common.time_utils import format_time_12h, local_day_bounds
 from .models import ClassAttendance, DailyAttendance, ExitPass
 
 
@@ -51,6 +55,91 @@ def _parse_uuid(raw_val) -> uuid_lib.UUID | None:
         return uuid_lib.UUID(str(raw_val).strip())
     except (ValueError, TypeError):
         return None
+
+
+def recompute_daily_attendance(
+    *,
+    enrollment_id: int,
+    attendance_date,
+    recorder=None,
+    remarks: str | None = None,
+) -> DailyAttendance | None:
+    """
+    Recomputes DailyAttendance safely from all ClassAttendance records for the given
+    (enrollment_id, attendance_date), so later period scans or manual edits never
+    overwrite an earlier valid arrival time_in or daily status.
+    """
+    class_records = list(
+        ClassAttendance.objects.filter(
+            enrollment_id=enrollment_id,
+            attendance_date=attendance_date,
+        )
+        .select_related("class_period")
+        .order_by("scanned_at", "class_period__start_time", "id")
+    )
+    existing = DailyAttendance.objects.filter(
+        enrollment_id=enrollment_id,
+        attendance_date=attendance_date,
+    ).first()
+
+    if not class_records:
+        if existing:
+            existing.delete()
+        return None
+
+    present_or_late = [r for r in class_records if r.status in ("PRESENT", "LATE")]
+    if present_or_late:
+        present_or_late.sort(
+            key=lambda r: (
+                timezone.localtime(r.scanned_at) if r.scanned_at else timezone.now(),
+                (
+                    r.class_period.start_time
+                    if (r.class_period_id and r.class_period and r.class_period.start_time)
+                    else dt_time.max
+                ),
+                r.id,
+            )
+        )
+        earliest = present_or_late[0]
+        computed_status = earliest.status
+        computed_time_in = timezone.localtime(earliest.scanned_at).time() if earliest.scanned_at else None
+        computed_recorder = earliest.recorded_by or recorder
+    elif any(r.status == "EXCUSED" for r in class_records):
+        computed_status = "EXCUSED"
+        computed_time_in = None
+        computed_recorder = class_records[0].recorded_by or recorder
+    else:
+        computed_status = "ABSENT"
+        computed_time_in = None
+        computed_recorder = class_records[0].recorded_by or recorder
+
+    if existing:
+        update_fields = []
+        if existing.status != computed_status:
+            existing.status = computed_status
+            update_fields.append("status")
+        if existing.time_in != computed_time_in:
+            existing.time_in = computed_time_in
+            update_fields.append("time_in")
+        if computed_recorder and not existing.recorded_by_id:
+            existing.recorded_by = computed_recorder
+            update_fields.append("recorded_by")
+        if remarks and not existing.remarks:
+            existing.remarks = remarks[:255]
+            update_fields.append("remarks")
+        if update_fields:
+            update_fields.append("updated_at")
+            existing.save(update_fields=update_fields)
+        return existing
+
+    return DailyAttendance.objects.create(
+        enrollment_id=enrollment_id,
+        attendance_date=attendance_date,
+        time_in=computed_time_in,
+        status=computed_status,
+        recorded_by=computed_recorder,
+        remarks=(remarks or "Attendance log")[:255],
+    )
 
 
 @transaction.atomic
@@ -127,7 +216,7 @@ def record_student_qr_scan(
         )
 
     enrollment = (
-        Enrollment.objects.filter(student=student, status="ENROLLED")
+        Enrollment.objects.filter(student=student, status__in=ACTIVE_ENROLLMENT_STATUSES)
         .select_related("section", "section__grade_level", "section__adviser")
         .order_by("-section__school_year__is_active", "-id")
         .first()
@@ -234,33 +323,17 @@ def record_student_qr_scan(
     )
 
     if created:
-        DailyAttendance.objects.update_or_create(
-            enrollment=enrollment,
+        recompute_daily_attendance(
+            enrollment_id=enrollment.id,
             attendance_date=today,
-            defaults={
-                "time_in": local_now.time(),
-                "status": arrival_status,
-                "recorded_by": recorder,
-                "remarks": (note or "QR attendance")[:255],
-            },
+            recorder=recorder,
+            remarks=(note or "QR attendance")[:255],
         )
 
     adviser_uid = section.adviser.user_id if (section.adviser_id and section.adviser) else None
     _invalidate_live_attendance_caches(user_id=user.id, adviser_user_id=adviser_uid)
 
     local_scan_dt = timezone.localtime(record.scanned_at)
-    subj_title = target_period.subject.title if (target_period and target_period.subject_id) else "Class"
-    adviser_ctx = (
-        f" (Adviser: {section.adviser.full_name})"
-        if (section.adviser_id and section.adviser)
-        else ""
-    )
-    time_short = local_scan_dt.strftime("%I:%M %p").lstrip("0")
-    guardian_notice = (
-        f"{student.full_name} arrived late for {subj_title} in {section_label}{adviser_ctx} at {time_short}."
-        if record.status == "LATE"
-        else f"{student.full_name} arrived safely for {subj_title} in {section_label}{adviser_ctx} at {time_short}."
-    )
     return {
         "ok": True,
         "success": True,
@@ -272,10 +345,9 @@ def record_student_qr_scan(
         "lrn": student.lrn,
         "section": section_label,
         "status": record.status,
-        "scanned_at": local_scan_dt.strftime("%I:%M:%S %p"),
+        "scanned_at": format_time_12h(local_scan_dt, include_seconds=True),
         "scanned_at_iso": local_scan_dt.isoformat(),
         "attendance_note": note,
-        "guardian_notice": guardian_notice,
         "photo_url": build_media_url(student.photo, request),
     }
 
@@ -349,7 +421,7 @@ def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
 
     enrollment_by_student: dict[int, Enrollment] = {}
     for enr in (
-        Enrollment.objects.filter(student_id__in=student_ids, status="ENROLLED")
+        Enrollment.objects.filter(student_id__in=student_ids, status__in=ACTIVE_ENROLLMENT_STATUSES)
         .select_related("section", "section__adviser")
         .order_by("-section__school_year__is_active", "-id")
     ):
@@ -385,17 +457,21 @@ def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
         else set()
     )
 
-    existing_daily_keys = set(
-        DailyAttendance.objects.filter(
+    existing_daily_map: dict[tuple[int, object], DailyAttendance] = {
+        (da.enrollment_id, da.attendance_date): da
+        for da in DailyAttendance.objects.filter(
             enrollment_id__in=enr_ids,
             attendance_date__in=scan_dates,
-        ).values_list("enrollment_id", "attendance_date")
-    )
+        )
+    }
+
+    parsed_entries.sort(key=lambda e: e["scanned_at"])
 
     new_class_rows: list[ClassAttendance] = []
     new_daily_rows: list[DailyAttendance] = []
+    updated_daily_map: dict[tuple[int, object], DailyAttendance] = {}
     seen_batch_class_keys = set(existing_class_keys)
-    seen_batch_daily_keys = set(existing_daily_keys)
+    seen_batch_daily_keys = set(existing_daily_map.keys())
     seen_batch_uuids = set(existing_uuids)
     duplicates = 0
 
@@ -432,6 +508,7 @@ def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
 
         status_val = determine_arrival_status(period, entry["scanned_at"])
         recorder_id = teacher.id if teacher else period.teacher_id
+        local_scan_time = timezone.localtime(entry["scanned_at"]).time()
 
         new_class_rows.append(
             ClassAttendance(
@@ -455,18 +532,32 @@ def sync_offline_qr_scans(*, user, raw_scans: list[dict]) -> dict:
                 DailyAttendance(
                     enrollment_id=enr.id,
                     attendance_date=entry["scan_date"],
-                    time_in=timezone.localtime(entry["scanned_at"]).time(),
+                    time_in=local_scan_time,
                     status=status_val,
                     recorded_by_id=recorder_id,
                     remarks="Synced from offline camera QR queue.",
                 )
             )
             seen_batch_daily_keys.add(daily_key)
+        elif daily_key in existing_daily_map:
+            existing_da = existing_daily_map[daily_key]
+            if existing_da.status not in ("PRESENT", "LATE") or (
+                existing_da.time_in is None or local_scan_time < existing_da.time_in
+            ):
+                existing_da.time_in = local_scan_time
+                existing_da.status = status_val
+                if recorder_id and not existing_da.recorded_by_id:
+                    existing_da.recorded_by_id = recorder_id
+                updated_daily_map[daily_key] = existing_da
 
     if new_class_rows:
         ClassAttendance.objects.bulk_create(new_class_rows, ignore_conflicts=True)
     if new_daily_rows:
         DailyAttendance.objects.bulk_create(new_daily_rows, ignore_conflicts=True)
+    if updated_daily_map:
+        DailyAttendance.objects.bulk_update(
+            list(updated_daily_map.values()), ["time_in", "status", "recorded_by_id"]
+        )
 
     adviser_user_ids = {
         enr.section.adviser.user_id
@@ -509,7 +600,7 @@ def save_manual_attendance(
         )
 
     enr = (
-        Enrollment.objects.filter(student=student, status="ENROLLED")
+        Enrollment.objects.filter(student=student, status__in=ACTIVE_ENROLLMENT_STATUSES)
         .select_related("section", "section__adviser")
         .order_by("-section__school_year__is_active", "-id")
         .first()
@@ -535,30 +626,250 @@ def save_manual_attendance(
     recorder = teacher or period.teacher or TeacherProfile.objects.filter(user__is_active=True).order_by("id").first()
     now = timezone.now()
 
-    log, _ = ClassAttendance.objects.update_or_create(
+    existing_log = ClassAttendance.objects.filter(
         enrollment=enr,
         class_period=period,
         attendance_date=target_date,
-        defaults={
-            "recorded_by": recorder,
-            "status": clean_status,
-            "scan_method": "MANUAL",
-            "scanned_at": now,
-        },
-    )
-    DailyAttendance.objects.update_or_create(
-        enrollment=enr,
+    ).first()
+    if existing_log:
+        preserve_scanned_at = (
+            existing_log.status in ("PRESENT", "LATE")
+            and clean_status in ("PRESENT", "LATE")
+            and existing_log.scanned_at is not None
+        )
+        existing_log.recorded_by = recorder
+        existing_log.status = clean_status
+        existing_log.scan_method = "MANUAL"
+        if not preserve_scanned_at:
+            existing_log.scanned_at = now
+        existing_log.save(update_fields=["recorded_by", "status", "scan_method", "scanned_at"])
+        log = existing_log
+    else:
+        log = ClassAttendance.objects.create(
+            enrollment=enr,
+            class_period=period,
+            attendance_date=target_date,
+            recorded_by=recorder,
+            status=clean_status,
+            scan_method="MANUAL",
+            scanned_at=now,
+        )
+
+    recompute_daily_attendance(
+        enrollment_id=enr.id,
         attendance_date=target_date,
-        defaults={
-            "time_in": timezone.localtime(now).time() if clean_status in ("PRESENT", "LATE") else None,
-            "status": clean_status,
-            "recorded_by": recorder,
-            "remarks": "Manual teacher update.",
-        },
+        recorder=recorder,
+        remarks="Manual teacher update.",
     )
     adviser_uid = enr.section.adviser.user_id if (enr.section and enr.section.adviser_id and enr.section.adviser) else None
     _invalidate_live_attendance_caches(user_id=user.id, adviser_user_id=adviser_uid)
     return log
+
+
+@transaction.atomic
+def mark_unscanned_students_absent(
+    *,
+    user,
+    period_id: int | None = None,
+    section_id: int | None = None,
+    date_str: str | None = None,
+) -> dict:
+    """
+    Marks every unscanned active student in an assigned class period as ABSENT
+    (or EXCUSED if covered by an active student ExitPass for that period) so
+    DepEd SF2 and 30-day dropout warning reports stay complete without manual one-by-one clicks.
+    """
+    teacher = resolve_teacher_for_user(user)
+    leader = is_school_leader(user)
+    if not leader and (not teacher or not teacher.can_handle_classes):
+        raise AppError(
+            "FORBIDDEN",
+            "Only assigned classroom teachers and school leaders can mark unscanned students absent.",
+            403,
+        )
+
+    period = None
+    if period_id:
+        period = (
+            ClassPeriod.objects.select_related("section", "section__adviser", "subject")
+            .filter(id=period_id, is_active=True)
+            .first()
+        )
+        if not period:
+            raise AppError("PERIOD_NOT_FOUND", "Selected class period was not found.", 404)
+    elif section_id:
+        base_qs = ClassPeriod.objects.select_related("section", "section__adviser", "subject").filter(
+            section_id=section_id, is_active=True
+        )
+        if teacher:
+            period = base_qs.filter(teacher=teacher).order_by("start_time").first()
+        if not period:
+            period = base_qs.order_by("start_time").first()
+        if not period:
+            raise AppError("NO_SCHEDULE", "No active class period found for this section.", 400)
+    else:
+        raise AppError("PERIOD_REQUIRED", "Select a class period or section first.", 400)
+
+    section = period.section
+    is_adviser = bool(teacher and section.adviser_id == teacher.id)
+    is_period_teacher = bool(teacher and period.teacher_id == teacher.id)
+    if not (leader or is_adviser or is_period_teacher):
+        raise AppError(
+            "FORBIDDEN_SECTION",
+            "You can only mark attendance for your assigned classes or advisory section.",
+            403,
+        )
+
+    today = timezone.localdate()
+    target_date = today
+    if date_str:
+        try:
+            target_date = datetime.strptime(str(date_str).strip(), "%Y-%m-%d").date()
+        except ValueError:
+            raise AppError("INVALID_DATE", "Invalid date format (use YYYY-MM-DD).", 400)
+    if target_date > today:
+        raise AppError("FUTURE_DATE", "You cannot mark absences for a future date.", 400)
+    if SchoolHoliday.objects.filter(holiday_date=target_date).exists():
+        raise AppError(
+            "HOLIDAY_DATE",
+            "This date is marked as a school holiday or suspension, so absences were not recorded.",
+            400,
+        )
+
+    enrollments = list(
+        Enrollment.objects.filter(
+            section=section,
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
+            student__is_active=True,
+        ).only("id")
+    )
+    all_enr_ids = [e.id for e in enrollments]
+    if not all_enr_ids:
+        return {
+            "ok": True,
+            "success": True,
+            "period_id": period.id,
+            "section_id": section.id,
+            "attendance_date": str(target_date),
+            "marked_absent_count": 0,
+            "marked_excused_count": 0,
+            "already_recorded_count": 0,
+            "total_students": 0,
+            "message": "No active enrolled students found in this class.",
+        }
+
+    existing_enr_ids = set(
+        ClassAttendance.objects.filter(
+            class_period=period,
+            attendance_date=target_date,
+            enrollment_id__in=all_enr_ids,
+        ).values_list("enrollment_id", flat=True)
+    )
+    unscanned_enr_ids = [eid for eid in all_enr_ids if eid not in existing_enr_ids]
+
+    if not unscanned_enr_ids:
+        return {
+            "ok": True,
+            "success": True,
+            "period_id": period.id,
+            "section_id": section.id,
+            "attendance_date": str(target_date),
+            "marked_absent_count": 0,
+            "marked_excused_count": 0,
+            "already_recorded_count": len(existing_enr_ids),
+            "total_students": len(all_enr_ids),
+            "message": "Every student in this class already has an attendance record for this period.",
+        }
+
+    day_start, day_end = local_day_bounds(target_date)
+    current_tz = timezone.get_current_timezone()
+    period_start_dt = (
+        timezone.make_aware(datetime.combine(target_date, period.start_time), current_tz)
+        if period.start_time
+        else day_start
+    )
+    period_end_dt = (
+        timezone.make_aware(datetime.combine(target_date, period.end_time), current_tz)
+        if period.end_time
+        else day_end
+    )
+
+    excused_enr_ids: set[int] = set()
+    for ep in ExitPass.objects.filter(
+        pass_scope="STUDENT",
+        enrollment_id__in=unscanned_enr_ids,
+        is_cancelled=False,
+        issued_at__lt=day_end,
+        valid_until__gte=day_start,
+    ):
+        if (
+            ep.issued_at <= period_end_dt
+            and ep.valid_until >= period_start_dt
+            and (ep.returned_at is None or ep.returned_at >= period_start_dt)
+        ):
+            excused_enr_ids.add(ep.enrollment_id)
+
+    recorder = (
+        teacher
+        or period.teacher
+        or section.adviser
+        or TeacherProfile.objects.filter(user__is_active=True).order_by("id").first()
+    )
+    now = timezone.now()
+
+    new_rows: list[ClassAttendance] = []
+    absent_count = 0
+    excused_count = 0
+    for eid in unscanned_enr_ids:
+        next_status = "EXCUSED" if eid in excused_enr_ids else "ABSENT"
+        if next_status == "EXCUSED":
+            excused_count += 1
+        else:
+            absent_count += 1
+        new_rows.append(
+            ClassAttendance(
+                enrollment_id=eid,
+                class_period=period,
+                attendance_date=target_date,
+                recorded_by=recorder,
+                status=next_status,
+                scan_method="MANUAL",
+                scanned_at=now,
+            )
+        )
+
+    ClassAttendance.objects.bulk_create(new_rows, ignore_conflicts=True)
+
+    for eid in unscanned_enr_ids:
+        recompute_daily_attendance(
+            enrollment_id=eid,
+            attendance_date=target_date,
+            recorder=recorder,
+            remarks="Marked absent (unscanned)" if eid not in excused_enr_ids else "Excused by active exit pass",
+        )
+
+    adviser_uid = section.adviser.user_id if (section.adviser_id and section.adviser) else None
+    _invalidate_live_attendance_caches(user_id=user.id, adviser_user_id=adviser_uid)
+
+    parts = []
+    if absent_count:
+        parts.append(f"Marked {absent_count} unscanned student(s) as Absent")
+    if excused_count:
+        parts.append(f"{excused_count} student(s) with an active exit pass as Excused")
+    summary_msg = " and ".join(parts) + "." if parts else "Attendance updated."
+
+    return {
+        "ok": True,
+        "success": True,
+        "period_id": period.id,
+        "section_id": section.id,
+        "attendance_date": str(target_date),
+        "marked_absent_count": absent_count,
+        "marked_excused_count": excused_count,
+        "already_recorded_count": len(existing_enr_ids),
+        "total_students": len(all_enr_ids),
+        "message": summary_msg,
+    }
 
 
 @transaction.atomic
@@ -569,14 +880,22 @@ def update_exit_pass_lifecycle(*, user, exit_pass: ExitPass, action_name: str) -
             raise AppError("FORBIDDEN", "Only school leaders can approve official locator slips.", 403)
         if exit_pass.is_cancelled:
             raise AppError("PASS_CANCELLED", "Cancelled passes cannot be approved.", 400)
-        exit_pass.issued_by = user
-        exit_pass.save(update_fields=["issued_by"])
+        exit_pass.is_approved = True
+        exit_pass.approved_by = user
+        exit_pass.approved_at = timezone.now()
+        exit_pass.save(update_fields=["is_approved", "approved_by", "approved_at"])
         _invalidate_live_attendance_caches(user_id=user.id)
         return exit_pass
 
     if clean_action == "RETURN":
         if exit_pass.is_cancelled:
             raise AppError("PASS_CANCELLED", "Cancelled exit passes cannot be marked returned.", 400)
+        if exit_pass.pass_scope == "TEACHER" and not exit_pass.is_approved:
+            raise AppError(
+                "PASS_NOT_APPROVED",
+                "Pending locator slips must be approved by a school leader before marking returned.",
+                400,
+            )
         exit_pass.returned_at = timezone.now()
         exit_pass.save(update_fields=["returned_at"])
         _invalidate_live_attendance_caches(user_id=user.id)

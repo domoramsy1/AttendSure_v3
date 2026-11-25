@@ -1,3 +1,6 @@
+# AttendSure Backend - Attendance Loafing Detector
+# File: D:\AttendSure_V3\backend\apps\attendance\loafing_detector.py
+
 from datetime import datetime, time as dt_time
 from django.db import transaction
 from django.db.models import Q
@@ -5,9 +8,10 @@ from django.utils import timezone
 
 from apps.accounts.selectors import get_teacher_section_ids, resolve_teacher_for_user
 from apps.campus.models import LoafingIncident
-from apps.school.models import ClassPeriod, period_runs_on_weekday
-from apps.students.models import Enrollment
+from apps.school.models import ClassPeriod, SchoolHoliday, period_runs_on_weekday
+from apps.students.models import ACTIVE_ENROLLMENT_STATUSES, Enrollment
 from common.permissions import is_school_leader
+from common.time_utils import local_day_bounds
 from .models import ClassAttendance, DailyAttendance, ExitPass
 
 
@@ -30,6 +34,8 @@ def detect_daily_student_cutting(
     audit_date = target_date or local_now.date()
     audit_weekday = audit_date.isoweekday()
     is_past_date = audit_date < local_now.date()
+    is_future_date = audit_date > local_now.date()
+    is_holiday = SchoolHoliday.objects.filter(holiday_date=audit_date).exists()
 
     allowed_section_ids: set[int] | None = None
     if user is not None and not is_school_leader(user):
@@ -38,7 +44,7 @@ def detect_daily_student_cutting(
 
     # 1. Fetch active enrollments scoped by section / teacher permissions
     enr_qs = Enrollment.objects.filter(
-        status__in=["ENROLLED", "TRANSFERRED_IN"],
+        status__in=ACTIVE_ENROLLMENT_STATUSES,
         student__is_active=True,
     ).select_related("student", "section", "section__grade_level")
     if section_id:
@@ -53,7 +59,7 @@ def detect_daily_student_cutting(
     created_cutting = 0
     created_expired = 0
 
-    if enrollment_ids:
+    if not is_holiday and enrollment_ids:
         # 2. Fetch active class periods for relevant sections in 1 query,
         # then keep only periods scheduled to meet on audit_date's weekday.
         periods = [
@@ -114,14 +120,13 @@ def detect_daily_student_cutting(
                     explicit_absent_pairs.add((enr_id, pid))
 
             # 4. Fetch non-cancelled ExitPasses for these enrollments that could overlap audit_date (1 query)
-            day_start = timezone.make_aware(datetime.combine(audit_date, dt_time.min))
-            day_end = timezone.make_aware(datetime.combine(audit_date, dt_time.max))
+            day_start, day_end = local_day_bounds(audit_date)
             student_passes_by_enr: dict[int, list[ExitPass]] = {}
             for ep in ExitPass.objects.filter(
                 pass_scope="STUDENT",
                 enrollment_id__in=enrollment_ids,
                 is_cancelled=False,
-                issued_at__lte=day_end,
+                issued_at__lt=day_end,
                 valid_until__gte=day_start,
             ):
                 student_passes_by_enr.setdefault(ep.enrollment_id, []).append(ep)
@@ -130,7 +135,8 @@ def detect_daily_student_cutting(
             existing_cutting_pairs = set(
                 LoafingIncident.objects.filter(
                     incident_type="STUDENT_CUTTING_CLASS",
-                    detected_at__date=audit_date,
+                    detected_at__gte=day_start,
+                    detected_at__lt=day_end,
                     enrollment_id__in=enrollment_ids,
                 ).values_list("enrollment_id", "class_period_id")
             )
@@ -154,18 +160,18 @@ def detect_daily_student_cutting(
                     if (enr.id, period.id) in existing_cutting_pairs:
                         continue
 
-                    # Only flag periods that follow an earlier presence (or where roll-call ran / time passed)
-                    is_subsequent = first_seen_time is not None and period.start_time > first_seen_time
+                    # Only flag periods that have actually started/elapsed (never upcoming classes)
+                    is_subsequent = first_seen_time is None or period.start_time > first_seen_time
                     period_elapsed = (
                         force_all_periods
                         or is_past_date
                         or (period.id in started_period_ids)
                         or ((enr.id, period.id) in explicit_absent_pairs)
-                        or (local_now.time() >= period.start_time)
+                        or (not is_future_date and local_now.time() >= period.start_time)
                     )
-                    if not (is_subsequent or period_elapsed):
+                    if not period_elapsed:
                         continue
-                    if first_seen_time is not None and period.start_time < first_seen_time and period.id not in started_period_ids:
+                    if not is_subsequent:
                         continue
 
                     # Check if an active ExitPass covers this period
@@ -184,6 +190,15 @@ def detect_daily_student_cutting(
                     if covered_by_pass:
                         continue
 
+                    if audit_date != local_now.date():
+                        incident_detected_at = (
+                            period_end_dt
+                            if (day_start <= period_end_dt < day_end)
+                            else period_start_dt
+                        )
+                    else:
+                        incident_detected_at = now
+
                     subj_label = period.subject.code if period.subject_id else "Class"
                     new_incidents.append(
                         LoafingIncident(
@@ -191,7 +206,7 @@ def detect_daily_student_cutting(
                             status="OPEN",
                             enrollment=enr,
                             class_period=period,
-                            detected_at=now,
+                            detected_at=incident_detected_at,
                             remarks=f"Present earlier on {audit_date} but missing from {subj_label} without an exit pass.",
                         )
                     )
@@ -201,8 +216,9 @@ def detect_daily_student_cutting(
                 LoafingIncident.objects.bulk_create(new_incidents)
                 created_cutting = len(new_incidents)
 
-    # 6. Detect EXPIRED_EXIT_PASS incidents (overdue, unreturned, uncancelled passes)
+    # 6. Detect EXPIRED_EXIT_PASS incidents (overdue, approved, unreturned, uncancelled passes)
     overdue_qs = ExitPass.objects.filter(
+        is_approved=True,
         is_cancelled=False,
         returned_at__isnull=True,
         valid_until__lt=now,
@@ -243,6 +259,7 @@ def detect_daily_student_cutting(
     return {
         "ok": True,
         "audit_date": str(audit_date),
+        "is_holiday": is_holiday,
         "created_cutting_incidents": created_cutting,
         "created_expired_pass_incidents": created_expired,
         "total_created": created_cutting + created_expired,

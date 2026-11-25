@@ -1,10 +1,18 @@
+// AttendSure Web - Root Portal Application
+// File: D:\AttendSure_V3\web\src\App.tsx
+
 /**
  * AttendSure - Application Shell (Lazy-Loaded Tabs, Hover Prefetch & Role Guard)
  * File: web/src/App.tsx
  */
 
 import React, { Suspense, lazy, startTransition, useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import apiClient, { clearApiClientCache, prefetchApiGet, warmupRoleEndpoints } from './api/client';
+import apiClient, {
+  clearApiClientCache,
+  prefetchApiGet,
+  revokeCurrentDeviceSession,
+  warmupRoleEndpoints,
+} from './api/client';
 import { API_ROUTES } from './api/routes';
 import { AuthPage as LoginView } from './components/auth/AuthPage';
 import { StartupShowcasePage } from './components/showcase/StartupShowcasePage';
@@ -16,6 +24,9 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ProfileModal, type ProfileUpdatePayload } from './components/modals/ProfileModal';
 import { CompleteProfileModal, type CompletedProfileUser } from './components/modals/CompleteProfileModal';
 import { ScheduleAlarmModal } from './components/modals/ScheduleAlarmModal';
+import { OnboardingTour } from './components/help/OnboardingTour';
+import { UserManualModal } from './components/help/UserManualModal';
+import { resolveUserProfileKey } from './components/help/manualContent';
 import {
   buildTestWebAlarm,
   evaluateDueWebAlarm,
@@ -189,8 +200,11 @@ const AppContent: React.FC = () => {
   const [showStaffLogin, setShowStaffLogin] = useState<boolean>(false);
 
   const [session, setSession] = useState<UserSession | null>(() => {
-    const token = localStorage.getItem('attendsure_token') || localStorage.getItem('attendsure_access');
-    if (!token) return null;
+    const token = localStorage.getItem('attendsure_access');
+    if (!token) {
+      localStorage.removeItem('attendsure_token');
+      return null;
+    }
     const username = localStorage.getItem('attendsure_username') || '';
     return {
       user_id: Number(localStorage.getItem('attendsure_user_id') || 0),
@@ -214,6 +228,11 @@ const AppContent: React.FC = () => {
   );
   const [isCompleteProfileModalOpen, setIsCompleteProfileModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isManualOpen, setIsManualOpen] = useState(false);
+  const [isTourOpen, setIsTourOpen] = useState(false);
+  const [onboardingVersion, setOnboardingVersion] = useState<number>(1);
+  const autoPromptedTourRef = useRef<string | null>(null);
+  const pendingOnboardingAfterProfileRef = useRef<boolean>(false);
 
   const [activeTab, setActiveTab] = useState<NavItemKey>('dashboard');
   const [selectedReport, setSelectedReport] = useState<'sf1' | 'sf2' | 'sf4'>('sf1');
@@ -323,7 +342,16 @@ const AppContent: React.FC = () => {
     setIsSuperuser(false);
     setSelectedReport('sf1');
     setIsCompleteProfileModalOpen(false);
+    setIsManualOpen(false);
+    setIsTourOpen(false);
+    autoPromptedTourRef.current = null;
+    pendingOnboardingAfterProfileRef.current = false;
   }, []);
+
+  const handleLogout = useCallback(async () => {
+    await revokeCurrentDeviceSession();
+    handleAuthExpired();
+  }, [handleAuthExpired]);
 
   useEffect(() => {
     window.addEventListener('attendsure:auth-expired', handleAuthExpired);
@@ -417,7 +445,20 @@ const AppContent: React.FC = () => {
           setSelectedReport((prev) => (prev === 'sf4' ? 'sf1' : prev));
         }
 
-        if (d.is_profile_completed === false) setIsCompleteProfileModalOpen(true);
+        if (d.current_onboarding_version) {
+          setOnboardingVersion(Number(d.current_onboarding_version) || 1);
+        }
+
+        const tourScopeKey = `${userId || d.username || 'user'}:${Number(d.current_onboarding_version || 1)}`;
+        if (d.is_profile_completed === false) {
+          setIsCompleteProfileModalOpen(true);
+          if (d.needs_onboarding === true) {
+            pendingOnboardingAfterProfileRef.current = true;
+          }
+        } else if (d.needs_onboarding === true && autoPromptedTourRef.current !== tourScopeKey) {
+          autoPromptedTourRef.current = tourScopeKey;
+          setIsTourOpen(true);
+        }
 
         setSession((prev) =>
           prev ? { ...prev, user_id: userId || prev.user_id, teacher_name: name || prev.teacher_name, role } : null
@@ -822,6 +863,7 @@ const AppContent: React.FC = () => {
               schoolLogo={resolvedSchoolLogo}
               canTeach={canTeach}
               allowedTabs={allowedTabs}
+              onOpenManual={() => setIsManualOpen(true)}
             />
           </div>
 
@@ -852,9 +894,11 @@ const AppContent: React.FC = () => {
               alarmsEnabled={alarmsEnabled}
               onToggleAlarms={handleToggleAlarms}
               onTestAlarm={handleTestAlarm}
-              onLogout={handleAuthExpired}
+              onLogout={() => void handleLogout()}
               onNavigateTab={handleTabSelection}
               onOpenProfile={() => setIsProfileModalOpen(true)}
+              onOpenManual={() => setIsManualOpen(true)}
+              onStartTour={() => setIsTourOpen(true)}
             />
 
             <main
@@ -938,6 +982,7 @@ const AppContent: React.FC = () => {
 
           <CompleteProfileModal
             isOpen={isCompleteProfileModalOpen}
+            onSignOut={() => void handleLogout()}
             onCompleted={(updatedUser: CompletedProfileUser) => {
               setIsCompleteProfileModalOpen(false);
               const name = String(updatedUser.full_name || updatedUser.username || '').trim();
@@ -954,6 +999,10 @@ const AppContent: React.FC = () => {
                 setUserPhoto(photo);
                 localStorage.setItem('attendsure_user_photo', photo);
               }
+              if (pendingOnboardingAfterProfileRef.current) {
+                pendingOnboardingAfterProfileRef.current = false;
+                setIsTourOpen(true);
+              }
             }}
           />
           <ScheduleAlarmModal
@@ -961,6 +1010,20 @@ const AppContent: React.FC = () => {
             onDismiss={handleDismissAlarm}
             onSnooze={handleSnoozeAlarm}
             onNavigateTab={handleTabSelection}
+          />
+          <OnboardingTour
+            isOpen={isTourOpen}
+            userProfile={resolveUserProfileKey(userRole, canTeach)}
+            onboardingVersion={onboardingVersion}
+            onClose={() => setIsTourOpen(false)}
+            onOpenManual={() => setIsManualOpen(true)}
+          />
+          <UserManualModal
+            isOpen={isManualOpen}
+            onClose={() => setIsManualOpen(false)}
+            userProfile={resolveUserProfileKey(userRole, canTeach)}
+            schoolName={school.school_name}
+            onStartTour={() => setIsTourOpen(true)}
           />
         </div>
       )}

@@ -1,12 +1,18 @@
+# AttendSure Backend - Reports SF4
+# File: D:\AttendSure_V3\backend\apps\reports\sf4.py
+
 import calendar
 from datetime import date, datetime
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.attendance.models import ClassAttendance, DailyAttendance
+from apps.campus.models import LoafingIncident
 from apps.school.models import GradeLevel, SchoolHoliday, SchoolYear, Section
 from apps.school.selectors import get_school_metadata
 from apps.students.models import Enrollment
 from common.exceptions import AppError
+from common.time_utils import local_month_bounds
 from .sf2 import resolve_month
 
 
@@ -79,6 +85,7 @@ def generate_sf4_report(
         raise AppError("INVALID_YEAR", "Year must be between 1900 and 2100.", 400)
     _, num_days = calendar.monthrange(year, month_num)
     start_dt, end_dt = date(year, month_num, 1), date(year, month_num, num_days)
+    today = timezone.localdate()
 
     holiday_dates = set(
         SchoolHoliday.objects.filter(
@@ -91,7 +98,11 @@ def generate_sf4_report(
         if date(year, month_num, d).weekday() < 5
         and date(year, month_num, d) not in holiday_dates
     ]
-    n_days = len(school_days) or 1
+    if year == today.year and month_num == today.month:
+        elapsed_school_days = [d for d in school_days if d <= today]
+    else:
+        elapsed_school_days = list(school_days)
+    n_days = len(elapsed_school_days) or 1
 
     target_sy = None
     if school_year:
@@ -130,24 +141,45 @@ def generate_sf4_report(
         enr_by_sec.setdefault(enr.section_id, []).append(enr)
         all_enrollment_ids.add(enr.id)
 
-    present_codes = ["PRESENT", "LATE", "EXCUSED"]
-    present_pairs = set()
+    present_vals = {"present", "late", "tardy", "excused", "cutting"}
+    records_by_enr: dict[int, dict[date, str]] = {}
     if all_enrollment_ids:
-        present_pairs.update(
-            DailyAttendance.objects.filter(
-                enrollment_id__in=all_enrollment_ids,
-                attendance_date__range=(start_dt, end_dt),
-                status__in=present_codes,
-            ).values_list("enrollment_id", "attendance_date")
-        )
-        present_pairs.update(
+        for row in DailyAttendance.objects.filter(
+            enrollment_id__in=all_enrollment_ids,
+            attendance_date__range=(start_dt, end_dt),
+        ).values("enrollment_id", "attendance_date", "status"):
+            records_by_enr.setdefault(row["enrollment_id"], {})[
+                row["attendance_date"]
+            ] = row["status"].lower()
+
+        for row in (
             ClassAttendance.objects.filter(
                 class_period__section__in=sections,
                 enrollment_id__in=all_enrollment_ids,
                 attendance_date__range=(start_dt, end_dt),
-                status__in=present_codes,
-            ).values_list("enrollment_id", "attendance_date")
-        )
+            )
+            .order_by("scanned_at")
+            .values("enrollment_id", "attendance_date", "status")
+        ):
+            records_by_enr.setdefault(row["enrollment_id"], {}).setdefault(
+                row["attendance_date"], row["status"].lower()
+            )
+
+        month_start_dt, month_end_dt = local_month_bounds(year, month_num)
+        for enr_id, det_at in (
+            LoafingIncident.objects.filter(
+                incident_type="STUDENT_CUTTING_CLASS",
+                enrollment_id__in=all_enrollment_ids,
+                detected_at__gte=month_start_dt,
+                detected_at__lt=month_end_dt,
+            )
+            .exclude(status="EXCUSED")
+            .values_list("enrollment_id", "detected_at")
+        ):
+            if det_at is None:
+                continue
+            det_day = timezone.localtime(det_at).date()
+            records_by_enr.setdefault(enr_id, {})[det_day] = "cutting"
 
     grade_names = list(
         GradeLevel.objects.order_by("level_number").values_list("name", flat=True)
@@ -183,6 +215,7 @@ def generate_sf4_report(
                 else enr.status_date
             )
 
+            exited_this_month = False
             if "DROP" in status_val:
                 if exit_dt and exit_dt < start_dt:
                     if is_m:
@@ -191,6 +224,7 @@ def generate_sf4_report(
                         drop_prev_f += 1
                     continue
                 if not exit_dt or exit_dt <= end_dt:
+                    exited_this_month = True
                     if is_m:
                         drop_mo_m += 1
                     else:
@@ -203,6 +237,7 @@ def generate_sf4_report(
                         tout_prev_f += 1
                     continue
                 if not exit_dt or exit_dt <= end_dt:
+                    exited_this_month = True
                     if is_m:
                         tout_mo_m += 1
                     else:
@@ -220,19 +255,20 @@ def generate_sf4_report(
                     else:
                         tin_mo_f += 1
 
-            if status_val not in ("DROPPED", "TRANSFERRED_OUT") or (
-                exit_dt and exit_dt > end_dt
-            ):
+            if not exited_this_month:
                 if is_m:
                     reg_m += 1
                 else:
                     reg_f += 1
-                for s_day in school_days:
-                    if (enr.id, s_day) in present_pairs:
-                        if is_m:
-                            att_m += 1
-                        else:
-                            att_f += 1
+
+            # Include attendance days for every learner registered during the month (aligned with SF2)
+            enr_att_map = records_by_enr.get(enr.id, {})
+            for s_day in elapsed_school_days:
+                if enr_att_map.get(s_day, "") in present_vals:
+                    if is_m:
+                        att_m += 1
+                    else:
+                        att_f += 1
 
         reg = make_triplet(reg_m, reg_f)
         ada = make_triplet(round(att_m / n_days, 1), round(att_f / n_days, 1))
@@ -304,6 +340,8 @@ def generate_sf4_report(
         "school_year": resolved_sy,
         "month": clean_month,
         "year": year,
+        "elapsed_school_days_count": len(elapsed_school_days),
+        "total_school_days_count": len(school_days),
         "grade_groups": grade_groups,
         "non_graded_summary": None,
         "total_summary": total_summary,

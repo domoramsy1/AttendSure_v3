@@ -1,3 +1,6 @@
+# AttendSure Backend - School Read Queries
+# File: D:\AttendSure_V3\backend\apps\school\selectors.py
+
 from django.core.cache import cache
 from django.db.models import Count, Q
 

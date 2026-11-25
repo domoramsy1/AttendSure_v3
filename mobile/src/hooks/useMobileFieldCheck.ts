@@ -1,3 +1,6 @@
+// AttendSure Mobile - Use Mobile Field Check Hook
+// File: D:\AttendSure_V3\mobile\src\hooks\useMobileFieldCheck.ts
+
 /**
  * AttendSure Mobile - Debounced & AbortController-Safe Live Field Availability Hook
  * File: mobile/src/hooks/useMobileFieldCheck.ts

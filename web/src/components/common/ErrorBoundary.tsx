@@ -1,3 +1,6 @@
+// AttendSure Web - Error Boundary Component
+// File: D:\AttendSure_V3\web\src\components\common\ErrorBoundary.tsx
+
 /**
  * AttendSure - Fault Isolation Error Boundary
  * File: web/src/components/common/ErrorBoundary.tsx

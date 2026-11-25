@@ -1,3 +1,6 @@
+// AttendSure Mobile - Root Application Component
+// File: D:\AttendSure_V3\mobile\App.tsx
+
 import React, { useMemo, useState } from 'react';
 import {
   NavigationContainer,

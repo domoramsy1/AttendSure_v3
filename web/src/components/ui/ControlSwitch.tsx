@@ -1,3 +1,6 @@
+// AttendSure Web - Control Switch Component
+// File: D:\AttendSure_V3\web\src\components\ui\ControlSwitch.tsx
+
 /**
  * AttendSure - Precision Segmented Control Switch & Toggle Switch
  * File: web/src/components/ui/ControlSwitch.tsx

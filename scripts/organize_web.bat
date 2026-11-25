@@ -1,3 +1,6 @@
+@REM AttendSure Scripts - Organize Web
+@REM File: D:\AttendSure_V3\scripts\organize_web.bat
+
 @setlocal & set "_PY=python" & (if exist "%~dp0..\backend\venv\Scripts\python.exe" set "_PY=%~dp0..\backend\venv\Scripts\python.exe") & call "%%_PY%%" -x "%~f0" %* & exit /b
 r"""
 AttendSure - Web Portal Dead-File Archiver

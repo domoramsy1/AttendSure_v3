@@ -1,3 +1,6 @@
+# AttendSure Backend - Campus Database Models
+# File: D:\AttendSure_V3\backend\apps\campus\models.py
+
 from datetime import time as dt_time
 from decimal import Decimal
 from django.conf import settings
@@ -23,8 +26,28 @@ ZONE_STATUS_CHOICES = [
 
 LOAFING_INCIDENT_TYPE_CHOICES = [
     ("TEACHER_OUTSIDE_GEOFENCE", "Teacher Outside Campus Boundary"),
+    ("TEACHER_SIGNAL_LOST", "Teacher Phone Signal Lost"),
     ("STUDENT_CUTTING_CLASS", "Student Cutting Class"),
     ("EXPIRED_EXIT_PASS", "Expired Exit Pass"),
+]
+
+NETWORK_TYPE_CHOICES = [
+    ("WIFI", "Wi-Fi"),
+    ("CELLULAR", "Mobile Data"),
+    ("NONE", "No Signal"),
+    ("UNKNOWN", "Unknown"),
+]
+
+APP_STATE_CHOICES = [
+    ("ACTIVE", "App Open"),
+    ("BACKGROUND", "Sleeping / Background"),
+    ("UNKNOWN", "Unknown"),
+]
+
+PING_SOURCE_CHOICES = [
+    ("FOREGROUND", "Foreground"),
+    ("BACKGROUND_TASK", "Background Service"),
+    ("OFFLINE_QUEUE", "Offline Queue Sync"),
 ]
 
 LOAFING_STATUS_CHOICES = [
@@ -120,6 +143,20 @@ class TeacherLocationPing(models.Model):
         max_length=24, choices=ZONE_STATUS_CHOICES, default="INSIDE", db_index=True
     )
     device_id = models.CharField(max_length=128, blank=True, default="")
+    device_model = models.CharField(max_length=100, blank=True, default="")
+    battery_percent = models.PositiveSmallIntegerField(null=True, blank=True)
+    is_charging = models.BooleanField(null=True, blank=True)
+    is_low_power_mode = models.BooleanField(null=True, blank=True)
+    network_type = models.CharField(
+        max_length=20, choices=NETWORK_TYPE_CHOICES, blank=True, default="UNKNOWN"
+    )
+    is_gps_enabled = models.BooleanField(default=True)
+    app_state = models.CharField(
+        max_length=20, choices=APP_STATE_CHOICES, blank=True, default="UNKNOWN"
+    )
+    ping_source = models.CharField(
+        max_length=20, choices=PING_SOURCE_CHOICES, blank=True, default="FOREGROUND"
+    )
     recorded_at = models.DateTimeField(default=timezone.now, db_index=True)
 
     class Meta:

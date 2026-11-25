@@ -1,4 +1,8 @@
+# AttendSure Backend - School Business Logic Services
+# File: D:\AttendSure_V3\backend\apps\school\services.py
+
 from datetime import time
+from common.time_utils import format_time_range_12h
 from .models import ClassPeriod, SchoolYear, Section, Subject, expand_schedule_days
 from .selectors import format_section_label
 
@@ -180,7 +184,7 @@ def check_class_period_conflicts(
             )
             for other in base_qs.filter(section=section):
                 if expand_schedule_days(other.day_of_week) & target_days:
-                    win = f"{other.start_time.strftime('%H:%M')}-{other.end_time.strftime('%H:%M')}"
+                    win = format_time_range_12h(other.start_time, other.end_time)
                     section_conflict = (
                         f"Schedule clash in {sec_label}: {other.subject.code} already meets at {win}."
                     )
@@ -193,7 +197,7 @@ def check_class_period_conflicts(
                         other.section.grade_level.name if other.section.grade_level_id else "",
                         other.section.name,
                     )
-                    win = f"{other.start_time.strftime('%H:%M')}-{other.end_time.strftime('%H:%M')}"
+                    win = format_time_range_12h(other.start_time, other.end_time)
                     teacher_conflict = (
                         f"Teacher double-booking: {teacher.full_name} is already teaching "
                         f"{other_sec} ({other.subject.code}, {win})."
@@ -208,7 +212,7 @@ def check_class_period_conflicts(
                         other.section.grade_level.name if other.section.grade_level_id else "",
                         other.section.name,
                     )
-                    win = f"{other.start_time.strftime('%H:%M')}-{other.end_time.strftime('%H:%M')}"
+                    win = format_time_range_12h(other.start_time, other.end_time)
                     room_conflict = (
                         f"Room double-booking: {clean_room} is already used by {other_sec} "
                         f"for {other.subject.code} ({win})."
@@ -259,26 +263,85 @@ def normalize_day_of_week(raw_value: str | int | None) -> str:
     return mapping.get(clean, "ALL_WEEKDAYS")
 
 
+def _build_uniform_candidate_slots() -> list[tuple[str, time, time]]:
+    """
+    Non-overlapping candidate time slots for automatic subject assignment:
+    - First 10 slots: 07:30-17:30 Mon-Fri (ALL_WEEKDAYS)
+    - Next slots: non-overlapping MWF/TTH extended & early-morning slots, then Saturday slots
+    """
+    slots: list[tuple[str, time, time]] = [
+        ("ALL_WEEKDAYS", time(hr, 30), time(hr + 1, 30))
+        for hr in range(7, 17)
+    ]
+    for hr in (17, 6, 18, 19, 20):
+        slots.append(("MWF", time(hr, 30), time(hr + 1, 30)))
+        slots.append(("TTH", time(hr, 30), time(hr + 1, 30)))
+    for hr in range(7, 17):
+        slots.append(("6", time(hr, 30), time(hr + 1, 30)))
+    for day_num in ("1", "2", "3", "4", "5"):
+        slots.append((day_num, time(21, 30), time(22, 30)))
+    return slots
+
+
 def sync_uniform_subjects_for_section(section: Section) -> None:
     if not section or not section.grade_level_id:
         return
     subjects = list(Subject.objects.filter(grade_level_id=section.grade_level_id).order_by("id"))
-    existing_ids = set(ClassPeriod.objects.filter(section=section).values_list("subject_id", flat=True))
+    existing_periods = list(
+        ClassPeriod.objects.filter(section=section).only(
+            "subject_id", "day_of_week", "start_time", "end_time", "is_active"
+        )
+    )
+    existing_ids = {p.subject_id for p in existing_periods}
+    occupied: list[tuple[set[int], time, time]] = [
+        (expand_schedule_days(p.day_of_week), p.start_time, p.end_time)
+        for p in existing_periods
+        if p.is_active and p.start_time and p.end_time
+    ]
+
+    candidate_slots = _build_uniform_candidate_slots()
     to_create = []
-    for idx, subj in enumerate(subjects):
+    for subj in subjects:
         if subj.id in existing_ids:
             continue
-        start_hr = min(7 + idx, 16)
-        to_create.append(
-            ClassPeriod(
-                schedule_code=f"{section.id}-{subj.code}"[:64],
-                section=section,
-                subject=subj,
-                day_of_week="ALL_WEEKDAYS",
-                start_time=time(start_hr, 30),
-                end_time=time(min(start_hr + 1, 17), 30),
-                is_active=True,
+
+        chosen: tuple[str, time, time] | None = None
+        for day_code, s_time, e_time in candidate_slots:
+            cand_days = expand_schedule_days(day_code)
+            has_clash = any(
+                (occ_days & cand_days) and (s_time < occ_end and e_time > occ_start)
+                for occ_days, occ_start, occ_end in occupied
             )
-        )
+            if not has_clash:
+                chosen = (day_code, s_time, e_time)
+                occupied.append((cand_days, s_time, e_time))
+                break
+
+        if chosen is not None:
+            day_code, s_time, e_time = chosen
+            to_create.append(
+                ClassPeriod(
+                    schedule_code=f"{section.id}-{subj.code}"[:64],
+                    section=section,
+                    subject=subj,
+                    day_of_week=day_code,
+                    start_time=s_time,
+                    end_time=e_time,
+                    is_active=True,
+                )
+            )
+        else:
+            # Overflow fallback beyond all available slots: keep inactive so timetables never double-book.
+            to_create.append(
+                ClassPeriod(
+                    schedule_code=f"{section.id}-{subj.code}"[:64],
+                    section=section,
+                    subject=subj,
+                    day_of_week="ALL_WEEKDAYS",
+                    start_time=time(16, 30),
+                    end_time=time(17, 30),
+                    is_active=False,
+                )
+            )
     if to_create:
         ClassPeriod.objects.bulk_create(to_create)

@@ -1,3 +1,6 @@
+// AttendSure Web - Compliance Context
+// File: D:\AttendSure_V3\web\src\context\ComplianceContext.tsx
+
 /**
  * AttendSure - School Compliance & Localization Context
  * File: web/src/context/ComplianceContext.tsx

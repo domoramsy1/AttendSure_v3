@@ -1,3 +1,6 @@
+# AttendSure Backend - Common Request Logger
+# File: D:\AttendSure_V3\backend\common\request_logger.py
+
 r"""
 AttendSure - Thread-Safe Color Terminal API & Security Logger
 File: D:\AttendSure_V3\backend\common\request_logger.py
@@ -13,6 +16,8 @@ import time
 import unicodedata
 from urllib.parse import parse_qsl, urlencode
 from django.utils import timezone
+
+from common.time_utils import format_time_12h
 
 security_logger = logging.getLogger("attendsure.security")
 
@@ -70,11 +75,16 @@ QUIET_POLL_PATHS = {
     "/api/v1/school/public-branding/",
 }
 
-TRUSTED_PROXIES = {
-    ip.strip()
-    for ip in os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1,::1").split(",")
-    if ip.strip()
-}
+def _read_trusted_proxy_entries() -> set[str]:
+    return {
+        ip.strip()
+        for ip in os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1,::1").split(",")
+        if ip.strip()
+    }
+
+
+_INITIAL_TRUSTED_PROXIES = _read_trusted_proxy_entries()
+TRUSTED_PROXIES = set(_INITIAL_TRUSTED_PROXIES)
 
 
 def _enable_windows_ansi_colors() -> bool:
@@ -173,24 +183,44 @@ def _validate_ip(raw_ip: str) -> str | None:
         return None
 
 
-def _get_trusted_proxies() -> set[str]:
-    normalized: set[str] = set()
-    for raw in TRUSTED_PROXIES:
-        valid = _validate_ip(raw)
-        normalized.add(valid or raw.strip())
-    return normalized
+def _get_trusted_proxy_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    entries = (
+        TRUSTED_PROXIES
+        if TRUSTED_PROXIES != _INITIAL_TRUSTED_PROXIES
+        else _read_trusted_proxy_entries()
+    )
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for raw in entries:
+        candidate = str(raw or "").strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+def _is_trusted_proxy(ip_str: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    for net in _get_trusted_proxy_networks():
+        if addr.version == net.version and addr in net:
+            return True
+    return False
 
 
 def extract_client_ip(request) -> str:
-    """Honors forwarded headers only when REMOTE_ADDR is a trusted reverse proxy."""
+    """Honors forwarded headers only when REMOTE_ADDR matches a trusted reverse proxy IP or CIDR."""
     if not request or not hasattr(request, "META"):
         return "127.0.0.1"
 
     raw_remote = str(request.META.get("REMOTE_ADDR") or "").strip()
     validated_remote = _validate_ip(raw_remote)
-    trusted = _get_trusted_proxies()
 
-    if validated_remote and (validated_remote in trusted or raw_remote in trusted):
+    if validated_remote and _is_trusted_proxy(validated_remote):
         cf_ip = _validate_ip(str(request.META.get("HTTP_CF_CONNECTING_IP") or ""))
         if cf_ip:
             return cf_ip
@@ -346,7 +376,7 @@ class RequestLoggerMiddleware:
         if method == "OPTIONS" and 200 <= code < 400:
             return
 
-        now_str = timezone.localtime().strftime("%H:%M:%S")
+        now_str = format_time_12h(timezone.localtime(), include_seconds=True)
         raw_qs = request.META.get("QUERY_STRING", "")
         is_media = path.startswith("/media/")
         is_silent_poll = method == "GET" and ("silent=1" in raw_qs or path in QUIET_POLL_PATHS)

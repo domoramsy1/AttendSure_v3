@@ -1,3 +1,6 @@
+// AttendSure Web - Application Entry Point
+// File: D:\AttendSure_V3\web\src\main.tsx
+
 /**
  * AttendSure - Instant-Mount Application Entry Point
  * File: web/src/main.tsx

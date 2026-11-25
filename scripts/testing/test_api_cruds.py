@@ -1,3 +1,6 @@
+# AttendSure Scripts - Test API Cruds
+# File: D:\AttendSure_V3\scripts\testing\test_api_cruds.py
+
 r"""
 AttendSure - End-to-End 3NF Backend CRUD, Security & DepEd Report Verification
 Run: python testing\test_api_cruds.py
@@ -17,8 +20,8 @@ setup_django()
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from common.qr_signer import sign_student_qr
 from apps.accounts.models import Department, PositionTitle, TeacherProfile, UserProfile
@@ -78,8 +81,8 @@ class ApiSuiteVerifier:
         if not admin:
             self.record("AUTH", "Superuser Lookup", False, "No active superuser in DB", 0.0)
             return False
-        token, _ = Token.objects.get_or_create(user=admin)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}", HTTP_HOST="localhost")
+        access = str(RefreshToken.for_user(admin).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}", HTTP_HOST="localhost")
         return True
 
     def crud_cycle(self, label: str, url: str, create_data: dict, patch_data: dict, check_key: str, query: str = ""):

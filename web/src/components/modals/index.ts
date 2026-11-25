@@ -1,3 +1,6 @@
+// AttendSure Web - Modals Index Component
+// File: D:\AttendSure_V3\web\src\components\modals\index.ts
+
 /**
  * AttendSure - Centralized Modals Export Index
  * Every modal can now be cleanly imported from '../modals' or '@/components/modals'

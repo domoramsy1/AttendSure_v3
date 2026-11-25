@@ -1,3 +1,6 @@
+// AttendSure Mobile - Permissions Utility
+// File: D:\AttendSure_V3\mobile\src\utils\permissions.ts
+
 /**
  * AttendSure Mobile - Centralized Role-Based Access Control (RBAC) Permission Matrix
  * File: mobile/src/utils/permissions.ts
@@ -27,7 +30,8 @@ export type MobileTabId =
   | 'calendar'
   | 'settings'
   | 'sardo_safety'
-  | 'dtr';
+  | 'dtr'
+  | 'help';
 
 export interface PermissionUser {
   role?: string | null;

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Inspect Models
+# File: D:\AttendSure_V3\scripts\utilities\inspect_models.py
+
 r"""
 AttendSure - 6-Domain Models Schema Inspector (3NF)
 Run: python utilities\inspect_models.py

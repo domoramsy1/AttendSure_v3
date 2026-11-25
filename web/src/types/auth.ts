@@ -1,3 +1,6 @@
+// AttendSure Web - Auth
+// File: D:\AttendSure_V3\web\src\types\auth.ts
+
 export interface LoginPayload {
   username: string;
   password: string;

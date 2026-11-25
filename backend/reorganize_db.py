@@ -1,3 +1,6 @@
+# AttendSure Backend - Reorganize DB
+# File: D:\AttendSure_V3\backend\reorganize_db.py
+
 import os
 from pathlib import Path
 

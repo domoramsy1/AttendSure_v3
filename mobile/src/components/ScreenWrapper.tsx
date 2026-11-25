@@ -1,3 +1,6 @@
+// AttendSure Mobile - Screen Wrapper Component
+// File: D:\AttendSure_V3\mobile\src\components\ScreenWrapper.tsx
+
 import React from 'react';
 import { View, ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';

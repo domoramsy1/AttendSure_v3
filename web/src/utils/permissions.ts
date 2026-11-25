@@ -1,3 +1,6 @@
+// AttendSure Web - Permissions Utility
+// File: D:\AttendSure_V3\web\src\utils\permissions.ts
+
 /**
  * AttendSure - Centralized Role-Based Access Control (RBAC) Permission Matrix
  * File: web/src/utils/permissions.ts

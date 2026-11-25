@@ -1,3 +1,6 @@
+// AttendSure Mobile - Hmr Utils Native
+// File: D:\AttendSure_V3\mobile\src\shims\hmrUtils.native.js
+
 /**
  * AttendSure Mobile - Safe Native HMR Utils Shim for Expo Go / React Native 0.88
  * Prevents "Cannot read property 'hide' of undefined" when DevLoadingView is absent

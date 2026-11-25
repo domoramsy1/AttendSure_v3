@@ -1,3 +1,6 @@
+// AttendSure Web - Settings Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\SettingsTab.tsx
+
 /**
  * AttendSure - School Settings & Self-Service Maintenance Center
  * File: web/src/components/tabs/SettingsTab.tsx
@@ -12,6 +15,7 @@ import { useAlert } from '../../context/AlertContext';
 import { useTheme } from '../../context/ThemeContext';
 import { exportToCsv } from '../common/Pagination';
 import { canManageSchoolSetup, canViewAuditLogs, getCurrentUserFromStorage } from '../../utils/permissions';
+import { formatTime12h } from '../../utils/timeFormat';
 import { Building2, History, Layers, Loader2, Wrench } from 'lucide-react';
 import { MaintenancePanel } from './settings/MaintenancePanel';
 import {
@@ -188,7 +192,7 @@ export const SettingsTab: React.FC = () => {
         ) || 0,
       openLoafingIncidents: Number(sysData?.open_loafing_incidents) || 0,
       activeExitPasses: Number(sysData?.active_exit_passes) || 0,
-      lastChecked: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      lastChecked: formatTime12h(new Date(), { includeSeconds: true }),
     });
   }, []);
 

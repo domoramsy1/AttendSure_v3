@@ -1,3 +1,6 @@
+# AttendSure Backend - Django System Settings
+# File: D:\AttendSure_V3\backend\config\settings.py
+
 import os
 import socket
 import sys
@@ -130,10 +133,11 @@ TEMPLATES = [
 ]
 
 DB_ENGINE = os.getenv("DB_ENGINE", "postgresql").strip().lower()
-if "test" in sys.argv:
+USE_POSTGRES_FOR_TESTS = os.getenv("USE_POSTGRES_FOR_TESTS", "False").strip().lower() in ("true", "1", "yes")
+if "test" in sys.argv and not USE_POSTGRES_FOR_TESTS:
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
     PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
-elif "postgres" in DB_ENGINE:
+elif "postgres" in DB_ENGINE or ("test" in sys.argv and USE_POSTGRES_FOR_TESTS):
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
@@ -147,6 +151,8 @@ elif "postgres" in DB_ENGINE:
             "OPTIONS": {"connect_timeout": 5},
         }
     }
+    if "test" in sys.argv:
+        PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 else:
     DATABASES = {
         "default": {
@@ -204,7 +210,6 @@ CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_EAGER", str(DEBUG)).lower() in ("tr
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.TokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
@@ -269,7 +274,7 @@ LOGGING = {
         "standard": {
             "format": "[{asctime}] [{levelname}] [{name}] {message}",
             "style": "{",
-            "datefmt": "%Y-%m-%d %H:%M:%S",
+            "datefmt": "%Y-%m-%d %I:%M:%S %p",
         },
     },
     "handlers": {
@@ -344,3 +349,5 @@ if ENABLE_HTTPS_STRICT and not DEBUG:
 
 REQUIRE_GPS_FOR_QR_SCAN = os.getenv("REQUIRE_GPS_FOR_QR_SCAN", "False").strip().lower() in ("true", "1", "yes")
 ENABLE_JUDGE_DEMO = os.getenv("ENABLE_JUDGE_DEMO", "False").strip().lower() in ("true", "1", "yes")
+ENABLE_LEGACY_API_ROUTES = os.getenv("ENABLE_LEGACY_API_ROUTES", "False").strip().lower() in ("true", "1", "yes")
+ONBOARDING_CURRENT_VERSION = int(os.getenv("ONBOARDING_CURRENT_VERSION", "1"))

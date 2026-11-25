@@ -1,16 +1,26 @@
+// AttendSure Mobile - On-Device Phone Lock & Asymmetric Ed25519 Signing Service
+// File: D:\AttendSure_V3\mobile\src\services\biometricService.ts
+
 /**
- * AttendSure Mobile - Built-In Phone Lock / Biometric & Keystore Proof Service
- * Supports both hardware biometrics (Fingerprint / Face) and Android/iOS Screen Lock
- * (PIN, Pattern, or Password) via expo-local-authentication + expo-secure-store + expo-crypto.
- * Zero biometric or passcode data ever leaves the phone's hardware security storage.
+ * AttendSure Mobile - Built-In Phone Lock / Biometric & Asymmetric Keypair Service
+ *
+ * Uses the phone's built-in lock (Fingerprint, Face, PIN, or Pattern) via
+ * `expo-local-authentication` to unlock a per-teacher Ed25519 private key stored
+ * strictly in `expo-secure-store`. Only the public key, key ID, and per-action
+ * digital signature ever leave the phone — zero private keys, raw face photos,
+ * or biometric scans are ever sent to the server.
+ *
  * File: mobile/src/services/biometricService.ts
  */
 
 import { Platform } from 'react-native';
+import { Buffer } from 'buffer';
 import type * as LocalAuthenticationType from 'expo-local-authentication';
 import type * as SecureStoreType from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 import { getOrCreateDeviceUuid } from './deviceService';
 
 function getLocalAuth(): typeof LocalAuthenticationType | null {
@@ -44,12 +54,16 @@ export interface BiometricProofResult {
   ok: boolean;
   biometricMethod?: 'BIOMETRIC' | 'DEVICE_PIN_OR_PATTERN';
   keyId?: string;
+  publicKeyHex?: string;
+  keyAlgorithm?: 'ED25519';
+  signatureHex?: string;
+  nonce?: string;
   proofHash?: string;
   timestampMs?: number;
   error?: string;
 }
 
-const BIOMETRIC_SECRET_PREFIX = 'attendsure_biometric_secret_';
+const ED25519_PRIVATE_KEY_PREFIX = 'attendsure_ed25519_priv_';
 const NO_LOCK_SETUP_MESSAGE =
   'No screen lock is set on this phone. Please go to your phone Settings -> Lock screen and set a PIN, Pattern, or Fingerprint first.';
 
@@ -64,6 +78,22 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+function hexToBytes(hex: string): Uint8Array | null {
+  const cleaned = hex.trim().toLowerCase();
+  if (cleaned.length !== 64 || !/^[0-9a-f]{64}$/.test(cleaned)) {
+    return null;
+  }
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) {
+    out[i] = parseInt(cleaned.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function utf8Bytes(text: string): Uint8Array {
+  return Uint8Array.from(Buffer.from(text, 'utf8'));
 }
 
 /**
@@ -140,34 +170,60 @@ export async function checkPhoneLockCapability(): Promise<PhoneLockCapability> {
   }
 }
 
-async function getOrCreateUserBiometricSecret(userId: string | number): Promise<string> {
-  const storeKey = `${BIOMETRIC_SECRET_PREFIX}${sanitizeKeySegment(userId)}`;
+/**
+ * Loads or generates a per-teacher 32-byte Ed25519 private key inside SecureStore.
+ * The private key never leaves the phone.
+ */
+async function getOrCreateTeacherEd25519PrivateKey(
+  userId: string | number
+): Promise<Uint8Array> {
+  const storeKey = `${ED25519_PRIVATE_KEY_PREFIX}${sanitizeKeySegment(userId)}`;
   const SecureStore = getSecureStore();
 
   const existingSecure = SecureStore
     ? await SecureStore.getItemAsync(storeKey).catch(() => null)
     : null;
-  if (existingSecure && existingSecure.trim().length >= 32) {
-    return existingSecure.trim();
+  if (existingSecure) {
+    const decoded = hexToBytes(existingSecure);
+    if (decoded) return decoded;
   }
 
   const existingFallback = await AsyncStorage.getItem(storeKey).catch(() => null);
-  if (existingFallback && existingFallback.trim().length >= 32) {
-    return existingFallback.trim();
+  if (existingFallback) {
+    const decoded = hexToBytes(existingFallback);
+    if (decoded) {
+      // Upgrade into SecureStore when available
+      if (SecureStore) {
+        try {
+          await SecureStore.setItemAsync(storeKey, existingFallback, {
+            keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+          });
+          await AsyncStorage.removeItem(storeKey).catch(() => {});
+        } catch {}
+      }
+      return decoded;
+    }
   }
 
-  const randomBytes = await Crypto.getRandomBytesAsync(32);
-  const newSecret = bytesToHex(randomBytes);
+  const randomSeed = await Crypto.getRandomBytesAsync(32);
+  const seedHex = bytesToHex(randomSeed);
 
+  let savedToSecureStore = false;
   if (SecureStore) {
-    await SecureStore.setItemAsync(storeKey, newSecret, {
-      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
-    }).catch(() => {});
-  } else {
-    await AsyncStorage.setItem(storeKey, newSecret).catch(() => {});
+    try {
+      await SecureStore.setItemAsync(storeKey, seedHex, {
+        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+      });
+      savedToSecureStore = true;
+    } catch {
+      savedToSecureStore = false;
+    }
+  }
+  if (!savedToSecureStore) {
+    await AsyncStorage.setItem(storeKey, seedHex).catch(() => {});
   }
 
-  return newSecret;
+  return randomSeed;
 }
 
 function mapAuthErrorToPlainEnglish(errorCode?: string): string {
@@ -189,13 +245,14 @@ function mapAuthErrorToPlainEnglish(errorCode?: string): string {
 }
 
 /**
- * Verifies the teacher using their phone's built-in Fingerprint/Biometric OR Screen Lock
- * (PIN / Pattern / Password), reads or creates the per-user SecureStore secret, and generates
- * a non-replayable SHA-256 check-in proof.
+ * Verifies the teacher using their phone's built-in Fingerprint/Face OR Screen Lock
+ * (PIN / Pattern / Password), then signs `userId:deviceId:timestampMs:action[:nonce]`
+ * with the phone's SecureStore Ed25519 private key.
  */
 export async function verifyTeacherBiometricProof(
   userId: string | number,
-  action: CheckInProofAction
+  action: CheckInProofAction,
+  serverChallengeNonce?: string | null
 ): Promise<BiometricProofResult> {
   if (Platform.OS === 'web') {
     return {
@@ -228,7 +285,6 @@ export async function verifyTeacherBiometricProof(
         ? 'BIOMETRIC'
         : 'DEVICE_PIN_OR_PATTERN';
 
-    // Omit cancelLabel when disableDeviceFallback is false to stay compatible with Android DEVICE_CREDENTIAL (e.g. Samsung OneUI)
     const authResult = await LocalAuthentication.authenticateAsync({
       promptMessage:
         action === 'TIME_OUT'
@@ -244,28 +300,37 @@ export async function verifyTeacherBiometricProof(
       };
     }
 
-    const [secret, deviceUuid] = await Promise.all([
-      getOrCreateUserBiometricSecret(userId),
+    const [privateKeyBytes, deviceUuid] = await Promise.all([
+      getOrCreateTeacherEd25519PrivateKey(userId),
       getOrCreateDeviceUuid(),
     ]);
 
+    const publicKeyBytes = ed25519.getPublicKey(privateKeyBytes);
+    const publicKeyHex = bytesToHex(publicKeyBytes);
+    const keyId = bytesToHex(sha256(publicKeyBytes));
+
     const timestampMs = Date.now();
     const cleanUserId = String(userId ?? '').trim();
-    const keyId = await Crypto.digestStringAsync(
-      Crypto.CryptoDigestAlgorithm.SHA256,
-      secret
-    );
-    const proofPayload = `${secret}:${cleanUserId}:${deviceUuid}:${timestampMs}:${action}`;
-    const proofHash = await Crypto.digestStringAsync(
-      Crypto.CryptoDigestAlgorithm.SHA256,
-      proofPayload
-    );
+    const cleanAction = String(action).trim().toUpperCase();
+    const cleanNonce = String(serverChallengeNonce || '').trim();
+
+    const messageParts = [cleanUserId, deviceUuid, String(timestampMs), cleanAction];
+    if (cleanNonce) {
+      messageParts.push(cleanNonce);
+    }
+    const canonicalMessage = messageParts.join(':');
+    const signatureBytes = ed25519.sign(utf8Bytes(canonicalMessage), privateKeyBytes);
+    const signatureHex = bytesToHex(signatureBytes);
 
     return {
       ok: true,
       biometricMethod,
       keyId,
-      proofHash,
+      publicKeyHex,
+      keyAlgorithm: 'ED25519',
+      signatureHex,
+      nonce: cleanNonce || undefined,
+      proofHash: signatureHex.slice(0, 64),
       timestampMs,
     };
   } catch {

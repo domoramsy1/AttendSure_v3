@@ -1,3 +1,6 @@
+// AttendSure Web - Dep Ed Report Header Footer Component
+// File: D:\AttendSure_V3\web\src\components\reports\DepEdReportHeaderFooter.tsx
+
 /**
  * AttendSure - DepEd Manual of Style (DMOS) Header & Footer
  * File: web/src/components/reports/DepEdReportHeaderFooter.tsx

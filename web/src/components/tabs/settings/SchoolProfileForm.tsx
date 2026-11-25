@@ -1,3 +1,6 @@
+// AttendSure Web - School Profile Form
+// File: D:\AttendSure_V3\web\src\components\tabs\settings\SchoolProfileForm.tsx
+
 /**
  * AttendSure - Official School Profile, Principal Credentials & Seal Upload Form
  * File: web/src/components/tabs/settings/SchoolProfileForm.tsx

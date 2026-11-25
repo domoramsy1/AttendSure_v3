@@ -1,4 +1,7 @@
 @echo off
+@REM AttendSure Scripts - Start All
+@REM File: D:\AttendSure_V3\scripts\start_all.bat
+
 setlocal
 title AttendSure - Full System Launcher
 for %%I in ("%~dp0..") do set "ROOT_DIR=%%~fI"

@@ -40,13 +40,13 @@ Write-Host "Running migrations and static collection..." -ForegroundColor Gray
 docker compose exec -T "web_$TargetColor" python manage.py migrate --noinput
 docker compose exec -T "web_$TargetColor" python manage.py collectstatic --noinput
 
-Write-Host "Checking health on http://127.0.0.1:$TargetPort/api/health/db/..." -ForegroundColor Gray
+Write-Host "Checking health on http://127.0.0.1:$TargetPort/api/v1/health/db/..." -ForegroundColor Gray
 $Healthy = $false
 
 for ($Attempt = 1; $Attempt -le 12; $Attempt++) {
     Start-Sleep -Seconds 2
     try {
-        $Response = Invoke-WebRequest -Uri "http://127.0.0.1:$TargetPort/api/health/db/" -UseBasicParsing -TimeoutSec 5
+        $Response = Invoke-WebRequest -Uri "http://127.0.0.1:$TargetPort/api/v1/health/db/" -UseBasicParsing -TimeoutSec 5
         if ($Response.StatusCode -eq 200) {
             $Healthy = $true
             break

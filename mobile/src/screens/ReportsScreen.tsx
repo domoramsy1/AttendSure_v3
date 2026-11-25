@@ -1,5 +1,9 @@
+// AttendSure Mobile - Reports Screen
+// File: D:\AttendSure_V3\mobile\src\screens\ReportsScreen.tsx
+
 /**
  * AttendSure Mobile - School Forms & Official Attendance Reports
+ * Modularized with ReportPageSetupModal, ReportPackScopeFilter, and ReportScheduleClassListPreview.
  * File: mobile/src/screens/ReportsScreen.tsx
  */
 
@@ -15,7 +19,6 @@ import {
   Platform,
   TextInput,
   Share,
-  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -25,11 +28,7 @@ import { apiClient } from '../api/client';
 import { ENDPOINTS } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
-import {
-  cleanText,
-  getFriendlyErrorMessage,
-  type ThemePalette,
-} from '../constants/theme';
+import { cleanText, getFriendlyErrorMessage, type ThemePalette } from '../constants/theme';
 import { canViewReports, canViewSf4 } from '../utils/permissions';
 import { isCanceledError, showNotice } from '../utils/helpers';
 import ChipRow from '../components/common/ChipRow';
@@ -38,68 +37,24 @@ import DTRReportView from '../components/reports/DTRReportView';
 import SF1ReportView from '../components/reports/SF1ReportView';
 import SF2ReportView from '../components/reports/SF2ReportView';
 import SF4ReportView from '../components/reports/SF4ReportView';
+import ReportPageSetupModal, {
+  applyMobilePageSetupToHtml,
+  type MobilePageSetup,
+} from '../components/reports/ReportPageSetupModal';
+import ReportPackScopeFilter, {
+  type AssignedSectionOption,
+  type PackScope,
+  type SelectableTeacherOption,
+} from '../components/reports/ReportPackScopeFilter';
+import {
+  ReportClassListPreview,
+  ReportSchedulePreview,
+} from '../components/reports/ReportScheduleClassListPreview';
 
 type ReportType = 'SCHEDULE' | 'CLASS_LIST' | 'DTR' | 'SF1' | 'SF2' | 'SF4';
-type PackScope = 'ALL' | 'SELECTED';
-type MobilePaperKey = 'letter' | 'folio' | 'legal' | 'a4';
-type MobileOrientation = 'portrait' | 'landscape';
-type MobileMarginPreset = 'compact' | 'narrow' | 'normal';
-
-interface MobilePageSetup {
-  paperSize: MobilePaperKey;
-  orientation: MobileOrientation;
-  marginPreset: MobileMarginPreset;
-}
-
-const MOBILE_PAPER_DIMS: Record<MobilePaperKey, { label: string; width: number; height: number }> = {
-  letter: { label: 'Letter (8.5×11 in)', width: 8.5, height: 11.0 },
-  folio: { label: 'Folio (8.5×13 in)', width: 8.5, height: 13.0 },
-  legal: { label: 'Legal (8.5×14 in)', width: 8.5, height: 14.0 },
-  a4: { label: 'A4 (8.27×11.69 in)', width: 8.27, height: 11.69 },
-};
-
-const MOBILE_MARGIN_INCHES: Record<MobileMarginPreset, { label: string; inches: number }> = {
-  compact: { label: 'Compact (0.25 in)', inches: 0.25 },
-  narrow: { label: 'Narrow (0.50 in)', inches: 0.5 },
-  normal: { label: 'Normal (1.00 in)', inches: 1.0 },
-};
-
-const applyMobilePageSetupToHtml = (rawHtml: string, setup: MobilePageSetup): string => {
-  const paper = MOBILE_PAPER_DIMS[setup.paperSize] || MOBILE_PAPER_DIMS.legal;
-  const wIn = setup.orientation === 'landscape' ? paper.height : paper.width;
-  const hIn = setup.orientation === 'landscape' ? paper.width : paper.height;
-  const mIn = (MOBILE_MARGIN_INCHES[setup.marginPreset] || MOBILE_MARGIN_INCHES.compact).inches;
-
-  const pageCss = `<style>
-    @page { size: ${wIn}in ${hIn}in; margin: ${mIn}in !important; }
-    html, body { margin: 0 !important; padding: 0 !important; }
-    table { width: 100%; border-collapse: collapse; page-break-inside: auto; }
-    thead { display: table-header-group; }
-    tr, .qr-card, .sig-grid { page-break-inside: avoid; break-inside: avoid; }
-    section.sheet:not(:last-child) { page-break-after: always; break-after: page; }
-    section.sheet:last-child, .page-break:last-child { page-break-after: avoid !important; break-after: avoid !important; }
-  </style>`;
-
-  if (/<\/head>/i.test(rawHtml)) {
-    return rawHtml.replace(/<\/head>/i, `${pageCss}</head>`);
-  }
-  return `${pageCss}${rawHtml}`;
-};
 
 interface ReportsScreenProps {
   embedded?: boolean;
-}
-
-interface AssignedSection {
-  section_id: number;
-  section_name: string;
-  grade_level?: string;
-}
-
-interface SelectableTeacher {
-  id: number;
-  full_name: string;
-  employee_id?: string;
 }
 
 const SECTIONS_CACHE_KEY = 'attendsure_cached_report_sections';
@@ -114,7 +69,6 @@ const SHORT_MONTHS = [
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
 
-// Strips executable scripts and event handlers from HTML before printing or downloading
 const sanitizeReportHtml = (rawHtml: string): string =>
   String(rawHtml || '')
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
@@ -123,7 +77,6 @@ const sanitizeReportHtml = (rawHtml: string): string =>
     .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     .replace(/javascript:/gi, '');
 
-// Safe sandboxed Blob URL printing without document.write
 const triggerSafeBrowserPrint = (rawHtml: string): void => {
   if (typeof document === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
     return;
@@ -139,7 +92,6 @@ const triggerSafeBrowserPrint = (rawHtml: string): void => {
 
   const iframe = document.createElement('iframe');
   iframe.id = frameId;
-  // Scripts are strictly blocked because allow-scripts is omitted
   iframe.setAttribute('sandbox', 'allow-modals allow-same-origin');
   iframe.style.position = 'fixed';
   iframe.style.top = '-10000px';
@@ -168,7 +120,6 @@ const triggerSafeBrowserPrint = (rawHtml: string): void => {
   document.body.appendChild(iframe);
 };
 
-// Safe Blob file download on web without document.write
 const triggerSafeBrowserDownload = (
   content: string,
   rawFilename: string,
@@ -206,7 +157,6 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
   const reportAbortRef = useRef<AbortController | null>(null);
   const monthScrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(null);
 
-  // 1. Role-Based Permissions (Centralized RBAC Matrix)
   const currentUser = user as Record<string, any> | null;
   const isAdmin = canViewSf4(user);
   const canSeeClassReports = canViewReports(user);
@@ -219,11 +169,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         label: isAdmin ? 'Schedules' : 'My Schedule',
         icon: 'calendar-number-outline',
       });
-      tabs.push({
-        key: 'CLASS_LIST',
-        label: 'Class Lists',
-        icon: 'list-outline',
-      });
+      tabs.push({ key: 'CLASS_LIST', label: 'Class Lists', icon: 'list-outline' });
     }
     tabs.push({ key: 'DTR', label: 'DTR', icon: 'time-outline' });
     if (canSeeClassReports) {
@@ -243,9 +189,9 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
   const [selectedYear, setSelectedYear] = useState<number>(now.getFullYear());
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const [sections, setSections] = useState<AssignedSection[]>([]);
+  const [sections, setSections] = useState<AssignedSectionOption[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
-  const [teachersList, setTeachersList] = useState<SelectableTeacher[]>([]);
+  const [teachersList, setTeachersList] = useState<SelectableTeacherOption[]>([]);
   const [packScope, setPackScope] = useState<PackScope>('ALL');
   const [pickedSectionIds, setPickedSectionIds] = useState<number[]>([]);
   const [pickedTeacherIds, setPickedTeacherIds] = useState<number[]>([]);
@@ -296,7 +242,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
     try {
       const cached = await AsyncStorage.getItem(SECTIONS_CACHE_KEY);
       if (cached && isMounted.current && !controller.signal.aborted) {
-        const parsed: AssignedSection[] = JSON.parse(cached);
+        const parsed: AssignedSectionOption[] = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setSections(parsed);
           setSelectedSectionId((prev) => prev ?? parsed[0].section_id);
@@ -315,8 +261,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
 
       if (!isMounted.current || controller.signal.aborted) return;
 
-      const map = new Map<number, AssignedSection>();
-
+      const map = new Map<number, AssignedSectionOption>();
       if (classListRes.status === 'fulfilled') {
         const rawClasses = Array.isArray(classListRes.value?.data)
           ? classListRes.value.data
@@ -325,10 +270,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           const secId = item?.section_id ?? item?.section?.id;
           const secName = item?.section_name ?? item?.section?.name;
           if (secId && !map.has(secId)) {
-            map.set(secId, {
-              section_id: secId,
-              section_name: secName || `Section ${secId}`,
-            });
+            map.set(secId, { section_id: secId, section_name: secName || `Section ${secId}` });
           }
         });
       }
@@ -352,7 +294,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         const rawTeachers = Array.isArray(teacherRes.value.data)
           ? teacherRes.value.data
           : teacherRes.value.data?.results || [];
-        const normalizedTeachers: SelectableTeacher[] = rawTeachers
+        const normalizedTeachers: SelectableTeacherOption[] = rawTeachers
           .filter((t: any) => t?.id)
           .map((t: any) => ({
             id: Number(t.id),
@@ -385,9 +327,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         export_format: exportFormat,
         action_mode: actionMode,
       };
-      if (exportFormat === 'html') {
-        body.wrap_json = true;
-      }
+      if (exportFormat === 'html') body.wrap_json = true;
       if (packScope === 'SELECTED') {
         if (pickedSectionIds.length > 0) body.section_ids = pickedSectionIds;
         if (isAdmin && pickedTeacherIds.length > 0) body.teacher_ids = pickedTeacherIds;
@@ -597,7 +537,9 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
       blocks.forEach((ts: any) => {
         lines.push(`${ts.teacher_name} (${ts.employee_id}) — ${ts.total_weekly_hours} hrs/wk`);
         (ts.periods || []).forEach((p: any) => {
-          lines.push(`• ${p.time_range} (${p.day_label}) | ${p.subject_code} | ${p.section_label} | ${p.room_name}`);
+          lines.push(
+            `• ${p.time_range} (${p.day_label}) | ${p.subject_code} | ${p.section_label} | ${p.room_name}`
+          );
         });
         lines.push('');
       });
@@ -647,10 +589,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         if (Platform.OS === 'web' && html) {
           triggerSafeBrowserPrint(applyMobilePageSetupToHtml(html, pageSetup));
         } else {
-          await Share.share({
-            title: docTitle,
-            message: buildNativeShareSummary(selectedTab),
-          });
+          await Share.share({ title: docTitle, message: buildNativeShareSummary(selectedTab) });
         }
         return;
       }
@@ -703,10 +642,7 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           const csvText = typeof res.data === 'string' ? res.data : String(res.data || '');
           triggerSafeBrowserDownload(csvText, docTitle, 'text/csv;charset=utf-8', 'csv');
         } else {
-          await Share.share({
-            title: docTitle,
-            message: buildNativeShareSummary(selectedTab),
-          });
+          await Share.share({ title: docTitle, message: buildNativeShareSummary(selectedTab) });
         }
         return;
       }
@@ -777,18 +713,20 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
   }, [sf4Data, cleanSearch]);
 
   const renderActionButtons = () => (
-    <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+    <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
       <TouchableOpacity
-        style={styles.btnSec}
+        style={[styles.btnSec, embedded && { flex: 1 }]}
         onPress={() => setShowPageSetup(true)}
         activeOpacity={0.8}
       >
         <Ionicons name="options-outline" size={15} color={palette.primary} />
-        <Text style={styles.btnSecText}>Page Setup</Text>
+        <Text style={styles.btnSecText} numberOfLines={1}>
+          Page Setup
+        </Text>
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={[styles.btnSec, (loading || printingDoc) && { opacity: 0.6 }]}
+        style={[styles.btnSec, embedded && { flex: 1 }, (loading || printingDoc) && { opacity: 0.6 }]}
         onPress={() => void handlePrint()}
         disabled={loading || printingDoc}
       >
@@ -797,13 +735,15 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         ) : (
           <>
             <Ionicons name="print-outline" size={15} color={palette.primary} />
-            <Text style={styles.btnSecText}>Print</Text>
+            <Text style={styles.btnSecText} numberOfLines={1}>
+              Print
+            </Text>
           </>
         )}
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={[styles.btnPri, (loading || exportingDoc) && { opacity: 0.6 }]}
+        style={[styles.btnPri, embedded && { flex: 1 }, (loading || exportingDoc) && { opacity: 0.6 }]}
         onPress={() => void handleExportReport()}
         disabled={loading || exportingDoc}
       >
@@ -812,72 +752,24 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
         ) : (
           <>
             <Ionicons name="download-outline" size={15} color={palette.onPrimary} />
-            <Text style={styles.btnPriText}>Export</Text>
+            <Text style={styles.btnPriText} numberOfLines={1}>
+              Export
+            </Text>
           </>
         )}
       </TouchableOpacity>
 
-      <Modal
+      <ReportPageSetupModal
         visible={showPageSetup}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowPageSetup(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Page Setup</Text>
-            <Text style={styles.modalSub}>
-              Choose paper size, orientation, and margins so every downloaded or printed sheet fits cleanly with no cut or blank pages.
-            </Text>
-
-            <Text style={styles.modalLabel}>Paper Size</Text>
-            <ChipRow<MobilePaperKey>
-              wrap
-              options={(Object.keys(MOBILE_PAPER_DIMS) as MobilePaperKey[]).map((key) => ({
-                key,
-                label: MOBILE_PAPER_DIMS[key].label,
-              }))}
-              selected={pageSetup.paperSize}
-              onSelect={(paperSize) => setPageSetup((p) => ({ ...p, paperSize }))}
-            />
-
-            <Text style={styles.modalLabel}>Orientation</Text>
-            <ChipRow<MobileOrientation>
-              wrap
-              options={[
-                { key: 'portrait', label: 'Portrait' },
-                { key: 'landscape', label: 'Landscape' },
-              ]}
-              selected={pageSetup.orientation}
-              onSelect={(orientation) => setPageSetup((p) => ({ ...p, orientation }))}
-            />
-
-            <Text style={styles.modalLabel}>Page Margins</Text>
-            <ChipRow<MobileMarginPreset>
-              wrap
-              options={(Object.keys(MOBILE_MARGIN_INCHES) as MobileMarginPreset[]).map((mKey) => ({
-                key: mKey,
-                label: MOBILE_MARGIN_INCHES[mKey].label,
-              }))}
-              selected={pageSetup.marginPreset}
-              onSelect={(marginPreset) => setPageSetup((p) => ({ ...p, marginPreset }))}
-            />
-
-            <TouchableOpacity
-              style={[styles.btnPri, { width: '100%', paddingVertical: 11, marginTop: 12 }]}
-              onPress={() => setShowPageSetup(false)}
-            >
-              <Text style={styles.btnPriText}>Apply Page Setup</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+        pageSetup={pageSetup}
+        onChange={setPageSetup}
+        onClose={() => setShowPageSetup(false)}
+      />
     </View>
   );
 
   const content = (
     <>
-      {/* Standalone Top Header (hidden when embedded inside MainTabNavigator) */}
       {!embedded ? (
         <View style={styles.topHeader}>
           <View style={styles.standaloneTitleRow}>
@@ -905,37 +797,44 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
       )}
 
       {/* Role-Filtered Tab Switcher */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabScrollWrap}
-        contentContainerStyle={styles.tabRow}
-      >
-        {availableTabs.map((tab) => {
-          const active = selectedTab === tab.key;
-          return (
-            <TouchableOpacity
-              key={tab.key}
-              style={[styles.tabBtn, active && styles.tabBtnActive]}
-              onPress={() => {
-                setSelectedTab(tab.key);
-                setSearchQuery('');
-              }}
-            >
-              <Ionicons
-                name={tab.icon}
-                size={13}
-                color={active ? palette.onPrimary : palette.textSecondary}
-              />
-              <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      <View style={styles.tabBarContainer}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.tabScrollWrap}
+          contentContainerStyle={styles.tabRow}
+        >
+          {availableTabs.map((tab) => {
+            const active = selectedTab === tab.key;
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                style={[styles.tabBtn, active && styles.tabBtnActive]}
+                onPress={() => {
+                  setSelectedTab(tab.key);
+                  setSearchQuery('');
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={tab.icon}
+                  size={14}
+                  color={active ? palette.onPrimary : palette.textSecondary}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={[styles.tabBtnText, active && styles.tabBtnTextActive]}
+                >
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
 
       <ScrollView
+        style={styles.bodyScroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -947,112 +846,41 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           />
         }
       >
-        {/* All vs Selected Only Controls for Schedules & Class Lists */}
         {(selectedTab === 'SCHEDULE' || selectedTab === 'CLASS_LIST') && (
-          <View style={styles.card}>
-            <Text style={styles.sectionHeaderTitle}>EXPORT &amp; PRINT SCOPE</Text>
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: packScope === 'SELECTED' ? 10 : 0 }}>
-              <TouchableOpacity
-                style={[styles.secPill, { flex: 1, justifyContent: 'center', marginRight: 0 }, packScope === 'ALL' && styles.secPillActive]}
-                onPress={() => setPackScope('ALL')}
-              >
-                <Text style={[styles.secPillText, packScope === 'ALL' && styles.secPillTextActive]}>
-                  {isAdmin ? 'All School Records' : 'All My Classes'}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.secPill, { flex: 1, justifyContent: 'center', marginRight: 0 }, packScope === 'SELECTED' && styles.secPillActive]}
-                onPress={() => setPackScope('SELECTED')}
-              >
-                <Text style={[styles.secPillText, packScope === 'SELECTED' && styles.secPillTextActive]}>
-                  Selected Only ({pickedSectionIds.length + (isAdmin ? pickedTeacherIds.length : 0)})
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {packScope === 'SELECTED' && (
-              <View style={{ gap: 8 }}>
-                {sections.length > 0 && (
-                  <View>
-                    <Text style={[styles.loadingText, { textAlign: 'left', marginBottom: 6 }]}>
-                      Tap Class Sections to Include:
-                    </Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      {sections.map((sec) => {
-                        const checked = pickedSectionIds.includes(sec.section_id);
-                        return (
-                          <TouchableOpacity
-                            key={`pick-sec-${sec.section_id}`}
-                            style={[styles.secPill, checked && styles.secPillActive]}
-                            onPress={() =>
-                              setPickedSectionIds((prev) =>
-                                prev.includes(sec.section_id)
-                                  ? prev.filter((id) => id !== sec.section_id)
-                                  : [...prev, sec.section_id]
-                              )
-                            }
-                          >
-                            <Ionicons
-                              name={checked ? 'checkbox' : 'square-outline'}
-                              size={13}
-                              color={checked ? palette.onPrimary : palette.primary}
-                            />
-                            <Text style={[styles.secPillText, checked && styles.secPillTextActive]}>
-                              {sec.section_name}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
-                  </View>
-                )}
-
-                {isAdmin && teachersList.length > 0 && selectedTab === 'SCHEDULE' && (
-                  <View>
-                    <Text style={[styles.loadingText, { textAlign: 'left', marginBottom: 6 }]}>
-                      Or Tap Teachers to Include:
-                    </Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      {teachersList.map((t) => {
-                        const checked = pickedTeacherIds.includes(t.id);
-                        return (
-                          <TouchableOpacity
-                            key={`pick-t-${t.id}`}
-                            style={[styles.secPill, checked && styles.secPillActive]}
-                            onPress={() =>
-                              setPickedTeacherIds((prev) =>
-                                prev.includes(t.id)
-                                  ? prev.filter((id) => id !== t.id)
-                                  : [...prev, t.id]
-                              )
-                            }
-                          >
-                            <Ionicons
-                              name={checked ? 'checkbox' : 'square-outline'}
-                              size={13}
-                              color={checked ? palette.onPrimary : palette.primary}
-                            />
-                            <Text style={[styles.secPillText, checked && styles.secPillTextActive]}>
-                              {t.full_name}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
+          <ReportPackScopeFilter
+            selectedTab={selectedTab}
+            isAdmin={isAdmin}
+            packScope={packScope}
+            onChangeScope={setPackScope}
+            sections={sections}
+            pickedSectionIds={pickedSectionIds}
+            onToggleSection={(sectionId) =>
+              setPickedSectionIds((prev) =>
+                prev.includes(sectionId)
+                  ? prev.filter((id) => id !== sectionId)
+                  : [...prev, sectionId]
+              )
+            }
+            teachersList={teachersList}
+            pickedTeacherIds={pickedTeacherIds}
+            onToggleTeacher={(teacherId) =>
+              setPickedTeacherIds((prev) =>
+                prev.includes(teacherId)
+                  ? prev.filter((id) => id !== teacherId)
+                  : [...prev, teacherId]
+              )
+            }
+          />
         )}
 
-        {/* Month Selector for DTR, SF2, SF4 */}
         {(selectedTab === 'DTR' || selectedTab === 'SF2' || selectedTab === 'SF4') && (
           <ScrollView
             ref={monthScrollRef}
             horizontal
+            nestedScrollEnabled
             showsHorizontalScrollIndicator={false}
             style={styles.monthStrip}
+            contentContainerStyle={styles.monthStripContent}
           >
             {SHORT_MONTHS.map((mName, idx) => {
               const mNum = idx + 1;
@@ -1072,7 +900,6 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           </ScrollView>
         )}
 
-        {/* Section Selector for SF1 & SF2 */}
         {(selectedTab === 'SF1' || selectedTab === 'SF2') && (
           <View style={styles.card}>
             <Text style={styles.sectionHeaderTitle}>CLASS SECTION</Text>
@@ -1091,7 +918,6 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           </View>
         )}
 
-        {/* Quick Search */}
         {selectedTab !== 'DTR' && (
           <View style={styles.searchBox}>
             <Ionicons name="search-outline" size={16} color={palette.textMuted} />
@@ -1113,140 +939,29 @@ export const ReportsScreen: React.FC<ReportsScreenProps> = ({ embedded = false }
           </View>
         )}
 
-        {/* Dynamic Report Content */}
         {loading ? (
           <View style={styles.card}>
             <ActivityIndicator size="small" color={palette.primary} style={{ marginVertical: 24 }} />
-            <Text style={styles.loadingText}>Loading {selectedTab.replace('_', ' ')} records...</Text>
+            <Text style={styles.loadingText}>
+              Loading {selectedTab.replace('_', ' ')} records...
+            </Text>
           </View>
         ) : selectedTab === 'SCHEDULE' ? (
-          <View style={{ gap: 10 }}>
-            {packScope === 'SELECTED' &&
-            pickedSectionIds.length === 0 &&
-            (!isAdmin || pickedTeacherIds.length === 0) ? (
-              <View style={styles.card}>
-                <Text style={styles.emptyText}>
-                  Tap one or more class sections or teachers above, or switch to All.
-                </Text>
-              </View>
-            ) : !scheduleData || !(scheduleData.teacher_schedules || []).length ? (
-              <View style={styles.card}>
-                <Text style={styles.emptyText}>No class schedules found for the selected filter.</Text>
-              </View>
-            ) : (
-              (scheduleData.teacher_schedules as any[])
-                .filter(
-                  (ts) =>
-                    !cleanSearch ||
-                    String(ts.teacher_name || '').toLowerCase().includes(cleanSearch) ||
-                    (ts.periods || []).some(
-                      (p: any) =>
-                        String(p.subject_title || '').toLowerCase().includes(cleanSearch) ||
-                        String(p.section_label || '').toLowerCase().includes(cleanSearch)
-                    )
-                )
-                .map((ts: any) => (
-                  <View key={`sched-t-${ts.teacher_id}`} style={styles.card}>
-                    <Text style={styles.sectionHeaderTitle}>
-                      {ts.teacher_name} ({ts.employee_id}) • {ts.total_weekly_hours} hrs/wk
-                    </Text>
-                    {Array.isArray(ts.advisory_sections) && ts.advisory_sections.length > 0 && (
-                      <Text style={[styles.loadingText, { textAlign: 'left', marginBottom: 8 }]}>
-                        Class Adviser: {ts.advisory_sections.join(', ')}
-                      </Text>
-                    )}
-                    {(ts.periods || []).length === 0 ? (
-                      <Text style={styles.emptyText}>No active subject periods assigned.</Text>
-                    ) : (
-                      (ts.periods || []).map((p: any) => (
-                        <View
-                          key={`per-${p.id}`}
-                          style={{
-                            paddingVertical: 8,
-                            borderTopWidth: 1,
-                            borderTopColor: palette.border,
-                            gap: 2,
-                          }}
-                        >
-                          <Text style={{ fontSize: fonts.sm, fontWeight: fonts.weight.bold, color: palette.textPrimary }}>
-                            {p.subject_code} — {p.subject_title}
-                          </Text>
-                          <Text style={{ fontSize: fonts.xs, color: palette.textSecondary }}>
-                            {p.section_label} • {p.room_name}
-                          </Text>
-                          <Text style={{ fontSize: fonts.xs, color: palette.primary, fontWeight: fonts.weight.semibold }}>
-                            {p.time_range} ({p.day_label})
-                          </Text>
-                        </View>
-                      ))
-                    )}
-                  </View>
-                ))
-            )}
-          </View>
+          <ReportSchedulePreview
+            packScope={packScope}
+            isAdmin={isAdmin}
+            pickedSectionIds={pickedSectionIds}
+            pickedTeacherIds={pickedTeacherIds}
+            scheduleData={scheduleData}
+            cleanSearch={cleanSearch}
+          />
         ) : selectedTab === 'CLASS_LIST' ? (
-          <View style={{ gap: 10 }}>
-            {packScope === 'SELECTED' && pickedSectionIds.length === 0 ? (
-              <View style={styles.card}>
-                <Text style={styles.emptyText}>
-                  Tap one or more class sections above, or switch to All.
-                </Text>
-              </View>
-            ) : !classListData || !(classListData.class_lists || []).length ? (
-              <View style={styles.card}>
-                <Text style={styles.emptyText}>No class lists found for the selected filter.</Text>
-              </View>
-            ) : (
-              (classListData.class_lists as any[]).map((cl: any) => {
-                const matchingStudents = (cl.students || []).filter(
-                  (st: any) =>
-                    !cleanSearch ||
-                    String(st.full_name || '').toLowerCase().includes(cleanSearch) ||
-                    String(st.lrn || '').toLowerCase().includes(cleanSearch)
-                );
-                return (
-                  <View key={`cl-${cl.section_id}`} style={styles.card}>
-                    <Text style={styles.sectionHeaderTitle}>
-                      {cl.section_label} ({cl.total_count} Students)
-                    </Text>
-                    <Text style={[styles.loadingText, { textAlign: 'left', marginBottom: 8 }]}>
-                      Adviser: {cl.adviser_name} • Room: {cl.room_name} • Male: {cl.male_count} / Female: {cl.female_count}
-                    </Text>
-                    {matchingStudents.length === 0 ? (
-                      <Text style={styles.emptyText}>No students match your search.</Text>
-                    ) : (
-                      matchingStudents.map((st: any) => (
-                        <View
-                          key={`st-${cl.section_id}-${st.student_id}`}
-                          style={{
-                            flexDirection: 'row',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            paddingVertical: 7,
-                            borderTopWidth: 1,
-                            borderTopColor: palette.border,
-                            gap: 8,
-                          }}
-                        >
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: fonts.sm, fontWeight: fonts.weight.bold, color: palette.textPrimary }}>
-                              {st.full_name}
-                            </Text>
-                            <Text style={{ fontSize: fonts.xs, color: palette.textSecondary }}>
-                              LRN: {st.lrn} • {st.sex}
-                            </Text>
-                          </View>
-                          <Text style={{ fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.primary }}>
-                            {st.today_status}
-                          </Text>
-                        </View>
-                      ))
-                    )}
-                  </View>
-                );
-              })
-            )}
-          </View>
+          <ReportClassListPreview
+            packScope={packScope}
+            pickedSectionIds={pickedSectionIds}
+            classListData={classListData}
+            cleanSearch={cleanSearch}
+          />
         ) : selectedTab === 'DTR' ? (
           <DTRReportView
             data={dtrData}
@@ -1286,6 +1001,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
   StyleSheet.create({
     container: { flex: 1, backgroundColor: palette.background },
     topHeader: {
+      flexShrink: 0,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
@@ -1308,28 +1024,27 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       justifyContent: 'center',
     },
     embeddedActionBar: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      flexShrink: 0,
+      paddingHorizontal: 14,
       paddingVertical: 10,
       backgroundColor: palette.surface,
       borderBottomWidth: 1,
       borderBottomColor: palette.border,
       gap: 8,
     },
-    embeddedHint: { flex: 1, fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
+    embeddedHint: { fontSize: fonts.xs, color: palette.textSecondary, fontWeight: fonts.weight.semibold },
     screenTitle: { fontSize: fonts.lg, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
     screenSub: { fontSize: fonts.xs, color: palette.textSecondary, marginTop: 1 },
     btnPri: {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: palette.buttonBg,
-      paddingVertical: 7,
-      paddingHorizontal: 11,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
       borderRadius: 8,
-      gap: 4,
-      minWidth: 70,
+      gap: 5,
+      minHeight: 36,
+      minWidth: 74,
       justifyContent: 'center',
     },
     btnPriText: { color: palette.onPrimary, fontSize: fonts.xs, fontWeight: fonts.weight.extrabold },
@@ -1337,56 +1052,81 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: palette.primarySoft,
-      paddingVertical: 7,
-      paddingHorizontal: 11,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
       borderRadius: 8,
       borderWidth: 1,
       borderColor: palette.border,
-      gap: 4,
-      minWidth: 66,
+      gap: 5,
+      minHeight: 36,
+      minWidth: 70,
       justifyContent: 'center',
     },
     btnSecText: { color: palette.primary, fontSize: fonts.xs, fontWeight: fonts.weight.extrabold },
-    tabScrollWrap: {
+    tabBarContainer: {
       flexGrow: 0,
+      flexShrink: 0,
+      width: '100%',
       backgroundColor: palette.surface,
       borderBottomWidth: 1,
       borderBottomColor: palette.border,
     },
+    tabScrollWrap: { flexGrow: 0, flexShrink: 0 },
     tabRow: {
       flexDirection: 'row',
+      alignItems: 'center',
       paddingHorizontal: 14,
-      paddingVertical: 8,
-      gap: 6,
+      paddingVertical: 10,
+      gap: 8,
     },
     tabBtn: {
       flexDirection: 'row',
       justifyContent: 'center',
+      alignItems: 'center',
+      minHeight: 38,
       paddingVertical: 8,
-      paddingHorizontal: 12,
-      borderRadius: 8,
+      paddingHorizontal: 13,
+      borderRadius: 10,
       backgroundColor: palette.surfaceSubtle,
       borderWidth: 1,
       borderColor: palette.border,
-      alignItems: 'center',
-      gap: 5,
+      gap: 6,
     },
     tabBtnActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
-    tabBtnText: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: palette.textSecondary },
+    tabBtnText: {
+      fontSize: fonts.xs,
+      lineHeight: 16,
+      fontWeight: fonts.weight.extrabold,
+      color: palette.textSecondary,
+      includeFontPadding: false,
+      textAlignVertical: 'center',
+    },
     tabBtnTextActive: { color: palette.onPrimary },
+    bodyScroll: { flex: 1 },
     scrollContent: { padding: 14, paddingBottom: 140, gap: 10 },
-    monthStrip: { flexDirection: 'row', marginBottom: 2 },
+    monthStrip: { flexGrow: 0, flexShrink: 0, marginBottom: 2 },
+    monthStripContent: { flexDirection: 'row', alignItems: 'center', paddingVertical: 2 },
     monthChip: {
-      paddingVertical: 6,
+      minHeight: 34,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingVertical: 7,
       paddingHorizontal: 12,
-      borderRadius: 8,
+      borderRadius: 9,
       backgroundColor: palette.surface,
       borderWidth: 1,
       borderColor: palette.border,
       marginRight: 6,
     },
     monthChipActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
-    monthChipText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.textSecondary },
+    monthChipText: {
+      fontSize: fonts.xs,
+      lineHeight: 16,
+      fontWeight: fonts.weight.bold,
+      color: palette.textSecondary,
+      includeFontPadding: false,
+      textAlignVertical: 'center',
+    },
     monthChipTextActive: { color: palette.onPrimary },
     card: {
       backgroundColor: palette.surface,
@@ -1402,21 +1142,6 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       letterSpacing: 0.4,
       marginBottom: 8,
     },
-    secPill: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 5,
-      paddingVertical: 7,
-      paddingHorizontal: 12,
-      borderRadius: 8,
-      backgroundColor: palette.primarySoft,
-      borderWidth: 1,
-      borderColor: palette.border,
-      marginRight: 8,
-    },
-    secPillActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
-    secPillText: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: palette.primary },
-    secPillTextActive: { color: palette.onPrimary },
     searchBox: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1431,44 +1156,6 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     searchInput: { flex: 1, fontSize: fonts.sm, color: palette.textPrimary },
     loadingText: { fontSize: fonts.xs, color: palette.textSecondary, textAlign: 'center' },
     emptyText: { fontSize: fonts.xs, color: palette.textMuted, textAlign: 'center', paddingVertical: 8 },
-    modalBackdrop: {
-      flex: 1,
-      backgroundColor: 'rgba(15, 23, 42, 0.65)',
-      justifyContent: 'center',
-      alignItems: 'center',
-      padding: 18,
-    },
-    modalCard: {
-      width: '100%',
-      maxWidth: 420,
-      backgroundColor: palette.surface,
-      borderRadius: 16,
-      padding: 18,
-      borderWidth: 1,
-      borderColor: palette.borderStrong,
-    },
-    modalTitle: { fontSize: fonts.lg, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
-    modalSub: { fontSize: fonts.xs, color: palette.textSecondary, marginTop: 4, marginBottom: 10 },
-    modalLabel: {
-      fontSize: fonts.xs,
-      fontWeight: fonts.weight.extrabold,
-      color: palette.primary,
-      marginTop: 10,
-      marginBottom: 6,
-      textTransform: 'uppercase',
-    },
-    chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-    setupChip: {
-      paddingVertical: 7,
-      paddingHorizontal: 10,
-      borderRadius: 8,
-      backgroundColor: palette.surfaceSubtle,
-      borderWidth: 1,
-      borderColor: palette.border,
-    },
-    setupChipActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
-    setupChipText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.textPrimary },
-    setupChipTextActive: { color: palette.onPrimary },
   });
 
 export default ReportsScreen;

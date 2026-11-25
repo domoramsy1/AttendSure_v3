@@ -1,3 +1,6 @@
+// AttendSure Mobile - Profile Settings Screen
+// File: D:\AttendSure_V3\mobile\src\screens\ProfileSettingsScreen.tsx
+
 /**
  * AttendSure Mobile - Teacher Profile & Digital ID Pass
  * File: mobile/src/screens/ProfileSettingsScreen.tsx
@@ -152,13 +155,12 @@ export const ProfileSettingsScreen: React.FC = () => {
   };
 
   const sessionUser = user as ExtendedSessionUser | null;
+  const sessionFullName =
+    sessionUser?.full_name ||
+    sessionUser?.name ||
+    `${sessionUser?.first_name || ''} ${sessionUser?.last_name || ''}`.trim();
   const displayName = cleanText(
-    profile?.full_name ||
-      sessionUser?.full_name ||
-      sessionUser?.name ||
-      `${sessionUser?.first_name || ''} ${sessionUser?.last_name || ''}`.trim() ||
-      sessionUser?.username ||
-      'Teacher',
+    sessionFullName || profile?.full_name || sessionUser?.username || 'Teacher',
     120
   );
   const displayId = cleanText(

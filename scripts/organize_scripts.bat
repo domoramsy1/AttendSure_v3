@@ -1,3 +1,6 @@
+@REM AttendSure Scripts - Script Folder Organizer
+@REM File: D:\AttendSure_V3\scripts\organize_scripts.bat
+
 @setlocal & set "_PY=python" & (if exist "%~dp0..\backend\venv\Scripts\python.exe" set "_PY=%~dp0..\backend\venv\Scripts\python.exe") & call "%%_PY%%" -x "%~f0" %* & exit /b
 r"""
 AttendSure - Scripts Folder Organizer

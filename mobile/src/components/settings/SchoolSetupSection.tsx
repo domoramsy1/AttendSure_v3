@@ -1,3 +1,6 @@
+// AttendSure Mobile - School Setup Section Component
+// File: D:\AttendSure_V3\mobile\src\components\settings\SchoolSetupSection.tsx
+
 /**
  * AttendSure Mobile - Settings School Profile, Principal Picker & 3 Letterhead Logos Section
  * File: mobile/src/components/settings/SchoolSetupSection.tsx

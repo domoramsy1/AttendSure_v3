@@ -1,3 +1,6 @@
+// AttendSure Web - School Tenant Badge Component
+// File: D:\AttendSure_V3\web\src\components\branding\SchoolTenantBadge.tsx
+
 /**
  * AttendSure - Dynamic School Identity Badge (Theme-Adaptive & Zero Mock Data)
  * File: web/src/components/branding/SchoolTenantBadge.tsx

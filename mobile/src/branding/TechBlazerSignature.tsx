@@ -1,3 +1,6 @@
+// AttendSure Mobile - Tech Blazer Signature
+// File: D:\AttendSure_V3\mobile\src\branding\TechBlazerSignature.tsx
+
 /**
  * AttendSure Mobile - TechBlazer Signature Wrapper
  * File: mobile/src/branding/TechBlazerSignature.tsx

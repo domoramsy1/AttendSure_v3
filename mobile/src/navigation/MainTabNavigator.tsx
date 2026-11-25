@@ -1,3 +1,6 @@
+// AttendSure Mobile - Main Tab Navigator
+// File: D:\AttendSure_V3\mobile\src\navigation\MainTabNavigator.tsx
+
 /**
  * AttendSure Mobile - Main 5-Tab Navigator (Teachers & School Leaders Only)
  * File: mobile/src/navigation/MainTabNavigator.tsx
@@ -15,7 +18,6 @@ import {
   ActivityIndicator,
   TextInput,
   DeviceEventEmitter,
-  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,16 +29,6 @@ import { useThemeMode } from '../context/ThemeContext';
 import { getFriendlyErrorMessage, type ThemePalette } from '../constants/theme';
 import { canScanStudentQr, canViewTab, canViewTeacherDirectory } from '../utils/permissions';
 import { isCanceledError, showNotice } from '../utils/helpers';
-import {
-  isTeacherOnDutyStored,
-  setTeacherOnDutyFlag,
-  startContinuousGpsHeartbeat,
-  stopContinuousGpsHeartbeat,
-} from '../services/backgroundLocation';
-import {
-  ADAPTIVE_PING_INTERVAL_MS,
-  sendLiveHeartbeat,
-} from '../services/telemetryService';
 import {
   startScheduleAlarmLoop,
   stopScheduleAlarmLoop,
@@ -69,7 +61,10 @@ import TeachersScreen from '../screens/TeachersScreen';
 import SchedulesScreen from '../screens/SchedulesScreen';
 import UsersScreen from '../screens/UsersScreen';
 import SardoSafetyScreen from '../screens/SardoSafetyScreen';
+import UserManualScreen from '../screens/UserManualScreen';
 import DTRReportView, { DTRReportData } from '../components/reports/DTRReportView';
+import OnboardingGuideModal from '../components/help/OnboardingGuideModal';
+import { resolveUserProfileKey } from '../components/help/manualContent';
 
 export type TabType =
   | 'home'
@@ -86,6 +81,7 @@ export type TabType =
   | 'calendar'
   | 'settings'
   | 'sardo_safety'
+  | 'help'
   | 'dtr';
 
 export const MainTabNavigator: React.FC = () => {
@@ -94,6 +90,43 @@ export const MainTabNavigator: React.FC = () => {
   const { palette, fonts } = useThemeMode();
   const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
   const [activeTab, setActiveTab] = useState<TabType>('home');
+  const [isTourOpen, setIsTourOpen] = useState<boolean>(false);
+  const autoTourPromptedRef = useRef<string | null>(null);
+
+  const userProfileKey = useMemo(
+    () =>
+      resolveUserProfileKey(
+        user?.role || user?.system_role,
+        user?.can_handle_classes ?? user?.can_teach ?? true
+      ),
+    [user?.role, user?.system_role, user?.can_handle_classes, user?.can_teach]
+  );
+
+  useEffect(() => {
+    if (!user) {
+      autoTourPromptedRef.current = null;
+      setIsTourOpen(false);
+      return;
+    }
+    const tourKey = `${user.id}:${user.current_onboarding_version ?? 1}`;
+    if (user.needs_onboarding === true && autoTourPromptedRef.current !== tourKey) {
+      autoTourPromptedRef.current = tourKey;
+      setIsTourOpen(true);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    const openTourSub = DeviceEventEmitter.addListener('attendsure:open-onboarding-tour', () => {
+      setIsTourOpen(true);
+    });
+    const openManualSub = DeviceEventEmitter.addListener('attendsure:open-user-manual', () => {
+      setActiveTab('help');
+    });
+    return () => {
+      openTourSub.remove();
+      openManualSub.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (!canViewTab(user, activeTab)) {
@@ -101,102 +134,7 @@ export const MainTabNavigator: React.FC = () => {
     }
   }, [user, activeTab]);
 
-  // Duty-aware foreground + background GPS heartbeat: runs ONLY while teacher is clocked in on duty
-  useEffect(() => {
-    if (!user) return;
-    let active = true;
-    const dutyAbort = new AbortController();
-
-    const triggerHeartbeatIfOnDuty = async (forcePing = false) => {
-      if (!active) return;
-      const onDuty = await isTeacherOnDutyStored();
-      if (!active || !onDuty) return;
-      await sendLiveHeartbeat(undefined, forcePing).catch(() => {});
-    };
-
-    const syncDutyAndTracking = async (forcePing = false) => {
-      if (!active) return;
-
-      // Resume background GPS right away if already marked on-duty locally (e.g. offline app restart)
-      const storedOnDuty = await isTeacherOnDutyStored();
-      if (!active) return;
-      if (storedOnDuty) {
-        void startContinuousGpsHeartbeat().catch(() => {});
-      }
-
-      // Sync real duty status from the campus overview endpoint
-      try {
-        const res = await apiClient.get<{
-          teacher_list?: Array<{
-            id?: number;
-            teacher_id?: number;
-            user_id?: number;
-            employee_id?: string;
-            is_clocked_in?: boolean;
-            time_in?: string | null;
-            time_out?: string | null;
-          }>;
-        }>(ENDPOINTS.CAMPUS_OVERVIEW, { signal: dutyAbort.signal });
-
-        if (!active || dutyAbort.signal.aborted) return;
-        const rows = Array.isArray(res.data?.teacher_list) ? res.data.teacher_list : [];
-        const ownRow =
-          rows.find(
-            (t) =>
-              (user.teacher_id &&
-                (Number(t.teacher_id) === Number(user.teacher_id) ||
-                  Number(t.id) === Number(user.teacher_id))) ||
-              (user.id && t.user_id && Number(t.user_id) === Number(user.id)) ||
-              (user.employee_id &&
-                t.employee_id &&
-                String(t.employee_id).toLowerCase() === String(user.employee_id).toLowerCase())
-          ) || (rows.length === 1 && String(user.role || '').toUpperCase() === 'TEACHER' ? rows[0] : undefined);
-
-        if (ownRow) {
-          const isClockedIn = Boolean(
-            ownRow.is_clocked_in || (ownRow.time_in && !ownRow.time_out)
-          );
-          await setTeacherOnDutyFlag(isClockedIn);
-          if (isClockedIn && active) {
-            await triggerHeartbeatIfOnDuty(forcePing);
-          }
-          return;
-        }
-      } catch {
-        // Offline or unreachable: honor the locally stored duty state
-      }
-
-      if (storedOnDuty && active) {
-        await triggerHeartbeatIfOnDuty(forcePing);
-      } else if (!storedOnDuty && active) {
-        await stopContinuousGpsHeartbeat().catch(() => {});
-      }
-    };
-
-    void syncDutyAndTracking(true);
-
-    const intervalId = setInterval(() => {
-      void triggerHeartbeatIfOnDuty(false);
-    }, ADAPTIVE_PING_INTERVAL_MS);
-
-    const appStateSub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        void syncDutyAndTracking(true);
-      }
-    });
-
-    const dutyUpdateSub = DeviceEventEmitter.addListener('attendsure:attendance-updated', () => {
-      void syncDutyAndTracking(false);
-    });
-
-    return () => {
-      active = false;
-      dutyAbort.abort();
-      clearInterval(intervalId);
-      appStateSub.remove();
-      dutyUpdateSub.remove();
-    };
-  }, [user]);
+  // Foreground + background campus GPS tracking is managed centrally by TeacherDutyLocationProvider
 
   const [dtrMonth, setDtrMonth] = useState<number>(new Date().getMonth() + 1);
   const [dtrYear, setDtrYear] = useState<number>(new Date().getFullYear());
@@ -591,6 +529,7 @@ export const MainTabNavigator: React.FC = () => {
     'calendar',
     'dtr',
     'reports',
+    'help',
   ];
   const resolvedNavKey: TabType = accountSubTabs.includes(activeTab) ? 'menu' : activeTab;
 
@@ -657,6 +596,12 @@ export const MainTabNavigator: React.FC = () => {
             <SardoSafetyScreen />
           </View>
         )}
+        {activeTab === 'help' && (
+          <View style={styles.subScreenFill}>
+            {renderSubHeader('User Manual & Help', 'Everyday step-by-step guides & quick fixes', 'menu')}
+            <UserManualScreen onStartTour={() => setIsTourOpen(true)} />
+          </View>
+        )}
         {activeTab === 'dtr' && (
           <View style={styles.subScreenFill}>
             {renderSubHeader('Daily Time Record', 'Civil Service Form No. 48', 'menu')}
@@ -678,8 +623,10 @@ export const MainTabNavigator: React.FC = () => {
                   <Text style={styles.dtrControlsLabel}>INSPECT TEACHER DTR</Text>
                   <ScrollView
                     horizontal
+                    nestedScrollEnabled
                     showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={{ gap: 6, paddingVertical: 4 }}
+                    style={{ flexGrow: 0, flexShrink: 0 }}
+                    contentContainerStyle={{ gap: 8, paddingVertical: 4, alignItems: 'center' }}
                   >
                     <TouchableOpacity
                       style={[
@@ -823,6 +770,13 @@ export const MainTabNavigator: React.FC = () => {
           setActiveTab(targetTab);
         }}
       />
+      <OnboardingGuideModal
+        visible={isTourOpen}
+        userProfile={userProfileKey}
+        onboardingVersion={Number(user?.current_onboarding_version ?? 1)}
+        onClose={() => setIsTourOpen(false)}
+        onOpenManual={() => setActiveTab('help')}
+      />
     </View>
   );
 };
@@ -833,6 +787,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     screenContainer: { flex: 1 },
     subScreenFill: { flex: 1, backgroundColor: palette.background },
     subHeader: {
+      flexShrink: 0,
       backgroundColor: palette.headerBg,
       paddingHorizontal: 18,
       paddingBottom: 20,
@@ -894,15 +849,25 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       letterSpacing: 0.4,
     },
     dtrChip: {
-      paddingVertical: 6,
-      paddingHorizontal: 10,
-      borderRadius: 8,
+      minHeight: 34,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingVertical: 7,
+      paddingHorizontal: 12,
+      borderRadius: 9,
       backgroundColor: palette.surfaceSubtle,
       borderWidth: 1,
       borderColor: palette.border,
     },
     dtrChipActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
-    dtrChipText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.textSecondary },
+    dtrChipText: {
+      fontSize: fonts.xs,
+      lineHeight: 16,
+      fontWeight: fonts.weight.bold,
+      color: palette.textSecondary,
+      includeFontPadding: false,
+      textAlignVertical: 'center',
+    },
     dtrChipTextActive: { color: palette.onPrimary },
     dtrHoursInput: {
       backgroundColor: palette.surfaceSubtle,

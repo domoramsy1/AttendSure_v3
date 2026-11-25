@@ -1,3 +1,6 @@
+// AttendSure Mobile - Schedules Screen
+// File: D:\AttendSure_V3\mobile\src\screens\SchedulesScreen.tsx
+
 /**
  * AttendSure Mobile - Complete Academic Setup & Class Schedules CRUD (100% Web Parity)
  * File: mobile/src/screens/SchedulesScreen.tsx
@@ -28,6 +31,7 @@ import {
   type ThemePalette,
 } from '../constants/theme';
 import { canManageSchoolSetup } from '../utils/permissions';
+import { toTimeInputValue } from '../utils/formatters';
 import { confirmAction, showNotice } from '../utils/helpers';
 import { getServerBaseUrl } from '../services/configService';
 import ChipRow from '../components/common/ChipRow';
@@ -323,8 +327,8 @@ export const SchedulesScreen: React.FC = () => {
         subject: String(item.subject || item.subject_id || ''),
         teacher: String(item.teacher || item.teacher_id || ''),
         day_of_week: String(item.day_of_week || 'ALL_WEEKDAYS'),
-        start_time: String(item.start_time || '08:00').slice(0, 5),
-        end_time: String(item.end_time || '09:00').slice(0, 5),
+        start_time: toTimeInputValue(item.start_time, '08:00'),
+        end_time: toTimeInputValue(item.end_time, '09:00'),
       });
     } else if (subTab === 'SECTIONS') {
       setSectionForm({
@@ -411,8 +415,8 @@ export const SchedulesScreen: React.FC = () => {
           subject: Number(periodForm.subject),
           teacher: Number(periodForm.teacher),
           day_of_week: periodForm.day_of_week,
-          start_time: periodForm.start_time,
-          end_time: periodForm.end_time,
+          start_time: toTimeInputValue(periodForm.start_time, periodForm.start_time),
+          end_time: toTimeInputValue(periodForm.end_time, periodForm.end_time),
         };
       } else if (subTab === 'SECTIONS') {
         payload = {
@@ -580,6 +584,7 @@ export const SchedulesScreen: React.FC = () => {
         </View>
       ) : (
         <FlatList
+          style={styles.listFlex}
           data={activeList}
           keyExtractor={(item) => `${subTab}-${item.id}`}
           contentContainerStyle={styles.listContent}
@@ -651,9 +656,10 @@ export const SchedulesScreen: React.FC = () => {
 const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMode>['fonts']) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: palette.background },
-    tabStrip: { flexGrow: 0, maxHeight: 50, marginTop: 10 },
-    tabRow: { paddingHorizontal: 14, gap: 6, alignItems: 'center' },
-    toolbar: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingVertical: 8 },
+    tabStrip: { flexGrow: 0, flexShrink: 0, marginTop: 10, paddingVertical: 4 },
+    tabRow: { paddingHorizontal: 14, gap: 8, alignItems: 'center' },
+    toolbar: { flexShrink: 0, flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingVertical: 8 },
+    listFlex: { flex: 1 },
     searchWrap: {
       flex: 1,
       flexDirection: 'row',

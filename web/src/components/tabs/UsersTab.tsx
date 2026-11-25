@@ -1,3 +1,6 @@
+// AttendSure Web - Users Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\UsersTab.tsx
+
 /**
  * AttendSure - User Accounts & Access Control
  * File: web/src/components/tabs/UsersTab.tsx
@@ -348,6 +351,7 @@ export const UsersTab: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving || isCheckingFields) return;
 
     if (hasLiveErrors) {
       showAlert({

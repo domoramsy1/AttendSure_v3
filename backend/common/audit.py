@@ -1,3 +1,6 @@
+# AttendSure Backend - Common Audit
+# File: D:\AttendSure_V3\backend\common\audit.py
+
 import logging
 from django.db import transaction
 from rest_framework import viewsets
@@ -24,17 +27,17 @@ def record_audit_log(
     from apps.accounts.models import AuditLog
 
     user = request.user if (request and request.user and request.user.is_authenticated) else None
-    payload = dict(new_data or {})
-    if changed_fields:
-        payload["changed_fields"] = [str(field) for field in changed_fields]
+    clean_changed_fields = [str(field) for field in changed_fields] if changed_fields else None
+    payload = dict(new_data) if new_data else None
 
     try:
         with transaction.atomic():
             AuditLog.objects.create(
                 table_name=str(table_name)[:64],
                 record_id=record_id or 0,
-                action=str(action).upper()[:10],
-                new_data=payload or None,
+                action=str(action).upper()[:16],
+                new_data=payload,
+                changed_fields=clean_changed_fields,
                 performed_by=user,
                 client_ip=get_client_ip(request),
                 user_agent=str(request.META.get("HTTP_USER_AGENT", ""))[:255] if request else "",

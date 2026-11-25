@@ -1,3 +1,6 @@
+// AttendSure Mobile - Dashboard Screen
+// File: D:\AttendSure_V3\mobile\src\screens\DashboardScreen.tsx
+
 /**
  * AttendSure Mobile - Teacher Home Dashboard
  * File: mobile/src/screens/DashboardScreen.tsx
@@ -15,27 +18,25 @@ import {
   Platform,
   Vibration,
   DeviceEventEmitter,
+  AppState,
+  type AppStateStatus,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
+import { useTeacherDutyLocation } from '../context/TeacherDutyLocationContext';
 import { AttendSureLogo } from '../branding/BrandLogos';
 import { apiClient } from '../api/client';
 import { ENDPOINTS } from '../api/endpoints';
 import { getServerBaseUrl } from '../services/configService';
 import { getUnsyncedCount, syncOfflineQueue } from '../services/offlineQueue';
-import { sendLiveHeartbeat, format12HourTime, ADAPTIVE_PING_INTERVAL_MS } from '../services/telemetryService';
-import { setTeacherOnDutyFlag } from '../services/backgroundLocation';
-import {
-  getFriendlyErrorMessage,
-  type ThemePalette,
-} from '../constants/theme';
+import { format12HourTime } from '../services/telemetryService';
+import { type ThemePalette } from '../constants/theme';
 import { TabType } from '../navigation/MainTabNavigator';
 import { canViewClassList } from '../utils/permissions';
 import {
@@ -108,16 +109,10 @@ interface DtrSummaryData {
   total_undertime_minutes: number;
   dtr_submitted: boolean;
   dept_head_approved: boolean;
+  today_date?: string;
+  is_clocked_in_today?: boolean;
+  has_timed_out_today?: boolean;
   rows: DtrDayRow[];
-}
-
-interface GeofenceConfigData {
-  campus_name?: string | null;
-  name?: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  radius_meters: number | null;
-  is_configured?: boolean;
 }
 
 interface CalendarOverrideItem {
@@ -125,14 +120,6 @@ interface CalendarOverrideItem {
   date: string;
   type: 'SUSPENSION' | 'HOLIDAY' | 'EVENT';
   reason: string;
-}
-
-interface LiveGpsCoords {
-  latitude: number;
-  longitude: number;
-  accuracy: number | null;
-  mocked: boolean;
-  timestamp: string;
 }
 
 interface DashboardProps {
@@ -157,12 +144,20 @@ const getGreeting = (): string => {
 export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const { user, refreshUser } = useAuth();
   const { palette, fonts, isDark } = useThemeMode();
+  const {
+    liveCoords,
+    gpsError,
+    boundary: sharedBoundary,
+    liveTeachers,
+    isOnDuty: sharedIsOnDuty,
+    hasTimedOutToday: sharedHasTimedOut,
+    refreshCampusOverview,
+  } = useTeacherDutyLocation();
   const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
 
   const [sections, setSections] = useState<SectionItem[]>([]);
   const [schoolProfile, setSchoolProfile] = useState<SchoolProfileData | null>(null);
   const [dtrData, setDtrData] = useState<DtrSummaryData | null>(null);
-  const [geofenceConfig, setGeofenceConfig] = useState<GeofenceConfigData | null>(null);
   const [todayOverride, setTodayOverride] = useState<CalendarOverrideItem | null>(null);
   const [weekendRestEnabled, setWeekendRestEnabled] = useState<boolean>(false);
 
@@ -175,17 +170,18 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const [logoFailed, setLogoFailed] = useState<boolean>(false);
   const [avatarFailed, setAvatarFailed] = useState<boolean>(false);
 
-  const [liveCoords, setLiveCoords] = useState<LiveGpsCoords | null>(null);
-  const [gpsError, setGpsError] = useState<string | null>(null);
-
   const [showCampusAlertModal, setShowCampusAlertModal] = useState<boolean>(false);
   const [campusAlertAcknowledged, setCampusAlertAcknowledged] = useState<boolean>(false);
   const lastCampusAlertTimestamp = useRef<number>(0);
 
   const isMounted = useRef<boolean>(true);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const anchorCoordsRef = useRef<LiveGpsCoords | null>(null);
-  const lastHeartbeatSent = useRef<number>(0);
+  const appStateRef = useRef<AppStateStatus>(
+    (AppState.currentState as AppStateStatus | null | undefined) || 'active'
+  );
+  const [isAppActive, setIsAppActive] = useState<boolean>(
+    (AppState.currentState || 'active') === 'active'
+  );
 
   const currentUser = user as Record<string, any> | null;
   const allowClassViews = canViewClassList(user);
@@ -206,8 +202,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const schoolName =
     schoolProfile?.school_name ||
     currentUser?.school_name ||
-    geofenceConfig?.campus_name ||
-    geofenceConfig?.name ||
+    sharedBoundary?.campus_name ||
     'AttendSure';
 
   const schoolSubHeader = [
@@ -242,214 +237,61 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
   const todayDtrRow: DtrDayRow | null =
     dtrData?.rows?.find((r) => r.date_str === todayStr) || null;
 
-  const hasCheckedInToday = Boolean(todayDtrRow?.am_arrival || todayDtrRow?.pm_arrival);
-  const hasCheckedOutToday = Boolean(
-    (todayDtrRow?.pm_departure && todayDtrRow.pm_departure !== '') ||
-      (todayDtrRow?.am_departure && !todayDtrRow?.pm_arrival)
-  );
-  const isOfficiallyOnDuty = hasCheckedInToday && !hasCheckedOutToday;
-
-  useEffect(() => {
-    void setTeacherOnDutyFlag(isOfficiallyOnDuty);
-  }, [isOfficiallyOnDuty]);
-
-  const applyStationaryFilter = useCallback((raw: LiveGpsCoords): LiveGpsCoords => {
-    const anchor = anchorCoordsRef.current;
-    if (!anchor) {
-      anchorCoordsRef.current = raw;
-      return raw;
-    }
-
-    const displacement = calculateDistanceMeters(
-      anchor.latitude,
-      anchor.longitude,
-      raw.latitude,
-      raw.longitude
+  const isOverviewForToday = !sharedBoundary?.today_date || sharedBoundary.today_date === todayStr;
+  const ownOverviewRow = useMemo(() => {
+    if (!isOverviewForToday || !Array.isArray(liveTeachers)) return null;
+    return (
+      liveTeachers.find(
+        (row) =>
+          (currentUser?.id !== undefined &&
+            row?.user_id !== undefined &&
+            Number(row.user_id) === Number(currentUser.id)) ||
+          (currentUser?.teacher_id !== undefined &&
+            Number(row?.teacher_id ?? row?.id) === Number(currentUser.teacher_id))
+      ) || null
     );
+  }, [isOverviewForToday, liveTeachers, currentUser?.id, currentUser?.teacher_id]);
 
-    if (displacement < 6) {
-      return {
-        latitude: anchor.latitude,
-        longitude: anchor.longitude,
-        accuracy: raw.accuracy ?? anchor.accuracy,
-        mocked: raw.mocked,
-        timestamp: raw.timestamp,
-      };
-    }
+  const isDtrForToday =
+    Boolean(dtrData) && (!dtrData?.today_date || dtrData.today_date === todayStr);
+  const overviewClockedIn =
+    typeof ownOverviewRow?.is_clocked_in === 'boolean' ? ownOverviewRow.is_clocked_in : null;
+  const overviewTimedOut =
+    typeof ownOverviewRow?.has_timed_out === 'boolean' ? ownOverviewRow.has_timed_out : null;
+  const dtrClockedIn =
+    isDtrForToday && typeof dtrData?.is_clocked_in_today === 'boolean'
+      ? dtrData.is_clocked_in_today
+      : null;
+  const dtrTimedOut =
+    isDtrForToday && typeof dtrData?.has_timed_out_today === 'boolean'
+      ? dtrData.has_timed_out_today
+      : null;
 
-    anchorCoordsRef.current = raw;
-    return raw;
-  }, []);
-
-  useEffect(() => {
-    let watcherSubscription: Location.LocationSubscription | null = null;
-    let heartbeatIntervalTimer: ReturnType<typeof setInterval> | null = null;
-    let isSubscribed = true;
-
-    const transmitHeartbeat = async (coords: LiveGpsCoords, force = false) => {
-      if (coords.mocked) {
-        if (isSubscribed) {
-          setGpsError(
-            'A mock location setting appears to be turned on. Disable it in your phone settings to update your campus status.'
-          );
-        }
-        return;
-      }
-      try {
-        await sendLiveHeartbeat(coords, force);
-        if (isSubscribed) {
-          setIsOnline(true);
-          setGpsError(null);
-        }
-      } catch (err: unknown) {
-        if (!isSubscribed) return;
-        const msg = getFriendlyErrorMessage(err, 'Could not verify your campus location right now.');
-        const lower = msg.toLowerCase();
-        if (lower.includes('lock') || lower.includes('mismatch') || lower.includes('permission') || lower.includes('mock')) {
-          setGpsError(msg);
-          setIsOnline(false);
-        }
-      }
-    };
-
-    const startLiveGpsTracking = async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (!isSubscribed) return;
-        if (status !== 'granted') {
-          setGpsError('Location access is needed for Teacher Time In / Time Out.');
-          return;
-        }
-
-        const isGpsActive = await Location.hasServicesEnabledAsync();
-        if (!isSubscribed) return;
-        if (!isGpsActive) {
-          setGpsError('Phone GPS is turned off.');
-          return;
-        }
-
-        setGpsError(null);
-
-        const initial = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-        });
-        if (!isSubscribed) return;
-
-        if (initial) {
-          const rawCoords: LiveGpsCoords = {
-            latitude: initial.coords.latitude,
-            longitude: initial.coords.longitude,
-            accuracy: initial.coords.accuracy,
-            mocked: Boolean(initial.mocked),
-            timestamp: format12HourTime(new Date()),
-          };
-
-          const stabilized = applyStationaryFilter(rawCoords);
-          setLiveCoords(stabilized);
-
-          lastHeartbeatSent.current = Date.now();
-          void transmitHeartbeat(stabilized, true);
-        }
-
-        if (!isSubscribed) return;
-        const sub = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            timeInterval: 5000,
-            distanceInterval: 3,
-          },
-          (position) => {
-            if (!isSubscribed) return;
-
-            const rawCoords: LiveGpsCoords = {
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              accuracy: position.coords.accuracy,
-              mocked: Boolean(position.mocked),
-              timestamp: format12HourTime(new Date()),
-            };
-
-            const stabilized = applyStationaryFilter(rawCoords);
-            setLiveCoords(stabilized);
-            setGpsError(null);
-
-            const now = Date.now();
-            if (now - lastHeartbeatSent.current >= ADAPTIVE_PING_INTERVAL_MS) {
-              lastHeartbeatSent.current = now;
-              void transmitHeartbeat(stabilized);
-            }
-          }
-        );
-
-        // Clean up immediately if unmounted while awaiting watchPositionAsync
-        if (!isSubscribed) {
-          sub.remove();
-          return;
-        }
-        watcherSubscription = sub;
-
-        heartbeatIntervalTimer = setInterval(async () => {
-          if (!isSubscribed) return;
-          const now = Date.now();
-          if (now - lastHeartbeatSent.current < ADAPTIVE_PING_INTERVAL_MS) return;
-
-          try {
-            const freshLoc = await Location.getCurrentPositionAsync({
-              accuracy: Location.Accuracy.High,
-            });
-            if (!isSubscribed) return;
-            const rawCoords: LiveGpsCoords = {
-              latitude: freshLoc.coords.latitude,
-              longitude: freshLoc.coords.longitude,
-              accuracy: freshLoc.coords.accuracy,
-              mocked: Boolean(freshLoc.mocked),
-              timestamp: format12HourTime(new Date()),
-            };
-            const stabilized = applyStationaryFilter(rawCoords);
-            setLiveCoords(stabilized);
-            lastHeartbeatSent.current = now;
-            void transmitHeartbeat(stabilized);
-          } catch {
-            if (!isSubscribed) return;
-            if (anchorCoordsRef.current) {
-              lastHeartbeatSent.current = now;
-              const updated = {
-                ...anchorCoordsRef.current,
-                timestamp: format12HourTime(new Date()),
-              };
-              setLiveCoords(updated);
-              void transmitHeartbeat(updated);
-            }
-          }
-        }, ADAPTIVE_PING_INTERVAL_MS);
-      } catch (err: unknown) {
-        if (isSubscribed) {
-          setGpsError(getFriendlyErrorMessage(err, 'Searching for GPS signal...'));
-        }
-      }
-    };
-
-    void startLiveGpsTracking();
-
-    return () => {
-      isSubscribed = false;
-      if (watcherSubscription) {
-        watcherSubscription.remove();
-        watcherSubscription = null;
-      }
-      if (heartbeatIntervalTimer) {
-        clearInterval(heartbeatIntervalTimer);
-        heartbeatIntervalTimer = null;
-      }
-    };
-  }, [currentUser?.username, currentUser?.id, applyStationaryFilter]);
+  const hasCheckedOutToday =
+    dtrTimedOut !== null
+      ? dtrTimedOut
+      : overviewTimedOut !== null
+        ? overviewTimedOut
+        : sharedHasTimedOut;
+  const isOfficiallyOnDuty =
+    !hasCheckedOutToday &&
+    (overviewClockedIn !== null
+      ? overviewClockedIn
+      : dtrClockedIn !== null
+        ? dtrClockedIn
+        : sharedIsOnDuty);
+  const hasCheckedInToday =
+    isOfficiallyOnDuty ||
+    hasCheckedOutToday ||
+    Boolean(todayDtrRow?.am_arrival || todayDtrRow?.pm_arrival);
 
   const campusCenter = useMemo(() => {
-    const lat = geofenceConfig?.latitude ?? schoolProfile?.latitude ?? null;
-    const lng = geofenceConfig?.longitude ?? schoolProfile?.longitude ?? null;
-    const radius = geofenceConfig?.radius_meters ?? schoolProfile?.geofence_radius_meters ?? null;
+    const lat = sharedBoundary?.latitude ?? schoolProfile?.latitude ?? null;
+    const lng = sharedBoundary?.longitude ?? schoolProfile?.longitude ?? null;
+    const radius =
+      sharedBoundary?.radius_meters ?? schoolProfile?.geofence_radius_meters ?? null;
     return { lat, lng, radius };
-  }, [geofenceConfig, schoolProfile]);
+  }, [sharedBoundary, schoolProfile]);
 
   const liveDistanceMeters = useMemo(() => {
     if (!liveCoords || campusCenter.lat === null || campusCenter.lng === null) {
@@ -465,12 +307,13 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
 
   const isInsideCampusPerimeter = useMemo(() => {
     if (liveDistanceMeters === null || campusCenter.radius === null) return null;
-    return liveDistanceMeters <= campusCenter.radius;
-  }, [liveDistanceMeters, campusCenter.radius]);
+    const driftBuffer = Math.min(Math.max(liveCoords?.accuracy || 0, 0), 35);
+    return liveDistanceMeters <= campusCenter.radius + driftBuffer;
+  }, [liveDistanceMeters, campusCenter.radius, liveCoords?.accuracy]);
 
   useEffect(() => {
     if (isInsideCampusPerimeter === false && isOfficiallyOnDuty && campusCenter.radius !== null) {
-      const accuracyMargin = liveCoords?.accuracy || 0;
+      const accuracyMargin = Math.min(Math.max(liveCoords?.accuracy || 0, 0), 35);
       const excessDistance = (liveDistanceMeters || 0) - campusCenter.radius;
 
       if (excessDistance <= accuracyMargin) {
@@ -509,13 +352,12 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
         AsyncStorage.getItem('attendsure_cached_school'),
         AsyncStorage.getItem('attendsure_cached_sections'),
         AsyncStorage.getItem('attendsure_cached_dtr'),
-        AsyncStorage.getItem('attendsure_cached_geofence'),
         getServerBaseUrl(),
       ]);
 
       if (!isMounted.current) return;
 
-      const [schoolRes, sectionsRes, dtrRes, geoRes, baseRes] = results;
+      const [schoolRes, sectionsRes, dtrRes, baseRes] = results;
       if (schoolRes.status === 'fulfilled' && schoolRes.value) {
         setSchoolProfile(JSON.parse(schoolRes.value));
       }
@@ -524,9 +366,6 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
       }
       if (dtrRes.status === 'fulfilled' && dtrRes.value) {
         setDtrData(JSON.parse(dtrRes.value));
-      }
-      if (geoRes.status === 'fulfilled' && geoRes.value) {
-        setGeofenceConfig(JSON.parse(geoRes.value));
       }
       if (baseRes.status === 'fulfilled' && baseRes.value) {
         setServerBase(baseRes.value);
@@ -568,28 +407,56 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     }
   }, []);
 
+  // Fetch relatively static school branding and holiday overrides on mount / manual pull-to-refresh only
+  const loadStaticSchoolData = useCallback(async () => {
+    const todayDate = getLocalTodayStr();
+    const [schoolRes, calendarRes] = await Promise.allSettled([
+      apiClient.get(ENDPOINTS.SCHOOL_PROFILE, { timeout: 6000 }),
+      apiClient.get(ENDPOINTS.HOLIDAYS, { timeout: 6000 }),
+    ]);
+    if (!isMounted.current) return;
+
+    if (schoolRes.status === 'fulfilled' && schoolRes.value?.data) {
+      setSchoolProfile(schoolRes.value.data);
+      AsyncStorage.setItem(
+        'attendsure_cached_school',
+        JSON.stringify(schoolRes.value.data)
+      ).catch(() => {});
+    }
+
+    if (calendarRes.status === 'fulfilled' && calendarRes.value?.data) {
+      const calPayload = calendarRes.value.data;
+      const list: CalendarOverrideItem[] = Array.isArray(calPayload)
+        ? calPayload
+        : Array.isArray(calPayload?.results)
+        ? calPayload.results
+        : [];
+      if (typeof calPayload?.weekend_rest_enabled === 'boolean') {
+        setWeekendRestEnabled(calPayload.weekend_rest_enabled);
+      }
+      const matched = list.find((item) => item.date === todayDate) || null;
+      setTodayOverride(matched);
+    }
+  }, []);
+
+  // Poll only live attendance & DTR summaries (campus overview comes from TeacherDutyLocationContext)
   const loadAllDynamicData = useCallback(async () => {
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    const todayDate = getLocalTodayStr();
     const now = new Date();
 
-    const [classListRes, schoolRes, dtrRes, geofenceRes, calendarRes] =
-      await Promise.allSettled([
-        allowClassViews
-          ? apiClient.get(ENDPOINTS.ATTENDANCE_CLASSES, { signal: controller.signal, timeout: 5000 })
-          : Promise.resolve({ data: [] }),
-        apiClient.get(ENDPOINTS.SCHOOL_PROFILE, { signal: controller.signal, timeout: 5000 }),
-        apiClient.get(ENDPOINTS.EMPLOYEE_DTR, {
-          params: { month: now.getMonth() + 1, year: now.getFullYear() },
-          signal: controller.signal,
-          timeout: 5000,
-        }),
-        apiClient.get(ENDPOINTS.CAMPUS_OVERVIEW, { signal: controller.signal, timeout: 5000 }),
-        apiClient.get(ENDPOINTS.HOLIDAYS, { signal: controller.signal, timeout: 5000 }),
-      ]);
+    const [classListRes, dtrRes] = await Promise.allSettled([
+      allowClassViews
+        ? apiClient.get(ENDPOINTS.ATTENDANCE_CLASSES, { signal: controller.signal, timeout: 6000 })
+        : Promise.resolve({ data: [] }),
+      apiClient.get(ENDPOINTS.EMPLOYEE_DTR, {
+        params: { month: now.getMonth() + 1, year: now.getFullYear() },
+        signal: controller.signal,
+        timeout: 6000,
+      }),
+    ]);
 
     if (!isMounted.current || controller.signal.aborted) return;
 
@@ -610,45 +477,12 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
       );
     }
 
-    if (schoolRes.status === 'fulfilled' && schoolRes.value?.data) {
-      anySuccess = true;
-      setSchoolProfile(schoolRes.value.data);
-      AsyncStorage.setItem(
-        'attendsure_cached_school',
-        JSON.stringify(schoolRes.value.data)
-      ).catch(() => {});
-    }
-
     if (dtrRes.status === 'fulfilled' && dtrRes.value?.data) {
       anySuccess = true;
       setDtrData(dtrRes.value.data);
       AsyncStorage.setItem('attendsure_cached_dtr', JSON.stringify(dtrRes.value.data)).catch(
         () => {}
       );
-    }
-
-    if (geofenceRes.status === 'fulfilled' && geofenceRes.value?.data) {
-      anySuccess = true;
-      setGeofenceConfig(geofenceRes.value.data);
-      AsyncStorage.setItem(
-        'attendsure_cached_geofence',
-        JSON.stringify(geofenceRes.value.data)
-      ).catch(() => {});
-    }
-
-    if (calendarRes.status === 'fulfilled' && calendarRes.value?.data) {
-      anySuccess = true;
-      const calPayload = calendarRes.value.data;
-      const list: CalendarOverrideItem[] = Array.isArray(calPayload)
-        ? calPayload
-        : Array.isArray(calPayload?.results)
-        ? calPayload.results
-        : [];
-      if (typeof calPayload?.weekend_rest_enabled === 'boolean') {
-        setWeekendRestEnabled(calPayload.weekend_rest_enabled);
-      }
-      const matched = list.find((item) => item.date === todayDate) || null;
-      setTodayOverride(matched);
     }
 
     setIsOnline(anySuccess);
@@ -666,14 +500,40 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.allSettled([loadAllDynamicData(), flushOfflineRecords(), refreshUser()]);
+    await Promise.allSettled([
+      loadAllDynamicData(),
+      loadStaticSchoolData(),
+      flushOfflineRecords(),
+      refreshUser(),
+      refreshCampusOverview(),
+    ]);
     if (isMounted.current) setRefreshing(false);
-  }, [loadAllDynamicData, flushOfflineRecords, refreshUser]);
+  }, [
+    loadAllDynamicData,
+    loadStaticSchoolData,
+    flushOfflineRecords,
+    refreshUser,
+    refreshCampusOverview,
+  ]);
+
+  useEffect(() => {
+    const appSub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      const wasInactive = appStateRef.current !== 'active';
+      appStateRef.current = nextState;
+      const activeNow = nextState === 'active';
+      setIsAppActive(activeNow);
+      if (wasInactive && activeNow && isMounted.current) {
+        void loadAllDynamicData();
+      }
+    });
+    return () => appSub.remove();
+  }, [loadAllDynamicData]);
 
   useEffect(() => {
     isMounted.current = true;
     void loadCachedData().then(() => {
       if (isMounted.current) {
+        void loadStaticSchoolData();
         void loadAllDynamicData();
       }
     });
@@ -682,23 +542,31 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     const sub = DeviceEventEmitter.addListener('attendsure:attendance-updated', () => {
       if (isMounted.current) void loadAllDynamicData();
     });
-    const livePoll = setInterval(() => {
-      if (isMounted.current) void loadAllDynamicData();
-    }, 10000);
 
     return () => {
       isMounted.current = false;
       abortControllerRef.current?.abort();
       sub.remove();
-      clearInterval(livePoll);
     };
-  }, [loadCachedData, loadAllDynamicData, refreshUser]);
+  }, [loadCachedData, loadStaticSchoolData, loadAllDynamicData, refreshUser]);
+
+  // Pause the 30-second live refresh loop when the app moves into the background
+  useEffect(() => {
+    if (!isAppActive) return;
+    const livePoll = setInterval(() => {
+      if (isMounted.current && appStateRef.current === 'active') {
+        void loadAllDynamicData();
+      }
+    }, 30000);
+    return () => clearInterval(livePoll);
+  }, [isAppActive, loadAllDynamicData]);
 
   const safeSections = Array.isArray(sections) ? sections : [];
 
   let totalStudentsEnrolled = 0;
   let totalPresent = 0;
   let totalLate = 0;
+  let totalExcused = 0;
   let totalAbsent = 0;
   let totalNeedsReview = 0;
 
@@ -708,6 +576,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     PRESENT: 5,
     LATE: 4,
     TARDY: 4,
+    EXCUSED: 4,
     CUTTING: 3,
     UNVERIFIED: 2,
     ABSENT: 1,
@@ -743,6 +612,8 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
       totalPresent += 1;
     } else if (status === 'LATE' || status === 'TARDY') {
       totalLate += 1;
+    } else if (status === 'EXCUSED') {
+      totalExcused += 1;
     } else if (status === 'ABSENT') {
       totalAbsent += 1;
     } else if (status === 'CUTTING' || status === 'UNVERIFIED') {
@@ -750,7 +621,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
     }
   });
 
-  const totalAttended = totalPresent + totalLate;
+  const totalAttended = totalPresent + totalLate + totalExcused;
   const overallRate =
     totalStudentsEnrolled > 0
       ? Math.round((totalAttended / totalStudentsEnrolled) * 100)
@@ -1020,6 +891,7 @@ export const DashboardScreen: React.FC<DashboardProps> = ({ onNavigate }) => {
           lastSyncTime={lastSyncTime}
           totalPresent={totalPresent}
           totalLate={totalLate}
+          totalExcused={totalExcused}
           totalAbsent={totalAbsent}
           totalNeedsReview={totalNeedsReview}
         />

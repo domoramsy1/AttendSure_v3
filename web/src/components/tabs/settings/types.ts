@@ -1,3 +1,6 @@
+// AttendSure Web - Types Component
+// File: D:\AttendSure_V3\web\src\components\tabs\settings\types.ts
+
 /**
  * AttendSure - Shared Types & Helpers for Settings Sub-Panels
  * File: web/src/components/tabs/settings/types.ts

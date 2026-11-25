@@ -1,3 +1,6 @@
+// AttendSure Web - Footer Component
+// File: D:\AttendSure_V3\web\src\components\layout\Footer.tsx
+
 /**
  * AttendSure - Dynamic Institutional Footer (Zero Mock IDs)
  * File: web/src/components/layout/Footer.tsx

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Badge Component
+// File: D:\AttendSure_V3\mobile\src\components\common\Badge.tsx
+
 import React from 'react';
 import { Text, View } from 'react-native';
 import { useThemeMode } from '../../context/ThemeContext';

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Button
+// File: D:\AttendSure_V3\mobile\src\components\common\Button.tsx
+
 import React from 'react';
 import { Text, TouchableOpacity, ActivityIndicator, ViewStyle } from 'react-native';
 import { useThemeMode } from '../../context/ThemeContext';

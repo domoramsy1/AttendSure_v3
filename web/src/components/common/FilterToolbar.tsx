@@ -1,3 +1,6 @@
+// AttendSure Web - Filter Toolbar
+// File: D:\AttendSure_V3\web\src\components\common\FilterToolbar.tsx
+
 /**
  * AttendSure - Standardized Filter & Search Toolbar
  * File: web/src/components/common/FilterToolbar.tsx

@@ -1,3 +1,6 @@
+# AttendSure Backend - Common Exceptions
+# File: D:\AttendSure_V3\backend\common\exceptions.py
+
 # D:\AttendSure_V3\backend\common\exceptions.py
 
 import logging

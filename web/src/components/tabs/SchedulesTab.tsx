@@ -1,3 +1,6 @@
+// AttendSure Web - Schedules Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\SchedulesTab.tsx
+
 /**
  * AttendSure - Academic Timetables, Sections & Schedules
  * File: web/src/components/tabs/SchedulesTab.tsx
@@ -12,6 +15,7 @@ import { useAlert } from '../../context/AlertContext';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
 import { canManageSchoolSetup, getCurrentUserFromStorage, normalizeRole } from '../../utils/permissions';
+import { formatTime12h } from '../../utils/timeFormat';
 import {
   Calendar,
   DoorOpen,
@@ -354,17 +358,7 @@ export const SchedulesTab: React.FC = () => {
     setEditItem(null);
   };
 
-  const formatTime = (timeStr?: string) => {
-    if (!timeStr) return '--:--';
-    const parts = timeStr.split(':');
-    if (parts.length < 2) return timeStr;
-    let hours = parseInt(parts[0], 10);
-    const minutes = parts[1];
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12 || 12;
-    const strHours = hours < 10 ? `0${hours}` : `${hours}`;
-    return `${strHours}:${minutes} ${ampm}`;
-  };
+  const formatTime = (timeStr?: string) => formatTime12h(timeStr, { fallback: '--:--' });
 
   const getScheduleCode = (item: ScheduleItem) => {
     return item.schedule_code || item.code || `SCH-${String(item.id).padStart(4, '0')}`;

@@ -1,14 +1,15 @@
 // AttendSure Mobile - Canonical v1 API Endpoints (Full Parity with Web)
-// File: mobile/src/api/endpoints.ts
+// File: D:\AttendSure_V3\mobile\src\api\endpoints.ts
 
 export const ENDPOINTS = {
   // Health & Maintenance
   HEALTH_DB: 'v1/health/db/',
   FLUSH_CACHE: 'v1/cache/flush/',
 
-  // Authentication, Staff Accounts, Users & Audit Logs
+  // Authentication, Staff Accounts, Users, Onboarding & Audit Logs
   LOGIN: 'v1/accounts/login/',
   LOGOUT: 'v1/accounts/logout/',
+  TOKEN_REFRESH: 'v1/accounts/token/refresh/',
   CURRENT_USER: 'v1/accounts/me/',
   PROFILE: 'v1/accounts/profile/',
   CHANGE_PASSWORD: 'v1/accounts/change-password/',
@@ -16,6 +17,8 @@ export const ENDPOINTS = {
   RESET_DEVICE: 'v1/accounts/reset-device/',
   UNLOCK_ACCOUNTS: 'v1/accounts/unlock-accounts/',
   AUDIT_LOGS: 'v1/accounts/audit-logs/',
+  ONBOARDING_COMPLETE: 'v1/accounts/onboarding/complete/',
+  ONBOARDING_RESET: 'v1/accounts/onboarding/reset/',
   TEACHERS: 'v1/accounts/teachers/',
   TEACHERS_DROPDOWN: 'v1/accounts/teachers/dropdown/',
   USERS: 'v1/accounts/users/',
@@ -43,6 +46,7 @@ export const ENDPOINTS = {
   CAMPUS_BOUNDARY: 'v1/campus/boundary/',
   CAMPUS_PING: 'v1/campus/ping/',
   CAMPUS_CHECK_IN: 'v1/campus/check-in/',
+  CAMPUS_CHECK_IN_CHALLENGE: 'v1/campus/check-in/challenge/',
   CAMPUS_LOAFING: 'v1/campus/loafing/',
   CAMPUS_LOAFING_INCIDENTS: 'v1/campus/loafing-incidents/',
   CAMPUS_LOAFING_RUN_AUDIT: 'v1/campus/loafing/run-audit/',
@@ -53,6 +57,7 @@ export const ENDPOINTS = {
   ATTENDANCE_SCAN: 'v1/attendance/scan/',
   ATTENDANCE_OFFLINE_SYNC: 'v1/attendance/offline-sync/',
   ATTENDANCE_LOGS: 'v1/attendance/records/',
+  ATTENDANCE_MARK_UNSCANNED_ABSENT: 'v1/attendance/mark-unscanned-absent/',
   ATTENDANCE_CLASSES: 'v1/attendance/classes/',
   ADVISER_MATRIX: 'v1/attendance/adviser-matrix/',
   EXIT_PASSES: 'v1/attendance/exit-passes/',

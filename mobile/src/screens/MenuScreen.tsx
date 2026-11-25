@@ -1,3 +1,6 @@
+// AttendSure Mobile - Menu Screen
+// File: D:\AttendSure_V3\mobile\src\screens\MenuScreen.tsx
+
 /**
  * AttendSure Mobile - Profile, Color Mode Switcher & School Tools
  * File: mobile/src/screens/MenuScreen.tsx
@@ -10,6 +13,7 @@ import {
   TouchableOpacity,
   ScrollView,
   RefreshControl,
+  DeviceEventEmitter,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -275,6 +279,12 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
       title: 'School Calendar',
       sub: 'Holidays and class suspensions',
       icon: 'calendar-outline',
+    },
+    {
+      key: 'help',
+      title: 'User Manual & Help',
+      sub: 'Step-by-step guides, quick fixes & animated walkthrough',
+      icon: 'help-circle-outline',
     },
     {
       key: 'settings',
@@ -575,6 +585,20 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onSelectScreen }) => {
         {tab === 'ACCOUNT' && (
           <View style={ui.card}>
             <Text style={ui.heading}>Account Options</Text>
+            <TouchableOpacity
+              style={[ui.buttonSecondary, { marginBottom: 10 }]}
+              onPress={() => onSelectScreen('help')}
+            >
+              <Ionicons name="book-outline" size={16} color={palette.primary} />
+              <Text style={ui.buttonSecondaryText}>User Manual &amp; Quick Fixes</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[ui.buttonSecondary, { marginBottom: 10 }]}
+              onPress={() => DeviceEventEmitter.emit('attendsure:open-onboarding-tour')}
+            >
+              <Ionicons name="play-circle-outline" size={16} color={palette.success} />
+              <Text style={ui.buttonSecondaryText}>Replay Animated Guide</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={[ui.buttonSecondary, { marginBottom: 10 }]}
               onPress={() => onSelectScreen('settings')}

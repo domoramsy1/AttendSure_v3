@@ -1,3 +1,6 @@
+// AttendSure Mobile - Expo Crypto Shim
+// File: D:\AttendSure_V3\mobile\src\shims\expoCryptoShim.js
+
 /**
  * AttendSure Mobile - Safe ExpoCrypto Shim with Pure-JS FIPS 180-4 SHA-256 Fallback
  * Prevents "[runtime not ready]: Error: Cannot find native module 'ExpoCrypto'"

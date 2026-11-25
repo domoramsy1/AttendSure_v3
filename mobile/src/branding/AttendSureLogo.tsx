@@ -1,3 +1,6 @@
+// AttendSure Mobile - Attend Sure Logo
+// File: D:\AttendSure_V3\mobile\src\branding\AttendSureLogo.tsx
+
 /**
  * AttendSure Mobile - Brand Logo Wrapper
  * File: mobile/src/branding/AttendSureLogo.tsx

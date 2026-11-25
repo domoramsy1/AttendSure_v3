@@ -1,3 +1,6 @@
+// AttendSure Mobile - Types Component
+// File: D:\AttendSure_V3\mobile\src\components\schedules\types.ts
+
 /**
  * AttendSure Mobile - Shared Academic Setup Types
  * File: mobile/src/components/schedules/types.ts

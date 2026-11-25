@@ -1,3 +1,6 @@
+# AttendSure Scripts - Bootstrap
+# File: D:\AttendSure_V3\scripts\_bootstrap.py
+
 r"""
 AttendSure - Shared Script Bootstrap & Virtualenv Resolver
 File: D:\AttendSure_V3\scripts\_bootstrap.py

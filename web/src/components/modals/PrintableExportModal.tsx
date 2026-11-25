@@ -1,3 +1,6 @@
+// AttendSure Web - Printable Export Modal
+// File: D:\AttendSure_V3\web\src\components\modals\PrintableExportModal.tsx
+
 /**
  * AttendSure - Printable & Downloadable Schedules, Class Lists, QR ID Cards & Directory Modal
  * File: web/src/components/modals/PrintableExportModal.tsx

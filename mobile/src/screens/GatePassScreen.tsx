@@ -1,9 +1,17 @@
+// AttendSure Mobile - Gate Pass Screen
+// File: D:\AttendSure_V3\mobile\src\screens\GatePassScreen.tsx
+
 /**
- * AttendSure Mobile - Authorized Exit Passes & Locator Slips (100% Web Parity)
+ * AttendSure Mobile - Authorized Exit Passes & Official Locator Slips (100% Web Parity)
  * File: mobile/src/screens/GatePassScreen.tsx
  *
- * Includes searchable Student & Teacher pickers, Pass Type presets, Proof/Attachment
- * photo upload & preview, Edit/Delete CRUD, Mark Returned, Approve, and Cancel actions.
+ * - Parents submit a physical hardcopy excuse letter to the school; the student's class
+ *   adviser or a school leader reviews it, optionally attaches a photo/scan/PDF of that
+ *   hardcopy as proof, and issues the Student Exit Pass.
+ * - Teacher Official Locator Slips requested by non-leaders start as PENDING_APPROVAL until
+ *   approved by a school leader (Admin, Principal, or Department Head).
+ * - Supports Camera Photo, Gallery Image, and Document/File Picker (PDF or Image, <= 2 MB),
+ *   proof replacement/removal (clear_proof=true), image preview vs PDF document card + Open.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -18,12 +26,16 @@ import {
   TextInput,
   ActivityIndicator,
   ScrollView,
+  Platform,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import QRCode from 'react-native-qrcode-svg';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { apiClient } from '../api/client';
 import { ENDPOINTS } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
@@ -31,16 +43,26 @@ import { useThemeMode } from '../context/ThemeContext';
 import {
   cleanText,
   getFriendlyErrorMessage,
+  isSafeUrl,
   QR_COLORS,
   type ThemePalette,
 } from '../constants/theme';
 import { canApproveOrCancelLocatorSlip, canIssueStudentExitPass } from '../utils/permissions';
+import { formatDateTime12h, formatTime12h } from '../utils/formatters';
 import { confirmAction, isCanceledError, resolveMediaUrl, showNotice } from '../utils/helpers';
 import { getServerBaseUrl } from '../services/configService';
-import ImageUploadField from '../components/common/ImageUploadField';
 import ChipRow from '../components/common/ChipRow';
 
-const PASSES_CACHE_KEY = 'attendsure_cached_exit_passes_v4';
+const PASSES_CACHE_KEY = 'attendsure_cached_exit_passes_v5';
+const MAX_PROOF_BYTES = 2 * 1024 * 1024;
+const ALLOWED_PROOF_EXTENSIONS = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.webp']);
+const ALLOWED_PROOF_MIMES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+]);
 
 export interface ExitPassItem {
   id: number;
@@ -55,13 +77,17 @@ export interface ExitPassItem {
   reason: string;
   attachment?: string | null;
   attachment_url?: string | null;
+  issued_by?: number | null;
   issued_by_name?: string;
+  is_approved?: boolean;
+  approved_by?: number | null;
+  approved_by_name?: string;
+  approved_at?: string | null;
   issued_at: string;
   valid_until: string;
   returned_at?: string | null;
   is_cancelled?: boolean;
-  pass_status: 'ACTIVE' | 'RETURNED' | 'OVERDUE' | 'CANCELLED';
-  guardian_notice?: string;
+  pass_status: 'PENDING_APPROVAL' | 'ACTIVE' | 'RETURNED' | 'OVERDUE' | 'CANCELLED';
 }
 
 interface StudentChoice {
@@ -78,11 +104,22 @@ interface TeacherChoice {
   department?: string;
 }
 
+interface PendingProofSelection {
+  kind: 'image' | 'pdf';
+  name: string;
+  mimeType: string;
+  sizeBytes?: number;
+  dataUrl?: string;
+  nativeUri?: string;
+  webFile?: File;
+}
+
 interface GatePassScreenProps {
   onBack?: () => void;
 }
 
 const STUDENT_PASS_TYPES = [
+  'Parent Hardcopy Excuse Letter',
   'Clinic / Medical Clearance',
   'Parent Pickup',
   'Official Activity',
@@ -95,6 +132,75 @@ const TEACHER_PASS_TYPES = [
   'Official Errand',
   'DepEd Meeting',
 ] as const;
+
+const STATUS_FILTER_OPTIONS = [
+  { key: 'PENDING_APPROVAL', label: 'Pending Approval' },
+  { key: 'ACTIVE', label: 'Active' },
+  { key: 'OVERDUE', label: 'Overdue' },
+  { key: 'RETURNED', label: 'Returned' },
+  { key: 'CANCELLED', label: 'Cancelled' },
+  { key: 'ALL', label: 'All' },
+] as const;
+
+const formatPassStatusLabel = (st: ExitPassItem['pass_status']): string => {
+  if (st === 'PENDING_APPROVAL') return 'PENDING APPROVAL';
+  return st;
+};
+
+const isPdfReference = (urlOrName?: string | null, mimeType?: string | null): boolean => {
+  const mime = String(mimeType || '').trim().toLowerCase();
+  if (mime === 'application/pdf') return true;
+  const raw = String(urlOrName || '').trim().toLowerCase();
+  if (!raw) return false;
+  if (raw.startsWith('data:application/pdf')) return true;
+  return raw.split('?')[0].split('#')[0].endsWith('.pdf');
+};
+
+const extractFilenameFromUrl = (raw?: string | null): string => {
+  if (!raw) return 'Attached Document';
+  if (raw.startsWith('data:')) {
+    return raw.startsWith('data:application/pdf') ? 'excuse_letter.pdf' : 'proof_image.jpg';
+  }
+  const clean = raw.split('?')[0].split('#')[0];
+  const seg = clean.substring(clean.lastIndexOf('/') + 1);
+  try {
+    return decodeURIComponent(seg || 'Attached Document');
+  } catch {
+    return seg || 'Attached Document';
+  }
+};
+
+const formatFileSize = (bytes?: number): string => {
+  if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+};
+
+const estimateBase64Bytes = (rawBase64: string): number => {
+  const clean = rawBase64.replace(/\s+/g, '');
+  const padding = clean.endsWith('==') ? 2 : clean.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
+};
+
+const getLowerExtension = (nameOrUri?: string | null): string => {
+  const clean = String(nameOrUri || '').trim().toLowerCase().split('?')[0].split('#')[0];
+  const dot = clean.lastIndexOf('.');
+  return dot >= 0 ? clean.slice(dot) : '';
+};
+
+const readFileAsDataUrlWeb = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read the selected file.'));
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error('Could not read the selected file.'));
+      }
+    };
+    reader.readAsDataURL(file);
+  });
 
 export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
   const { user } = useAuth();
@@ -110,7 +216,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
   const [serverBase, setServerBase] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string>('ACTIVE');
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
 
   const [selectedPass, setSelectedPass] = useState<ExitPassItem | null>(null);
@@ -122,14 +228,16 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
   const [studentPickerSearch, setStudentPickerSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [pickingProof, setPickingProof] = useState(false);
 
-  const [attachmentBase64, setAttachmentBase64] = useState<string | null>(null);
-  const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
+  const [pendingProof, setPendingProof] = useState<PendingProofSelection | null>(null);
+  const [existingProofUrl, setExistingProofUrl] = useState<string | null>(null);
+  const [clearExistingProof, setClearExistingProof] = useState<boolean>(false);
 
   const [form, setForm] = useState({
     student_id: '',
     teacher_id: user?.teacher_id ? String(user.teacher_id) : '',
-    pass_type: 'Clinic / Medical Clearance',
+    pass_type: STUDENT_PASS_TYPES[0] as string,
     destination: '',
     reason: '',
     duration_hours: '2',
@@ -243,8 +351,9 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
     setEditingPass(null);
     setPassScope(nextScope);
     setStudentPickerSearch('');
-    setAttachmentBase64(null);
-    setAttachmentPreview(null);
+    setPendingProof(null);
+    setExistingProofUrl(null);
+    setClearExistingProof(false);
     setForm({
       student_id: '',
       teacher_id: user?.teacher_id ? String(user.teacher_id) : '',
@@ -260,8 +369,15 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
     setEditingPass(pass);
     setPassScope(pass.pass_scope);
     setStudentPickerSearch('');
-    setAttachmentBase64(null);
-    setAttachmentPreview(pass.attachment_url || pass.attachment || null);
+    setPendingProof(null);
+    setExistingProofUrl(pass.attachment_url || pass.attachment || null);
+    setClearExistingProof(false);
+    const issuedMs = pass.issued_at ? new Date(pass.issued_at).getTime() : NaN;
+    const validMs = pass.valid_until ? new Date(pass.valid_until).getTime() : NaN;
+    const diffHours =
+      Number.isFinite(issuedMs) && Number.isFinite(validMs) && validMs > issuedMs
+        ? Math.round((validMs - issuedMs) / 3600000)
+        : 2;
     setForm({
       student_id: pass.student ? String(pass.student) : '',
       teacher_id: pass.teacher ? String(pass.teacher) : '',
@@ -270,10 +386,199 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
         (pass.pass_scope === 'STUDENT' ? STUDENT_PASS_TYPES[0] : TEACHER_PASS_TYPES[0]),
       destination: pass.destination || '',
       reason: pass.reason || '',
-      duration_hours: '2',
+      duration_hours: String(Math.max(1, Math.min(12, diffHours || 2))),
     });
     setSelectedPass(null);
     setShowIssueModal(true);
+  };
+
+  const handleOpenExternalDocument = async (rawUrl: string | null) => {
+    const safe = resolveMediaUrl(rawUrl, serverBase);
+    if (!safe || !isSafeUrl(safe)) {
+      showNotice('Cannot Open File', 'This attachment link is missing or invalid.');
+      return;
+    }
+    try {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.open(safe, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      const supported = await Linking.canOpenURL(safe);
+      if (supported) {
+        await Linking.openURL(safe);
+      } else {
+        showNotice('No Viewer Available', 'Install a PDF or document viewer app on your phone to open this file.');
+      }
+    } catch {
+      showNotice('Open Failed', 'Could not open this document right now.');
+    }
+  };
+
+  const handlePickProofFromCamera = async () => {
+    if (pickingProof || submitting) return;
+    if (Platform.OS === 'web') {
+      await handlePickProofDocument();
+      return;
+    }
+    setPickingProof(true);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        showNotice(
+          'Camera Permission Needed',
+          'Allow camera access in your phone settings to photograph the hardcopy excuse letter.'
+        );
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.78,
+        base64: true,
+        cameraType: ImagePicker.CameraType.back,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_PROOF_BYTES) {
+        showNotice('File Too Large', 'Please attach a photo smaller than 2 MB.');
+        return;
+      }
+      if (!asset.base64 || estimateBase64Bytes(asset.base64) > MAX_PROOF_BYTES) {
+        showNotice('File Too Large', 'Captured photo exceeded 2 MB. Please retake closer or clearer.');
+        return;
+      }
+      const mime = asset.mimeType && ALLOWED_PROOF_MIMES.has(asset.mimeType.toLowerCase())
+        ? asset.mimeType.toLowerCase()
+        : 'image/jpeg';
+      const dataUrl = `data:${mime};base64,${asset.base64}`;
+      setPendingProof({
+        kind: 'image',
+        name: asset.fileName || 'excuse_letter_photo.jpg',
+        mimeType: mime,
+        sizeBytes: asset.fileSize ?? estimateBase64Bytes(asset.base64),
+        dataUrl,
+        nativeUri: asset.uri,
+      });
+      setClearExistingProof(false);
+    } catch {
+      showNotice('Camera Error', 'Could not take a photo right now. Please try again.');
+    } finally {
+      setPickingProof(false);
+    }
+  };
+
+  const handlePickProofFromGallery = async () => {
+    if (pickingProof || submitting) return;
+    if (Platform.OS === 'web') {
+      await handlePickProofDocument();
+      return;
+    }
+    setPickingProof(true);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        showNotice(
+          'Photo Library Permission Needed',
+          'Allow photo library access in your phone settings to pick a proof image.'
+        );
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+        base64: true,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_PROOF_BYTES) {
+        showNotice('File Too Large', 'Please choose an image smaller than 2 MB.');
+        return;
+      }
+      if (!asset.base64 || estimateBase64Bytes(asset.base64) > MAX_PROOF_BYTES) {
+        showNotice('File Too Large', 'Please choose a smaller image (under 2 MB).');
+        return;
+      }
+      const mime = asset.mimeType && ALLOWED_PROOF_MIMES.has(asset.mimeType.toLowerCase())
+        ? asset.mimeType.toLowerCase()
+        : 'image/jpeg';
+      const dataUrl = `data:${mime};base64,${asset.base64}`;
+      setPendingProof({
+        kind: 'image',
+        name: asset.fileName || 'proof_image.jpg',
+        mimeType: mime,
+        sizeBytes: asset.fileSize ?? estimateBase64Bytes(asset.base64),
+        dataUrl,
+        nativeUri: asset.uri,
+      });
+      setClearExistingProof(false);
+    } catch {
+      showNotice('Gallery Error', 'Could not open your photo gallery right now.');
+    } finally {
+      setPickingProof(false);
+    }
+  };
+
+  const handlePickProofDocument = async () => {
+    if (pickingProof || submitting) return;
+    setPickingProof(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const doc = result.assets[0];
+      const ext = getLowerExtension(doc.name || doc.uri);
+      const cleanMime = String(doc.mimeType || '').trim().toLowerCase();
+      const mimeAllowed = cleanMime ? ALLOWED_PROOF_MIMES.has(cleanMime) : false;
+      const extAllowed = ext ? ALLOWED_PROOF_EXTENSIONS.has(ext) : false;
+
+      if (!mimeAllowed && !extAllowed) {
+        showNotice('Unsupported File', 'Please select a PDF, JPG, PNG, or WebP file.');
+        return;
+      }
+      if (typeof doc.size === 'number' && doc.size > MAX_PROOF_BYTES) {
+        showNotice('File Too Large', 'Please choose a document or image smaller than 2 MB.');
+        return;
+      }
+
+      const isPdf = cleanMime === 'application/pdf' || ext === '.pdf';
+      const resolvedMime = isPdf
+        ? 'application/pdf'
+        : cleanMime || (ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg');
+
+      if (Platform.OS === 'web' && doc.file) {
+        const dataUrl = await readFileAsDataUrlWeb(doc.file);
+        setPendingProof({
+          kind: isPdf ? 'pdf' : 'image',
+          name: doc.name || (isPdf ? 'excuse_letter.pdf' : 'proof_image.jpg'),
+          mimeType: resolvedMime,
+          sizeBytes: doc.size ?? doc.file.size,
+          dataUrl: isPdf ? undefined : dataUrl,
+          webFile: doc.file,
+        });
+      } else {
+        setPendingProof({
+          kind: isPdf ? 'pdf' : 'image',
+          name: doc.name || (isPdf ? 'excuse_letter.pdf' : 'proof_image.jpg'),
+          mimeType: resolvedMime,
+          sizeBytes: doc.size,
+          dataUrl: !isPdf && doc.base64 ? `data:${resolvedMime};base64,${doc.base64}` : undefined,
+          nativeUri: doc.uri,
+        });
+      }
+      setClearExistingProof(false);
+    } catch {
+      showNotice('File Picker Error', 'Could not open your file picker right now. Please try again.');
+    } finally {
+      setPickingProof(false);
+    }
+  };
+
+  const handleRemoveProofSelection = () => {
+    setPendingProof(null);
+    setExistingProofUrl(null);
+    setClearExistingProof(true);
   };
 
   const handleIssueSubmit = async () => {
@@ -296,44 +601,97 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
 
     const parsedHours = Number.parseInt(cleanText(form.duration_hours, 2), 10);
     const hours = Math.max(1, Math.min(12, Number.isFinite(parsedHours) ? parsedHours : 2));
-    const expiry = new Date(Date.now() + hours * 3600000);
+    // Anchor from max(issued_at, now) so editing an overdue pass actually extends it into the future
+    const issuedMs =
+      editingPass && editingPass.issued_at ? new Date(editingPass.issued_at).getTime() : NaN;
+    const baseMs =
+      editingPass && Number.isFinite(issuedMs) ? Math.max(issuedMs, Date.now()) : Date.now();
+    const expiry = new Date(baseMs + hours * 3600000);
 
     setSubmitting(true);
     try {
-      const payload: Record<string, string | number | null> = {
-        pass_scope: passScope,
-        pass_type: cleanText(form.pass_type, 80),
-        destination: cleanedDest,
-        reason: cleanedReason,
-      };
-      if (!editingPass) {
-        payload.valid_until = expiry.toISOString();
-        if (passScope === 'STUDENT' && parsedStudentId !== null) {
-          payload.student_id = parsedStudentId;
-        } else if (form.teacher_id) {
-          payload.teacher_id = Number(form.teacher_id);
-        } else if (user?.teacher_id) {
-          payload.teacher_id = Number(user.teacher_id);
+      const needsMultipart = Boolean(
+        pendingProof && (pendingProof.kind === 'pdf' || !pendingProof.dataUrl)
+      );
+
+      let requestBody: FormData | Record<string, string | number | boolean | null>;
+      if (needsMultipart && pendingProof) {
+        const fd = new FormData();
+        fd.append('pass_scope', passScope);
+        fd.append('pass_type', cleanText(form.pass_type, 80));
+        fd.append('destination', cleanedDest);
+        fd.append('reason', cleanedReason);
+        fd.append('valid_until', expiry.toISOString());
+        if (!editingPass) {
+          if (passScope === 'STUDENT' && parsedStudentId !== null) {
+            fd.append('student_id', String(parsedStudentId));
+          } else if (form.teacher_id) {
+            fd.append('teacher_id', String(Number(form.teacher_id)));
+          } else if (user?.teacher_id) {
+            fd.append('teacher_id', String(Number(user.teacher_id)));
+          }
         }
-      }
-      if (attachmentBase64) {
-        payload.attachment = attachmentBase64;
+        if (Platform.OS === 'web' && pendingProof.webFile) {
+          fd.append('attachment', pendingProof.webFile, pendingProof.name);
+        } else if (pendingProof.nativeUri) {
+          fd.append('attachment', {
+            uri: pendingProof.nativeUri,
+            name: pendingProof.name,
+            type: pendingProof.mimeType,
+          } as unknown as Blob);
+        }
+        requestBody = fd;
+      } else {
+        const payload: Record<string, string | number | boolean | null> = {
+          pass_scope: passScope,
+          pass_type: cleanText(form.pass_type, 80),
+          destination: cleanedDest,
+          reason: cleanedReason,
+          valid_until: expiry.toISOString(),
+        };
+        if (!editingPass) {
+          if (passScope === 'STUDENT' && parsedStudentId !== null) {
+            payload.student_id = parsedStudentId;
+          } else if (form.teacher_id) {
+            payload.teacher_id = Number(form.teacher_id);
+          } else if (user?.teacher_id) {
+            payload.teacher_id = Number(user.teacher_id);
+          }
+        }
+        if (pendingProof?.dataUrl) {
+          payload.attachment = pendingProof.dataUrl;
+        } else if (editingPass && clearExistingProof) {
+          payload.clear_proof = true;
+        }
+        requestBody = payload;
       }
 
       if (editingPass) {
         await apiClient.patch(
           `${ENDPOINTS.EXIT_PASSES}${encodeURIComponent(String(editingPass.id))}/`,
-          payload
+          requestBody,
+          { timeout: needsMultipart ? 20000 : 12000 }
         );
         showNotice('Updated', `Exit pass ${editingPass.pass_number} updated.`);
       } else {
-        await apiClient.post(ENDPOINTS.EXIT_PASSES, payload);
-        showNotice('Exit Pass Issued', 'The authorized exit pass is now active.');
+        const res = await apiClient.post<ExitPassItem>(ENDPOINTS.EXIT_PASSES, requestBody, {
+          timeout: needsMultipart ? 20000 : 12000,
+        });
+        const isPending = res.data?.pass_status === 'PENDING_APPROVAL';
+        showNotice(
+          isPending ? 'Request Submitted' : 'Exit Pass Issued',
+          isPending
+            ? 'Your Official Locator Slip has been submitted and is waiting for school leader approval.'
+            : 'The authorized exit pass is now active.'
+        );
       }
 
       if (!isMountedRef.current) return;
       setShowIssueModal(false);
       setEditingPass(null);
+      setPendingProof(null);
+      setExistingProofUrl(null);
+      setClearExistingProof(false);
       void fetchPasses(true);
     } catch (err: unknown) {
       if (!isMountedRef.current) return;
@@ -371,7 +729,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
         `${ENDPOINTS.EXIT_PASSES}${encodeURIComponent(String(pass.id))}/approve/`
       );
       if (!isMountedRef.current) return;
-      showNotice('Approved', `Official Locator Slip ${pass.pass_number} has been approved.`);
+      showNotice('Approved', `Official Locator Slip ${pass.pass_number} is now active.`);
       setSelectedPass(null);
       void fetchPasses(true);
     } catch (err: unknown) {
@@ -424,6 +782,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
   };
 
   const getStatusStyle = (st: ExitPassItem['pass_status']) => {
+    if (st === 'PENDING_APPROVAL') return { bg: palette.warningLight, text: palette.warning };
     if (st === 'ACTIVE') return { bg: palette.successLight, text: palette.success };
     if (st === 'OVERDUE') return { bg: palette.dangerLight, text: palette.danger };
     if (st === 'RETURNED') return { bg: palette.infoLight, text: palette.info };
@@ -431,6 +790,25 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
   };
 
   const passTypePresets = passScope === 'STUDENT' ? STUDENT_PASS_TYPES : TEACHER_PASS_TYPES;
+  const resolvedExistingProof = !clearExistingProof
+    ? resolveMediaUrl(existingProofUrl, serverBase)
+    : null;
+  const hasAnyProofInForm = Boolean(pendingProof || resolvedExistingProof);
+  const formProofIsPdf = pendingProof
+    ? pendingProof.kind === 'pdf'
+    : isPdfReference(resolvedExistingProof);
+  const formProofImageUri = pendingProof
+    ? pendingProof.kind === 'image'
+      ? pendingProof.dataUrl || pendingProof.nativeUri || null
+      : null
+    : !formProofIsPdf
+      ? resolvedExistingProof
+      : null;
+
+  const selectedPassProofUrl = selectedPass
+    ? resolveMediaUrl(selectedPass.attachment_url || selectedPass.attachment, serverBase)
+    : null;
+  const selectedPassProofIsPdf = isPdfReference(selectedPassProofUrl);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -443,7 +821,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
           )}
           <View>
             <Text style={styles.headerTitle}>Authorized Exit Passes</Text>
-            <Text style={styles.headerSubtitle}>Student &amp; Teacher Campus Permits</Text>
+            <Text style={styles.headerSubtitle}>Student Exit Passes &amp; Teacher Locator Slips</Text>
           </View>
         </View>
 
@@ -472,9 +850,9 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
 
       <View style={styles.filterRow}>
         <ChipRow
-          options={['ACTIVE', 'OVERDUE', 'RETURNED', 'CANCELLED', 'ALL'].map((st) => ({
-            key: st,
-            label: st,
+          options={STATUS_FILTER_OPTIONS.map((opt) => ({
+            key: opt.key,
+            label: opt.label,
           }))}
           selected={statusFilter}
           onSelect={setStatusFilter}
@@ -488,6 +866,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
         </View>
       ) : (
         <FlatList
+          style={styles.listFlex}
           data={filteredPasses}
           keyExtractor={(item) => String(item.id)}
           contentContainerStyle={styles.listContent}
@@ -513,6 +892,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
           }
           renderItem={({ item }) => {
             const pillColors = getStatusStyle(item.pass_status);
+            const hasProof = Boolean(item.attachment_url || item.attachment);
             return (
               <TouchableOpacity
                 style={styles.card}
@@ -520,15 +900,16 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                 onPress={() => setSelectedPass(item)}
               >
                 <View style={styles.cardTop}>
-                  <View>
+                  <View style={{ flex: 1, marginRight: 8 }}>
                     <Text style={styles.passCode}>{item.pass_number}</Text>
                     <Text style={styles.holderType}>
-                      {item.pass_scope} EXIT PASS{item.pass_type ? ` • ${item.pass_type}` : ''}
+                      {item.pass_scope === 'TEACHER' ? 'TEACHER LOCATOR SLIP' : 'STUDENT EXIT PASS'}
+                      {item.pass_type ? ` • ${item.pass_type}` : ''}
                     </Text>
                   </View>
                   <View style={[styles.statusPill, { backgroundColor: pillColors.bg }]}>
                     <Text style={[styles.statusPillText, { color: pillColors.text }]}>
-                      {item.pass_status}
+                      {formatPassStatusLabel(item.pass_status)}
                     </Text>
                   </View>
                 </View>
@@ -540,16 +921,15 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
 
                 <View style={styles.cardBottom}>
                   <Text style={styles.dateText}>
-                    Valid until:{' '}
-                    {item.valid_until && !Number.isNaN(Date.parse(item.valid_until))
-                      ? new Date(item.valid_until).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })
-                      : '—'}
+                    Valid until: {formatTime12h(item.valid_until)}
                   </Text>
                   <Text style={styles.cardAction}>
-                    {item.attachment_url || item.attachment ? 'Proof • ' : ''}View Pass &gt;
+                    {hasProof
+                      ? isPdfReference(item.attachment_url || item.attachment)
+                        ? 'PDF Proof • '
+                        : 'Photo Proof • '
+                      : ''}
+                    View Pass &gt;
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -589,7 +969,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                     <Text
                       style={[styles.switchText, passScope === 'STUDENT' && styles.switchTextActive]}
                     >
-                      Student Pass
+                      Student Exit Pass
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -605,6 +985,15 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                       Official Locator Slip
                     </Text>
                   </TouchableOpacity>
+                </View>
+              )}
+
+              {!isLeader && passScope === 'TEACHER' && !editingPass && (
+                <View style={styles.infoNoteBanner}>
+                  <Ionicons name="information-circle-outline" size={16} color={palette.warning} />
+                  <Text style={styles.infoNoteText}>
+                    Teacher Locator Slips start as Pending Approval until approved by a school leader (Admin, Principal, or Department Head).
+                  </Text>
                 </View>
               )}
 
@@ -676,36 +1065,111 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                 onChangeText={(val) => setForm({ ...form, reason: val })}
               />
 
-              {!editingPass && (
-                <>
-                  <Text style={styles.inputLabel}>Allowed Duration (Hours, 1 to 12)</Text>
-                  <TextInput
-                    style={styles.inputField}
-                    placeholder="2"
-                    placeholderTextColor={palette.textMuted}
-                    keyboardType="numeric"
-                    maxLength={2}
-                    value={form.duration_hours}
-                    onChangeText={(val) => setForm({ ...form, duration_hours: val })}
-                  />
-                </>
-              )}
-
-              <ImageUploadField
-                label="Supporting Document / Proof Photo (Optional)"
-                helperText="Attach travel order, clinic slip, or parent letter image."
-                value={attachmentBase64 || attachmentPreview}
-                serverBase={serverBase}
-                variant="proof"
-                onChange={(dataUrl) => {
-                  setAttachmentBase64(dataUrl);
-                  setAttachmentPreview(dataUrl);
-                }}
-                onRemove={() => {
-                  setAttachmentBase64(null);
-                  setAttachmentPreview(null);
-                }}
+              <Text style={styles.inputLabel}>Allowed Duration (Hours, 1 to 12)</Text>
+              <TextInput
+                style={styles.inputField}
+                placeholder="2"
+                placeholderTextColor={palette.textMuted}
+                keyboardType="numeric"
+                maxLength={2}
+                value={form.duration_hours}
+                onChangeText={(val) => setForm({ ...form, duration_hours: val })}
               />
+
+              {/* Flexible Proof Attachment Picker (Camera, Gallery, or PDF/File) */}
+              <View style={styles.proofPickerCard}>
+                <Text style={styles.inputLabel}>
+                  {passScope === 'STUDENT'
+                    ? 'Hardcopy Excuse Letter / Proof (Photo or PDF)'
+                    : 'Travel Order / Supporting Proof (Photo or PDF)'}
+                </Text>
+                <Text style={styles.proofHelperText}>
+                  {passScope === 'STUDENT'
+                    ? 'Optional: attach a photo, gallery image, or PDF scan of the parent’s hardcopy excuse letter (up to 2 MB).'
+                    : 'Optional: attach a photo, gallery image, or PDF of your travel order or memo (up to 2 MB).'}
+                </Text>
+
+                {hasAnyProofInForm && (
+                  formProofIsPdf ? (
+                    <View style={styles.docPreviewCard}>
+                      <View style={styles.docBadge}>
+                        <Ionicons name="document-text-outline" size={20} color={palette.primary} />
+                        <Text style={styles.docBadgeText}>PDF</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.docFileName} numberOfLines={1}>
+                          {pendingProof?.name || extractFilenameFromUrl(resolvedExistingProof)}
+                        </Text>
+                        <Text style={styles.docMetaText}>
+                          {pendingProof?.sizeBytes
+                            ? `PDF Document • ${formatFileSize(pendingProof.sizeBytes)}`
+                            : 'Attached PDF Document'}
+                        </Text>
+                      </View>
+                      {resolvedExistingProof && !pendingProof && (
+                        <TouchableOpacity
+                          style={styles.openDocSmallBtn}
+                          onPress={() => void handleOpenExternalDocument(resolvedExistingProof)}
+                        >
+                          <Text style={styles.openDocSmallBtnText}>Open</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ) : formProofImageUri ? (
+                    <View style={styles.imagePreviewWrap}>
+                      <Image
+                        source={{ uri: formProofImageUri }}
+                        style={styles.proofFormImage}
+                        contentFit="contain"
+                      />
+                    </View>
+                  ) : null
+                )}
+
+                <View style={styles.proofActionRow}>
+                  {Platform.OS !== 'web' && (
+                    <>
+                      <TouchableOpacity
+                        style={[styles.proofActionBtn, (pickingProof || submitting) && { opacity: 0.6 }]}
+                        onPress={() => void handlePickProofFromCamera()}
+                        disabled={pickingProof || submitting}
+                      >
+                        <Ionicons name="camera-outline" size={14} color={palette.primary} />
+                        <Text style={styles.proofActionBtnText}>Camera</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.proofActionBtn, (pickingProof || submitting) && { opacity: 0.6 }]}
+                        onPress={() => void handlePickProofFromGallery()}
+                        disabled={pickingProof || submitting}
+                      >
+                        <Ionicons name="images-outline" size={14} color={palette.primary} />
+                        <Text style={styles.proofActionBtnText}>Gallery</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                  <TouchableOpacity
+                    style={[styles.proofActionBtn, (pickingProof || submitting) && { opacity: 0.6 }]}
+                    onPress={() => void handlePickProofDocument()}
+                    disabled={pickingProof || submitting}
+                  >
+                    <Ionicons name="document-attach-outline" size={14} color={palette.primary} />
+                    <Text style={styles.proofActionBtnText}>
+                      {Platform.OS === 'web' ? 'Choose Photo or PDF' : 'PDF / File'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {hasAnyProofInForm && (
+                  <TouchableOpacity
+                    style={styles.removeProofBtn}
+                    onPress={handleRemoveProofSelection}
+                    disabled={submitting}
+                  >
+                    <Ionicons name="trash-outline" size={14} color={palette.danger} />
+                    <Text style={styles.removeProofBtnText}>Remove Attached Proof</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
 
               <TouchableOpacity
                 style={[styles.submitBtn, submitting && { opacity: 0.65 }]}
@@ -716,7 +1180,11 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                   <ActivityIndicator size="small" color={palette.onPrimary} />
                 ) : (
                   <Text style={styles.submitBtnText}>
-                    {editingPass ? 'Save Pass Changes' : 'Issue Exit Pass'}
+                    {editingPass
+                      ? 'Save Pass Changes'
+                      : !isLeader && passScope === 'TEACHER'
+                        ? 'Submit Locator Slip for Approval'
+                        : 'Issue Exit Pass'}
                   </Text>
                 )}
               </TouchableOpacity>
@@ -753,8 +1221,11 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                     />
                   </View>
                   <Text style={styles.qrHint}>
-                    {selectedPass.guardian_notice ||
-                      'This official pass protects the holder from false alerts until the scheduled return time.'}
+                    {selectedPass.pass_status === 'PENDING_APPROVAL'
+                      ? 'Waiting for a school leader (Admin, Principal, or Department Head) to approve this locator slip.'
+                      : selectedPass.pass_scope === 'STUDENT'
+                        ? 'Student exit pass issued after verifying the parent’s hardcopy excuse letter at school.'
+                        : 'Approved official locator slip protecting the teacher from false alerts until the scheduled return time.'}
                   </Text>
                 </View>
 
@@ -781,23 +1252,68 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                   <Text style={styles.infoVal}>{selectedPass.reason}</Text>
                 </View>
                 <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Status:</Text>
-                  <Text style={styles.infoVal}>{selectedPass.pass_status}</Text>
+                  <Text style={styles.infoLabel}>Valid Until:</Text>
+                  <Text style={styles.infoVal}>{formatDateTime12h(selectedPass.valid_until)}</Text>
                 </View>
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Status:</Text>
+                  <Text style={styles.infoVal}>{formatPassStatusLabel(selectedPass.pass_status)}</Text>
+                </View>
+                {selectedPass.issued_by_name ? (
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Issued / Requested By:</Text>
+                    <Text style={styles.infoVal}>{selectedPass.issued_by_name}</Text>
+                  </View>
+                ) : null}
+                {selectedPass.approved_by_name ? (
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Approved By:</Text>
+                    <Text style={styles.infoVal}>{selectedPass.approved_by_name}</Text>
+                  </View>
+                ) : null}
 
-                {resolveMediaUrl(selectedPass.attachment_url || selectedPass.attachment, serverBase) ? (
+                {selectedPassProofUrl ? (
                   <View style={styles.proofBox}>
-                    <Text style={styles.infoLabel}>Attached Proof Document:</Text>
-                    <Image
-                      source={{
-                        uri: resolveMediaUrl(
-                          selectedPass.attachment_url || selectedPass.attachment,
-                          serverBase
-                        )!,
-                      }}
-                      style={styles.proofImage}
-                      contentFit="contain"
-                    />
+                    <Text style={styles.infoLabel}>
+                      {selectedPass.pass_scope === 'STUDENT'
+                        ? 'Attached Hardcopy Excuse Letter / Proof:'
+                        : 'Attached Supporting Proof Document:'}
+                    </Text>
+                    {selectedPassProofIsPdf ? (
+                      <View style={styles.docPreviewCard}>
+                        <View style={styles.docBadge}>
+                          <Ionicons name="document-text-outline" size={20} color={palette.primary} />
+                          <Text style={styles.docBadgeText}>PDF</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.docFileName} numberOfLines={1}>
+                            {extractFilenameFromUrl(selectedPassProofUrl)}
+                          </Text>
+                          <Text style={styles.docMetaText}>PDF Proof Document</Text>
+                        </View>
+                        <TouchableOpacity
+                          style={styles.openDocSmallBtn}
+                          onPress={() => void handleOpenExternalDocument(selectedPassProofUrl)}
+                        >
+                          <Text style={styles.openDocSmallBtnText}>Open / View</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <>
+                        <Image
+                          source={{ uri: selectedPassProofUrl }}
+                          style={styles.proofImage}
+                          contentFit="contain"
+                        />
+                        <TouchableOpacity
+                          style={[styles.proofActionBtn, { marginTop: 4 }]}
+                          onPress={() => void handleOpenExternalDocument(selectedPassProofUrl)}
+                        >
+                          <Ionicons name="open-outline" size={14} color={palette.primary} />
+                          <Text style={styles.proofActionBtnText}>Open Full Image</Text>
+                        </TouchableOpacity>
+                      </>
+                    )}
                   </View>
                 ) : null}
 
@@ -814,7 +1330,7 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
 
                 {isLeader &&
                   selectedPass.pass_scope === 'TEACHER' &&
-                  (selectedPass.pass_status === 'ACTIVE' || selectedPass.pass_status === 'OVERDUE') && (
+                  selectedPass.pass_status === 'PENDING_APPROVAL' && (
                     <TouchableOpacity
                       style={[
                         styles.confirmExitBtn,
@@ -829,35 +1345,73 @@ export const GatePassScreen: React.FC<GatePassScreenProps> = ({ onBack }) => {
                     </TouchableOpacity>
                   )}
 
-                {isLeader && (
-                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                    <TouchableOpacity
-                      style={[styles.confirmExitBtn, { flex: 1, marginTop: 0, backgroundColor: palette.primarySoft }]}
-                      onPress={() => openEditModal(selectedPass)}
-                      disabled={actionBusy}
-                    >
-                      <Ionicons name="create-outline" size={15} color={palette.primary} />
-                      <Text style={[styles.confirmExitBtnText, { color: palette.primary }]}>Edit</Text>
-                    </TouchableOpacity>
-                    {selectedPass.pass_status === 'ACTIVE' && (
-                      <TouchableOpacity
-                        style={[styles.confirmExitBtn, { flex: 1, marginTop: 0, backgroundColor: palette.warning }]}
-                        onPress={() => void handleCancelPass(selectedPass)}
-                        disabled={actionBusy}
-                      >
-                        <Text style={styles.confirmExitBtnText}>Cancel Pass</Text>
-                      </TouchableOpacity>
-                    )}
-                    <TouchableOpacity
-                      style={[styles.confirmExitBtn, { width: 46, marginTop: 0, backgroundColor: palette.danger }]}
-                      onPress={() => handleDeletePass(selectedPass)}
-                      disabled={actionBusy}
-                      accessibilityLabel="Delete Exit Pass"
-                    >
-                      <Ionicons name="trash-outline" size={16} color={palette.onPrimary} />
-                    </TouchableOpacity>
-                  </View>
-                )}
+                {(() => {
+                  const isIssuer =
+                    user?.id !== undefined &&
+                    selectedPass.issued_by !== undefined &&
+                    selectedPass.issued_by !== null &&
+                    Number(selectedPass.issued_by) === Number(user.id);
+                  const isOwnStudentPass =
+                    allowStudentPass && selectedPass.pass_scope === 'STUDENT' && isIssuer;
+                  const isOwnPendingTeacherSlip =
+                    selectedPass.pass_scope === 'TEACHER' &&
+                    selectedPass.pass_status === 'PENDING_APPROVAL' &&
+                    isIssuer;
+                  const canEditOrDelete =
+                    isLeader ||
+                    isOwnPendingTeacherSlip ||
+                    (isOwnStudentPass && selectedPass.pass_status !== 'RETURNED');
+                  const canCancelSelected =
+                    (selectedPass.pass_status === 'PENDING_APPROVAL' ||
+                      selectedPass.pass_status === 'ACTIVE' ||
+                      selectedPass.pass_status === 'OVERDUE') &&
+                    (isLeader || isOwnStudentPass);
+                  if (!canEditOrDelete && !canCancelSelected) return null;
+                  return (
+                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                      {canEditOrDelete && (
+                        <TouchableOpacity
+                          style={[
+                            styles.confirmExitBtn,
+                            { flex: 1, marginTop: 0, backgroundColor: palette.primarySoft },
+                          ]}
+                          onPress={() => openEditModal(selectedPass)}
+                          disabled={actionBusy}
+                        >
+                          <Ionicons name="create-outline" size={15} color={palette.primary} />
+                          <Text style={[styles.confirmExitBtnText, { color: palette.primary }]}>
+                            Edit
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                      {canCancelSelected && (
+                        <TouchableOpacity
+                          style={[
+                            styles.confirmExitBtn,
+                            { flex: 1, marginTop: 0, backgroundColor: palette.warning },
+                          ]}
+                          onPress={() => void handleCancelPass(selectedPass)}
+                          disabled={actionBusy}
+                        >
+                          <Text style={styles.confirmExitBtnText}>Cancel Pass</Text>
+                        </TouchableOpacity>
+                      )}
+                      {canEditOrDelete && (
+                        <TouchableOpacity
+                          style={[
+                            styles.confirmExitBtn,
+                            { width: 46, marginTop: 0, backgroundColor: palette.danger },
+                          ]}
+                          onPress={() => handleDeletePass(selectedPass)}
+                          disabled={actionBusy}
+                          accessibilityLabel="Delete Exit Pass"
+                        >
+                          <Ionicons name="trash-outline" size={16} color={palette.onPrimary} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })()}
               </ScrollView>
             )}
           </View>
@@ -917,18 +1471,8 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       borderColor: palette.border,
     },
     searchInput: { flex: 1, fontSize: fonts.sm, color: palette.textPrimary },
-    filterRow: { paddingHorizontal: 14, paddingVertical: 10 },
-    filterChip: {
-      paddingVertical: 6,
-      paddingHorizontal: 12,
-      borderRadius: 99,
-      backgroundColor: palette.surface,
-      borderWidth: 1,
-      borderColor: palette.border,
-    },
-    filterChipActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
-    filterChipText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.textSecondary },
-    filterChipTextActive: { color: palette.onPrimary },
+    filterRow: { flexShrink: 0, paddingHorizontal: 14, paddingVertical: 10 },
+    listFlex: { flex: 1 },
     centerBox: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
     centerText: { fontSize: fonts.sm, color: palette.textSecondary },
     listContent: { paddingHorizontal: 14, paddingBottom: 115, gap: 10 },
@@ -994,17 +1538,18 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     switchBtnActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
     switchText: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: palette.textSecondary },
     switchTextActive: { color: palette.onPrimary },
-    pickerChip: {
-      paddingVertical: 6,
-      paddingHorizontal: 10,
-      borderRadius: 8,
-      backgroundColor: palette.surfaceSubtle,
+    infoNoteBanner: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 8,
+      padding: 10,
+      borderRadius: 10,
+      backgroundColor: palette.warningLight,
       borderWidth: 1,
-      borderColor: palette.border,
+      borderColor: palette.warning,
+      marginBottom: 6,
     },
-    pickerChipActive: { backgroundColor: palette.buttonBg, borderColor: palette.buttonBg },
-    pickerChipText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.textSecondary },
-    pickerChipTextActive: { color: palette.onPrimary },
+    infoNoteText: { flex: 1, fontSize: fonts.xxs, color: palette.textPrimary, lineHeight: 15 },
     inputLabel: {
       fontSize: fonts.xs,
       fontWeight: fonts.weight.bold,
@@ -1022,6 +1567,78 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       fontSize: fonts.sm,
       color: palette.textPrimary,
     },
+    proofPickerCard: {
+      marginTop: 10,
+      padding: 12,
+      borderRadius: 12,
+      backgroundColor: palette.surfaceSubtle,
+      borderWidth: 1,
+      borderColor: palette.border,
+      gap: 8,
+    },
+    proofHelperText: { fontSize: fonts.xxs, color: palette.textMuted, lineHeight: 15 },
+    proofActionRow: { flexDirection: 'row', gap: 6 },
+    proofActionBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 5,
+      height: 38,
+      borderRadius: 9,
+      backgroundColor: palette.primarySoft,
+      borderWidth: 1,
+      borderColor: palette.primary,
+      paddingHorizontal: 8,
+    },
+    proofActionBtnText: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: palette.primary },
+    removeProofBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 5,
+      height: 34,
+      borderRadius: 8,
+      backgroundColor: palette.dangerLight,
+    },
+    removeProofBtnText: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.danger },
+    docPreviewCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      padding: 10,
+      borderRadius: 10,
+      backgroundColor: palette.surface,
+      borderWidth: 1,
+      borderColor: palette.borderStrong,
+    },
+    docBadge: {
+      width: 44,
+      height: 44,
+      borderRadius: 10,
+      backgroundColor: palette.primarySoft,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    docBadgeText: { fontSize: 9, fontWeight: fonts.weight.black, color: palette.primary },
+    docFileName: { fontSize: fonts.xs, fontWeight: fonts.weight.extrabold, color: palette.textPrimary },
+    docMetaText: { fontSize: fonts.xxs, color: palette.textSecondary, marginTop: 1 },
+    openDocSmallBtn: {
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+      backgroundColor: palette.buttonBg,
+    },
+    openDocSmallBtnText: { fontSize: fonts.xxs, fontWeight: fonts.weight.extrabold, color: palette.onPrimary },
+    imagePreviewWrap: {
+      borderRadius: 10,
+      overflow: 'hidden',
+      backgroundColor: palette.surface,
+      borderWidth: 1,
+      borderColor: palette.borderStrong,
+      padding: 6,
+    },
+    proofFormImage: { width: '100%', height: 130, borderRadius: 8 },
     submitBtn: {
       backgroundColor: palette.buttonBg,
       height: 46,
@@ -1066,11 +1683,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       borderWidth: 1,
       borderColor: palette.border,
     },
-    proofImage: {
-      width: '100%',
-      height: 150,
-      borderRadius: 8,
-    },
+    proofImage: { width: '100%', height: 150, borderRadius: 8 },
     confirmExitBtn: {
       flexDirection: 'row',
       alignItems: 'center',

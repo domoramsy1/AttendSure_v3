@@ -1,3 +1,6 @@
+# AttendSure Backend - Attendance Database Models
+# File: D:\AttendSure_V3\backend\apps\attendance\models.py
+
 import uuid
 from django.conf import settings
 from django.db import models
@@ -141,6 +144,15 @@ class ExitPass(models.Model):
     valid_until = models.DateTimeField()
     returned_at = models.DateTimeField(null=True, blank=True)
     is_cancelled = models.BooleanField(default=False)
+    is_approved = models.BooleanField(default=True, db_index=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_exit_passes",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "exit_passes"
@@ -167,6 +179,8 @@ class ExitPass(models.Model):
             return "CANCELLED"
         if self.returned_at is not None:
             return "RETURNED"
+        if self.pass_scope == "TEACHER" and not self.is_approved:
+            return "PENDING_APPROVAL"
         if self.valid_until and timezone.now() > self.valid_until:
             return "OVERDUE"
         return "ACTIVE"
@@ -176,6 +190,7 @@ class ExitPass(models.Model):
         now = timezone.now()
         return (
             not self.is_cancelled
+            and self.is_approved
             and self.returned_at is None
             and self.issued_at <= now <= self.valid_until
         )

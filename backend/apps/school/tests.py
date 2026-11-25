@@ -1,3 +1,6 @@
+# AttendSure Backend - School Automated Tests
+# File: D:\AttendSure_V3\backend\apps\school\tests.py
+
 """
 AttendSure - Live Conflict Detection, DepEd Adviser Workload, Field Availability & Auto-Enrollment Tests
 Run: python manage.py test apps.school.tests --verbosity=2
@@ -10,8 +13,10 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import AuditLog, Department, PositionTitle, TeacherProfile, UserProfile
 from apps.attendance.selectors import get_adviser_matrix, get_assigned_classes_with_class_lists
-from apps.school.models import ClassPeriod, GradeLevel, Room, SchoolYear, Section, Subject
+from apps.school.models import ClassPeriod, GradeLevel, Room, SchoolYear, Section, Subject, expand_schedule_days
+from apps.school.services import sync_uniform_subjects_for_section
 from apps.students.models import Student
+from apps.students.services import sync_student_enrollment
 
 User = get_user_model()
 
@@ -607,3 +612,90 @@ class AcademicConflictAndAvailabilityTests(APITestCase):
                     p = os.path.join(settings.MEDIA_ROOT, url.split("/media/", 1)[-1])
                     if os.path.exists(p):
                         os.remove(p)
+
+    def test_sync_uniform_subjects_for_section_prevents_overlaps_beyond_ten_subjects(self):
+        grade11 = GradeLevel.objects.create(level_number=11, code="G11", name="Grade 11", stage="SHS")
+        sec_stem = Section.objects.create(
+            school_year=self.sy,
+            grade_level=grade11,
+            name="STEM-A",
+            adviser=self.teacher_1,
+            room_name="Room 301",
+            is_active=True,
+        )
+        for i in range(1, 15):
+            Subject.objects.create(
+                code=f"SHS{i:02d}",
+                title=f"Senior High Subject {i}",
+                grade_level=grade11,
+            )
+
+        sync_uniform_subjects_for_section(sec_stem)
+        periods = list(ClassPeriod.objects.filter(section=sec_stem, is_active=True).order_by("id"))
+        self.assertEqual(len(periods), 14)
+
+        # Verify zero pairwise overlaps on intersecting weekdays (especially no stacked 16:30-17:30 periods)
+        for idx, p1 in enumerate(periods):
+            d1 = expand_schedule_days(p1.day_of_week)
+            for p2 in periods[idx + 1 :]:
+                d2 = expand_schedule_days(p2.day_of_week)
+                overlaps_time = p1.start_time < p2.end_time and p1.end_time > p2.start_time
+                self.assertFalse(
+                    overlaps_time and bool(d1 & d2),
+                    f"Overlapping periods: {p1.schedule_code} ({p1.day_of_week} {p1.start_time}-{p1.end_time}) "
+                    f"vs {p2.schedule_code} ({p2.day_of_week} {p2.start_time}-{p2.end_time})",
+                )
+
+    def test_sync_student_enrollment_uses_timezone_localdate(self):
+        from unittest.mock import patch
+
+        stu = Student.objects.create(
+            lrn="127901269955",
+            first_name="Paolo",
+            last_name="Ramos",
+            gender="Male",
+            birth_date=date(2013, 6, 15),
+        )
+        manila_day = date(2026, 11, 26)
+        with patch("apps.students.services.timezone.localdate", return_value=manila_day):
+            enr = sync_student_enrollment(
+                student=stu,
+                section_id=self.section_newton.id,
+                enrollment_status="TRANSFERRED_IN",
+            )
+        self.assertIsNotNone(enr)
+        self.assertEqual(enr.status_date, manila_day)
+
+    def test_school_settings_get_preserves_explicitly_cleared_fields(self):
+        put_res = self.client.put(
+            "/api/v1/school/settings/",
+            {
+                "school_name": "Clear Test High School",
+                "school_id": "304555",
+                "principal_teacher": self.teacher_1.id,
+                "address": "123 Main St",
+                "contact_number": "09171234567",
+            },
+            format="json",
+        )
+        self.assertEqual(put_res.status_code, 200, put_res.data)
+        self.assertEqual(put_res.data["principal_teacher"], self.teacher_1.id)
+        self.assertEqual(put_res.data["address"], "123 Main St")
+        self.assertEqual(put_res.data["contact_number"], "09171234567")
+
+        clear_res = self.client.put(
+            "/api/v1/school/settings/",
+            {
+                "principal_teacher": None,
+                "address": "",
+                "contact_number": "",
+            },
+            format="json",
+        )
+        self.assertEqual(clear_res.status_code, 200, clear_res.data)
+        self.assertIn("principal_teacher", clear_res.data)
+        self.assertIsNone(clear_res.data["principal_teacher"])
+        self.assertIn("address", clear_res.data)
+        self.assertEqual(clear_res.data["address"], "")
+        self.assertIn("contact_number", clear_res.data)
+        self.assertEqual(clear_res.data["contact_number"], "")

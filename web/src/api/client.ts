@@ -1,3 +1,6 @@
+// AttendSure Web - Client
+// File: D:\AttendSure_V3\web\src\api\client.ts
+
 /**
  * AttendSure Web API Client - Strict /api/v1/ Enforcement, Request Deduplication & JWT Layer
  * File: web/src/api/client.ts
@@ -27,38 +30,6 @@ type CacheListener = (data: unknown) => void;
 const responseCache = new Map<string, CacheEntry>();
 const inflightGetMap = new Map<string, Promise<AxiosResponse>>();
 const cacheListeners = new Map<string, Set<CacheListener>>();
-
-const LEGACY_TO_V1_PREFIXES: ReadonlyArray<[RegExp, string]> = [
-  [/^me\/?$/i, 'v1/accounts/me/'],
-  [/^users(\/|$)/i, 'v1/accounts/users$1'],
-  [/^teachers\/dropdown\/?$/i, 'v1/accounts/teachers/dropdown/'],
-  [/^teachers\/(\d+)\/reset-device\/?$/i, 'v1/accounts/teachers/$1/reset-device/'],
-  [/^teachers(\/|$)/i, 'v1/accounts/teachers$1'],
-  [/^activity-logs(\/|$)/i, 'v1/accounts/audit-logs$1'],
-  [/^settings\/school\/?$/i, 'v1/school/settings/'],
-  [/^academic-years(\/|$)/i, 'v1/school/school-years$1'],
-  [/^grade-levels(\/|$)/i, 'v1/school/grade-levels$1'],
-  [/^rooms(\/|$)/i, 'v1/school/rooms$1'],
-  [/^subjects(\/|$)/i, 'v1/school/subjects$1'],
-  [/^sections(\/|$)/i, 'v1/school/sections$1'],
-  [/^schedules(\/|$)/i, 'v1/school/periods$1'],
-  [/^students(\/|$)/i, 'v1/students$1'],
-  [/^gate-passes(\/|$)/i, 'v1/attendance/exit-passes$1'],
-  [/^classroom\/adviser-matrix\/?$/i, 'v1/attendance/adviser-matrix/'],
-  [/^classroom\/(student_list|class_list)\/?$/i, 'v1/attendance/classes/'],
-  [/^geofence\/audit\/?$/i, 'v1/campus/audit/'],
-  [/^geofence(\/|$)/i, 'v1/campus/overview$1'],
-  [/^enterprise\/emergency-roll-?call\/?$/i, 'v1/campus/roll-call/'],
-  [/^enterprise\/sdg-impact\/?$/i, 'v1/reports/sdg-impact/'],
-  [/^enterprise\/edfi-export\/?$/i, 'v1/reports/edfi-export/'],
-  [/^enterprise\/sardo-early-warning\/?$/i, 'v1/reports/dropout-risk/'],
-  [/^dashboard\/overview\/?$/i, 'v1/reports/dashboard/'],
-  [/^system\/status\/?$/i, 'v1/reports/system-status/'],
-  [/^reports(\/|$)/i, 'v1/reports$1'],
-  [/^core\/maintenance\/db-check\/?$/i, 'v1/health/db/'],
-  [/^core\/maintenance\/flush-cache\/?$/i, 'v1/cache/flush/'],
-  [/^core\/maintenance\/unlock-accounts\/?$/i, 'v1/accounts/unlock-accounts/'],
-];
 
 const notifyCacheListeners = (key: string, data: unknown): void => {
   const listeners = cacheListeners.get(key);
@@ -104,21 +75,21 @@ export const resolveBaseUrl = (): string => {
 
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location;
-    if (port === '80' || port === '443' || port === '5173' || !port) {
-      if (
-        hostname.includes('attendsure.ph') ||
-        hostname.includes('attendsure.com.ph') ||
-        hostname.includes('trycloudflare.com')
-      ) {
-        return `${protocol}//${hostname}`;
-      }
+    // Standard HTTP/HTTPS ports (80/443) are served behind Nginx reverse proxy on the same origin.
+    if (!port || port === '80' || port === '443') {
+      return `${protocol}//${hostname}`;
+    }
+    if (
+      hostname.includes('attendsure.ph') ||
+      hostname.includes('attendsure.com.ph') ||
+      hostname.includes('trycloudflare.com')
+    ) {
+      return `${protocol}//${hostname}`;
     }
     if (isLocalOrLanHost(hostname)) {
       return `${protocol}//${hostname}:8000`;
     }
-    return port && port !== '80' && port !== '443'
-      ? `${protocol}//${hostname}:${port}`
-      : `${protocol}//${hostname}`;
+    return `${protocol}//${hostname}:${port}`;
   }
 
   return 'http://127.0.0.1:8000';
@@ -139,18 +110,7 @@ export const normalizeApiPath = (rawUrl: string): string => {
     .replace(/^(api\/)+/i, '');
 
   if (!clean.startsWith('v1/')) {
-    const qIdx = clean.indexOf('?');
-    const pathPart = qIdx >= 0 ? clean.slice(0, qIdx) : clean;
-    const queryPart = qIdx >= 0 ? clean.slice(qIdx) : '';
-
-    let mapped = pathPart;
-    for (const [pattern, replacement] of LEGACY_TO_V1_PREFIXES) {
-      if (pattern.test(pathPart)) {
-        mapped = pathPart.replace(pattern, replacement);
-        break;
-      }
-    }
-    clean = (mapped.startsWith('v1/') ? mapped : `v1/${mapped}`) + queryPart;
+    clean = `v1/${clean}`;
   }
 
   return `/api/${clean}`;
@@ -209,10 +169,12 @@ const clearStoredAuth = (): void => {
     'token',
     'attendsure_username',
     'attendsure_teacher_name',
+    'attendsure_teacher_id',
     'attendsure_role',
     'attendsure_user_id',
     'attendsure_user_photo',
     'attendsure_can_teach',
+    'attendsure_is_superuser',
   ];
   keys.forEach((k) => localStorage.removeItem(k));
   lastWarmupUser = '';
@@ -280,29 +242,21 @@ apiClient.interceptors.request.use(
 
     const reqUrl = config.url || '';
     const isAuthRoute =
-      reqUrl.includes('/login/') || reqUrl.includes('/token/') || reqUrl.includes('/public-branding/');
+      reqUrl.includes('/login/') ||
+      reqUrl.includes('/logout/') ||
+      reqUrl.includes('/token/') ||
+      reqUrl.includes('/public-branding/');
 
-    if (config.headers && !config.headers.Authorization) {
+    if (config.headers && !config.headers.Authorization && !isAuthRoute) {
       let jwtAccess = localStorage.getItem('attendsure_access')?.trim().replace(/[\r\n]/g, '') || '';
-      if (jwtAccess && !isAuthRoute && isJwtExpiringSoon(jwtAccess)) {
+      if (jwtAccess && isJwtExpiringSoon(jwtAccess)) {
         const refreshed = await refreshJwtAccessToken();
         if (refreshed) {
           jwtAccess = refreshed;
         }
       }
-      const legacyToken = (
-        localStorage.getItem('attendsure_token') ||
-        localStorage.getItem('auth_token') ||
-        localStorage.getItem('token') ||
-        ''
-      )
-        .trim()
-        .replace(/[\r\n]/g, '');
-
-      if (jwtAccess) {
+      if (jwtAccess && jwtAccess.split('.').length === 3) {
         config.headers.Authorization = `Bearer ${jwtAccess}`;
-      } else if (legacyToken) {
-        config.headers.Authorization = `Token ${legacyToken}`;
       }
     }
 
@@ -313,7 +267,6 @@ apiClient.interceptors.request.use(
 
 type RetriableConfig = InternalAxiosRequestConfig & {
   _jwtRetried?: boolean;
-  _tokenRetried?: boolean;
 };
 
 apiClient.interceptors.response.use(
@@ -328,7 +281,10 @@ apiClient.interceptors.response.use(
     const originalRequest = error.config as RetriableConfig | undefined;
     const reqUrl = originalRequest?.url || '';
     const isAuthRoute =
-      reqUrl.includes('/login/') || reqUrl.includes('/token/') || reqUrl.includes('/public-branding/');
+      reqUrl.includes('/login/') ||
+      reqUrl.includes('/logout/') ||
+      reqUrl.includes('/token/') ||
+      reqUrl.includes('/public-branding/');
 
     if (error.response?.status === 401 && originalRequest && !isAuthRoute) {
       const refreshToken = localStorage.getItem('attendsure_refresh')?.trim();
@@ -341,18 +297,6 @@ apiClient.interceptors.response.use(
         }
       }
 
-      const fallbackToken = localStorage.getItem('attendsure_token')?.trim();
-      if (
-        fallbackToken &&
-        !originalRequest._tokenRetried &&
-        String(originalRequest.headers?.Authorization || '').startsWith('Bearer ')
-      ) {
-        originalRequest._tokenRetried = true;
-        localStorage.removeItem('attendsure_access');
-        originalRequest.headers.Authorization = `Token ${fallbackToken}`;
-        return apiClient(originalRequest);
-      }
-
       clearStoredAuth();
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('attendsure:auth-expired'));
@@ -362,6 +306,20 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+export const revokeCurrentDeviceSession = async (): Promise<void> => {
+  const refresh = localStorage.getItem('attendsure_refresh')?.trim();
+  if (!refresh) return;
+  try {
+    await axios.post(
+      `${resolveBaseUrl()}/api/v1/accounts/logout/`,
+      { refresh },
+      { timeout: 5000 }
+    );
+  } catch {
+    // Best-effort server-side refresh blacklist
+  }
+};
 
 interface GenericAbortSignal {
   readonly aborted: boolean;
@@ -454,7 +412,7 @@ apiClient.get = function swrGet<T = any, R = AxiosResponse<T>, D = any>(
 };
 
 export const prefetchApiGet = (url: string, params?: Record<string, unknown>): void => {
-  const hasToken = Boolean(localStorage.getItem('attendsure_access') || localStorage.getItem('attendsure_token'));
+  const hasToken = Boolean(localStorage.getItem('attendsure_access'));
   if (!hasToken) return;
   const key = buildApiCacheKey(url, params);
   const hit = responseCache.get(key);

@@ -1,3 +1,6 @@
+// AttendSure Web - Enterprise Sdg Widget Component
+// File: D:\AttendSure_V3\web\src\components\dashboard\EnterpriseSDGWidget.tsx
+
 /**
  * AttendSure - DepEd Campus Safety, SARDO Early-Warning, Division Data Export & Emergency Roll-Call
  * File: web/src/components/dashboard/EnterpriseSDGWidget.tsx

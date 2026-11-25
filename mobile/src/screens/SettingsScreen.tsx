@@ -1,3 +1,6 @@
+// AttendSure Mobile - Settings Screen
+// File: D:\AttendSure_V3\mobile\src\screens\SettingsScreen.tsx
+
 /**
  * AttendSure Mobile - Complete Account, School Setup, 3 Logos, Maintenance & Audit Logs
  * File: mobile/src/screens/SettingsScreen.tsx
@@ -38,6 +41,7 @@ import {
 import type { AlarmToneKind } from '../services/soundService';
 import { canManageSchoolSetup, canViewAuditLogs } from '../utils/permissions';
 import { confirmAction, isCanceledError, showNotice } from '../utils/helpers';
+import { useMobileFieldCheck } from '../hooks/useMobileFieldCheck';
 import {
   isSafeUrl,
   cleanText,
@@ -84,8 +88,23 @@ export interface ExtendedUserProfile {
 
 type SettingsSubTab = 'PROFILE' | 'SCHOOL' | 'MAINTENANCE' | 'LOGS';
 
+const isValidPhoneNumber = (raw: string): boolean => {
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
+  if (trimmed.length > 20) return false;
+  if (/[^0-9+\-\s()]/.test(trimmed)) return false;
+  const digits = trimmed.replace(/\D/g, '');
+  if (trimmed.startsWith('+')) {
+    return digits.length >= 8 && digits.length <= 15 && !digits.startsWith('0');
+  }
+  if (digits.startsWith('63') && digits.length === 12) return true;
+  if (digits.startsWith('09') && digits.length === 11) return true;
+  if (digits.startsWith('9') && digits.length === 10) return true;
+  return digits.length >= 7 && digits.length <= 15;
+};
+
 export const SettingsScreen: React.FC = () => {
-  const { user, logout, updateUser, updateSessionToken } = useAuth();
+  const { user, logout, updateUser, refreshUser, updateSessionToken } = useAuth();
   const { palette, fonts, mode, setThemeMode } = useThemeMode();
   const styles = useMemo(() => createStyles(palette, fonts), [palette, fonts]);
 
@@ -108,6 +127,7 @@ export const SettingsScreen: React.FC = () => {
   const [email, setEmail] = useState<string>(user?.email || '');
   const [currentPassword, setCurrentPassword] = useState<string>('');
   const [newPassword, setNewPassword] = useState<string>('');
+  const [confirmPassword, setConfirmPassword] = useState<string>('');
   const [newPhotoBase64, setNewPhotoBase64] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoRemoved, setPhotoRemoved] = useState<boolean>(false);
@@ -324,42 +344,119 @@ export const SettingsScreen: React.FC = () => {
     DeviceEventEmitter.emit('attendsure:test-alarm', { kind });
   };
 
+  const trimmedEmail = cleanText(email, 120);
+  const trimmedPhone = cleanText(contactNumber, 20);
+  const emailFormatError =
+    trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)
+      ? 'Please enter a valid email address.'
+      : undefined;
+  const phoneFormatError =
+    trimmedPhone && !isValidPhoneNumber(trimmedPhone)
+      ? 'Use a valid Philippine (09XXXXXXXXX) or international (+...) number.'
+      : undefined;
+
+  const ownUserId = user?.id ? Number(user.id) : undefined;
+  const ownTeacherId = user?.teacher_id ? Number(user.teacher_id) : undefined;
+
+  const emailCheck = useMobileFieldCheck({
+    enabled: activeSubTab === 'PROFILE',
+    field: 'email',
+    value: trimmedEmail,
+    formatError: emailFormatError,
+    excludeUserId: ownUserId,
+    excludeTeacherId: ownTeacherId,
+  });
+
+  const contactCheck = useMobileFieldCheck({
+    enabled: activeSubTab === 'PROFILE',
+    field: 'contact_number',
+    value: trimmedPhone,
+    minDigits: 7,
+    formatError: phoneFormatError,
+    excludeUserId: ownUserId,
+    excludeTeacherId: ownTeacherId,
+  });
+
+  const firstNameError = !cleanText(firstName, 80) ? 'First name is required.' : '';
+  const lastNameError = !cleanText(lastName, 80) ? 'Last name is required.' : '';
+  const cleanCurrentPassword = currentPassword.replace(/[\r\n\t]/g, '').trim();
+  const cleanNewPassword = newPassword.replace(/[\r\n\t]/g, '').trim();
+  const cleanConfirmPassword = confirmPassword.replace(/[\r\n\t]/g, '').trim();
+  const passwordError = cleanNewPassword
+    ? cleanNewPassword.length < 8
+      ? 'New password must be at least 8 characters.'
+      : !cleanCurrentPassword
+        ? 'Enter your current password to set a new password.'
+        : cleanNewPassword !== cleanConfirmPassword
+          ? 'New password and confirmation do not match.'
+          : ''
+    : '';
+
+  const isCheckingProfile = emailCheck.checking || contactCheck.checking;
+  const hasProfileBlockers = Boolean(
+    firstNameError ||
+      lastNameError ||
+      emailFormatError ||
+      phoneFormatError ||
+      passwordError ||
+      emailCheck.isTaken ||
+      contactCheck.isTaken
+  );
+
   const handleSaveProfile = async () => {
     const cleanFirst = cleanText(firstName, 80);
     const cleanMiddle = cleanText(middleName, 80);
     const cleanLast = cleanText(lastName, 80);
     const cleanEmail = cleanText(email, 120);
     const cleanPhone = cleanText(contactNumber, 20);
-    const cleanCurrentPassword = currentPassword.replace(/[\r\n\t]/g, '').trim();
-    const cleanPassword = newPassword.replace(/[\r\n\t]/g, '').trim();
+    const cleanCurrPw = currentPassword.replace(/[\r\n\t]/g, '').trim();
+    const cleanPw = newPassword.replace(/[\r\n\t]/g, '').trim();
+    const cleanConfirmPw = confirmPassword.replace(/[\r\n\t]/g, '').trim();
 
+    if (isCheckingProfile) {
+      showNotice('Checking Details', 'Please wait a moment while we verify your email and mobile number.');
+      return;
+    }
     if (!cleanFirst || !cleanLast) {
       showNotice('Missing Name', 'First name and last name are required.');
       return;
     }
-    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      showNotice('Invalid Email', 'Please enter a valid email address.');
+    if (emailFormatError || emailCheck.isTaken) {
+      showNotice('Email Notice', emailFormatError || emailCheck.warning || 'Please enter a valid email address.');
       return;
     }
-    if (cleanPassword && cleanPassword.length < 8) {
+    if (phoneFormatError || contactCheck.isTaken) {
+      showNotice('Phone Number Notice', phoneFormatError || contactCheck.warning || 'Please enter a valid mobile number.');
+      return;
+    }
+    if (cleanPw && cleanPw.length < 8) {
       showNotice('Password Too Short', 'Your new password must be at least 8 characters long.');
       return;
     }
-    if (cleanPassword && !cleanCurrentPassword) {
+    if (cleanPw && !cleanCurrPw) {
       showNotice('Current Password Required', 'Enter your current password to set a new password.');
+      return;
+    }
+    if (cleanPw && cleanPw !== cleanConfirmPw) {
+      showNotice('Passwords Do Not Match', 'Your new password and confirmation password must match.');
       return;
     }
 
     setSaving(true);
     try {
-      if (cleanPassword) {
-        const pwRes = await apiClient.post<{ token?: string }>(ENDPOINTS.CHANGE_PASSWORD, {
-          current_password: cleanCurrentPassword,
-          new_password: cleanPassword,
+      if (cleanPw) {
+        const pwRes = await apiClient.post<{
+          access?: string;
+          refresh?: string;
+          token?: string;
+        }>(ENDPOINTS.CHANGE_PASSWORD, {
+          current_password: cleanCurrPw,
+          new_password: cleanPw,
         });
         if (!isMountedRef.current) return;
-        if (pwRes.data?.token) {
-          await updateSessionToken(pwRes.data.token);
+        const rotatedAccess = pwRes.data?.access || pwRes.data?.token;
+        if (rotatedAccess) {
+          await updateSessionToken(rotatedAccess, pwRes.data?.refresh);
         }
       }
 
@@ -373,6 +470,7 @@ export const SettingsScreen: React.FC = () => {
       if (photoRemoved) {
         payload.photo = null;
         payload.remove_photo = true;
+        payload.clear_photo = true;
       } else if (newPhotoBase64 && isSafeUrl(newPhotoBase64)) {
         payload.photo = newPhotoBase64;
       }
@@ -384,18 +482,25 @@ export const SettingsScreen: React.FC = () => {
         const nextPhoto = res.data.photo_url ?? res.data.photo ?? null;
         const normalizedProfile = { ...res.data, photo: nextPhoto, photo_url: nextPhoto };
         setProfile(normalizedProfile);
+        setFirstName(normalizedProfile.first_name || '');
+        setMiddleName(normalizedProfile.middle_name || '');
+        setLastName(normalizedProfile.last_name || '');
+        setContactNumber(normalizedProfile.contact_number || normalizedProfile.phone || '');
+        setEmail(normalizedProfile.email || '');
         AsyncStorage.setItem(SETTINGS_PROFILE_CACHE_KEY, JSON.stringify(normalizedProfile)).catch(() => {});
         await updateUser(normalizedProfile as Partial<NonNullable<typeof user>>);
+        void refreshUser();
       }
 
       setCurrentPassword('');
       setNewPassword('');
+      setConfirmPassword('');
       setNewPhotoBase64(null);
       setPhotoPreview(null);
       setPhotoRemoved(false);
       showNotice(
         'Saved',
-        cleanPassword ? 'Your profile and password have been updated.' : 'Your account details have been updated.'
+        cleanPw ? 'Your profile and password have been updated.' : 'Your account details have been updated.'
       );
     } catch (err: unknown) {
       if (!isMountedRef.current) return;
@@ -549,7 +654,7 @@ export const SettingsScreen: React.FC = () => {
         />
       )}
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.bodyScroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* SUB-TAB 1: PROFILE, THEME, ALARMS & PERSONAL INFO */}
         {activeSubTab === 'PROFILE' && (
           <>
@@ -562,7 +667,7 @@ export const SettingsScreen: React.FC = () => {
               </Text>
               <ImageUploadField
                 label="Profile Portrait Photo"
-                helperText="Tap to update your portrait, then tap Save Changes below."
+                helperText="Take a photo, pick from gallery, or remove your profile photo, then tap Save Profile Changes below."
                 value={displayProfilePhoto}
                 serverBase={serverBase}
                 variant="avatar"
@@ -654,6 +759,32 @@ export const SettingsScreen: React.FC = () => {
               </View>
             </View>
 
+            {/* User Manual & Animated Onboarding Guide */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Help &amp; Guided Walkthrough</Text>
+              <Text style={styles.cardSubtitle}>
+                Read plain-English guides for QR scanning, campus GPS, DepEd forms, or replay the animated onboarding tour.
+              </Text>
+              <View style={styles.alarmBtnRow}>
+                <TouchableOpacity
+                  style={[styles.alarmTestBtn, { backgroundColor: palette.primarySoft, borderColor: palette.primary }]}
+                  onPress={() => DeviceEventEmitter.emit('attendsure:open-user-manual')}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="book-outline" size={14} color={palette.primary} />
+                  <Text style={[styles.alarmTestBtnText, { color: palette.primary }]}>User Manual</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.alarmTestBtn, { backgroundColor: palette.successLight, borderColor: palette.success }]}
+                  onPress={() => DeviceEventEmitter.emit('attendsure:open-onboarding-tour')}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="play-circle-outline" size={14} color={palette.success} />
+                  <Text style={[styles.alarmTestBtnText, { color: palette.success }]}>Replay Guide</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {/* Digital Teacher ID Pass */}
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Digital Teacher ID Pass</Text>
@@ -676,7 +807,7 @@ export const SettingsScreen: React.FC = () => {
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Personal Information &amp; Password</Text>
 
-              <Text style={styles.inputLabel}>First Name</Text>
+              <Text style={styles.inputLabel}>First Name *</Text>
               <TextInput
                 style={styles.input}
                 value={firstName}
@@ -685,18 +816,19 @@ export const SettingsScreen: React.FC = () => {
                 placeholderTextColor={palette.textMuted}
                 maxLength={80}
               />
+              {firstNameError ? <Text style={styles.fieldWarnText}>{firstNameError}</Text> : null}
 
-              <Text style={styles.inputLabel}>Middle Name</Text>
+              <Text style={styles.inputLabel}>Middle Name (optional)</Text>
               <TextInput
                 style={styles.input}
                 value={middleName}
                 onChangeText={setMiddleName}
-                placeholder="Enter middle name (optional)"
+                placeholder="Leave blank if none"
                 placeholderTextColor={palette.textMuted}
                 maxLength={80}
               />
 
-              <Text style={styles.inputLabel}>Last Name</Text>
+              <Text style={styles.inputLabel}>Last Name *</Text>
               <TextInput
                 style={styles.input}
                 value={lastName}
@@ -705,6 +837,7 @@ export const SettingsScreen: React.FC = () => {
                 placeholderTextColor={palette.textMuted}
                 maxLength={80}
               />
+              {lastNameError ? <Text style={styles.fieldWarnText}>{lastNameError}</Text> : null}
 
               <Text style={styles.inputLabel}>Email Address</Text>
               <TextInput
@@ -717,6 +850,11 @@ export const SettingsScreen: React.FC = () => {
                 placeholderTextColor={palette.textMuted}
                 maxLength={120}
               />
+              {emailCheck.checking ? (
+                <Text style={styles.fieldHintText}>Checking email availability...</Text>
+              ) : emailCheck.warning ? (
+                <Text style={styles.fieldWarnText}>{emailCheck.warning}</Text>
+              ) : null}
 
               <Text style={styles.inputLabel}>Mobile Phone Number</Text>
               <TextInput
@@ -724,10 +862,19 @@ export const SettingsScreen: React.FC = () => {
                 value={contactNumber}
                 onChangeText={setContactNumber}
                 keyboardType="phone-pad"
-                placeholder="09XXXXXXXXX"
+                placeholder="09XXXXXXXXX or +639XXXXXXXXX"
                 placeholderTextColor={palette.textMuted}
                 maxLength={20}
               />
+              {contactCheck.checking ? (
+                <Text style={styles.fieldHintText}>Checking phone number...</Text>
+              ) : contactCheck.warning ? (
+                <Text style={styles.fieldWarnText}>{contactCheck.warning}</Text>
+              ) : (
+                <Text style={styles.fieldHintText}>
+                  Accepts Philippine mobile numbers or international numbers starting with +.
+                </Text>
+              )}
 
               <Text style={styles.inputLabel}>Current Password (Required if changing password)</Text>
               <TextInput
@@ -751,13 +898,28 @@ export const SettingsScreen: React.FC = () => {
                 maxLength={128}
               />
 
+              <Text style={styles.inputLabel}>Confirm New Password</Text>
+              <TextInput
+                style={styles.input}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+                placeholder="Re-enter your new password"
+                placeholderTextColor={palette.textMuted}
+                maxLength={128}
+              />
+              {passwordError ? <Text style={styles.fieldWarnText}>{passwordError}</Text> : null}
+
               <TouchableOpacity
-                style={[styles.saveBtn, saving && { opacity: 0.65 }]}
+                style={[
+                  styles.saveBtn,
+                  (saving || isCheckingProfile || hasProfileBlockers) && { opacity: 0.6 },
+                ]}
                 onPress={() => void handleSaveProfile()}
-                disabled={saving}
+                disabled={saving || isCheckingProfile || hasProfileBlockers}
                 activeOpacity={0.85}
               >
-                {saving ? (
+                {saving || isCheckingProfile ? (
                   <ActivityIndicator size="small" color={palette.onPrimary} />
                 ) : (
                   <Text style={styles.saveBtnText}>Save Profile Changes</Text>
@@ -817,8 +979,9 @@ export const SettingsScreen: React.FC = () => {
 const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMode>['fonts']) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: palette.background },
-    subTabStrip: { flexGrow: 0, maxHeight: 50, marginTop: 10 },
-    subTabRow: { paddingHorizontal: 14, gap: 6, alignItems: 'center' },
+    subTabStrip: { flexGrow: 0, flexShrink: 0, marginTop: 10, paddingVertical: 4 },
+    subTabRow: { paddingHorizontal: 14, gap: 8, alignItems: 'center' },
+    bodyScroll: { flex: 1 },
     scrollContent: { padding: 14, paddingBottom: 120, gap: 12 },
     card: {
       backgroundColor: palette.surface,
@@ -868,6 +1031,8 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       borderColor: palette.border,
     },
     inputLabel: { fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.textSecondary, marginTop: 4 },
+    fieldWarnText: { fontSize: fonts.xxs, fontWeight: fonts.weight.bold, color: palette.danger },
+    fieldHintText: { fontSize: fonts.xxs, color: palette.textMuted },
     input: {
       backgroundColor: palette.surfaceSubtle,
       borderWidth: 1,

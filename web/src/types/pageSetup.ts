@@ -1,3 +1,6 @@
+// AttendSure Web - Page Setup
+// File: D:\AttendSure_V3\web\src\types\pageSetup.ts
+
 export type LayoutMode = 'pages' | 'pageless';
 export type PageOrientation = 'portrait' | 'landscape';
 export type PaperSizeKey = 'legal' | 'folio' | 'letter' | 'a4' | 'a3';

@@ -1,3 +1,6 @@
+// AttendSure Web - Teachers Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\TeachersTab.tsx
+
 /**
  * AttendSure - Teachers & Staff Directory and 1-to-1 Phone Binding Manager
  * File: web/src/components/tabs/TeachersTab.tsx
@@ -9,32 +12,34 @@ import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
-import { isSafeImageUrl, sanitizeText, QR_COLORS } from '../../theme/tokens';
 import { AttendSureBrandBadge } from '../branding/BrandAssets';
-import { QrCodeSvg } from '../common/QrCodeSvg';
 import { StatsCard } from '../common/StatsCard';
-import { AvatarUploadField } from '../common/AvatarUploadField';
-import {
-  STAFF_DEPARTMENTS_LIST,
-  STAFF_SUFFIX_OPTIONS,
-} from '../common/staffConstants';
-import {
-  StaffContactField,
-  StaffDepartmentPositionFields,
-  StaffNameFields,
-  StaffTeachingToggle,
-} from '../common/StaffFormFields';
+import { STAFF_DEPARTMENTS_LIST, STAFF_SUFFIX_OPTIONS } from '../common/staffConstants';
 import { Pagination, ALL_ROWS_SIZE, exportToCsv } from '../common/Pagination';
-import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { PrintableExportModal, type SelectableOption } from '../modals/PrintableExportModal';
 import { useCopyFeedback } from '../../utils/clipboard';
+import { formatTime12h } from '../../utils/timeFormat';
 import { useFieldAvailability } from '../../hooks/useFieldAvailability';
 import {
   canManageTeachers as canManageTeachersPerm,
   canResetBoundDevice,
   getCurrentUserFromStorage,
 } from '../../utils/permissions';
+import { TeachersFilterBar } from './teachers/TeachersFilterBar';
+import { TeacherFormModal } from './teachers/TeacherFormModal';
+import { TeacherIdPassModal } from './teachers/TeacherIdPassModal';
+import {
+  DEFAULT_POSITION_GROUPS,
+  INITIAL_FORM_DATA,
+  cleanInput,
+  getInitials,
+  getSafeAvatarUrl,
+  type PaginatedResponse,
+  type StatusFilter,
+  type Teacher,
+  type TeacherFormState,
+} from './teachers/types';
 import {
   Users,
   Plus,
@@ -45,7 +50,6 @@ import {
   Check,
   Loader2,
   Download,
-  Search,
   RefreshCw,
   Smartphone,
   ShieldCheck,
@@ -56,146 +60,18 @@ import {
   Printer,
 } from 'lucide-react';
 
-export interface Teacher {
-  id: number;
-  user?: number;
-  employee_id: string;
-  first_name: string;
-  middle_name?: string;
-  last_name: string;
-  suffix?: string;
-  full_name: string;
-  position: string;
-  department: string;
-  contact_number?: string;
-  email?: string;
-  can_handle_classes?: boolean;
-  can_teach?: boolean;
-  bound_device_id?: string | null;
-  device_model?: string | null;
-  device_bound_at?: string | null;
-  photo?: string | null;
-  photo_url?: string | null;
-  is_active: boolean;
-}
-
-interface PaginatedResponse<T> {
-  count: number;
-  total_pages?: number;
-  current_page?: number;
-  results: T[];
-}
-
-type StatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE' | 'BOUND' | 'UNBOUND';
-
-interface TeacherFormState {
-  employee_id: string;
-  first_name: string;
-  middle_name: string;
-  last_name: string;
-  suffix: string;
-  position: string;
-  department: string;
-  contact_number: string;
-  email: string;
-  can_handle_classes: boolean;
-  is_active: boolean;
-  photo: string | null;
-}
+export type { Teacher };
 
 const TEACHERS_ENDPOINT = API_ROUTES.accounts.teachers;
 const TEACHERS_DROPDOWN_ENDPOINT = API_ROUTES.accounts.teachersDropdown;
 const CACHE_STORAGE_KEY = 'attendsure_teachers_directory_cache';
-
-const DEFAULT_POSITION_GROUPS = [
-  {
-    category: 'Classroom Teachers',
-    ranks: [
-      'Teacher I',
-      'Teacher II',
-      'Teacher III',
-      'Special Science Teacher I',
-      'Master Teacher I',
-      'Master Teacher II',
-      'Master Teacher III',
-      'Master Teacher IV',
-    ],
-  },
-  {
-    category: 'Department Heads',
-    ranks: [
-      'Head Teacher I',
-      'Head Teacher II',
-      'Head Teacher III',
-      'Head Teacher IV',
-      'Head Teacher V',
-      'Head Teacher VI',
-    ],
-  },
-  {
-    category: 'School Leadership',
-    ranks: [
-      'Assistant School Principal I',
-      'Assistant School Principal II',
-      'School Principal I',
-      'School Principal II',
-      'School Principal III',
-      'School Principal IV',
-      'Secondary School Principal IV',
-    ],
-  },
-  {
-    category: 'Academic & Office Support',
-    ranks: [
-      'Administrative Officer II',
-      'Administrative Assistant',
-      'School Registrar',
-      'Guidance Counselor I',
-      'ICT Systems Coordinator',
-    ],
-  },
-];
-
 const DEFAULT_DEPARTMENTS = STAFF_DEPARTMENTS_LIST;
 
-const INITIAL_FORM_DATA: TeacherFormState = {
-  employee_id: '',
-  first_name: '',
-  middle_name: '',
-  last_name: '',
-  suffix: '',
-  position: 'Teacher I',
-  department: 'Junior High School',
-  contact_number: '',
-  email: '',
-  can_handle_classes: true,
-  is_active: true,
-  photo: null,
-};
-
-const cleanInput = (raw: string, maxLength = 120): string => {
-  const stripped = String(raw || '')
-    .replace(/[\u0000-\u001F\u007F]/g, '')
-    .replace(/[<>]/g, '');
-  return sanitizeText(stripped, maxLength);
-};
-
-const getSafeAvatarUrl = (teacher: Pick<Teacher, 'photo_url' | 'photo'>): string | null => {
-  const candidate = teacher.photo_url || teacher.photo || null;
-  return isSafeImageUrl(candidate) ? candidate : null;
-};
-
-const getInitials = (name: string): string => {
-  const words = cleanInput(name, 80)
-    .replace(/,/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-  if (words.length >= 2) return `${words[0][0]}${words[1][0]}`.toUpperCase();
-  return (words[0] || 'T').slice(0, 2).toUpperCase();
-};
-
 const getUserScopedCacheKey = (): string => {
-  const scope = localStorage.getItem('attendsure_user_id') || localStorage.getItem('attendsure_username') || 'default';
+  const scope =
+    localStorage.getItem('attendsure_user_id') ||
+    localStorage.getItem('attendsure_username') ||
+    'default';
   return `${CACHE_STORAGE_KEY}_${scope}`;
 };
 
@@ -275,6 +151,11 @@ export const TeachersTab: React.FC = () => {
   const [inspectingTeacher, setInspectingTeacher] = useState<Teacher | null>(null);
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>([]);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [resettingDeviceId, setResettingDeviceId] = useState<number | null>(null);
+  const [formData, setFormData] = useState<TeacherFormState>(INITIAL_FORM_DATA);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const { copiedKey, copy } = useCopyFeedback();
 
   const teacherOptions = useMemo<SelectableOption[]>(
     () =>
@@ -290,11 +171,6 @@ export const TeachersTab: React.FC = () => {
       prev.includes(teacherId) ? prev.filter((id) => id !== teacherId) : [...prev, teacherId]
     );
   };
-  const [saving, setSaving] = useState<boolean>(false);
-  const [resettingDeviceId, setResettingDeviceId] = useState<number | null>(null);
-  const [formData, setFormData] = useState<TeacherFormState>(INITIAL_FORM_DATA);
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const { copiedKey, copy } = useCopyFeedback();
 
   const mountedRef = useRef<boolean>(true);
   const activeAbortRef = useRef<AbortController | null>(null);
@@ -376,10 +252,14 @@ export const TeachersTab: React.FC = () => {
               writeCachedTeacherList(payload, payload.length);
             }
           }
-          setLastUpdated(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+          setLastUpdated(formatTime12h(new Date()));
         } else {
           const reason = listOutcome.reason as { name?: string; code?: string };
-          if (reason?.name === 'CanceledError' || reason?.name === 'AbortError' || reason?.code === 'ERR_CANCELED') {
+          if (
+            reason?.name === 'CanceledError' ||
+            reason?.name === 'AbortError' ||
+            reason?.code === 'ERR_CANCELED'
+          ) {
             return;
           }
           if (!silent) {
@@ -452,7 +332,7 @@ export const TeachersTab: React.FC = () => {
     field: 'contact_number',
     value: cleanPhoneCheck,
     minLength: 10,
-    fallbackMessage: 'This mobile number is already assigned to another staff account.',
+    fallbackMessage: 'This mobile number is already assigned to another teacher account.',
     excludeId: editingTeacher?.id,
     excludeTeacherId: editingTeacher?.id,
   });
@@ -469,7 +349,9 @@ export const TeachersTab: React.FC = () => {
   };
   const checkingCount =
     (empAvail.checking ? 1 : 0) + (emailAvail.checking ? 1 : 0) + (phoneAvail.checking ? 1 : 0);
-  const hasLiveErrors = Boolean(liveErrors.employee_id || liveErrors.email || liveErrors.contact_number);
+  const hasLiveErrors = Boolean(
+    liveErrors.employee_id || liveErrors.email || liveErrors.contact_number
+  );
 
   useEffect(() => {
     const searchChanged = prevSearchRef.current !== search;
@@ -531,7 +413,8 @@ export const TeachersTab: React.FC = () => {
   );
 
   const uniqueDepartmentCount = useMemo(() => {
-    const source = directoryDepartments.length > 0 ? directoryDepartments : teacherList.map((t) => t.department);
+    const source =
+      directoryDepartments.length > 0 ? directoryDepartments : teacherList.map((t) => t.department);
     return new Set(source.filter(Boolean)).size;
   }, [directoryDepartments, teacherList]);
 
@@ -624,7 +507,7 @@ export const TeachersTab: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (saving) return;
+    if (saving || checkingCount > 0) return;
 
     if (hasLiveErrors) {
       showAlert({
@@ -696,7 +579,10 @@ export const TeachersTab: React.FC = () => {
 
     try {
       if (editingTeacher) {
-        const res = await apiClient.put<Teacher>(`${TEACHERS_ENDPOINT}${editingTeacher.id}/`, payload);
+        const res = await apiClient.put<Teacher>(
+          `${TEACHERS_ENDPOINT}${editingTeacher.id}/`,
+          payload
+        );
         setTeacherList((prev) => prev.map((t) => (t.id === editingTeacher.id ? res.data : t)));
         showAlert({
           title: 'Profile Saved',
@@ -717,7 +603,10 @@ export const TeachersTab: React.FC = () => {
     } catch (err: unknown) {
       showAlert({
         title: 'Could Not Save',
-        message: extractApiError(err, 'Unable to save this teacher record. Please check the details and try again.'),
+        message: extractApiError(
+          err,
+          'Unable to save this teacher record. Please check the details and try again.'
+        ),
         type: 'error',
       });
     } finally {
@@ -728,7 +617,7 @@ export const TeachersTab: React.FC = () => {
   const handleResetDeviceBinding = (teacher: Teacher) => {
     showConfirm({
       title: 'Reset Phone Lock',
-      message: `Unlink the current mobile phone and biometric key lock for ${teacher.full_name}? Their next Phone Fingerprint / Biometric & Campus GPS Time In will automatically pair their new phone.`,
+      message: `Unlink the current mobile phone and signing key lock for ${teacher.full_name}? Their next Phone Lock & Campus GPS Time In will automatically pair their new phone.`,
       confirmLabel: 'Reset Phone Lock',
       isDestructive: false,
       onConfirm: async () => {
@@ -747,7 +636,9 @@ export const TeachersTab: React.FC = () => {
           );
           if (inspectingTeacher?.id === teacher.id) {
             setInspectingTeacher((prev) =>
-              prev ? { ...prev, bound_device_id: null, device_model: null, device_bound_at: null } : null
+              prev
+                ? { ...prev, bound_device_id: null, device_model: null, device_bound_at: null }
+                : null
             );
           }
           showAlert({
@@ -796,123 +687,45 @@ export const TeachersTab: React.FC = () => {
     });
   };
 
-  const styles = useMemo(
-    () => ({
-      page: {
+  const actionBtnStyle: React.CSSProperties = {
+    width: 30,
+    height: 30,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: tokens.borderSubtle,
+    backgroundColor: tokens.bgSurfaceSubtle,
+    color: tokens.textSecondary,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+  };
+
+  const activeSchoolName = school.school_name?.trim() || 'AttendSure School Campus';
+
+  return (
+    <div
+      style={{
         display: 'flex',
-        flexDirection: 'column' as const,
+        flexDirection: 'column',
         gap: 16,
         padding: 'clamp(12px, 2.2vw, 20px)',
         maxWidth: 1400,
         margin: '0 auto',
         fontFamily: fonts.sans,
-      },
-      headerCard: {
-        ...ui.card,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap' as const,
-        gap: 12,
-      },
-      statsGrid: {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 205px), 1fr))',
-        gap: 12,
-      },
-      controlsBar: {
-        ...ui.card,
-        padding: '12px 16px',
-        display: 'flex',
-        flexDirection: 'column' as const,
-        gap: 10,
-      },
-      controlsTopRow: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap' as const,
-        gap: 10,
-      },
-      searchWrap: {
-        position: 'relative' as const,
-        flex: '1 1 220px',
-        maxWidth: 320,
-      },
-      searchInput: {
-        ...ui.input,
-        paddingLeft: 34,
-        backgroundColor: tokens.bgSurfaceSubtle,
-      },
-      deptSelect: {
-        ...ui.input,
-        width: 'auto',
-        minWidth: 210,
-        backgroundColor: tokens.bgSurfaceSubtle,
-        cursor: 'pointer',
-      },
-      filterPillsRow: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        flexWrap: 'wrap' as const,
-      },
-      tableCard: {
-        ...ui.card,
-        padding: 0,
-        overflow: 'hidden',
-      },
-      actionBtn: {
-        width: 30,
-        height: 30,
-        borderRadius: radius.sm,
-        borderWidth: 1,
-        borderStyle: 'solid' as const,
-        borderColor: tokens.borderSubtle,
-        backgroundColor: tokens.bgSurfaceSubtle,
-        color: tokens.textSecondary,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
-      },
-      modalBodySurface: {
-        backgroundColor: tokens.bgSurface,
-        color: tokens.textPrimary,
-        margin: -20,
-        padding: 20,
-        fontFamily: fonts.sans,
-      },
-      formGrid2: {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-        gap: 10,
-      },
-      nameGrid: {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(115px, 1fr))',
-        gap: 10,
-      },
-    }),
-    [tokens, fonts, radius, ui]
-  );
-
-  const filterPillOptions: { key: StatusFilter; label: string }[] = [
-    { key: 'ALL', label: `All (${teacherList.length})` },
-    { key: 'ACTIVE', label: `Active (${activeTeachersCount})` },
-    { key: 'INACTIVE', label: `Inactive (${Math.max(0, teacherList.length - activeTeachersCount)})` },
-    { key: 'BOUND', label: `Phone Linked (${boundPhonesCount})` },
-    { key: 'UNBOUND', label: `Unlinked (${Math.max(0, teacherList.length - boundPhonesCount)})` },
-  ];
-
-  const activeSchoolName = school.school_name?.trim() || 'AttendSure School Campus';
-  const inspectingQrValue = inspectingTeacher
-    ? `ATTENDSURE:TEACHER:${inspectingTeacher.employee_id}`
-    : '';
-
-  return (
-    <div style={styles.page}>
-      <div style={styles.headerCard}>
+      }}
+    >
+      <div
+        style={{
+          ...ui.card,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 12,
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
           <AttendSureBrandBadge size={42} mode={mode} />
           <div style={{ minWidth: 0 }}>
@@ -944,7 +757,13 @@ export const TeachersTab: React.FC = () => {
               {selectedTeacherIds.length} Selected &times; Clear
             </Button>
           )}
-          <Button variant="secondary" size="sm" onClick={handleManualRefresh} loading={refreshing} icon={<RefreshCw size={13} />}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleManualRefresh}
+            loading={refreshing}
+            icon={<RefreshCw size={13} />}
+          >
             Refresh
           </Button>
           <Button
@@ -996,7 +815,13 @@ export const TeachersTab: React.FC = () => {
         </div>
       )}
 
-      <div style={styles.statsGrid}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 205px), 1fr))',
+          gap: 12,
+        }}
+      >
         <StatsCard
           label="Total Teachers"
           value={(totalCount || teacherList.length).toLocaleString()}
@@ -1014,7 +839,7 @@ export const TeachersTab: React.FC = () => {
           label="Mobile Phones Linked"
           value={`${boundPhonesCount} / ${teacherList.length}`}
           valueColor={brand.primary}
-          helpText="1-to-1 bound for Phone Fingerprint / Biometric & Campus GPS"
+          helpText="1-to-1 bound for Phone Lock & Campus GPS"
           badge={<Smartphone size={17} color={brand.primary} />}
         />
         <StatsCard
@@ -1026,75 +851,21 @@ export const TeachersTab: React.FC = () => {
         />
       </div>
 
-      <div style={styles.controlsBar}>
-        <div style={styles.controlsTopRow}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: 1 }}>
-            <div style={styles.searchWrap}>
-              <Search
-                size={14}
-                color={tokens.textMuted}
-                style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
-              />
-              <input
-                type="text"
-                aria-label="Search teachers"
-                placeholder="Search by name, Employee ID, or role..."
-                value={search}
-                maxLength={80}
-                onChange={(e) => setSearch(e.target.value)}
-                style={styles.searchInput}
-              />
-            </div>
+      <TeachersFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        departmentFilter={departmentFilter}
+        onDepartmentFilterChange={setDepartmentFilter}
+        departmentOptions={departmentOptions}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        displayedCount={displayedTeachers.length}
+        loadedCount={teacherList.length}
+        activeTeachersCount={activeTeachersCount}
+        boundPhonesCount={boundPhonesCount}
+      />
 
-            <select
-              aria-label="Filter by department"
-              value={departmentFilter}
-              onChange={(e) => setDepartmentFilter(e.target.value)}
-              style={styles.deptSelect}
-            >
-              <option value="">All Departments</option>
-              {departmentOptions.map((dept) => (
-                <option key={dept} value={dept}>
-                  {dept}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted, fontWeight: fonts.weight.semibold }}>
-            Showing {displayedTeachers.length} of {teacherList.length} loaded
-          </span>
-        </div>
-
-        <div style={styles.filterPillsRow}>
-          {filterPillOptions.map((pill) => {
-            const active = statusFilter === pill.key;
-            return (
-              <button
-                key={pill.key}
-                type="button"
-                onClick={() => setStatusFilter(pill.key)}
-                style={{
-                  padding: '5px 11px',
-                  borderRadius: radius.pill,
-                  borderWidth: 1,
-                  borderStyle: 'solid',
-                  borderColor: active ? brand.primary : tokens.borderStrong,
-                  backgroundColor: active ? tokens.primaryLight : tokens.bgSurfaceSubtle,
-                  color: active ? brand.primary : tokens.textSecondary,
-                  fontSize: fonts.size.xs,
-                  fontWeight: fonts.weight.bold,
-                  cursor: 'pointer',
-                }}
-              >
-                {pill.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div style={styles.tableCard}>
+      <div style={{ ...ui.card, padding: 0, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
@@ -1132,8 +903,14 @@ export const TeachersTab: React.FC = () => {
               {loading && teacherList.length === 0 ? (
                 <tr>
                   <td colSpan={9} style={{ padding: 44, textAlign: 'center', color: tokens.textMuted }}>
-                    <Loader2 className="animate-spin" size={24} style={{ margin: '0 auto 8px', display: 'block', color: brand.primary }} />
-                    <span style={{ fontSize: fonts.size.sm, fontWeight: fonts.weight.semibold }}>Loading teacher directory...</span>
+                    <Loader2
+                      className="animate-spin"
+                      size={24}
+                      style={{ margin: '0 auto 8px', display: 'block', color: brand.primary }}
+                    />
+                    <span style={{ fontSize: fonts.size.sm, fontWeight: fonts.weight.semibold }}>
+                      Loading teacher directory...
+                    </span>
                   </td>
                 </tr>
               ) : displayedTeachers.length === 0 ? (
@@ -1182,7 +959,11 @@ export const TeachersTab: React.FC = () => {
                           }}
                         >
                           {avatarUrl ? (
-                            <img src={avatarUrl} alt={teacher.full_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <img
+                              src={avatarUrl}
+                              alt={teacher.full_name}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
                           ) : (
                             getInitials(teacher.full_name || teacher.first_name)
                           )}
@@ -1209,13 +990,19 @@ export const TeachersTab: React.FC = () => {
                             cursor: 'pointer',
                           }}
                         >
-                          {copiedKey === `emp-${teacher.id}` ? <Check size={11} color={brand.success} /> : <Copy size={11} color={tokens.textMuted} />}
+                          {copiedKey === `emp-${teacher.id}` ? (
+                            <Check size={11} color={brand.success} />
+                          ) : (
+                            <Copy size={11} color={tokens.textMuted} />
+                          )}
                           <span>{teacher.employee_id}</span>
                         </button>
                       </td>
 
                       <td style={ui.td}>
-                        <div style={{ fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>{teacher.full_name}</div>
+                        <div style={{ fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>
+                          {teacher.full_name}
+                        </div>
                         {(teacher.can_handle_classes ?? teacher.can_teach) && (
                           <span
                             style={{
@@ -1234,15 +1021,21 @@ export const TeachersTab: React.FC = () => {
                       </td>
 
                       <td style={ui.td}>
-                        <div style={{ fontWeight: fonts.weight.semibold, color: tokens.textPrimary }}>{teacher.position || 'Teacher'}</div>
+                        <div style={{ fontWeight: fonts.weight.semibold, color: tokens.textPrimary }}>
+                          {teacher.position || 'Teacher'}
+                        </div>
                         <div style={{ fontSize: fonts.size.xs, color: tokens.textSecondary, marginTop: 2 }}>
                           {teacher.department || 'Unassigned Department'}
                         </div>
                       </td>
 
                       <td style={ui.td}>
-                        <div style={{ fontSize: fonts.size.sm, color: tokens.textPrimary }}>{teacher.email || '—'}</div>
-                        <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted, marginTop: 2 }}>{teacher.contact_number || '—'}</div>
+                        <div style={{ fontSize: fonts.size.sm, color: tokens.textPrimary }}>
+                          {teacher.email || '—'}
+                        </div>
+                        <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted, marginTop: 2 }}>
+                          {teacher.contact_number || '—'}
+                        </div>
                       </td>
 
                       <td style={ui.td}>
@@ -1278,12 +1071,19 @@ export const TeachersTab: React.FC = () => {
                             )}
                           </div>
                         ) : (
-                          <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>Pairs on first mobile Time In</span>
+                          <span style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>
+                            Pairs on first mobile Time In
+                          </span>
                         )}
                       </td>
 
                       <td style={ui.td}>
-                        <span style={ui.badge(teacher.is_active ? tokens.successLight : tokens.dangerLight, teacher.is_active ? brand.success : brand.danger)}>
+                        <span
+                          style={ui.badge(
+                            teacher.is_active ? tokens.successLight : tokens.dangerLight,
+                            teacher.is_active ? brand.success : brand.danger
+                          )}
+                        >
                           {teacher.is_active ? 'ACTIVE' : 'INACTIVE'}
                         </span>
                       </td>
@@ -1293,7 +1093,7 @@ export const TeachersTab: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => setInspectingTeacher(teacher)}
-                            style={styles.actionBtn}
+                            style={actionBtnStyle}
                             title="View Digital Teacher Pass"
                             aria-label={`View digital pass for ${teacher.full_name}`}
                           >
@@ -1305,7 +1105,7 @@ export const TeachersTab: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => handleOpenEdit(teacher)}
-                                style={styles.actionBtn}
+                                style={actionBtnStyle}
                                 title="Edit Teacher Profile"
                                 aria-label={`Edit ${teacher.full_name}`}
                               >
@@ -1314,7 +1114,7 @@ export const TeachersTab: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => promptDelete(teacher)}
-                                style={{ ...styles.actionBtn, color: brand.danger }}
+                                style={{ ...actionBtnStyle, color: brand.danger }}
                                 title="Remove Teacher"
                                 aria-label={`Remove ${teacher.full_name}`}
                               >
@@ -1347,232 +1147,35 @@ export const TeachersTab: React.FC = () => {
         />
       </div>
 
-      {isModalOpen && (
-        <Modal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          title={editingTeacher ? `Edit Teacher: ${editingTeacher.full_name}` : 'Add New Teacher'}
-          maxWidth="580px"
-        >
-          <div style={styles.modalBodySurface}>
-            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <AvatarUploadField
-                previewUrl={photoPreview}
-                displayName={`${formData.first_name} ${formData.last_name}`.trim() || 'Teacher'}
-                label="Directory Profile Photo"
-                helpText="Optional JPG, PNG, or WebP (max 2 MB). Biometric verification stays strictly on the teacher's phone."
-                size={56}
-                disabled={saving}
-                onSelectPhoto={(_file, dataUri) => {
-                  setPhotoPreview(dataUri);
-                  setFormData((prev) => ({ ...prev, photo: dataUri }));
-                }}
-                onRemovePhoto={() => {
-                  setPhotoPreview(null);
-                  setFormData((prev) => ({ ...prev, photo: '' }));
-                }}
-                onValidationError={(msg) => showAlert({ title: 'Invalid Image', message: msg, type: 'error' })}
-              />
+      <TeacherFormModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        editingTeacher={editingTeacher}
+        formData={formData}
+        onChangeForm={setFormData}
+        photoPreview={photoPreview}
+        onPhotoPreviewChange={setPhotoPreview}
+        departmentOptions={departmentOptions}
+        positionGroups={positionGroups}
+        liveErrors={liveErrors}
+        fieldVerified={fieldVerified}
+        checkingCount={checkingCount}
+        hasLiveErrors={hasLiveErrors}
+        saving={saving}
+        onSubmit={handleSubmit}
+        onPhotoValidationError={(msg) =>
+          showAlert({ title: 'Invalid Image', message: msg, type: 'error' })
+        }
+      />
 
-              <div style={styles.formGrid2}>
-                <div>
-                  <label htmlFor="teacher-emp-id" style={ui.label}>Employee ID *</label>
-                  <input
-                    id="teacher-emp-id"
-                    type="text"
-                    required
-                    maxLength={50}
-                    value={formData.employee_id}
-                    onChange={(e) => setFormData({ ...formData, employee_id: e.target.value.toUpperCase() })}
-                    style={{
-                      ...ui.input,
-                      fontFamily: fonts.mono,
-                      borderColor: liveErrors.employee_id
-                        ? brand.danger
-                        : fieldVerified.employee_id
-                          ? brand.success
-                          : tokens.borderStrong,
-                    }}
-                    placeholder="e.g. EMP-2026-014"
-                  />
-                  {liveErrors.employee_id && (
-                    <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', fontWeight: 700, color: brand.danger }}>
-                      {liveErrors.employee_id}
-                    </span>
-                  )}
-                </div>
-                <div>
-                  <label htmlFor="teacher-email" style={ui.label}>Email Address</label>
-                  <input
-                    id="teacher-email"
-                    type="email"
-                    maxLength={150}
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    style={{
-                      ...ui.input,
-                      borderColor: liveErrors.email
-                        ? brand.danger
-                        : fieldVerified.email
-                          ? brand.success
-                          : tokens.borderStrong,
-                    }}
-                    placeholder="name@school.edu"
-                  />
-                  {liveErrors.email && (
-                    <span style={{ display: 'block', marginTop: 3, fontSize: '0.70rem', fontWeight: 700, color: brand.danger }}>
-                      {liveErrors.email}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <StaffNameFields
-                values={formData}
-                onChange={(patch) => setFormData((prev) => ({ ...prev, ...patch }))}
-                idPrefix="teacher"
-                gridStyle={styles.nameGrid}
-              />
-
-              <StaffDepartmentPositionFields
-                department={formData.department}
-                position={formData.position}
-                onChange={(patch) => setFormData((prev) => ({ ...prev, ...patch }))}
-                departmentOptions={departmentOptions}
-                positionGroups={positionGroups}
-                order="position-first"
-                idPrefix="teacher"
-                gridStyle={styles.formGrid2}
-              />
-
-              <div style={styles.formGrid2}>
-                <StaffContactField
-                  id="teacher-contact"
-                  value={formData.contact_number}
-                  onChange={(val) => setFormData((prev) => ({ ...prev, contact_number: val }))}
-                  error={liveErrors.contact_number}
-                  verified={fieldVerified.contact_number}
-                />
-                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 8 }}>
-                  <StaffTeachingToggle
-                    variant="inline"
-                    checked={formData.can_handle_classes}
-                    onChange={(checked) => setFormData((prev) => ({ ...prev, can_handle_classes: checked }))}
-                  />
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: fonts.size.sm, fontWeight: fonts.weight.semibold, color: tokens.textPrimary, cursor: 'pointer' }}>
-                    <input type="checkbox" checked={formData.is_active} onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })} style={{ accentColor: brand.success }} />
-                    Active teacher account
-                  </label>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8, paddingTop: 12, borderTop: `1px solid ${tokens.borderSubtle}` }}>
-                <Button variant="secondary" size="md" type="button" onClick={() => setIsModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button variant="primary" size="md" type="submit" loading={saving} disabled={saving || hasLiveErrors || checkingCount > 0}>
-                  {editingTeacher ? 'Save Changes' : 'Add Teacher'}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </Modal>
-      )}
-
-      {inspectingTeacher && (
-        <Modal
-          isOpen={Boolean(inspectingTeacher)}
-          onClose={() => setInspectingTeacher(null)}
-          title="Digital Teacher ID Pass"
-          maxWidth="420px"
-        >
-          <div style={styles.modalBodySurface}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-              <div style={{ width: '100%', maxWidth: 310, backgroundColor: tokens.bgSurface, border: `2px solid ${brand.primary}`, borderRadius: radius.xl, overflow: 'hidden', boxShadow: tokens.cardShadow }}>
-                <div style={{ backgroundColor: brand.buttonBg, color: tokens.onPrimary, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left' }}>
-                  <AttendSureBrandBadge size={34} mode="light" />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: fonts.size.sm, fontWeight: fonts.weight.extrabold, letterSpacing: '0.4px' }}>
-                      ATTENDSURE TEACHER PASS
-                    </div>
-                    <div style={{ fontSize: fonts.size.xs, color: tokens.onPrimary, opacity: 0.85, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {activeSchoolName}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ padding: '16px 14px' }}>
-                  <div
-                    style={{
-                      width: 68,
-                      height: 68,
-                      borderRadius: '50%',
-                      margin: '0 auto 10px',
-                      overflow: 'hidden',
-                      border: `2px solid ${brand.primary}`,
-                      backgroundColor: tokens.primaryLight,
-                      color: brand.primary,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: fonts.weight.extrabold,
-                      fontSize: fonts.size.lg,
-                    }}
-                  >
-                    {getSafeAvatarUrl(inspectingTeacher) ? (
-                      <img src={getSafeAvatarUrl(inspectingTeacher)!} alt={inspectingTeacher.full_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      getInitials(inspectingTeacher.full_name || inspectingTeacher.first_name)
-                    )}
-                  </div>
-
-                  <div style={{ fontSize: fonts.size.md, fontWeight: fonts.weight.extrabold, color: tokens.textPrimary }}>
-                    {inspectingTeacher.full_name}
-                  </div>
-                  <div style={{ fontSize: fonts.size.sm, color: tokens.textSecondary, marginTop: 2 }}>{inspectingTeacher.position}</div>
-                  <div style={{ fontSize: fonts.size.xs, color: tokens.textMuted }}>{inspectingTeacher.department}</div>
-
-                  {inspectingQrValue && (
-                    <div style={{ margin: '12px auto', width: 120, height: 120, padding: 6, backgroundColor: QR_COLORS.background, borderRadius: radius.md, border: `1px solid ${tokens.borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <QrCodeSvg value={inspectingQrValue} size={108} label={`Teacher verification QR code for ${inspectingTeacher.full_name}`} style={{ width: '100%', height: '100%' }} />
-                    </div>
-                  )}
-
-                  <div style={{ fontSize: fonts.size.sm, fontFamily: fonts.mono, fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>
-                    ID: {inspectingTeacher.employee_id}
-                  </div>
-                </div>
-
-                <div style={{ backgroundColor: tokens.bgSurfaceSubtle, padding: '10px 12px', borderTop: `1px solid ${tokens.borderSubtle}`, fontSize: fonts.size.xs, color: tokens.textSecondary, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <div style={{ fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>
-                    Mobile Time In / Out: {inspectingTeacher.bound_device_id ? inspectingTeacher.device_model || 'Linked Phone Active' : 'Pairs on first mobile Time In'}
-                  </div>
-                  <div style={{ color: tokens.textMuted }}>
-                    Phone Fingerprint / Biometric &amp; Campus GPS only. Zero biometric data ever leaves the teacher&apos;s phone.
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-                {canResetPhoneLock && inspectingTeacher.bound_device_id && (
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    onClick={() => handleResetDeviceBinding(inspectingTeacher)}
-                    loading={resettingDeviceId === inspectingTeacher.id}
-                    icon={<RotateCcw size={14} />}
-                  >
-                    Reset Phone Lock
-                  </Button>
-                )}
-                <Button variant="primary" size="md" onClick={() => setInspectingTeacher(null)}>
-                  Close
-                </Button>
-              </div>
-            </div>
-          </div>
-        </Modal>
-      )}
+      <TeacherIdPassModal
+        teacher={inspectingTeacher}
+        schoolName={activeSchoolName}
+        canResetPhoneLock={canResetPhoneLock}
+        resettingDeviceId={resettingDeviceId}
+        onResetDeviceBinding={handleResetDeviceBinding}
+        onClose={() => setInspectingTeacher(null)}
+      />
 
       <PrintableExportModal
         isOpen={isPrintModalOpen}

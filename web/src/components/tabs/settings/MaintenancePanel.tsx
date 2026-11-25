@@ -1,3 +1,6 @@
+// AttendSure Web - Maintenance Panel
+// File: D:\AttendSure_V3\web\src\components\tabs\settings\MaintenancePanel.tsx
+
 /**
  * AttendSure - Self-Service Maintenance & Health Diagnostics Panel
  * File: web/src/components/tabs/settings/MaintenancePanel.tsx

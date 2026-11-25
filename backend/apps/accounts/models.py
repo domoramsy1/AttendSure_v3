@@ -1,3 +1,6 @@
+# AttendSure Backend - Accounts Database Models
+# File: D:\AttendSure_V3\backend\apps\accounts\models.py
+
 # D:\AttendSure_V3\backend\apps\accounts\models.py
 import re
 import secrets
@@ -101,6 +104,8 @@ class TeacherProfile(models.Model):
     device_model = models.CharField(max_length=100, blank=True, null=True)
     device_bound_at = models.DateTimeField(blank=True, null=True)
     biometric_key_id = models.CharField(max_length=128, blank=True, null=True)
+    biometric_public_key = models.TextField(blank=True, default="")
+    biometric_key_algorithm = models.CharField(max_length=24, blank=True, default="")
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -171,6 +176,9 @@ class UserProfile(models.Model):
     role = models.CharField(max_length=20, choices=USER_ROLE_CHOICES, default="TEACHER", db_index=True)
     failed_login_attempts = models.PositiveIntegerField(default=0)
     locked_until = models.DateTimeField(null=True, blank=True)
+    onboarding_completed = models.BooleanField(default=False)
+    onboarding_completed_at = models.DateTimeField(null=True, blank=True)
+    onboarding_version = models.PositiveSmallIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -235,3 +243,4 @@ class AuditLog(models.Model):
         indexes = [
             models.Index(fields=["table_name", "-created_at"], name="idx_audit_table_created"),
         ]
+

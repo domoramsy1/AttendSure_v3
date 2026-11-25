@@ -1,5 +1,5 @@
 // AttendSure Mobile - Application Entry Point
-// File: mobile/index.ts
+// File: D:\AttendSure_V3\mobile\index.ts
 
 import { Platform } from 'react-native';
 import { Buffer } from 'buffer';

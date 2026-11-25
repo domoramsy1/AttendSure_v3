@@ -1,3 +1,6 @@
+# AttendSure Deploy - Docker Compose Services
+# File: D:\AttendSure_V3\docker-compose.yml
+
 # D:\AttendSure_V3\docker-compose.yml
 
 services:
@@ -44,6 +47,7 @@ services:
       - path: ./backend/.env
         required: false
     environment:
+      - PORT=8001
       - GUNICORN_BIND=0.0.0.0:8001
       - SECRET_KEY=${SECRET_KEY:-replace_with_strong_64_char_production_secret_key}
       - DB_HOST=db
@@ -72,6 +76,7 @@ services:
       - path: ./backend/.env
         required: false
     environment:
+      - PORT=8002
       - GUNICORN_BIND=0.0.0.0:8002
       - SECRET_KEY=${SECRET_KEY:-replace_with_strong_64_char_production_secret_key}
       - DB_HOST=db
@@ -91,7 +96,9 @@ services:
     restart: always
 
   nginx:
-    image: nginx:1.27-alpine
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.nginx
     container_name: attendsure_nginx
     ports:
       - "80:80"

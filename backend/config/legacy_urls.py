@@ -1,3 +1,11 @@
+# AttendSure Backend - Config Legacy URLs (RETIRED BY DEFAULT)
+# File: D:\AttendSure_V3\backend\config\legacy_urls.py
+#
+# Migration Note:
+# All Web and Mobile clients now target canonical `/api/v1/` routes exclusively.
+# These unversioned `/api/` aliases are disabled by default (`ENABLE_LEGACY_API_ROUTES=False`).
+# Set `ENABLE_LEGACY_API_ROUTES=True` only if a temporary transitional cutover is needed.
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 

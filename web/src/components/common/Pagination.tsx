@@ -1,3 +1,6 @@
+// AttendSure Web - Pagination Component
+// File: D:\AttendSure_V3\web\src\components\common\Pagination.tsx
+
 /**
  * AttendSure - Reusable Server Pagination Bar & Safe CSV Exporter
  * File: web/src/components/common/Pagination.tsx

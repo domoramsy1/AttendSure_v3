@@ -1,3 +1,6 @@
+// AttendSure Mobile - Helpers
+// File: D:\AttendSure_V3\mobile\src\utils\helpers.ts
+
 /**
  * AttendSure Mobile - Centralized Helpers (Alerts, Confirmations, Media URLs, GPS & Initials)
  * File: mobile/src/utils/helpers.ts

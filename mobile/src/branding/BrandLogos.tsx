@@ -1,3 +1,6 @@
+// AttendSure Mobile - Brand Logos
+// File: D:\AttendSure_V3\mobile\src\branding\BrandLogos.tsx
+
 /**
  * AttendSure Mobile - Centralized Brand Logo Components
  * File: mobile/src/branding/BrandLogos.tsx

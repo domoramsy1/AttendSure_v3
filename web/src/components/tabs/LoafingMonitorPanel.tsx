@@ -1,3 +1,6 @@
+// AttendSure Web - Loafing Monitor Panel
+// File: D:\AttendSure_V3\web\src\components\tabs\LoafingMonitorPanel.tsx
+
 /**
  * AttendSure - Live Loafing & Class-Cutting Incident Monitor
  * File: web/src/components/tabs/LoafingMonitorPanel.tsx
@@ -11,6 +14,13 @@ import { useAlert } from '../../context/AlertContext';
 import { sanitizeText } from '../../theme/tokens';
 import { StatusBadge } from '../common/StatusBadge';
 import { canResolveLoafing, getCurrentUserFromStorage } from '../../utils/permissions';
+import { formatDateTime12h } from '../../utils/timeFormat';
+import {
+  CAMPUS_ALERT_FILTER_OPTIONS,
+  getCampusAlertLabel,
+  getCampusAlertStatusLabel,
+  type CampusAlertType,
+} from '../../utils/alertLabels';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -25,7 +35,7 @@ import {
 
 export interface LoafingIncidentItem {
   id: number;
-  incident_type: 'TEACHER_OUTSIDE_GEOFENCE' | 'STUDENT_CUTTING_CLASS' | 'EXPIRED_EXIT_PASS';
+  incident_type: CampusAlertType;
   status: 'OPEN' | 'RETURNED' | 'EXCUSED' | 'CONFIRMED_LOAFING';
   person_name: string;
   person_code: string;
@@ -43,22 +53,6 @@ export interface LoafingIncidentItem {
 interface LoafingMonitorPanelProps {
   onIncidentUpdated?: () => void;
 }
-
-const INCIDENT_TYPE_LABELS: Record<string, string> = {
-  TEACHER_OUTSIDE_GEOFENCE: 'Teacher Loafing',
-  STUDENT_CUTTING_CLASS: 'Student Cutting Class',
-  EXPIRED_EXIT_PASS: 'Expired Exit Pass',
-};
-
-const getStatusLabel = (status: string, incidentType?: string): string => {
-  if (status === 'CONFIRMED_LOAFING') {
-    return incidentType === 'STUDENT_CUTTING_CLASS' ? 'Confirmed Cutting' : 'Confirmed Loafing';
-  }
-  if (status === 'OPEN') return 'Open Alert';
-  if (status === 'RETURNED') return 'Returned';
-  if (status === 'EXCUSED') return 'Excused';
-  return status;
-};
 
 export const LoafingMonitorPanel: React.FC<LoafingMonitorPanelProps> = ({ onIncidentUpdated }) => {
   const { tokens, brand, ui } = useTheme();
@@ -132,10 +126,13 @@ export const LoafingMonitorPanel: React.FC<LoafingMonitorPanelProps> = ({ onInci
       const data = res.data || {};
       const cutting = Number(data.created_cutting_incidents ?? 0);
       const expired = Number(data.created_expired_pass_incidents ?? 0);
+      const silentTeachers = Number(
+        data.created_signal_lost_incidents ?? data.created_silent_teacher_incidents ?? 0
+      );
       showAlert({
-        title: 'Student Cutting Audit Complete',
-        message: `Detected ${cutting} new student cutting alert(s) and ${expired} expired exit pass alert(s).`,
-        type: cutting + expired > 0 ? 'warning' : 'success',
+        title: 'Campus Alert Audit Complete',
+        message: `Detected ${cutting} student cutting alert(s), ${expired} expired exit pass alert(s), and ${silentTeachers} silent teacher phone alert(s).`,
+        type: cutting + expired + silentTeachers > 0 ? 'warning' : 'success',
       });
       await fetchIncidents(false);
       onIncidentUpdated?.();
@@ -165,7 +162,7 @@ export const LoafingMonitorPanel: React.FC<LoafingMonitorPanelProps> = ({ onInci
       });
       showAlert({
         title: 'Incident Updated',
-        message: `Alert #${incidentId} marked as ${getStatusLabel(nextStatus, incident.incident_type)}.`,
+        message: `Alert #${incidentId} marked as ${getCampusAlertStatusLabel(nextStatus, incident.incident_type)}.`,
         type: 'success',
       });
       setRemarksById((prev) => {
@@ -226,10 +223,11 @@ export const LoafingMonitorPanel: React.FC<LoafingMonitorPanelProps> = ({ onInci
             onChange={(e) => setTypeFilter(e.target.value)}
             style={{ ...ui.input, width: 'auto', padding: '5px 9px', fontSize: '0.74rem' }}
           >
-            <option value="ALL">All Alert Types</option>
-            <option value="TEACHER_OUTSIDE_GEOFENCE">Teacher Loafing</option>
-            <option value="STUDENT_CUTTING_CLASS">Student Cutting Class</option>
-            <option value="EXPIRED_EXIT_PASS">Expired Exit Pass</option>
+            {CAMPUS_ALERT_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
 
           <select
@@ -310,9 +308,15 @@ export const LoafingMonitorPanel: React.FC<LoafingMonitorPanelProps> = ({ onInci
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: tokens.textPrimary }}>
                       <AlertTriangle
                         size={13}
-                        color={inc.status === 'OPEN' ? brand.danger : brand.warning}
+                        color={
+                          inc.incident_type === 'TEACHER_SIGNAL_LOST'
+                            ? brand.warning
+                            : inc.status === 'OPEN'
+                              ? brand.danger
+                              : brand.warning
+                        }
                       />
-                      {INCIDENT_TYPE_LABELS[inc.incident_type] || inc.incident_type}
+                      {getCampusAlertLabel(inc.incident_type)}
                     </span>
                   </td>
 
@@ -338,14 +342,14 @@ export const LoafingMonitorPanel: React.FC<LoafingMonitorPanelProps> = ({ onInci
                   <td style={ui.td}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', color: tokens.textSecondary }}>
                       <Clock size={12} />
-                      {inc.detected_at ? new Date(inc.detected_at).toLocaleString() : '—'}
+                      {formatDateTime12h(inc.detected_at)}
                     </span>
                   </td>
 
                   <td style={ui.td}>
                     <StatusBadge
                       status={inc.status}
-                      label={getStatusLabel(inc.status, inc.incident_type)}
+                      label={getCampusAlertStatusLabel(inc.status, inc.incident_type)}
                     />
                   </td>
 

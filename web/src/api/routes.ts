@@ -1,3 +1,6 @@
+// AttendSure Web - Routes
+// File: D:\AttendSure_V3\web\src\api\routes.ts
+
 /**
  * AttendSure - Centralized Plain-English API Routes & Safe Input Helpers
  * File: web/src/api/routes.ts
@@ -10,6 +13,7 @@ export const API_ROUTES = {
   },
   accounts: {
     login: '/v1/accounts/login/',
+    logout: '/v1/accounts/logout/',
     demoStatus: '/v1/accounts/demo-status/',
     demoLogin: '/v1/accounts/demo-login/',
     refreshToken: '/v1/accounts/token/refresh/',
@@ -20,6 +24,8 @@ export const API_ROUTES = {
     resetDevice: '/v1/accounts/reset-device/',
     unlockAccounts: '/v1/accounts/unlock-accounts/',
     auditLogs: '/v1/accounts/audit-logs/',
+    onboardingComplete: '/v1/accounts/onboarding/complete/',
+    onboardingReset: '/v1/accounts/onboarding/reset/',
     departments: '/v1/accounts/departments/',
     teachers: '/v1/accounts/teachers/',
     teachersDropdown: '/v1/accounts/teachers/dropdown/',
@@ -50,6 +56,7 @@ export const API_ROUTES = {
     scan: '/v1/attendance/scan/',
     offlineSync: '/v1/attendance/offline-sync/',
     records: '/v1/attendance/records/',
+    markUnscannedAbsent: '/v1/attendance/mark-unscanned-absent/',
     classes: '/v1/attendance/classes/',
     adviserMatrix: '/v1/attendance/adviser-matrix/',
     exitPasses: '/v1/attendance/exit-passes/',
@@ -59,6 +66,7 @@ export const API_ROUTES = {
     overview: '/v1/campus/overview/',
     boundary: '/v1/campus/boundary/',
     checkIn: '/v1/campus/check-in/',
+    checkInChallenge: '/v1/campus/check-in/challenge/',
     ping: '/v1/campus/ping/',
     audit: '/v1/campus/audit/',
     loafing: '/v1/campus/loafing/',

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Login Screen
+// File: D:\AttendSure_V3\mobile\src\screens\LoginScreen.tsx
+
 /**
  * AttendSure Mobile - Clean Sign-In Screen
  * File: mobile/src/screens/LoginScreen.tsx
@@ -29,6 +32,7 @@ import { apiClient } from '../api/client';
 import { ENDPOINTS } from '../api/endpoints';
 import { getServerBaseUrl } from '../services/configService';
 import { isCanceledError, resolveMediaUrl, showNotice } from '../utils/helpers';
+import { ServerConfigModal } from '../components/ServerConfigModal';
 
 const SCHOOL_CACHE_KEY = 'attendsure_cached_school_profile';
 const MAX_ATTEMPTS = 5;
@@ -53,6 +57,7 @@ export const LoginScreen: React.FC = () => {
   const [school, setSchool] = useState<PublicSchoolBranding | null>(null);
   const [serverBase, setServerBase] = useState('');
   const [logoError, setLogoError] = useState(false);
+  const [serverConfigOpen, setServerConfigOpen] = useState(false);
 
   const passwordRef = useRef<React.ComponentRef<typeof TextInput> | null>(null);
   const attemptsRef = useRef(0);
@@ -284,8 +289,45 @@ export const LoginScreen: React.FC = () => {
               )}
             </TouchableOpacity>
           </View>
+
+          <View style={styles.serverFooter}>
+            <TouchableOpacity
+              style={[
+                styles.serverBtn,
+                {
+                  backgroundColor: palette.surface,
+                  borderColor: palette.borderStrong,
+                },
+              ]}
+              onPress={() => setServerConfigOpen(true)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Server Settings"
+            >
+              <Ionicons name="server-outline" size={16} color={palette.primary} />
+              <Text style={[styles.serverBtnText, { color: palette.primary }]}>
+                Server Settings
+              </Text>
+            </TouchableOpacity>
+            {serverBase ? (
+              <Text
+                style={[styles.serverAddressHint, { color: palette.textMuted }]}
+                numberOfLines={1}
+              >
+                {serverBase}
+              </Text>
+            ) : null}
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <ServerConfigModal
+        visible={serverConfigOpen}
+        onClose={() => {
+          setServerConfigOpen(false);
+          void loadSchoolBranding();
+        }}
+      />
     </SafeAreaView>
   );
 };
@@ -379,6 +421,30 @@ const styles = StyleSheet.create({
     fontSize: 15.5,
     fontWeight: '800',
     letterSpacing: 0.2,
+  },
+  serverFooter: {
+    marginTop: 20,
+    alignItems: 'center',
+    gap: 6,
+  },
+  serverBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  serverBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  serverAddressHint: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    maxWidth: '90%',
   },
 });
 

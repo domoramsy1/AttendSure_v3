@@ -1,3 +1,6 @@
+# AttendSure Scripts - Reset Connections
+# File: D:\AttendSure_V3\scripts\database\reset_connections.py
+
 r"""
 AttendSure - Terminate Stuck Idle PostgreSQL Connections
 Run: python database\reset_connections.py

@@ -1,3 +1,6 @@
+// AttendSure Web - Dashboard View Component
+// File: D:\AttendSure_V3\web\src\components\dashboard\DashboardView.tsx
+
 /**
  * AttendSure - Instant-Hydrating School Dashboard
  * File: web/src/components/dashboard/DashboardView.tsx
@@ -8,6 +11,7 @@ import apiClient, { peekApiCache, subscribeApiCache } from '../../api/client';
 import { API_ROUTES } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { canViewTab, getCurrentUserFromStorage } from '../../utils/permissions';
+import { formatTime12h } from '../../utils/timeFormat';
 import { StatsCard } from '../common/StatsCard';
 import {
   UserCheck,
@@ -130,7 +134,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [loading, setLoading] = useState<boolean>(() => warmPayload === undefined);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>(() =>
-    warmPayload ? new Date().toLocaleTimeString() : ''
+    warmPayload ? formatTime12h(new Date(), { includeSeconds: true }) : ''
   );
   const [fetchFailed, setFetchFailed] = useState<boolean>(false);
   const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
@@ -145,7 +149,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   useEffect(() => {
     return subscribeApiCache(API_ROUTES.reports.dashboard, undefined, (freshRaw) => {
       setData(normalizeDashboardPayload(freshRaw as Record<string, any>));
-      setLastSyncTime(new Date().toLocaleTimeString());
+      setLastSyncTime(formatTime12h(new Date(), { includeSeconds: true }));
       setLoading(false);
     });
   }, []);
@@ -178,7 +182,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         if (res.data) {
           setFetchFailed(false);
           setData(normalizeDashboardPayload(res.data));
-          setLastSyncTime(new Date().toLocaleTimeString());
+          setLastSyncTime(formatTime12h(new Date(), { includeSeconds: true }));
           onStatusChange?.(true);
         }
       } catch (err: unknown) {

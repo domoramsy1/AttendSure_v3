@@ -1,3 +1,6 @@
+// AttendSure Web - Module Table Layout Component
+// File: D:\AttendSure_V3\web\src\components\tabs\ModuleTableLayout.tsx
+
 /**
  * AttendSure - Standard Module Table Layout
  * File: web/src/components/tabs/ModuleTableLayout.tsx

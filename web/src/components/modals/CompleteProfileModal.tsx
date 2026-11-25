@@ -1,10 +1,13 @@
+// AttendSure Web - Complete Profile Modal
+// File: D:\AttendSure_V3\web\src\components\modals\CompleteProfileModal.tsx
+
 /**
  * AttendSure - First-Time Profile Completion Modal
  * File: web/src/components/modals/CompleteProfileModal.tsx
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import apiClient from '../../api/client';
+import apiClient, { clearApiClientCache, revokeCurrentDeviceSession } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { isSafeImageUrl } from '../../theme/tokens';
@@ -12,7 +15,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { AvatarUploadField } from '../common/AvatarUploadField';
 import { useAlert } from '../../context/AlertContext';
-import { UserCheck, ShieldCheck, Loader2 } from 'lucide-react';
+import { UserCheck, ShieldCheck, Loader2, LogOut } from 'lucide-react';
 
 export interface CompletedProfileUser {
   full_name?: string;
@@ -25,6 +28,7 @@ export interface CompletedProfileUser {
 interface CompleteProfileModalProps {
   isOpen: boolean;
   onCompleted: (updatedUser: CompletedProfileUser) => void;
+  onSignOut?: () => void;
 }
 
 const sanitizeField = (raw: string, maxLen = 100): string =>
@@ -33,7 +37,23 @@ const sanitizeField = (raw: string, maxLen = 100): string =>
 const sanitizePassword = (raw: string): string =>
   String(raw || '').replace(/[\u0000-\u001F\u007F]/g, '').slice(0, 128);
 
-export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOpen, onCompleted }) => {
+const isValidInternationalOrPhPhone = (raw: string): boolean => {
+  const cleaned = raw.trim().replace(/[\s\-().]/g, '');
+  if (!cleaned) return false;
+  if (/^(09\d{9}|9\d{9}|639\d{9}|\+639\d{9}|\+6309\d{9})$/.test(cleaned)) {
+    return true;
+  }
+  if (/^00[1-9]\d{7,14}$/.test(cleaned)) {
+    return true;
+  }
+  return /^\+[1-9]\d{7,14}$/.test(cleaned);
+};
+
+export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({
+  isOpen,
+  onCompleted,
+  onSignOut,
+}) => {
   const { tokens, brand, fonts, ui } = useTheme();
   const { showAlert } = useAlert();
   const [loading, setLoading] = useState(false);
@@ -78,7 +98,7 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
           middle_name: sanitizeField(u.middle_name || '', 100),
           last_name: sanitizeField(u.last_name || '', 100),
           suffix: sanitizeField(u.suffix || '', 12),
-          contact_number: sanitizeField(u.contact_number || '', 13),
+          contact_number: sanitizeField(u.contact_number || '', 20),
           department: sanitizeField(u.department || 'Junior High School', 100) || 'Junior High School',
           current_password: '',
           password: '',
@@ -110,23 +130,53 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
     };
   }, [isOpen, showAlert]);
 
-  const cleanPhone = formData.contact_number.trim().replace(/[\s-]/g, '');
-  const isPhoneValid = /^(09|\+639)\d{9}$/.test(cleanPhone);
+  const cleanPhone = formData.contact_number.trim().replace(/[\s\-().]/g, '');
+  const isFirstNameValid = formData.first_name.trim().length >= 2;
+  const isLastNameValid = formData.last_name.trim().length >= 2;
+  const isPhoneValid = isValidInternationalOrPhPhone(cleanPhone);
   const isPasswordValid =
     !formData.password ||
     (formData.password.length >= 8 && /[A-Za-z]/.test(formData.password) && /[0-9]/.test(formData.password));
+  const needsCurrentPassword = Boolean(formData.password.trim() && !formData.current_password.trim());
   const isFormValid =
-    formData.first_name.trim().length >= 2 &&
-    formData.last_name.trim().length >= 2 &&
+    isFirstNameValid &&
+    isLastNameValid &&
     isPhoneValid &&
-    isPasswordValid;
+    isPasswordValid &&
+    !needsCurrentPassword;
 
   const setField = (key: Exclude<keyof typeof formData, 'photo'>, val: string) => {
     const clean =
       key === 'password' || key === 'current_password'
         ? sanitizePassword(val)
-        : sanitizeField(val, key === 'contact_number' ? 13 : 100);
+        : sanitizeField(val, key === 'contact_number' ? 20 : 100);
     setFormData((p) => ({ ...p, [key]: clean }));
+  };
+
+  const handleSignOut = async () => {
+    submitAbortRef.current?.abort();
+    await revokeCurrentDeviceSession();
+    [
+      'attendsure_access',
+      'attendsure_refresh',
+      'attendsure_token',
+      'auth_token',
+      'token',
+      'attendsure_username',
+      'attendsure_teacher_name',
+      'attendsure_teacher_id',
+      'attendsure_role',
+      'attendsure_user_id',
+      'attendsure_user_photo',
+      'attendsure_can_teach',
+      'attendsure_is_superuser',
+    ].forEach((k) => localStorage.removeItem(k));
+    clearApiClientCache();
+    if (onSignOut) {
+      onSignOut();
+    } else if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('attendsure:auth-expired'));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -157,8 +207,12 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
           { signal: controller.signal }
         );
         if (controller.signal.aborted || !mountedRef.current) return;
-        if (pwRes.data?.token) {
-          localStorage.setItem('attendsure_token', pwRes.data.token);
+        localStorage.removeItem('attendsure_token');
+        if (pwRes.data?.access) {
+          localStorage.setItem('attendsure_access', pwRes.data.access);
+        }
+        if (pwRes.data?.refresh) {
+          localStorage.setItem('attendsure_refresh', pwRes.data.refresh);
         }
       }
 
@@ -260,6 +314,11 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
                 value={formData.first_name}
                 onChange={(e) => setField('first_name', e.target.value)}
               />
+              {formData.first_name.length > 0 && !isFirstNameValid && (
+                <span style={{ fontSize: '0.72rem', color: brand.danger, marginTop: 4, display: 'block' }}>
+                  Enter at least 2 characters for your first name.
+                </span>
+              )}
             </div>
             <div>
               <label style={ui.label}>Last Name *</label>
@@ -270,6 +329,11 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
                 value={formData.last_name}
                 onChange={(e) => setField('last_name', e.target.value)}
               />
+              {formData.last_name.length > 0 && !isLastNameValid && (
+                <span style={{ fontSize: '0.72rem', color: brand.danger, marginTop: 4, display: 'block' }}>
+                  Enter at least 2 characters for your last name.
+                </span>
+              )}
             </div>
           </div>
 
@@ -299,15 +363,20 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
 
           <div style={responsiveGrid}>
             <div>
-              <label style={ui.label}>Contact Number (11 Digits) *</label>
+              <label style={ui.label}>Mobile / Contact Number *</label>
               <input
                 required
-                maxLength={13}
-                placeholder="09171234567"
+                maxLength={20}
+                placeholder="09171234567 or +639171234567"
                 style={ui.input}
                 value={formData.contact_number}
                 onChange={(e) => setField('contact_number', e.target.value)}
               />
+              {!isPhoneValid && (
+                <span style={{ fontSize: '0.72rem', color: formData.contact_number ? brand.danger : tokens.textMuted, marginTop: 4, display: 'block' }}>
+                  Use PH format (09XXXXXXXXX / +639XXXXXXXXX) or international format (+country code, 8-15 digits).
+                </span>
+              )}
             </div>
             <div>
               <label style={ui.label}>Department *</label>
@@ -331,6 +400,11 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
                 value={formData.current_password}
                 onChange={(e) => setField('current_password', e.target.value)}
               />
+              {needsCurrentPassword && (
+                <span style={{ fontSize: '0.72rem', color: brand.danger, marginTop: 4, display: 'block' }}>
+                  Enter your current password to set a new password.
+                </span>
+              )}
             </div>
             <div>
               <label style={ui.label}>New Password (Optional)</label>
@@ -351,7 +425,11 @@ export const CompleteProfileModal: React.FC<CompleteProfileModalProps> = ({ isOp
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 8 }}>
+            <Button variant="secondary" size="md" type="button" onClick={() => void handleSignOut()} disabled={saving}>
+              <LogOut size={15} />
+              <span>Sign Out</span>
+            </Button>
             <Button variant="primary" size="md" type="submit" disabled={saving || !isFormValid}>
               {saving ? <Loader2 size={16} className="animate-spin" /> : <UserCheck size={16} />}
               <span>{saving ? 'Saving...' : 'Complete & Activate Profile'}</span>

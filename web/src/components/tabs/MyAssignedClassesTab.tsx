@@ -1,3 +1,6 @@
+// AttendSure Web - My Assigned Classes Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\MyAssignedClassesTab.tsx
+
 /**
  * AttendSure - My Classes & Student Attendance List
  * File: web/src/components/tabs/MyAssignedClassesTab.tsx
@@ -11,9 +14,14 @@ import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
 import { isSafeImageUrl } from '../../theme/tokens';
 import { useCopyFeedback } from '../../utils/clipboard';
+import { formatTimeRange12h, toTimeInputValue } from '../../utils/timeFormat';
 import { StatsCard } from '../common/StatsCard';
 import { ProfileAvatar } from '../common/ProfileAvatar';
-import { QrCodeSvg } from '../common/QrCodeSvg';
+import { QrCodeSvg, buildQrSvgDataUri } from '../common/QrCodeSvg';
+import {
+  buildStudentQrPassPrintPayload,
+  printHtmlWithPageSetup,
+} from '../../utils/reportExporters';
 import { exportToCsv } from '../common/Pagination';
 import { ControlSwitch } from '../ui/ControlSwitch';
 import { Modal } from '../ui/Modal';
@@ -35,6 +43,7 @@ import {
   ShieldCheck,
   BookOpen,
   UserCheck,
+  UserX,
   Trash2,
 } from 'lucide-react';
 
@@ -119,6 +128,7 @@ export const MyAssignedClassesTab: React.FC = () => {
   const { copiedKey: copiedValue, copy } = useCopyFeedback();
   const [badgeStudent, setBadgeStudent] = useState<StudentItem | null>(null);
   const [savingStudentId, setSavingStudentId] = useState<number | null>(null);
+  const [markingUnscanned, setMarkingUnscanned] = useState<boolean>(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
 
@@ -184,11 +194,11 @@ export const MyAssignedClassesTab: React.FC = () => {
 
       const sectionName = String(item.section_name || item.name || 'Section').trim();
       const subjectTitle = String(item.subject_title || item.subject_name || 'Homeroom').trim();
-      const startTime = item.start_time ? String(item.start_time).slice(0, 5) : '';
-      const endTime = item.end_time ? String(item.end_time).slice(0, 5) : '';
+      const startTime = toTimeInputValue(item.start_time);
+      const endTime = toTimeInputValue(item.end_time);
       const timeDisplay =
         String(item.time_display || '').trim() ||
-        (startTime && endTime ? `${startTime} - ${endTime}` : 'Homeroom');
+        (startTime && endTime ? formatTimeRange12h(startTime, endTime) : 'Homeroom');
       const roomVal = String(item.room_number || item.room || '').trim();
 
       return {
@@ -330,11 +340,15 @@ export const MyAssignedClassesTab: React.FC = () => {
       (s) => s.attendance_status === 'PRESENT' || s.attendance_status === 'LATE'
     ).length;
     const cardsLinked = studentsList.filter((s) => Boolean(s.qr_token)).length;
+    const unscannedCount = studentsList.filter(
+      (s) => s.attendance_status === 'UNSCANNED'
+    ).length;
     return {
       totalClasses: classes.length,
       classTotal,
       inClassToday,
       cardsLinked,
+      unscannedCount,
     };
   }, [classes.length, selectedClass]);
 
@@ -416,6 +430,41 @@ export const MyAssignedClassesTab: React.FC = () => {
           });
         } finally {
           setSavingStudentId(null);
+        }
+      },
+    });
+  };
+
+  const handleMarkUnscannedAbsent = () => {
+    if (!selectedClass || markingUnscanned || stats.unscannedCount === 0) return;
+    const periodId = selectedClass.subject_code === 'ADV' ? undefined : selectedClass.schedule_id;
+    showConfirm({
+      title: 'Mark Unscanned Students Absent',
+      message: `Mark all ${stats.unscannedCount} unscanned student(s) in ${selectedClass.section_name} (${selectedClass.subject_title}) as Absent for today? Students covered by an active exit pass will be marked Excused instead.`,
+      confirmLabel: 'Mark Absent',
+      isDestructive: true,
+      onConfirm: async () => {
+        setMarkingUnscanned(true);
+        try {
+          const res = await apiClient.post(API_ROUTES.attendance.markUnscannedAbsent, {
+            ...(periodId ? { schedule_id: periodId } : {}),
+            section_id: selectedClass.section_id,
+          });
+          window.dispatchEvent(new CustomEvent('attendsure:attendance-updated'));
+          await fetchClasses(true, true);
+          showAlert({
+            title: 'Attendance Recorded',
+            message: res.data?.message || 'Unscanned students have been recorded.',
+            type: 'success',
+          });
+        } catch (err: unknown) {
+          showAlert({
+            title: 'Action Failed',
+            message: extractApiError(err, 'Could not mark unscanned students absent.'),
+            type: 'error',
+          });
+        } finally {
+          setMarkingUnscanned(false);
         }
       },
     });
@@ -550,6 +599,26 @@ export const MyAssignedClassesTab: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {canEditAttendance && selectedClass && stats.unscannedCount > 0 && (
+            <button
+              type="button"
+              onClick={handleMarkUnscannedAbsent}
+              disabled={markingUnscanned || loading}
+              style={{
+                ...ui.btnSecondary,
+                borderColor: brand.danger,
+                color: brand.danger,
+              }}
+            >
+              <UserX size={14} />
+              <span>
+                {markingUnscanned
+                  ? 'Marking Absent...'
+                  : `Mark Unscanned Absent (${stats.unscannedCount})`}
+              </span>
+            </button>
+          )}
+
           {selectedStudentIds.length > 0 && (
             <button
               type="button"
@@ -1028,7 +1097,27 @@ export const MyAssignedClassesTab: React.FC = () => {
               <Button variant="secondary" size="md" type="button" onClick={() => setBadgeStudent(null)}>
                 Close
               </Button>
-              <Button variant="primary" size="md" type="button" onClick={() => window.print()}>
+              <Button
+                variant="primary"
+                size="md"
+                type="button"
+                onClick={() => {
+                  const sectionText = `${selectedClass?.grade_level ? `${selectedClass.grade_level} - ` : ''}${selectedClass?.section_name || 'Enrolled Student'}`;
+                  printHtmlWithPageSetup(
+                    buildStudentQrPassPrintPayload({
+                      studentName: badgeStudent.name,
+                      lrn: badgeStudent.lrn,
+                      sectionLabel: sectionText,
+                      schoolName: activeSchoolName,
+                      qrDataUri: buildQrSvgDataUri(badgeStudent.qr_payload || badgeStudent.lrn, 180),
+                      photoUrl: badgeStudent.photo_url,
+                      statusLabel: badgeStudent.qr_token
+                        ? `Active (${maskQrToken(badgeStudent.qr_token)})`
+                        : 'LRN Mode',
+                    })
+                  );
+                }}
+              >
                 <Printer size={14} /> Print ID Card
               </Button>
             </div>

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Check Database
+# File: D:\AttendSure_V3\scripts\database\check_database.py
+
 r"""
 AttendSure - PostgreSQL Health, Latency & 3NF Domain Table Counter
 Run: python database\check_database.py

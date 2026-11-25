@@ -1,3 +1,6 @@
+# AttendSure Backend - Accounts API Views
+# File: D:\AttendSure_V3\backend\apps\accounts\views.py
+
 # D:\AttendSure_V3\backend\apps\accounts\views.py
 from datetime import datetime, time as dt_time, timedelta
 import re
@@ -15,11 +18,14 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
-from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from common.audit import AuditedModelViewSet, record_audit_log
 from common.exceptions import AppError
+from common.time_utils import parse_local_date_bounds
 from common.permissions import (
     ALLOWED_ROLES,
     IsAdminOrPrincipal,
@@ -31,7 +37,13 @@ from common.permissions import (
     is_system_admin,
 )
 from common.phone import normalize_ph_phone
-from .models import AuditLog, Department, TeacherProfile
+from .models import (
+    AuditLog,
+    Department,
+    TeacherProfile,
+    UserProfile,
+)
+from .selectors import resolve_teacher_for_user
 from .serializers import (
     AUDIT_MODULE_LABELS,
     AuditLogSerializer,
@@ -68,6 +80,7 @@ def _is_judge_demo_enabled() -> bool:
 
 
 class LoginView(APIView):
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
     throttle_classes = [LoginThrottle]
 
@@ -86,9 +99,8 @@ class LoginView(APIView):
             request=request,
         )
         user_id = payload.get("user", {}).get("id")
-        if user_id:
-            drf_token, _ = Token.objects.get_or_create(user_id=user_id)
-            payload["token"] = drf_token.key
+        # Return short-lived JWT access token under both `access` and `token` (no permanent DRF tokens)
+        payload["token"] = payload["access"]
 
         record_audit_log(
             request=request,
@@ -104,26 +116,53 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
+    """
+    Revokes ONLY the signing-out device's JWT refresh token (even when the short-lived
+    access token has already expired). Never signs out the user's other active devices.
+    """
+
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         raw_refresh = str(request.data.get("refresh") or "").strip()
+
+        actor_user = None
+        revoked = False
+
         if raw_refresh:
             try:
-                RefreshToken(raw_refresh).blacklist()
+                token_obj = RefreshToken(raw_refresh)
+                token_uid = token_obj.get("user_id")
+                if token_uid:
+                    actor_user = User.objects.filter(id=token_uid).only("id", "username").first()
+                token_obj.blacklist()
+                revoked = True
             except TokenError:
-                pass
+                revoked = False
 
-        if request.user and request.user.is_authenticated:
-            Token.objects.filter(user_id=request.user.id).delete()
+        if actor_user is None:
+            try:
+                jwt_auth = JWTAuthentication()
+                auth_result = jwt_auth.authenticate(request)
+                if auth_result is not None:
+                    actor_user = auth_result[0]
+            except (InvalidToken, TokenError, Exception):
+                actor_user = None
+
+        if actor_user is not None:
+            request.user = actor_user
             record_audit_log(
                 request=request,
                 table_name="auth_user",
-                record_id=request.user.id,
+                record_id=actor_user.id,
                 action="LOGOUT",
-                new_data={"username": request.user.username},
+                new_data={"username": actor_user.username, "refresh_revoked": revoked},
             )
-        return Response({"ok": True, "message": "Signed out."}, status=status.HTTP_200_OK)
+        return Response(
+            {"ok": True, "revoked": revoked, "message": "Signed out."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class DemoStatusView(APIView):
@@ -209,7 +248,7 @@ class DemoLoginView(APIView):
             )
 
         refresh = RefreshToken.for_user(user_obj)
-        drf_token, _ = Token.objects.get_or_create(user_id=user_obj.id)
+        access_str = str(refresh.access_token)
         session_user = build_user_session_payload(user=user_obj, request=request)
 
         record_audit_log(
@@ -221,9 +260,9 @@ class DemoLoginView(APIView):
         )
         return Response(
             {
-                "access": str(refresh.access_token),
+                "access": access_str,
                 "refresh": str(refresh),
-                "token": drf_token.key,
+                "token": access_str,
                 "user": session_user,
             }
         )
@@ -293,9 +332,20 @@ class ChangePasswordView(APIView):
         request.user.set_password(new_password)
         request.user.save(update_fields=["password"])
 
-        # Rotate DRF token so older sessions using the old token are signed out
+        # Blacklist all existing JWT refresh tokens for this user so older sessions cannot refresh
+        outstanding_tokens = list(OutstandingToken.objects.filter(user=request.user))
+        if outstanding_tokens:
+            BlacklistedToken.objects.bulk_create(
+                [BlacklistedToken(token=ot) for ot in outstanding_tokens],
+                ignore_conflicts=True,
+            )
+
+        # Clean up any legacy DRF token rows without creating new non-expiring tokens
         Token.objects.filter(user_id=request.user.id).delete()
-        new_token = Token.objects.create(user=request.user)
+
+        # Issue fresh JWT tokens for the active session
+        fresh_refresh = RefreshToken.for_user(request.user)
+        fresh_access = str(fresh_refresh.access_token)
 
         record_audit_log(
             request=request,
@@ -303,7 +353,94 @@ class ChangePasswordView(APIView):
             record_id=request.user.id,
             action="PASSWORD",
         )
-        return Response({"ok": True, "message": "Password updated.", "token": new_token.key})
+        return Response(
+            {
+                "ok": True,
+                "message": "Password updated.",
+                "token": fresh_access,
+                "access": fresh_access,
+                "refresh": str(fresh_refresh),
+            }
+        )
+
+
+class OnboardingCompleteView(APIView):
+    """Marks the interactive onboarding guide as completed for the signed-in user."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        current_ver = int(getattr(settings, "ONBOARDING_CURRENT_VERSION", 1) or 1)
+        raw_ver = request.data.get("version")
+        try:
+            next_ver = max(current_ver, int(raw_ver)) if raw_ver not in (None, "") else current_ver
+        except (TypeError, ValueError):
+            next_ver = current_ver
+        next_ver = min(next_ver, 32767)
+
+        profile, _ = UserProfile.objects.get_or_create(
+            user=request.user,
+            defaults={"role": "ADMIN" if request.user.is_superuser else "TEACHER"},
+        )
+        now = timezone.now()
+        profile.onboarding_completed = True
+        profile.onboarding_completed_at = now
+        profile.onboarding_version = next_ver
+        profile.save(
+            update_fields=[
+                "onboarding_completed",
+                "onboarding_completed_at",
+                "onboarding_version",
+                "updated_at",
+            ]
+        )
+        request.user.profile = profile
+        return Response(
+            {
+                "ok": True,
+                "onboarding_completed": True,
+                "onboarding_completed_at": timezone.localtime(now).isoformat(),
+                "onboarding_version": profile.onboarding_version,
+                "needs_onboarding": False,
+                "user": build_user_session_payload(user=request.user, request=request),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class OnboardingResetView(APIView):
+    """Resets onboarding state so the signed-in user can replay the animated guide."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        profile, _ = UserProfile.objects.get_or_create(
+            user=request.user,
+            defaults={"role": "ADMIN" if request.user.is_superuser else "TEACHER"},
+        )
+        profile.onboarding_completed = False
+        profile.onboarding_completed_at = None
+        profile.onboarding_version = 0
+        profile.save(
+            update_fields=[
+                "onboarding_completed",
+                "onboarding_completed_at",
+                "onboarding_version",
+                "updated_at",
+            ]
+        )
+        request.user.profile = profile
+        return Response(
+            {
+                "ok": True,
+                "onboarding_completed": False,
+                "onboarding_completed_at": None,
+                "onboarding_version": 0,
+                "needs_onboarding": True,
+                "user": build_user_session_payload(user=request.user, request=request),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 def _parse_int_id(raw) -> int | None:
@@ -652,14 +789,9 @@ class AuditLogListView(APIView):
 
         date_filter = str(request.query_params.get("date") or "").strip()
         if date_filter:
-            try:
-                parsed_date = datetime.strptime(date_filter, "%Y-%m-%d").date()
-            except ValueError:
-                parsed_date = None
-            if parsed_date is not None:
-                tz = timezone.get_current_timezone()
-                start_dt = timezone.make_aware(datetime.combine(parsed_date, dt_time.min), tz)
-                end_dt = start_dt + timedelta(days=1)
+            bounds = parse_local_date_bounds(date_filter)
+            if bounds is not None:
+                start_dt, end_dt = bounds
                 qs = qs.filter(created_at__gte=start_dt, created_at__lt=end_dt)
 
         search_term = str(request.query_params.get("search") or "").strip()[:100]

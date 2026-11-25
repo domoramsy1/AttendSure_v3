@@ -1,3 +1,6 @@
+// AttendSure Web - Brand Assets Component
+// File: D:\AttendSure_V3\web\src\components\branding\BrandAssets.tsx
+
 /**
  * ATTENDSURE - Lightweight Brand & Theme-Safe Emblem Components
  * File: web/src/components/branding/BrandAssets.tsx

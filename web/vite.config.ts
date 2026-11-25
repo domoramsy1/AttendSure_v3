@@ -1,4 +1,5 @@
-// File: web/vite.config.ts
+// AttendSure Web - Vite Build Configuration
+// File: D:\AttendSure_V3\web\vite.config.ts
 
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';

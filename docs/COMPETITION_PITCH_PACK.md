@@ -57,7 +57,7 @@ Every number shown on the AttendSure dashboard and safety panel comes live from 
 ### Slide 9 — Planned Next Steps (Roadmap)
 - **Phase 1 (Current Release — Live Today):** Complete 5-role staff web portal & mobile app, signed camera QR scanning with offline sync, on-device phone lock & campus GPS teacher check-in, weekday-aware cutting detection, official DepEd SF1/SF2/SF4/DTR, 30-Day SARDO Risk, and 1-Click Emergency Roll-Call.
 - **Phase 2 (Division Pilot & Scale):** Multi-school pilot across Region X public high schools, division analytics dashboards, and fine-tuned attendance trend reports.
-- **Phase 3 (Planned Parent Mobile Alerts):** Optional **real-time mobile app push notifications** for parents/guardians when a student checks in for class or receives an approved campus Exit Pass — keeping communication instant and zero-cost.
+- **Phase 3 (School-Wide Reporting Enhancements):** Expanded DepEd division analytics, attendance trend forecasting, and streamlined adviser-verified hardcopy excuse letter archiving.
 
 ### Slide 10 — Summary & Call to Action
 - **Proven Codebase:** Verified by automated Django unit tests and an 8-gate repository audit covering migrations, API routes, 184 web/mobile permission checks, UI token consistency, vocabulary standards, and schedule conflict checks.

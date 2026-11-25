@@ -1,3 +1,6 @@
+# AttendSure Backend - Accounts Read Queries
+# File: D:\AttendSure_V3\backend\apps\accounts\selectors.py
+
 from django.contrib.auth import get_user_model
 
 from .models import TeacherProfile
@@ -47,12 +50,12 @@ def get_teacher_enrollment_ids(teacher: TeacherProfile | None) -> set[int]:
     if not section_ids:
         return set()
 
-    from apps.students.models import Enrollment
+    from apps.students.models import ACTIVE_ENROLLMENT_STATUSES, Enrollment
 
     return set(
         Enrollment.objects.filter(
             section_id__in=section_ids,
-            status__in=["ENROLLED", "TRANSFERRED_IN"],
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
             student__is_active=True,
         ).values_list("id", flat=True)
     )
@@ -64,12 +67,12 @@ def get_teacher_student_ids(teacher: TeacherProfile | None) -> set[int]:
     if not section_ids:
         return set()
 
-    from apps.students.models import Enrollment
+    from apps.students.models import ACTIVE_ENROLLMENT_STATUSES, Enrollment
 
     return set(
         Enrollment.objects.filter(
             section_id__in=section_ids,
-            status__in=["ENROLLED", "TRANSFERRED_IN"],
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
             student__is_active=True,
         ).values_list("student_id", flat=True)
     )

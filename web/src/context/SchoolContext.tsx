@@ -1,3 +1,6 @@
+// AttendSure Web - School Context
+// File: D:\AttendSure_V3\web\src\context\SchoolContext.tsx
+
 /**
  * AttendSure - Global School Settings & Branding Context
  * File: web/src/context/SchoolContext.tsx
@@ -235,9 +238,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const hasToken = Boolean(
-      localStorage.getItem('attendsure_token') || localStorage.getItem('attendsure_access')
-    );
+    const hasToken = Boolean(localStorage.getItem('attendsure_access'));
 
     try {
       const endpoint = hasToken ? API_ROUTES.school.settings : API_ROUTES.school.publicBranding;

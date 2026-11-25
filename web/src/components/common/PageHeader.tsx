@@ -1,3 +1,6 @@
+// AttendSure Web - Page Header Component
+// File: D:\AttendSure_V3\web\src\components\common\PageHeader.tsx
+
 /**
  * AttendSure - Standardized Module Page Header
  * File: web/src/components/common/PageHeader.tsx

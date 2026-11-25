@@ -1,3 +1,6 @@
+// AttendSure Web - Schedule Alarms Utility
+// File: D:\AttendSure_V3\web\src\utils\scheduleAlarms.ts
+
 /**
  * AttendSure Web - Teacher Time In/Out & Class Period Alarm Sound + Reminder Engine
  * File: web/src/utils/scheduleAlarms.ts

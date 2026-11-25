@@ -1,3 +1,6 @@
+# AttendSure Backend - School URL Routes
+# File: D:\AttendSure_V3\backend\apps\school\urls.py
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from apps.accounts.views import DepartmentViewSet

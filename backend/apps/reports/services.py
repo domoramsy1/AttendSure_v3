@@ -1,3 +1,6 @@
+# AttendSure Backend - Reports Business Logic Services
+# File: D:\AttendSure_V3\backend\apps\reports\services.py
+
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -8,6 +11,7 @@ from apps.campus.models import LoafingIncident, MonthlyTimeRecord
 from common.audit import record_audit_log
 from common.exceptions import AppError
 from common.permissions import get_user_role, is_school_leader
+from common.time_utils import local_day_bounds
 from common.validators import clean_text as _clean_text
 
 
@@ -142,8 +146,11 @@ def process_monthly_dtr_action(
                 "INVALID_DATE", "Valid incident date (YYYY-MM-DD) is required.", 400
             )
 
+        inc_start, inc_end = local_day_bounds(incident_dt)
         updated_count = LoafingIncident.objects.filter(
-            teacher=teacher, detected_at__date=incident_dt
+            teacher=teacher,
+            detected_at__gte=inc_start,
+            detected_at__lt=inc_end,
         ).update(
             status="EXCUSED",
             remarks=remarks,

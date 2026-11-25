@@ -1,3 +1,6 @@
+// AttendSure Mobile - Sardo Safety Screen
+// File: D:\AttendSure_V3\mobile\src\screens\SardoSafetyScreen.tsx
+
 /**
  * AttendSure Mobile - DepEd Campus Safety, SARDO Early-Warning & Emergency Roll-Call
  * File: mobile/src/screens/SardoSafetyScreen.tsx

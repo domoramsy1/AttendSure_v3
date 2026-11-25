@@ -1,3 +1,6 @@
+// AttendSure Web - Attend Sure Badge Component
+// File: D:\AttendSure_V3\web\src\components\branding\AttendSureBadge.tsx
+
 /**
  * AttendSure - Theme-Adaptive Brand Emblem Badge
  * File: web/src/components/branding/AttendSureBadge.tsx

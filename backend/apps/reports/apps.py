@@ -1,3 +1,6 @@
+# AttendSure Backend - Reports App Configuration
+# File: D:\AttendSure_V3\backend\apps\reports\apps.py
+
 from django.apps import AppConfig
 
 

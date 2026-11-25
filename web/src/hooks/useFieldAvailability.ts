@@ -1,3 +1,6 @@
+// AttendSure Web - Use Field Availability Hook
+// File: D:\AttendSure_V3\web\src\hooks\useFieldAvailability.ts
+
 /**
  * AttendSure - Debounced & AbortController-Safe Live Field Availability Hook
  * File: web/src/hooks/useFieldAvailability.ts

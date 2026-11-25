@@ -1,3 +1,6 @@
+// AttendSure Web - Auth Page Component
+// File: D:\AttendSure_V3\web\src\components\auth\AuthPage.tsx
+
 /**
  * AttendSure - Executive School Staff Sign-In Portal
  * File: web/src/components/auth/AuthPage.tsx
@@ -138,9 +141,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
         return;
       }
 
-      const token = String(data.token || data.access || '').trim();
-      const access = String(data.access || '').trim();
+      const access = String(data.access || data.token || '').trim();
       const refresh = String(data.refresh || '').trim();
+      const token = access;
       const username = String(userObj.username || cleanUsername).trim();
       const teacherName = String(userObj.teacher_name || userObj.full_name || username).trim();
       const userId = Number(userObj.id || userObj.user_id || 0);
@@ -158,7 +161,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthSuccess, onLoginSucces
       clearPreviousSessionStorage();
       clearApiClientCache();
 
-      if (token) localStorage.setItem('attendsure_token', token);
       if (access) localStorage.setItem('attendsure_access', access);
       if (refresh) localStorage.setItem('attendsure_refresh', refresh);
       localStorage.setItem('attendsure_username', username);

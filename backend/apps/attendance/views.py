@@ -1,3 +1,6 @@
+# AttendSure Backend - Attendance API Views
+# File: D:\AttendSure_V3\backend\apps\attendance\views.py
+
 from datetime import datetime
 from django.utils import timezone
 from rest_framework import permissions, status
@@ -22,6 +25,8 @@ from .selectors import (
 from .serializers import ExitPassSerializer
 from .services import (
     _invalidate_live_attendance_caches,
+    mark_unscanned_students_absent,
+    recompute_daily_attendance,
     record_student_qr_scan,
     save_manual_attendance,
     sync_offline_qr_scans,
@@ -194,18 +199,7 @@ class ClassAttendanceView(APIView):
             else None
         )
         existing.delete()
-
-        remaining = (
-            ClassAttendance.objects.filter(enrollment_id=enr_id, attendance_date=att_date)
-            .order_by("-scanned_at")
-            .first()
-        )
-        if remaining:
-            DailyAttendance.objects.filter(enrollment_id=enr_id, attendance_date=att_date).update(
-                status=remaining.status
-            )
-        else:
-            DailyAttendance.objects.filter(enrollment_id=enr_id, attendance_date=att_date).delete()
+        recompute_daily_attendance(enrollment_id=enr_id, attendance_date=att_date)
 
         _invalidate_live_attendance_caches(user_id=request.user.id, adviser_user_id=adviser_uid)
 
@@ -217,6 +211,35 @@ class ClassAttendanceView(APIView):
             new_data={"enrollment_id": enr_id, "attendance_date": str(att_date)},
         )
         return Response({"ok": True, "success": True, "message": "Attendance record removed."})
+
+
+class MarkUnscannedAbsentView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrLeader]
+
+    def post(self, request):
+        per_id = request.data.get("schedule_id") or request.data.get("period_id")
+        sec_id = request.data.get("section_id") or request.data.get("section")
+        date_str = request.data.get("attendance_date") or request.data.get("date")
+        result = mark_unscanned_students_absent(
+            user=request.user,
+            period_id=int(per_id) if (per_id and str(per_id).isdigit()) else None,
+            section_id=int(sec_id) if (sec_id and str(sec_id).isdigit()) else None,
+            date_str=str(date_str) if date_str else None,
+        )
+        record_audit_log(
+            request=request,
+            table_name=ClassAttendance._meta.db_table,
+            record_id=result["period_id"],
+            action="BULK_ABSENT",
+            new_data={
+                "period_id": result["period_id"],
+                "section_id": result["section_id"],
+                "attendance_date": result["attendance_date"],
+                "marked_absent_count": result["marked_absent_count"],
+                "marked_excused_count": result["marked_excused_count"],
+            },
+        )
+        return Response(result, status=status.HTTP_200_OK)
 
 
 class AssignedClassListView(APIView):
@@ -289,6 +312,12 @@ class ExitPassViewSet(AuditedModelViewSet):
             raise AppError("FORBIDDEN", "You can only edit or remove exit passes you issued.", 403)
         if instance.returned_at is not None:
             raise AppError("PASS_LOCKED", "Returned exit passes cannot be modified.", 400)
+        if instance.pass_scope == "TEACHER" and instance.is_approved:
+            raise AppError(
+                "PASS_LOCKED",
+                "Approved teacher locator slips can only be changed or removed by a school leader.",
+                403,
+            )
 
     def perform_update(self, serializer):
         self._assert_can_modify_pass(serializer.instance)
@@ -318,15 +347,33 @@ class ExitPassViewSet(AuditedModelViewSet):
                 "ok": True,
                 "success": True,
                 "approved": True,
+                "is_approved": updated.is_approved,
+                "approved_by_name": (
+                    (updated.approved_by.get_full_name() or updated.approved_by.username).strip()
+                    if updated.approved_by
+                    else ""
+                ),
+                "approved_at": updated.approved_at.isoformat() if updated.approved_at else None,
                 "pass_status": updated.pass_status,
                 "status": updated.pass_status,
-                "issued_by_name": (request.user.get_full_name() or request.user.username).strip(),
+                "issued_by_name": (
+                    (updated.issued_by.get_full_name() or updated.issued_by.username).strip()
+                    if updated.issued_by
+                    else "School Staff"
+                ),
             }
         )
 
     @action(detail=True, methods=["post"], url_path="mark-returned")
     def mark_returned(self, request, pk=None):
         updated = update_exit_pass_lifecycle(user=request.user, exit_pass=self.get_object(), action_name="RETURN")
+        record_audit_log(
+            request=request,
+            table_name=updated._meta.db_table,
+            record_id=updated.id,
+            action="RETURN",
+            new_data={"pass_number": updated.pass_number, "pass_scope": updated.pass_scope},
+        )
         return Response({"ok": True, "success": True, "pass_status": updated.pass_status, "status": updated.pass_status})
 
     @action(detail=True, methods=["post"], url_path="mark-used")
@@ -336,6 +383,13 @@ class ExitPassViewSet(AuditedModelViewSet):
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
         updated = update_exit_pass_lifecycle(user=request.user, exit_pass=self.get_object(), action_name="CANCEL")
+        record_audit_log(
+            request=request,
+            table_name=updated._meta.db_table,
+            record_id=updated.id,
+            action="CANCEL",
+            new_data={"pass_number": updated.pass_number, "pass_scope": updated.pass_scope},
+        )
         return Response({"ok": True, "success": True, "pass_status": updated.pass_status, "status": updated.pass_status})
 
     @action(detail=True, methods=["post"], url_path="decline")

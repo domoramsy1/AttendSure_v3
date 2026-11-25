@@ -1,3 +1,6 @@
+# AttendSure Backend - Common Media
+# File: D:\AttendSure_V3\backend\common\media.py
+
 import base64
 import hashlib
 import io

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Audit Codebase
+# File: D:\AttendSure_V3\scripts\testing\audit_codebase.py
+
 r"""
 AttendSure - Testing Subdirectory Entrypoint delegating to scripts/audit_codebase.py
 Run: python scripts\testing\audit_codebase.py

@@ -1,3 +1,6 @@
+// AttendSure Web - Staff Form Fields Component
+// File: D:\AttendSure_V3\web\src\components\common\StaffFormFields.tsx
+
 /**
  * AttendSure - Shared Staff Form Fields (Teachers Directory & User Accounts)
  * File: web/src/components/common/StaffFormFields.tsx

@@ -1,3 +1,6 @@
+# AttendSure Backend - School Database Models
+# File: D:\AttendSure_V3\backend\apps\school\models.py
+
 from django.db import models, transaction
 from django.db.models import UniqueConstraint
 from django.utils import timezone

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Campus Location Card
+// File: D:\AttendSure_V3\mobile\src\components\dashboard\CampusLocationCard.tsx
+
 /**
  * AttendSure Mobile - Live School Campus GPS Location Card
  * File: mobile/src/components/dashboard/CampusLocationCard.tsx

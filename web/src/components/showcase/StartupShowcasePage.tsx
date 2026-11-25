@@ -1,3 +1,6 @@
+// AttendSure Web - School Portal Overview Page Component
+// File: D:\AttendSure_V3\web\src\components\showcase\StartupShowcasePage.tsx
+
 /**
  * AttendSure - DepEd School Portal Overview & Staff Role Launcher
  * File: web/src/components/showcase/StartupShowcasePage.tsx
@@ -117,7 +120,6 @@ export const StartupShowcasePage: React.FC<StartupShowcasePageProps> = ({
       const data = res.data || {};
       const userObj = data.user || data;
       const resolvedRole = String(userObj.role || userObj.system_role || 'ADMIN').toUpperCase();
-      const token = String(data.token || data.access || '').trim();
       const access = String(data.access || '').trim();
       const refresh = String(data.refresh || '').trim();
       const username = String(userObj.username || `demo_${role}`).trim();
@@ -137,7 +139,6 @@ export const StartupShowcasePage: React.FC<StartupShowcasePageProps> = ({
       clearPreviousSessionStorage();
       clearApiClientCache();
 
-      if (token) localStorage.setItem('attendsure_token', token);
       if (access) localStorage.setItem('attendsure_access', access);
       if (refresh) localStorage.setItem('attendsure_refresh', refresh);
       localStorage.setItem('attendsure_username', username);
@@ -163,7 +164,7 @@ export const StartupShowcasePage: React.FC<StartupShowcasePageProps> = ({
       onDemoLoginSuccess(
         {
           user_id: userId,
-          token,
+          token: access,
           username,
           teacher_name: teacherName,
           role: resolvedRole,

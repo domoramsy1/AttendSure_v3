@@ -1,3 +1,6 @@
+# AttendSure Backend - Students API Views
+# File: D:\AttendSure_V3\backend\apps\students\views.py
+
 from django.db.models import Count, Q
 from rest_framework import permissions, status
 from rest_framework.decorators import action
@@ -9,7 +12,7 @@ from apps.school.models import Section
 from apps.school.selectors import get_sections_for_user
 from common.audit import AuditedModelViewSet, record_audit_log
 from common.permissions import IsAdminOrPrincipal, IsTeacherOrLeader, is_admin_or_principal
-from .models import Enrollment
+from .models import ACTIVE_ENROLLMENT_STATUSES, Enrollment
 from .selectors import get_enrollments_for_user, get_signed_qr_cards, get_students_for_user
 from .serializers import EnrollmentSerializer, StudentSerializer
 from .services import bulk_import_students_csv
@@ -101,7 +104,11 @@ class StudentViewSet(AuditedModelViewSet):
             active=Count("id", filter=Q(is_active=True), distinct=True),
             male=Count("id", filter=Q(is_active=True, gender="Male"), distinct=True),
             female=Count("id", filter=Q(is_active=True, gender="Female"), distinct=True),
-            enrolled=Count("id", filter=Q(is_active=True, enrollments__status="ENROLLED"), distinct=True),
+            enrolled=Count(
+                "id",
+                filter=Q(is_active=True, enrollments__status__in=ACTIVE_ENROLLMENT_STATUSES),
+                distinct=True,
+            ),
             paired=Count(
                 "id",
                 filter=Q(is_active=True, qr_token__isnull=False) & ~Q(qr_token=""),

@@ -1,3 +1,6 @@
+# AttendSure Backend - Accounts Test Exhaustive Crud
+# File: D:\AttendSure_V3\backend\apps\accounts\test_exhaustive_crud.py
+
 """
 AttendSure - Exhaustive Field-by-Field CRUD, Image Upload Pipeline & 5-Profile RBAC Matrix Test Suite
 Run: python manage.py test apps.accounts.test_exhaustive_crud --verbosity=2

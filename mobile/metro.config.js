@@ -1,4 +1,6 @@
 // AttendSure Mobile - Metro Bundler Configuration
+// File: D:\AttendSure_V3\mobile\metro.config.js
+
 // Safely shims expo async-require/hmrUtils on native so Expo Go on React Native 0.88
 // never throws "Cannot read property 'hide' of undefined".
 // File: mobile/metro.config.js

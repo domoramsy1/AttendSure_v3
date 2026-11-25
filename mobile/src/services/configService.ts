@@ -1,3 +1,6 @@
+// AttendSure Mobile - Config Service
+// File: D:\AttendSure_V3\mobile\src\services\configService.ts
+
 /**
  * AttendSure - Mobile Server Discovery & URL Security Service
  * File: mobile/src/services/configService.ts
@@ -12,42 +15,6 @@ const CACHE_TTL_MS = 15 * 60 * 1000;
 
 const DANGEROUS_SCHEME_RE = /^(javascript|data|file|vbscript|blob|about):/i;
 const ANY_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-
-export const ENDPOINTS = {
-  health: '/v1/health/db/',
-  auth: {
-    login: '/v1/accounts/login/',
-    logout: '/v1/accounts/logout/',
-    userProfile: '/v1/accounts/me/',
-  },
-  teachers: {
-    list: '/v1/accounts/teachers/',
-  },
-  classroom: {
-    studentList: '/v1/students/',
-    classList: '/v1/attendance/classes/',
-    scanQr: '/v1/attendance/scan/',
-    offlineSync: '/v1/attendance/offline-sync/',
-    logs: '/v1/attendance/records/',
-  },
-  clearance: {
-    list: '/v1/attendance/exit-passes/',
-  },
-  campus: {
-    overview: '/v1/campus/overview/',
-    ping: '/v1/campus/ping/',
-    checkIn: '/v1/campus/check-in/',
-    loafing: '/v1/campus/loafing/',
-  },
-  reports: {
-    dtr: '/v1/reports/dtr/',
-    sf1: (sectionId: number | string) =>
-      `/v1/reports/sf1/${encodeURIComponent(String(sectionId))}/`,
-    sf2: (sectionId: number | string) =>
-      `/v1/reports/sf2/${encodeURIComponent(String(sectionId))}/`,
-    sf4: '/v1/reports/sf4/',
-  },
-};
 
 function getLoopbackFallback(): string {
   return Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000';
@@ -441,5 +408,4 @@ export default {
   getDefaultBaseUrl,
   SERVER_URL_STORAGE_KEY,
   DEFAULT_SERVER_URL,
-  ENDPOINTS,
 };

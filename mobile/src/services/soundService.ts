@@ -1,3 +1,6 @@
+// AttendSure Mobile - Sound Service
+// File: D:\AttendSure_V3\mobile\src\services\soundService.ts
+
 /**
  * AttendSure - Safe Tactile & Web Audio Feedback Service
  * File: mobile/src/services/soundService.ts

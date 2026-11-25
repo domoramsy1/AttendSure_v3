@@ -1,3 +1,6 @@
+// AttendSure Web - Avatar Upload Field Component
+// File: D:\AttendSure_V3\web\src\components\common\AvatarUploadField.tsx
+
 /**
  * AttendSure - Shared Profile Photo / Avatar Upload Field
  * File: web/src/components/common/AvatarUploadField.tsx

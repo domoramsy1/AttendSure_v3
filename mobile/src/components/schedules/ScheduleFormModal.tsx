@@ -1,3 +1,6 @@
+// AttendSure Mobile - Schedule Form Modal
+// File: D:\AttendSure_V3\mobile\src\components\schedules\ScheduleFormModal.tsx
+
 /**
  * AttendSure Mobile - Universal Academic Setup Add / Edit Modal
  * File: mobile/src/components/schedules/ScheduleFormModal.tsx
@@ -18,6 +21,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeMode } from '../../context/ThemeContext';
 import type { ThemePalette } from '../../constants/theme';
+import { formatTime12h } from '../../utils/formatters';
 import ChipRow from '../common/ChipRow';
 import type {
   DeptFormState,
@@ -176,24 +180,30 @@ export const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
 
                 <View style={styles.twoCol}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>Start Time (HH:MM)</Text>
+                    <Text style={styles.inputLabel}>Start Time</Text>
                     <TextInput
                       style={styles.input}
                       value={periodForm.start_time}
                       onChangeText={(v) => setPeriodForm((p) => ({ ...p, start_time: v }))}
-                      placeholder="08:00"
+                      placeholder="08:00 or 8:00 AM"
                       placeholderTextColor={palette.textMuted}
                     />
+                    <Text style={styles.infoText}>
+                      12-hr: {formatTime12h(periodForm.start_time)}
+                    </Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>End Time (HH:MM)</Text>
+                    <Text style={styles.inputLabel}>End Time</Text>
                     <TextInput
                       style={styles.input}
                       value={periodForm.end_time}
                       onChangeText={(v) => setPeriodForm((p) => ({ ...p, end_time: v }))}
-                      placeholder="09:00"
+                      placeholder="09:00 or 9:00 AM"
                       placeholderTextColor={palette.textMuted}
                     />
+                    <Text style={styles.infoText}>
+                      12-hr: {formatTime12h(periodForm.end_time)}
+                    </Text>
                   </View>
                 </View>
               </>
@@ -582,6 +592,7 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       borderColor: palette.warning,
     },
     warnText: { flex: 1, fontSize: fonts.xs, fontWeight: fonts.weight.bold, color: palette.warning },
+    infoText: { fontSize: fonts.xxs, fontWeight: fonts.weight.semibold, color: palette.textMuted, marginTop: 3 },
     switchRow: {
       flexDirection: 'row',
       alignItems: 'center',

@@ -1,3 +1,6 @@
+# AttendSure Backend - Common Fields
+# File: D:\AttendSure_V3\backend\common\fields.py
+
 import json
 from django.db import models
 

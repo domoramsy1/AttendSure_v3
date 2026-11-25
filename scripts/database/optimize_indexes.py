@@ -1,3 +1,6 @@
+# AttendSure Scripts - Optimize Indexes
+# File: D:\AttendSure_V3\scripts\database\optimize_indexes.py
+
 r"""
 AttendSure - PostgreSQL Composite Index Optimizer (3NF Schema)
 Creates composite indexes on high-frequency lookup columns for fast API reads.

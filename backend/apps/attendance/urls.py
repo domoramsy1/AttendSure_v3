@@ -1,3 +1,6 @@
+# AttendSure Backend - Attendance URL Routes
+# File: D:\AttendSure_V3\backend\apps\attendance\urls.py
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from .views import (
@@ -5,6 +8,7 @@ from .views import (
     AssignedClassListView,
     ClassAttendanceView,
     ExitPassViewSet,
+    MarkUnscannedAbsentView,
     OfflineQrSyncView,
     ScanStudentQrView,
     SectionStudentListView,
@@ -19,6 +23,7 @@ urlpatterns = [
     path("offline-sync/", OfflineQrSyncView.as_view(), name="offline-sync"),
     path("loafing-audit/", StudentLoafingAuditView.as_view(), name="student-loafing-audit"),
     path("records/", ClassAttendanceView.as_view(), name="attendance-records"),
+    path("mark-unscanned-absent/", MarkUnscannedAbsentView.as_view(), name="mark-unscanned-absent"),
     path("classes/", AssignedClassListView.as_view(), name="assigned-classes"),
     path("class-list/", SectionStudentListView.as_view(), name="section-class-list"),
     path("adviser-matrix/", AdviserMatrixView.as_view(), name="adviser-matrix"),

@@ -1,3 +1,6 @@
+# AttendSure Backend - Students Read Queries
+# File: D:\AttendSure_V3\backend\apps\students\selectors.py
+
 from django.db.models import Count, Prefetch, Q
 
 from apps.accounts.selectors import (
@@ -9,7 +12,7 @@ from apps.school.selectors import format_section_label
 from common.media import build_media_url
 from common.permissions import is_school_leader
 from common.qr_signer import sign_student_qr
-from .models import Enrollment, Student
+from .models import ACTIVE_ENROLLMENT_STATUSES, Enrollment, Student
 
 
 def get_students_for_user(*, user, search: str = "", section_id: int | None = None):
@@ -43,7 +46,10 @@ def get_students_for_user(*, user, search: str = "", section_id: int | None = No
             | Q(last_name__icontains=search)
         )
     if section_id:
-        qs = qs.filter(enrollments__section_id=section_id, enrollments__status="ENROLLED")
+        qs = qs.filter(
+            enrollments__section_id=section_id,
+            enrollments__status__in=ACTIVE_ENROLLMENT_STATUSES,
+        )
     if not is_school_leader(user):
         teacher = resolve_teacher_for_user(user)
         if not teacher or not teacher.can_handle_classes:
@@ -68,9 +74,9 @@ def get_enrollments_for_user(*, user, section_id: int | None = None):
 
 
 def get_signed_qr_cards(*, user=None, section_id: int | None = None, request=None) -> list[dict]:
-    enr_qs = Enrollment.objects.filter(status="ENROLLED", student__is_active=True).select_related(
-        "student", "section", "section__grade_level"
-    )
+    enr_qs = Enrollment.objects.filter(
+        status__in=ACTIVE_ENROLLMENT_STATUSES, student__is_active=True
+    ).select_related("student", "section", "section__grade_level")
     if user and not is_school_leader(user):
         teacher = resolve_teacher_for_user(user)
         enr_qs = enr_qs.filter(section_id__in=get_teacher_section_ids(teacher)) if teacher else enr_qs.none()

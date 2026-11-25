@@ -1,3 +1,6 @@
+// AttendSure Mobile - Audit Logs Section Component
+// File: D:\AttendSure_V3\mobile\src\components\settings\AuditLogsSection.tsx
+
 /**
  * AttendSure Mobile - Settings Audit Logs Viewer Section
  * File: mobile/src/components/settings/AuditLogsSection.tsx
@@ -15,6 +18,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeMode } from '../../context/ThemeContext';
 import type { ThemePalette } from '../../constants/theme';
+import { formatDateTime12h, formatTime12h } from '../../utils/formatters';
 import ChipRow from '../common/ChipRow';
 
 export interface AuditLogEntry {
@@ -61,6 +65,7 @@ const LOG_ACTION_OPTIONS: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'DELETE', label: 'Deleted' },
   { key: 'APPROVE', label: 'Approved' },
   { key: 'RESOLVE', label: 'Resolved' },
+  { key: 'BULK_ABSENT', label: 'Marked Absent' },
   { key: 'PROFILE', label: 'Profile' },
   { key: 'BIO_ENROLL', label: 'Phone Lock' },
   { key: 'RESET_DEV', label: 'Phone Reset' },
@@ -81,7 +86,10 @@ const ACTION_LABELS: Record<string, string> = {
   UPDATE: 'Updated',
   DELETE: 'Deleted',
   APPROVE: 'Approved',
+  RETURN: 'Marked Returned',
+  CANCEL: 'Cancelled',
   RESOLVE: 'Resolved',
+  BULK_ABSENT: 'Marked Unscanned Students Absent',
   EXCUSE: 'Excused',
   SUBMIT: 'Submitted',
   VIEW: 'Viewed',
@@ -119,6 +127,7 @@ const MODULE_LABELS: Record<string, string> = {
   class_attendance: 'Student Attendance',
   daily_attendance: 'Daily Attendance',
   exit_passes: 'Exit Passes',
+  monthly_time_records: 'Monthly DTR',
   teacher_monthly_dtr: 'Monthly DTR',
   deped_reports: 'DepEd Reports',
   edfi_export: 'Division Export',
@@ -131,25 +140,23 @@ const ACCOUNT_ACTIONS = new Set(['LOGIN', 'LOGOUT', 'LOGIN_FAIL', 'LOCKOUT', 'LO
 function formatEntryTime(entry: AuditLogEntry): string {
   const rawIso = String(entry.created_at || '').trim();
   if (rawIso) {
-    const parsed = new Date(rawIso);
-    if (!Number.isNaN(parsed.getTime())) {
-      const dateStr = parsed.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
-      const timeStr = parsed.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
-      return `${dateStr} • ${timeStr}`;
+    const formatted = formatDateTime12h(rawIso, { fallback: '' });
+    if (formatted) {
+      const splitIdx = formatted.lastIndexOf(', ');
+      if (splitIdx > 0) {
+        return `${formatted.slice(0, splitIdx)} • ${formatted.slice(splitIdx + 2)}`;
+      }
+      return formatted;
     }
   }
   if (entry.timestamp && String(entry.timestamp).trim()) {
-    return String(entry.timestamp).trim();
+    const rawTs = String(entry.timestamp).trim();
+    return formatDateTime12h(rawTs, { fallback: rawTs });
   }
-  return [entry.date_only, entry.time_only].filter(Boolean).join(' • ') || '—';
+  const timeText = entry.time_only
+    ? formatTime12h(entry.time_only, { fallback: String(entry.time_only).trim() })
+    : '';
+  return [entry.date_only, timeText].filter(Boolean).join(' • ') || '—';
 }
 
 function getEntryActor(entry: AuditLogEntry): string {

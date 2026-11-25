@@ -1,3 +1,6 @@
+// AttendSure Web - SF2 Report Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\SF2ReportTab.tsx
+
 /**
  * AttendSure - Official DepEd School Form 2 (SF2) Daily Attendance Report of Learners
  * File: web/src/components/tabs/SF2ReportTab.tsx
@@ -24,6 +27,7 @@ export interface SchoolDay {
   dateNumber: number;
   dayOfWeek: 'M' | 'T' | 'W' | 'TH' | 'F';
   fullDate: string;
+  isFuture?: boolean;
 }
 
 export interface SF2Learner {
@@ -43,11 +47,17 @@ export interface MetricCounts {
   total: number;
 }
 
+export interface NullableMetricCounts {
+  m: number | null;
+  f: number | null;
+  total: number | null;
+}
+
 export interface SF2Metrics {
   enrolment_june: MetricCounts;
   late_enrolment: MetricCounts;
   registered_end: MetricCounts;
-  percentage_enrolment: MetricCounts;
+  percentage_enrolment: NullableMetricCounts;
   average_daily_attendance: MetricCounts;
   percentage_attendance: MetricCounts;
   consecutive_5_absent_count: MetricCounts;
@@ -77,6 +87,8 @@ export interface SF2ReportData {
   right_logo?: string | null;
   school_logo?: string | null;
   school_days: SchoolDay[];
+  elapsed_school_days_count?: number;
+  total_school_days_count?: number;
   has_enrolled_students?: boolean;
   males: SF2Learner[];
   females: SF2Learner[];
@@ -130,15 +142,51 @@ const SVG_CUTTING =
     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16" preserveAspectRatio="none"><polygon points="24,0 24,16 0,16" fill="#000000"/><line x1="0" y1="16" x2="24" y2="0" stroke="#000000" stroke-width="0.75"/></svg>'
   );
 
-const AttendanceCell: React.FC<{ status?: string | number | null; isSchoolDay?: boolean }> = ({
-  status,
-  isSchoolDay = true,
-}) => {
+const formatEnrolmentPct = (val: number | null | undefined): string =>
+  val === null || val === undefined || Number.isNaN(Number(val))
+    ? 'N/A'
+    : `${Number(val).toFixed(1)}%`;
+
+const AttendanceCell: React.FC<{
+  status?: string | number | null;
+  isSchoolDay?: boolean;
+  isFuture?: boolean;
+}> = ({ status, isSchoolDay = true, isFuture = false }) => {
   if (!isSchoolDay) {
     return <div style={{ width: '100%', height: '16px', backgroundColor: '#ffffff' }} />;
   }
 
+  if (isFuture) {
+    return (
+      <div
+        title="Upcoming school day"
+        style={{ width: '100%', height: '16px', backgroundColor: '#f1f5f9' }}
+      />
+    );
+  }
+
   const s = String(status ?? '').toLowerCase().trim();
+  if (!s) {
+    return (
+      <div
+        title="No attendance record logged"
+        style={{
+          width: '100%',
+          height: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: '#f8fafc',
+          color: '#94a3b8',
+          fontSize: '5.5pt',
+          fontWeight: 700,
+        }}
+      >
+        —
+      </div>
+    );
+  }
+
   let src = SVG_DIAGONAL_ONLY;
   let alt = 'Present';
 
@@ -151,6 +199,9 @@ const AttendanceCell: React.FC<{ status?: string | number | null; isSchoolDay?: 
   } else if (s === 'cutting' || s === 'cc' || s === '3' || s === 'c') {
     src = SVG_CUTTING;
     alt = 'Cutting Classes';
+  } else if (s === 'excused') {
+    src = SVG_DIAGONAL_ONLY;
+    alt = 'Excused';
   }
 
   return (
@@ -388,7 +439,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
     }
 
     reportData.school_days.forEach((day, idx) => {
-      if (idx >= maxCols) return;
+      if (idx >= maxCols || day.isFuture) return;
       let mPresent = 0;
       let fPresent = 0;
 
@@ -458,6 +509,9 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
 
   const renderSummaryFooter = () => {
     const m = reportData?.metrics;
+    const elapsedDays = reportData?.elapsed_school_days_count ?? schoolDays.length;
+    const daysDisplay =
+      elapsedDays < schoolDays.length ? `${elapsedDays} of ${schoolDays.length}` : String(schoolDays.length);
     return (
       <div style={{ marginTop: 8, width: '100%' }}>
         <div
@@ -486,7 +540,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
             </div>
             <div style={{ marginTop: 3 }}>
               <strong>CODES FOR CHECKING ATTENDANCE:</strong><br />
-              <strong>blank</strong> - Present; <strong>(X)</strong> - Absent; <strong>Tardy</strong> (Upper shaded = Late Comer, Lower shaded = Cutting Classes)
+              <strong>blank</strong> - Present; <strong>(X)</strong> - Absent; <strong>Tardy</strong> (Upper shaded = Late Comer, Lower shaded = Cutting Classes); <strong>—</strong> - Not Recorded; <strong>Shaded</strong> - Upcoming
             </div>
           </div>
 
@@ -494,7 +548,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
             <thead>
               <tr style={{ backgroundColor: '#f1f5f9' }}>
                 <th style={sumTh}>Month: {reportData?.month}</th>
-                <th style={sumTh}>Days of Classes: {schoolDays.length}</th>
+                <th style={sumTh}>Days of Classes: {daysDisplay}</th>
                 <th colSpan={3} style={sumTh}>Summary</th>
               </tr>
               <tr style={{ backgroundColor: '#f8fafc' }}>
@@ -525,9 +579,9 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
               </tr>
               <tr>
                 <td colSpan={2} style={sumTd}>Percentage of Enrolment as of end of the month</td>
-                <td style={sumTdNum}>{m?.percentage_enrolment?.m ?? 0}%</td>
-                <td style={sumTdNum}>{m?.percentage_enrolment?.f ?? 0}%</td>
-                <td style={sumTdNum}>{m?.percentage_enrolment?.total ?? 0}%</td>
+                <td style={sumTdNum}>{formatEnrolmentPct(m?.percentage_enrolment?.m)}</td>
+                <td style={sumTdNum}>{formatEnrolmentPct(m?.percentage_enrolment?.f)}</td>
+                <td style={sumTdNum}>{formatEnrolmentPct(m?.percentage_enrolment?.total)}</td>
               </tr>
               <tr>
                 <td colSpan={2} style={sumTd}>Average Daily Attendance</td>
@@ -840,7 +894,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                               const st = day ? m.attendance?.[day.dateNumber] : undefined;
                               return (
                                 <td key={`m-${m.id}-d-${i}`} style={tdDateCell}>
-                                  <AttendanceCell status={st} isSchoolDay={Boolean(day)} />
+                                  <AttendanceCell status={st} isSchoolDay={Boolean(day)} isFuture={Boolean(day?.isFuture)} />
                                 </td>
                               );
                             })}
@@ -853,7 +907,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                           <td colSpan={2} style={{ ...tdLeft, fontWeight: 800 }}>&larr; MALE | TOTAL Per Day &rarr;</td>
                           {Array.from({ length: 25 }).map((_, i) => (
                             <td key={`m-tot-${i}`} style={{ ...tdCenter, fontWeight: 800 }}>
-                              {schoolDays[i] ? dailyAttendanceTotals.males[i] : ''}
+                              {schoolDays[i] && !schoolDays[i].isFuture ? dailyAttendanceTotals.males[i] : ''}
                             </td>
                           ))}
                           <td style={{ ...tdCenter, fontWeight: 800 }}>{males.reduce((a, c) => a + (c.total_absent || 0), 0)}</td>
@@ -873,7 +927,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                               const st = day ? f.attendance?.[day.dateNumber] : undefined;
                               return (
                                 <td key={`f-${f.id}-d-${i}`} style={tdDateCell}>
-                                  <AttendanceCell status={st} isSchoolDay={Boolean(day)} />
+                                  <AttendanceCell status={st} isSchoolDay={Boolean(day)} isFuture={Boolean(day?.isFuture)} />
                                 </td>
                               );
                             })}
@@ -886,7 +940,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                           <td colSpan={2} style={{ ...tdLeft, fontWeight: 800 }}>&larr; FEMALE | TOTAL Per Day &rarr;</td>
                           {Array.from({ length: 25 }).map((_, i) => (
                             <td key={`f-tot-${i}`} style={{ ...tdCenter, fontWeight: 800 }}>
-                              {schoolDays[i] ? dailyAttendanceTotals.females[i] : ''}
+                              {schoolDays[i] && !schoolDays[i].isFuture ? dailyAttendanceTotals.females[i] : ''}
                             </td>
                           ))}
                           <td style={{ ...tdCenter, fontWeight: 800 }}>{females.reduce((a, c) => a + (c.total_absent || 0), 0)}</td>
@@ -898,7 +952,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                           <td colSpan={2} style={{ ...tdLeft, fontWeight: 900 }}>Combined TOTAL PER DAY</td>
                           {Array.from({ length: 25 }).map((_, i) => (
                             <td key={`c-tot-${i}`} style={{ ...tdCenter, fontWeight: 900 }}>
-                              {schoolDays[i] ? dailyAttendanceTotals.combined[i] : ''}
+                              {schoolDays[i] && !schoolDays[i].isFuture ? dailyAttendanceTotals.combined[i] : ''}
                             </td>
                           ))}
                           <td style={{ ...tdCenter, fontWeight: 900 }}>
@@ -951,7 +1005,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                             const st = day ? m.attendance?.[day.dateNumber] : undefined;
                             return (
                               <td key={`mp1-${m.id}-d-${i}`} style={tdDateCell}>
-                                <AttendanceCell status={st} isSchoolDay={Boolean(day)} />
+                                <AttendanceCell status={st} isSchoolDay={Boolean(day)} isFuture={Boolean(day?.isFuture)} />
                               </td>
                             );
                           })}
@@ -964,7 +1018,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                         <td colSpan={2} style={{ ...tdLeft, fontWeight: 800 }}>&larr; MALE | TOTAL Per Day &rarr;</td>
                         {Array.from({ length: 25 }).map((_, i) => (
                           <td key={`mp1-tot-${i}`} style={{ ...tdCenter, fontWeight: 800 }}>
-                            {schoolDays[i] ? dailyAttendanceTotals.males[i] : ''}
+                            {schoolDays[i] && !schoolDays[i].isFuture ? dailyAttendanceTotals.males[i] : ''}
                           </td>
                         ))}
                         <td style={{ ...tdCenter, fontWeight: 800 }}>{males.reduce((a, c) => a + (c.total_absent || 0), 0)}</td>
@@ -1000,7 +1054,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                             const st = day ? f.attendance?.[day.dateNumber] : undefined;
                             return (
                               <td key={`fp2-${f.id}-d-${i}`} style={tdDateCell}>
-                                <AttendanceCell status={st} isSchoolDay={Boolean(day)} />
+                                <AttendanceCell status={st} isSchoolDay={Boolean(day)} isFuture={Boolean(day?.isFuture)} />
                               </td>
                             );
                           })}
@@ -1013,7 +1067,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                         <td colSpan={2} style={{ ...tdLeft, fontWeight: 800 }}>&larr; FEMALE | TOTAL Per Day &rarr;</td>
                         {Array.from({ length: 25 }).map((_, i) => (
                           <td key={`fp2-tot-${i}`} style={{ ...tdCenter, fontWeight: 800 }}>
-                            {schoolDays[i] ? dailyAttendanceTotals.females[i] : ''}
+                            {schoolDays[i] && !schoolDays[i].isFuture ? dailyAttendanceTotals.females[i] : ''}
                           </td>
                         ))}
                         <td style={{ ...tdCenter, fontWeight: 800 }}>{females.reduce((a, c) => a + (c.total_absent || 0), 0)}</td>
@@ -1025,7 +1079,7 @@ export const SF2ReportTab: React.FC<SF2ReportTabProps> = ({
                         <td colSpan={2} style={{ ...tdLeft, fontWeight: 900 }}>Combined TOTAL PER DAY</td>
                         {Array.from({ length: 25 }).map((_, i) => (
                           <td key={`cp2-tot-${i}`} style={{ ...tdCenter, fontWeight: 900 }}>
-                            {schoolDays[i] ? dailyAttendanceTotals.combined[i] : ''}
+                            {schoolDays[i] && !schoolDays[i].isFuture ? dailyAttendanceTotals.combined[i] : ''}
                           </td>
                         ))}
                         <td style={{ ...tdCenter, fontWeight: 900 }}>

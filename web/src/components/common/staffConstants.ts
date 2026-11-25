@@ -1,3 +1,6 @@
+// AttendSure Web - Staff Constants Component
+// File: D:\AttendSure_V3\web\src\components\common\staffConstants.ts
+
 /**
  * AttendSure - Shared Staff Form Constants (Suffix, Department, Position Options)
  * File: web/src/components/common/staffConstants.ts

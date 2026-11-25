@@ -1,3 +1,6 @@
+# AttendSure Backend - Accounts Automated Tests
+# File: D:\AttendSure_V3\backend\apps\accounts\tests.py
+
 """
 AttendSure - 3NF Integrity, Security, Geofencing, Loafing & Performance Test Suite
 Run: python manage.py test apps.accounts.tests --verbosity=2
@@ -40,6 +43,7 @@ from apps.school.models import (
     Subject,
 )
 from apps.students.models import Enrollment, Student
+from common.device_crypto import generate_ed25519_keypair, sign_checkin_payload_ed25519
 from common.gps import calculate_distance_meters, verify_campus_gps
 from common.media import FlexibleImageField
 from common.phone import normalize_international_phone, normalize_ph_phone
@@ -528,6 +532,7 @@ class GeofencingAndLoafingEngineTests(APITestCase):
             center_latitude=Decimal("8.485800"),
             center_longitude=Decimal("124.656700"),
             radius_meters=150,
+            loafing_grace_minutes=0,
             duty_start_time=time(0, 0),
             duty_end_time=time(23, 59),
             enforce_geofence_checkin=True,
@@ -566,6 +571,15 @@ class GeofencingAndLoafingEngineTests(APITestCase):
 
     def test_teacher_outside_geofence_creates_alert_and_returning_auto_resolves(self):
         self.client.force_authenticate(user=self.teacher_user)
+        priv, pub_hex, key_id = generate_ed25519_keypair()
+        ts_ms = int(time_module.time() * 1000)
+        sig = sign_checkin_payload_ed25519(
+            private_key=priv,
+            user_id=self.teacher_user.id,
+            device_id="GEO-PHONE-1",
+            timestamp_ms=ts_ms,
+            action="TIME_IN",
+        )
 
         # 1. Check in inside campus
         checkin = self.client.post(
@@ -576,6 +590,12 @@ class GeofencingAndLoafingEngineTests(APITestCase):
                 "longitude": 124.6567,
                 "accuracy_meters": 10,
                 "face_verified_on_device": True,
+                "biometric_verified_on_device": True,
+                "biometric_key_id": key_id,
+                "biometric_public_key": pub_hex,
+                "biometric_key_algorithm": "ED25519",
+                "biometric_signature": sig,
+                "biometric_timestamp_ms": ts_ms,
                 "device_id": "GEO-PHONE-1",
             },
             format="json",
@@ -889,8 +909,8 @@ class GeofencingAndLoafingEngineTests(APITestCase):
 
     def test_biometric_key_enrollment_mismatch_and_device_reset(self):
         self.client.force_authenticate(user=self.teacher_user)
-        key_a = "a" * 64
-        key_b = "b" * 64
+        priv_a, pub_a, key_a = generate_ed25519_keypair()
+        priv_b, pub_b, key_b = generate_ed25519_keypair()
 
         # 1. Rejected when on-device biometric verification reports False
         failed_bio = self.client.post(
@@ -909,8 +929,15 @@ class GeofencingAndLoafingEngineTests(APITestCase):
         self.assertEqual(failed_bio.status_code, 403)
         self.assertEqual(failed_bio.data["error_code"], "BIOMETRIC_CHECK_FAILED")
 
-        # 2. First check-in enrolls biometric_key_id
+        # 2. First check-in enrolls asymmetric public key + key_id
         now_ms = int(time_module.time() * 1000)
+        sig_in = sign_checkin_payload_ed25519(
+            private_key=priv_a,
+            user_id=self.teacher_user.id,
+            device_id="GEO-PHONE-1",
+            timestamp_ms=now_ms,
+            action="TIME_IN",
+        )
         first_in = self.client.post(
             "/api/v1/campus/check-in/",
             {
@@ -920,7 +947,9 @@ class GeofencingAndLoafingEngineTests(APITestCase):
                 "accuracy_meters": 10,
                 "biometric_verified_on_device": True,
                 "biometric_key_id": key_a,
-                "biometric_proof": "f" * 64,
+                "biometric_public_key": pub_a,
+                "biometric_key_algorithm": "ED25519",
+                "biometric_signature": sig_in,
                 "biometric_timestamp_ms": now_ms,
                 "device_id": "GEO-PHONE-1",
             },
@@ -931,9 +960,19 @@ class GeofencingAndLoafingEngineTests(APITestCase):
         self.assertTrue(first_in.data["just_enrolled_biometric"])
         self.teacher.refresh_from_db()
         self.assertEqual(self.teacher.biometric_key_id, key_a)
+        self.assertEqual(self.teacher.biometric_public_key, pub_a)
+        self.assertEqual(self.teacher.biometric_key_algorithm, "ED25519")
         self.assertTrue(AuditLog.objects.filter(table_name="teacher_profiles", action="BIO_ENROLL").exists())
 
         # 3. Matching key succeeds on TIME_OUT
+        ts_out = int(time_module.time() * 1000) + 1
+        sig_out = sign_checkin_payload_ed25519(
+            private_key=priv_a,
+            user_id=self.teacher_user.id,
+            device_id="GEO-PHONE-1",
+            timestamp_ms=ts_out,
+            action="TIME_OUT",
+        )
         out_ok = self.client.post(
             "/api/v1/campus/check-in/",
             {
@@ -943,8 +982,10 @@ class GeofencingAndLoafingEngineTests(APITestCase):
                 "accuracy_meters": 10,
                 "biometric_verified_on_device": True,
                 "biometric_key_id": key_a,
-                "biometric_proof": "e" * 64,
-                "biometric_timestamp_ms": int(time_module.time() * 1000),
+                "biometric_public_key": pub_a,
+                "biometric_key_algorithm": "ED25519",
+                "biometric_signature": sig_out,
+                "biometric_timestamp_ms": ts_out,
                 "device_id": "GEO-PHONE-1",
             },
             format="json",
@@ -953,6 +994,14 @@ class GeofencingAndLoafingEngineTests(APITestCase):
         self.assertFalse(out_ok.data["just_enrolled_biometric"])
 
         # 4. Mismatched biometric_key_id returns 403 BIOMETRIC_MISMATCH + AuditLog
+        ts_bad = int(time_module.time() * 1000) + 2
+        sig_bad = sign_checkin_payload_ed25519(
+            private_key=priv_b,
+            user_id=self.teacher_user.id,
+            device_id="GEO-PHONE-1",
+            timestamp_ms=ts_bad,
+            action="TIME_IN",
+        )
         mismatch = self.client.post(
             "/api/v1/campus/check-in/",
             {
@@ -962,8 +1011,10 @@ class GeofencingAndLoafingEngineTests(APITestCase):
                 "accuracy_meters": 10,
                 "biometric_verified_on_device": True,
                 "biometric_key_id": key_b,
-                "biometric_proof": "d" * 64,
-                "biometric_timestamp_ms": int(time_module.time() * 1000),
+                "biometric_public_key": pub_b,
+                "biometric_key_algorithm": "ED25519",
+                "biometric_signature": sig_bad,
+                "biometric_timestamp_ms": ts_bad,
                 "device_id": "GEO-PHONE-1",
             },
             format="json",
@@ -972,16 +1023,25 @@ class GeofencingAndLoafingEngineTests(APITestCase):
         self.assertEqual(mismatch.data["error_code"], "BIOMETRIC_MISMATCH")
         self.assertTrue(AuditLog.objects.filter(table_name="teacher_profiles", action="BIO_REJECT").exists())
 
-        # 5. Principal resets phone lock -> clears bound_device_id AND biometric_key_id
+        # 5. Principal resets phone lock -> clears bound_device_id, biometric_key_id & public key
         self.client.force_authenticate(user=self.principal_user)
         reset_res = self.client.post(f"/api/v1/accounts/teachers/{self.teacher.id}/reset-device/", {}, format="json")
         self.assertEqual(reset_res.status_code, 200)
         self.teacher.refresh_from_db()
         self.assertIsNone(self.teacher.bound_device_id)
         self.assertIsNone(self.teacher.biometric_key_id)
+        self.assertEqual(self.teacher.biometric_public_key, "")
 
-        # 6. Teacher pairs replacement phone & new biometric key cleanly
+        # 6. Teacher pairs replacement phone & new asymmetric biometric key cleanly
         self.client.force_authenticate(user=self.teacher_user)
+        ts_rebind = int(time_module.time() * 1000) + 3
+        sig_rebind = sign_checkin_payload_ed25519(
+            private_key=priv_b,
+            user_id=self.teacher_user.id,
+            device_id="GEO-PHONE-NEW-2",
+            timestamp_ms=ts_rebind,
+            action="TIME_IN",
+        )
         rebind = self.client.post(
             "/api/v1/campus/check-in/",
             {
@@ -991,8 +1051,10 @@ class GeofencingAndLoafingEngineTests(APITestCase):
                 "accuracy_meters": 10,
                 "biometric_verified_on_device": True,
                 "biometric_key_id": key_b,
-                "biometric_proof": "c" * 64,
-                "biometric_timestamp_ms": int(time_module.time() * 1000),
+                "biometric_public_key": pub_b,
+                "biometric_key_algorithm": "ED25519",
+                "biometric_signature": sig_rebind,
+                "biometric_timestamp_ms": ts_rebind,
                 "device_id": "GEO-PHONE-NEW-2",
             },
             format="json",
@@ -1001,6 +1063,7 @@ class GeofencingAndLoafingEngineTests(APITestCase):
         self.teacher.refresh_from_db()
         self.assertEqual(self.teacher.bound_device_id, "GEO-PHONE-NEW-2")
         self.assertEqual(self.teacher.biometric_key_id, key_b)
+        self.assertEqual(self.teacher.biometric_public_key, pub_b)
 
 
 class PerformanceBoundedQueryTests(APITestCase):

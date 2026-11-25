@@ -1,3 +1,6 @@
+// AttendSure Web - Theme Context
+// File: D:\AttendSure_V3\web\src\context\ThemeContext.tsx
+
 /**
  * AttendSure - Theme Context & CSS Variable Engine
  * File: web/src/context/ThemeContext.tsx

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Update Project
+# File: D:\AttendSure_V3\scripts\utilities\update_project.py
+
 r"""
 AttendSure - Safe Project Pull, Migration & Dependency Updater
 Run: python utilities\update_project.py

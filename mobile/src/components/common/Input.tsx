@@ -1,3 +1,6 @@
+// AttendSure Mobile - Input Component
+// File: D:\AttendSure_V3\mobile\src\components\common\Input.tsx
+
 import React from 'react';
 import { Text, TextInput, View, TextInputProps } from 'react-native';
 import { useThemeMode } from '../../context/ThemeContext';

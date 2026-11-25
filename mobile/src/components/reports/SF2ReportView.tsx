@@ -1,3 +1,6 @@
+// AttendSure Mobile - SF2 Report View Component
+// File: D:\AttendSure_V3\mobile\src\components\reports\SF2ReportView.tsx
+
 /**
  * AttendSure - School Form 2 (SF2) Daily Attendance Report of Learners
  * File: mobile/src/components/reports/SF2ReportView.tsx
@@ -24,6 +27,7 @@ export interface SchoolDay {
   dateNumber: number;
   dayOfWeek: 'M' | 'T' | 'W' | 'TH' | 'F';
   fullDate?: string;
+  isFuture?: boolean;
 }
 
 export interface SF2Learner {
@@ -216,6 +220,7 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
         raw === 'cutting' ||
         raw === 'cc' ||
         raw === 'c' ||
+        raw === 'excused' ||
         raw === '0' ||
         raw === '2' ||
         raw === '3'
@@ -223,7 +228,7 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
     };
 
     standardSchoolDays.forEach((day, idx) => {
-      if (idx >= SF2_DAY_COUNT || idx >= schoolDays.length) return;
+      if (idx >= SF2_DAY_COUNT || idx >= schoolDays.length || day.isFuture) return;
       let mPresent = 0;
       let fPresent = 0;
 
@@ -287,9 +292,33 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
 
   const resolvedSchoolHead = cleanText(activeData.school_head, 160) || 'School Head / Principal';
 
+  const formatEnrolmentPct = (val: unknown): string =>
+    val === null || val === undefined || val === '' || Number.isNaN(Number(val))
+      ? 'N/A'
+      : `${Number(val).toFixed(1)}%`;
+
   // 5. Official DepEd Cell Notation Renderer
-  const renderAttendanceCell = (status?: string | number | null) => {
+  const renderAttendanceCell = (
+    status?: string | number | null,
+    isSchoolDay = true,
+    isFuture = false
+  ) => {
+    if (!isSchoolDay) {
+      return <View style={styles.attCell} />;
+    }
+
+    if (isFuture) {
+      return <View style={[styles.attCell, styles.attCellFuture]} />;
+    }
+
     const s = String(status ?? '').toLowerCase().trim();
+    if (!s) {
+      return (
+        <View style={[styles.attCell, styles.attCellUnrecorded]}>
+          <Text style={styles.textUnrecorded}>—</Text>
+        </View>
+      );
+    }
 
     if (s === 'absent' || s === 'x' || s === '1' || s === 'a') {
       return (
@@ -321,16 +350,27 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
   const isListEmpty = males.length === 0 && females.length === 0;
 
   const metrics = activeData.metrics || {};
-  const maleEnrolmentJune = metrics?.enrolment_june?.m ?? males.length;
-  const femaleEnrolmentJune = metrics?.enrolment_june?.f ?? females.length;
-  const totalEnrolmentJune = maleEnrolmentJune + femaleEnrolmentJune;
+  const maleEnrolmentJune = metrics?.enrolment_june?.m ?? 0;
+  const femaleEnrolmentJune = metrics?.enrolment_june?.f ?? 0;
+  const totalEnrolmentJune = metrics?.enrolment_june?.total ?? (maleEnrolmentJune + femaleEnrolmentJune);
 
-  const maleRegisteredEnd = males.length;
-  const femaleRegisteredEnd = females.length;
-  const totalRegisteredEnd = maleRegisteredEnd + femaleRegisteredEnd;
+  const maleRegisteredEnd = metrics?.registered_end?.m ?? males.length;
+  const femaleRegisteredEnd = metrics?.registered_end?.f ?? females.length;
+  const totalRegisteredEnd =
+    metrics?.registered_end?.total ?? maleRegisteredEnd + femaleRegisteredEnd;
 
-  const percentageEnrolment =
-    totalEnrolmentJune > 0 ? ((totalRegisteredEnd / totalEnrolmentJune) * 100).toFixed(2) : '100.00';
+  const percEnrolmentM = formatEnrolmentPct(metrics?.percentage_enrolment?.m);
+  const percEnrolmentF = formatEnrolmentPct(metrics?.percentage_enrolment?.f);
+  const percEnrolmentTotal = formatEnrolmentPct(metrics?.percentage_enrolment?.total);
+
+  const elapsedDaysCount =
+    typeof activeData.elapsed_school_days_count === 'number'
+      ? activeData.elapsed_school_days_count
+      : schoolDays.length;
+  const daysOfClassesDisplay =
+    elapsedDaysCount < schoolDays.length
+      ? `${elapsedDaysCount} of ${schoolDays.length}`
+      : String(schoolDays.length);
 
   const adaM = Number(metrics?.average_daily_attendance?.m ?? 0).toFixed(1);
   const adaF = Number(metrics?.average_daily_attendance?.f ?? 0).toFixed(1);
@@ -519,10 +559,11 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
                     </View>
 
                     {standardSchoolDays.map((sd, colIdx) => {
-                      const status = m.attendance?.[sd.dateNumber];
+                      const isRealDay = colIdx < schoolDays.length;
+                      const status = isRealDay ? m.attendance?.[sd.dateNumber] : undefined;
                       return (
                         <View key={`m-${m.id || rowIdx}-col-${colIdx}`} style={styles.dayDataCell}>
-                          {renderAttendanceCell(status)}
+                          {renderAttendanceCell(status, isRealDay, Boolean(sd.isFuture))}
                         </View>
                       );
                     })}
@@ -556,10 +597,12 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
                   >
                     <Text style={styles.tallyLabel}>&larr; MALE | TOTAL Per Day &rarr;</Text>
                   </View>
-                  {standardSchoolDays.map((_, colIdx) => (
+                  {standardSchoolDays.map((sd, colIdx) => (
                     <View key={`m-tot-col-${colIdx}`} style={styles.dayDataCell}>
                       <Text style={styles.tallyCountText}>
-                        {dailyAttendanceTotals.males[colIdx] || ''}
+                        {colIdx < schoolDays.length && !sd.isFuture
+                          ? dailyAttendanceTotals.males[colIdx]
+                          : ''}
                       </Text>
                     </View>
                   ))}
@@ -589,10 +632,11 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
                     </View>
 
                     {standardSchoolDays.map((sd, colIdx) => {
-                      const status = f.attendance?.[sd.dateNumber];
+                      const isRealDay = colIdx < schoolDays.length;
+                      const status = isRealDay ? f.attendance?.[sd.dateNumber] : undefined;
                       return (
                         <View key={`f-${f.id || rowIdx}-col-${colIdx}`} style={styles.dayDataCell}>
-                          {renderAttendanceCell(status)}
+                          {renderAttendanceCell(status, isRealDay, Boolean(sd.isFuture))}
                         </View>
                       );
                     })}
@@ -626,10 +670,12 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
                   >
                     <Text style={styles.tallyLabel}>&larr; FEMALE | TOTAL Per Day &rarr;</Text>
                   </View>
-                  {standardSchoolDays.map((_, colIdx) => (
+                  {standardSchoolDays.map((sd, colIdx) => (
                     <View key={`f-tot-col-${colIdx}`} style={styles.dayDataCell}>
                       <Text style={styles.tallyCountText}>
-                        {dailyAttendanceTotals.females[colIdx] || ''}
+                        {colIdx < schoolDays.length && !sd.isFuture
+                          ? dailyAttendanceTotals.females[colIdx]
+                          : ''}
                       </Text>
                     </View>
                   ))}
@@ -653,10 +699,12 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
                       Combined TOTAL PER DAY
                     </Text>
                   </View>
-                  {standardSchoolDays.map((_, colIdx) => (
+                  {standardSchoolDays.map((sd, colIdx) => (
                     <View key={`c-tot-col-${colIdx}`} style={styles.dayDataCell}>
                       <Text style={[styles.tallyCountText, { fontWeight: '900' }]}>
-                        {dailyAttendanceTotals.combined[colIdx] || ''}
+                        {colIdx < schoolDays.length && !sd.isFuture
+                          ? dailyAttendanceTotals.combined[colIdx]
+                          : ''}
                       </Text>
                     </View>
                   ))}
@@ -758,6 +806,10 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
                 <Text style={{ fontWeight: '800' }}>Tardy </Text>(half shaded Upper for Late
                 Comer, Lower for Cutting Classes)
               </Text>
+              <Text style={styles.codeText}>
+                <Text style={{ fontWeight: '800' }}>— </Text>- Not Recorded •{' '}
+                <Text style={{ fontWeight: '800' }}>Shaded </Text>- Upcoming
+              </Text>
 
               <View style={styles.legendVisualRow}>
                 <View style={styles.legendBox}>
@@ -815,7 +867,7 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
                 </Text>
                 <Text style={styles.summaryDaysTitle}>
                   No. of Days of Classes:{' '}
-                  <Text style={styles.summaryMonthVal}>{schoolDays.length}</Text>
+                  <Text style={styles.summaryMonthVal}>{daysOfClassesDisplay}</Text>
                 </Text>
               </View>
 
@@ -870,10 +922,10 @@ export const SF2ReportView: React.FC<SF2ReportViewProps> = ({
                   <Text style={[styles.sumTableCellLabel, { flex: 2.2 }]}>
                     Percentage of Enrolment as of end of the month
                   </Text>
-                  <Text style={[styles.sumTableCellVal, { flex: 0.6 }]}>—</Text>
-                  <Text style={[styles.sumTableCellVal, { flex: 0.6 }]}>—</Text>
+                  <Text style={[styles.sumTableCellVal, { flex: 0.6 }]}>{percEnrolmentM}</Text>
+                  <Text style={[styles.sumTableCellVal, { flex: 0.6 }]}>{percEnrolmentF}</Text>
                   <Text style={[styles.sumTableCellVal, styles.lastCell, { flex: 0.8, fontWeight: '700' }]}>
-                    {percentageEnrolment}%
+                    {percEnrolmentTotal}
                   </Text>
                 </View>
 
@@ -1188,6 +1240,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     position: 'relative',
     overflow: 'hidden',
+  },
+  attCellFuture: {
+    backgroundColor: '#f1f5f9',
+  },
+  attCellUnrecorded: {
+    backgroundColor: '#f8fafc',
+  },
+  textUnrecorded: {
+    fontSize: 7.5,
+    fontWeight: '700',
+    color: '#94a3b8',
+    lineHeight: 9,
+    textAlign: 'center',
   },
   textAbsent: {
     fontSize: 7.5,

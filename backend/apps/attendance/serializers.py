@@ -1,6 +1,12 @@
+# AttendSure Backend - Attendance Data Serializers
+# File: D:\AttendSure_V3\backend\apps\attendance\serializers.py
+
 # D:\AttendSure_V3\backend\apps\attendance\serializers.py
+import base64
 import os
+import uuid
 from datetime import timedelta
+from django.core.files.base import ContentFile
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -9,7 +15,7 @@ from apps.accounts.selectors import (
     get_teacher_enrollment_ids,
     resolve_teacher_for_user,
 )
-from apps.students.models import Enrollment
+from apps.students.models import ACTIVE_ENROLLMENT_STATUSES, Enrollment
 from common.exceptions import AppError
 from common.media import build_media_url, decode_uploaded_image
 from common.permissions import is_school_leader
@@ -18,6 +24,16 @@ from .models import ExitPass
 
 ALLOWED_PROOF_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}
 MAX_PROOF_BYTES = 2 * 1024 * 1024
+
+
+def _validate_pdf_bytes(raw_bytes: bytes) -> None:
+    if not raw_bytes or len(raw_bytes) > MAX_PROOF_BYTES:
+        raise serializers.ValidationError("Proof file must be 2 MB or smaller.")
+    if not raw_bytes.startswith(b"%PDF-"):
+        raise serializers.ValidationError("Uploaded PDF file is invalid or damaged.")
+    lowered = raw_bytes[:8192].lower()
+    if b"/javascript" in lowered or b"/js" in lowered:
+        raise serializers.ValidationError("PDF files with active scripts are blocked.")
 
 
 class ExitPassProofField(serializers.Field):
@@ -33,27 +49,39 @@ class ExitPassProofField(serializers.Field):
         if hasattr(data, "read"):
             safe_name = os.path.basename(str(getattr(data, "name", "") or ""))
             ext = os.path.splitext(safe_name)[1].lower()
+            content_type = str(getattr(data, "content_type", "") or "").lower()
+            if not ext and content_type == "application/pdf":
+                ext = ".pdf"
+                safe_name = f"exit_proof_{uuid.uuid4().hex}.pdf"
             if ext not in ALLOWED_PROOF_EXTS:
-                raise serializers.ValidationError("Allowed file types: PDF, JPG, PNG, or WEBP.")
+                raise serializers.ValidationError(
+                    "Only PDF, JPG, PNG, or WEBP proof files are allowed."
+                )
             size = getattr(data, "size", 0) or 0
             if size <= 0 or size > MAX_PROOF_BYTES:
-                raise serializers.ValidationError("Proof file must be under 2 MB.")
+                raise serializers.ValidationError("Proof file must be 2 MB or smaller.")
             if ext == ".pdf":
-                sample = data.read(4096)
+                raw_bytes = data.read()
                 data.seek(0)
-                if not sample.startswith(b"%PDF-"):
-                    raise serializers.ValidationError("Uploaded PDF file is invalid or damaged.")
-                lowered = sample.lower()
-                if b"/javascript" in lowered or b"/js" in lowered:
-                    raise serializers.ValidationError("PDF files with active scripts are blocked.")
-                data.name = safe_name
+                _validate_pdf_bytes(raw_bytes)
+                data.name = f"exit_proof_{uuid.uuid4().hex}.pdf"
                 return data
             return decode_uploaded_image(data, prefix="exit_proof")
 
-        if isinstance(data, str) and data.strip().startswith("data:image"):
-            decoded = decode_uploaded_image(data, prefix="exit_proof")
-            if not isinstance(decoded, serializers.SkipField):
-                return decoded
+        if isinstance(data, str):
+            clean = data.strip()
+            if clean.startswith("data:image"):
+                decoded = decode_uploaded_image(clean, prefix="exit_proof")
+                if not isinstance(decoded, serializers.SkipField):
+                    return decoded
+            if clean.startswith("data:application/pdf") and ";base64," in clean:
+                _, b64_part = clean.split(";base64,", 1)
+                try:
+                    raw_bytes = base64.b64decode(b64_part, validate=True)
+                except Exception as exc:
+                    raise serializers.ValidationError("Uploaded PDF file is invalid or damaged.") from exc
+                _validate_pdf_bytes(raw_bytes)
+                return ContentFile(raw_bytes, name=f"exit_proof_{uuid.uuid4().hex}.pdf")
 
         raise serializers.SkipField()
 
@@ -71,11 +99,12 @@ class ExitPassSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField()
     teacher_employee_id = serializers.SerializerMethodField()
     issued_by_name = serializers.SerializerMethodField()
+    approved_by_name = serializers.SerializerMethodField()
     valid_from = serializers.DateTimeField(source="issued_at", required=False)
     valid_to = serializers.DateTimeField(source="valid_until", required=False)
     attachment = ExitPassProofField(required=False, allow_null=True)
     attachment_url = serializers.SerializerMethodField()
-    guardian_notice = serializers.SerializerMethodField()
+    clear_proof = serializers.BooleanField(required=False, write_only=True, default=False)
 
     class Meta:
         model = ExitPass
@@ -99,6 +128,7 @@ class ExitPassSerializer(serializers.ModelSerializer):
             "destination",
             "attachment",
             "attachment_url",
+            "clear_proof",
             "issued_by",
             "issued_by_name",
             "issued_at",
@@ -107,11 +137,23 @@ class ExitPassSerializer(serializers.ModelSerializer):
             "valid_to",
             "returned_at",
             "is_cancelled",
+            "is_approved",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
             "pass_status",
             "status",
-            "guardian_notice",
         ]
-        read_only_fields = ["id", "pass_number", "issued_by", "returned_at", "is_cancelled"]
+        read_only_fields = [
+            "id",
+            "pass_number",
+            "issued_by",
+            "returned_at",
+            "is_cancelled",
+            "is_approved",
+            "approved_by",
+            "approved_at",
+        ]
         extra_kwargs = {
             "pass_scope": {"required": False},
             "issued_at": {"required": False},
@@ -149,26 +191,13 @@ class ExitPassSerializer(serializers.ModelSerializer):
             return "School Staff"
         return (obj.issued_by.get_full_name() or obj.issued_by.username).strip()
 
+    def get_approved_by_name(self, obj: ExitPass) -> str:
+        if not obj.approved_by:
+            return ""
+        return (obj.approved_by.get_full_name() or obj.approved_by.username).strip()
+
     def get_attachment_url(self, obj: ExitPass):
         return build_media_url(obj.attachment, self.context.get("request"))
-
-    def get_guardian_notice(self, obj: ExitPass) -> str:
-        holder = self.get_person_name(obj) or "The pass holder"
-        valid_str = (
-            timezone.localtime(obj.valid_until).strftime("%I:%M %p").lstrip("0")
-            if obj.valid_until
-            else ""
-        )
-        dest_ctx = f" to {obj.destination}" if obj.destination else ""
-        if obj.returned_at:
-            ret_str = timezone.localtime(obj.returned_at).strftime("%I:%M %p").lstrip("0")
-            return f"{holder} returned safely to campus at {ret_str} (Pass #{obj.pass_number})."
-        if obj.is_cancelled:
-            return f"Exit pass #{obj.pass_number} for {holder} was cancelled."
-        return (
-            f"{holder} was issued an official exit pass ({obj.pass_type or 'Campus Pass'}){dest_ctx}, "
-            f"valid until {valid_str or 'scheduled return'}."
-        )
 
     def to_internal_value(self, data):
         mutable = {k: data.get(k) for k in data.keys()} if hasattr(data, "keys") else dict(data)
@@ -196,6 +225,12 @@ class ExitPassSerializer(serializers.ModelSerializer):
         if "attachment" not in mutable and "proof_file" in mutable:
             mutable["attachment"] = mutable["proof_file"]
 
+        if "clear_proof" not in mutable:
+            for alias in ("remove_attachment", "clear_attachment", "remove_proof"):
+                if alias in mutable:
+                    mutable["clear_proof"] = mutable[alias]
+                    break
+
         for txt_key in ("reason", "destination", "pass_type"):
             if txt_key in mutable and isinstance(mutable[txt_key], str):
                 mutable[txt_key] = clean_text(mutable[txt_key], 300)
@@ -220,15 +255,17 @@ class ExitPassSerializer(serializers.ModelSerializer):
         user = request.user
         leader = is_school_leader(user)
         own_teacher = resolve_teacher_for_user(user)
+        now = timezone.now()
 
         student_id = validated_data.pop("student_id", None)
+        validated_data.pop("clear_proof", None)
         enrollment = validated_data.get("enrollment")
         target_teacher = validated_data.get("teacher")
 
         if not enrollment and student_id:
             enrollment = (
                 Enrollment.objects.select_related("student", "section")
-                .filter(student_id=student_id, status="ENROLLED")
+                .filter(student_id=student_id, status__in=ACTIVE_ENROLLMENT_STATUSES)
                 .order_by("-section__school_year__is_active", "-id")
                 .first()
             )
@@ -245,12 +282,15 @@ class ExitPassSerializer(serializers.ModelSerializer):
             ):
                 raise AppError(
                     "FORBIDDEN",
-                    "You can only create exit passes for students in your assigned classes.",
+                    "You can only issue student exit passes for students in your assigned classes.",
                     403,
                 )
             validated_data["pass_scope"] = "STUDENT"
             validated_data["enrollment"] = enrollment
             validated_data["teacher"] = None
+            validated_data["is_approved"] = True
+            validated_data["approved_by"] = user
+            validated_data["approved_at"] = now
         else:
             validated_data["pass_scope"] = "TEACHER"
             validated_data["enrollment"] = None
@@ -258,6 +298,9 @@ class ExitPassSerializer(serializers.ModelSerializer):
                 if not own_teacher:
                     raise AppError("NO_TEACHER_PROFILE", "A teacher profile is required.", 403)
                 validated_data["teacher"] = own_teacher
+                validated_data["is_approved"] = False
+                validated_data["approved_by"] = None
+                validated_data["approved_at"] = None
             else:
                 validated_data["teacher"] = (
                     target_teacher
@@ -268,11 +311,17 @@ class ExitPassSerializer(serializers.ModelSerializer):
                 )
                 if not validated_data["teacher"]:
                     raise serializers.ValidationError({"teacher": "Select an active teacher for this pass."})
+                validated_data["is_approved"] = True
+                validated_data["approved_by"] = user
+                validated_data["approved_at"] = now
 
         return ExitPass.objects.create(**validated_data, issued_by=user)
 
     def update(self, instance, validated_data):
         validated_data.pop("student_id", None)
+        clear_proof = bool(validated_data.pop("clear_proof", False))
+        if clear_proof and not validated_data.get("attachment"):
+            validated_data["attachment"] = None
         if validated_data.get("enrollment") is not None:
             validated_data["pass_scope"] = "STUDENT"
             validated_data["teacher"] = None

@@ -1,4 +1,5 @@
 // AttendSure Core Shared Data Types
+// File: D:\AttendSure_V3\web\src\types\section.ts
 
 export interface UserSession {
   token: string;

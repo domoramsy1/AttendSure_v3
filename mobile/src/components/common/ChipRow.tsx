@@ -1,3 +1,6 @@
+// AttendSure Mobile - Chip Row Component
+// File: D:\AttendSure_V3\mobile\src\components\common\ChipRow.tsx
+
 /**
  * AttendSure Mobile - Reusable Horizontal / Wrapped Filter & Picker Chip Row
  * File: mobile/src/components/common/ChipRow.tsx
@@ -56,6 +59,7 @@ export function ChipRow<T extends string | number = string>({
         activeOpacity={0.8}
       >
         <Text
+          numberOfLines={1}
           style={[
             variant === 'tab' ? styles.tabText : styles.chipText,
             active && (variant === 'tab' ? styles.tabTextActive : styles.chipTextActive),
@@ -72,29 +76,48 @@ export function ChipRow<T extends string | number = string>({
   }
 
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={[styles.scrollStrip, style]}
-      contentContainerStyle={[styles.scrollContent, contentContainerStyle]}
-    >
-      {items}
-    </ScrollView>
+    <View style={[styles.stripContainer, style]}>
+      <ScrollView
+        horizontal
+        nestedScrollEnabled
+        showsHorizontalScrollIndicator={false}
+        style={styles.scrollStrip}
+        contentContainerStyle={[styles.scrollContent, contentContainerStyle]}
+      >
+        {items}
+      </ScrollView>
+    </View>
   );
 }
 
 const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMode>['fonts']) =>
   StyleSheet.create({
-    scrollStrip: { flexGrow: 0 },
-    scrollContent: { gap: 6, alignItems: 'center' },
+    stripContainer: {
+      flexGrow: 0,
+      flexShrink: 0,
+      width: '100%',
+    },
+    scrollStrip: {
+      flexGrow: 0,
+      flexShrink: 0,
+    },
+    scrollContent: {
+      flexDirection: 'row',
+      gap: 8,
+      alignItems: 'center',
+      paddingVertical: 2,
+    },
     wrapRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
     chip: {
-      paddingVertical: 6,
-      paddingHorizontal: 11,
-      borderRadius: 8,
+      minHeight: 34,
+      paddingVertical: 7,
+      paddingHorizontal: 12,
+      borderRadius: 9,
       backgroundColor: palette.surfaceSubtle,
       borderWidth: 1,
       borderColor: palette.border,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     chipActive: {
       backgroundColor: palette.buttonBg,
@@ -102,19 +125,25 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     },
     chipText: {
       fontSize: fonts.xs,
+      lineHeight: 16,
       fontWeight: fonts.weight.bold,
       color: palette.textSecondary,
+      includeFontPadding: false,
+      textAlignVertical: 'center',
     },
     chipTextActive: {
       color: palette.onPrimary,
     },
     tabBtn: {
-      paddingVertical: 8,
-      paddingHorizontal: 12,
+      minHeight: 40,
+      paddingVertical: 9,
+      paddingHorizontal: 14,
       borderRadius: 10,
       backgroundColor: palette.surface,
       borderWidth: 1,
       borderColor: palette.border,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     tabBtnActive: {
       backgroundColor: palette.buttonBg,
@@ -122,8 +151,11 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
     },
     tabText: {
       fontSize: fonts.xs,
+      lineHeight: 16,
       fontWeight: fonts.weight.extrabold,
       color: palette.textSecondary,
+      includeFontPadding: false,
+      textAlignVertical: 'center',
     },
     tabTextActive: {
       color: palette.onPrimary,

@@ -1,3 +1,6 @@
+// AttendSure Web - Profile Avatar Component
+// File: D:\AttendSure_V3\web\src\components\common\ProfileAvatar.tsx
+
 /**
  * AttendSure - Reusable User & Teacher Avatar
  * Replaces duplicate implementations across TeachersTab, DTRTab, and MyAssignedClassesTab.

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Teacher Service
+// File: D:\AttendSure_V3\mobile\src\services\teacherService.ts
+
 /**
  * AttendSure - Teacher Directory, School Settings & Attendance Log Service
  * File: mobile/src/services/teacherService.ts

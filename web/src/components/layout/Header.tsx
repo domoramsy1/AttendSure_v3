@@ -1,3 +1,6 @@
+// AttendSure Web - Header Component
+// File: D:\AttendSure_V3\web\src\components\layout\Header.tsx
+
 /**
  * AttendSure - Top Navigation Header & Official Teacher ID Pass Modal
  * File: web/src/components/layout/Header.tsx
@@ -34,6 +37,7 @@ import type { UserSession } from '../../types/section';
 import {
   Sun,
   Moon,
+  Contrast,
   Bell,
   BellOff,
   Volume2,
@@ -49,6 +53,9 @@ import {
   LogOut,
   ChevronDown,
   Building2,
+  BookOpen,
+  HelpCircle,
+  Play,
 } from 'lucide-react';
 
 export type TabBadgeCounts = Partial<Record<NavItemKey, number>>;
@@ -68,6 +75,8 @@ export interface HeaderProps {
   onLogout: () => void;
   onNavigateTab: (tab: NavItemKey) => void;
   onOpenProfile: () => void;
+  onOpenManual?: () => void;
+  onStartTour?: () => void;
 }
 
 interface CurrentUserAccountData {
@@ -98,6 +107,8 @@ export const Header: React.FC<HeaderProps> = ({
   onLogout,
   onNavigateTab,
   onOpenProfile,
+  onOpenManual,
+  onStartTour,
 }) => {
   const themeCtx = useTheme();
   const { mode, tokens, brand, fonts, ui } = themeCtx;
@@ -109,9 +120,30 @@ export const Header: React.FC<HeaderProps> = ({
     } else if (typeof rawTheme.toggleMode === 'function') {
       (rawTheme.toggleMode as () => void)();
     } else if (typeof rawTheme.setMode === 'function') {
-      (rawTheme.setMode as (next: 'light' | 'dark') => void)(mode === 'dark' ? 'light' : 'dark');
+      const nextMode: 'light' | 'dark' | 'high-contrast' =
+        mode === 'light' ? 'dark' : mode === 'dark' ? 'high-contrast' : 'light';
+      (rawTheme.setMode as (next: 'light' | 'dark' | 'high-contrast') => void)(nextMode);
     }
   }, [themeCtx, mode]);
+
+  const themeToggleInfo = useMemo(() => {
+    if (mode === 'dark') {
+      return {
+        label: 'Theme: Dark Mode — click to switch to High-Contrast Mode',
+        icon: <Moon size={15} color={brand.primary} />,
+      };
+    }
+    if (mode === 'high-contrast') {
+      return {
+        label: 'Theme: High-Contrast Mode — click to switch to Light Mode',
+        icon: <Contrast size={15} color={tokens.textPrimary} />,
+      };
+    }
+    return {
+      label: 'Theme: Light Mode — click to switch to Dark Mode',
+      icon: <Sun size={15} color={brand.warning} />,
+    };
+  }, [mode, brand.primary, brand.warning, tokens.textPrimary]);
 
   const [isPassModalOpen, setIsPassModalOpen] = useState<boolean>(false);
   const [isPassPageSetupOpen, setIsPassPageSetupOpen] = useState<boolean>(false);
@@ -310,6 +342,31 @@ export const Header: React.FC<HeaderProps> = ({
             <QrCode size={14} />
             <span>My ID Pass</span>
           </button>
+
+          {onOpenManual && (
+            <button
+              type="button"
+              data-tour="help-manual"
+              onClick={onOpenManual}
+              title="Open searchable User Manual and Animated Guide"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '5px 11px',
+                borderRadius: 8,
+                border: `1px solid ${tokens.borderStrong}`,
+                backgroundColor: tokens.bgSurfaceSubtle,
+                color: tokens.textPrimary,
+                fontSize: '0.75rem',
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              <HelpCircle size={14} color={brand.primary} />
+              <span>Help</span>
+            </button>
+          )}
 
           <div
             style={{
@@ -537,7 +594,8 @@ export const Header: React.FC<HeaderProps> = ({
 
           <button
             type="button"
-            aria-label="Switch color theme"
+            title={themeToggleInfo.label}
+            aria-label={themeToggleInfo.label}
             onClick={handleToggleTheme}
             style={{
               display: 'inline-flex',
@@ -552,11 +610,7 @@ export const Header: React.FC<HeaderProps> = ({
               cursor: 'pointer',
             }}
           >
-            {mode === 'dark' ? (
-              <Sun size={15} color={brand.warning} />
-            ) : (
-              <Moon size={15} color={brand.primary} />
-            )}
+            {themeToggleInfo.icon}
           </button>
 
           <div ref={userMenuRef} style={{ position: 'relative' }}>
@@ -620,6 +674,44 @@ export const Header: React.FC<HeaderProps> = ({
                   <User size={14} color={brand.primary} />
                   <span>My Profile</span>
                 </button>
+
+                {onOpenManual && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsUserMenuOpen(false);
+                      onOpenManual();
+                    }}
+                    style={{
+                      ...ui.btnSecondary,
+                      border: 'none',
+                      justifyContent: 'flex-start',
+                      backgroundColor: 'transparent',
+                    }}
+                  >
+                    <BookOpen size={14} color={brand.primary} />
+                    <span>User Manual &amp; Help</span>
+                  </button>
+                )}
+
+                {onStartTour && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsUserMenuOpen(false);
+                      onStartTour();
+                    }}
+                    style={{
+                      ...ui.btnSecondary,
+                      border: 'none',
+                      justifyContent: 'flex-start',
+                      backgroundColor: 'transparent',
+                    }}
+                  >
+                    <Play size={14} color={brand.success} />
+                    <span>Replay Animated Guide</span>
+                  </button>
+                )}
 
                 {canOpenSettings && (
                   <button

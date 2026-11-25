@@ -1,3 +1,6 @@
+// AttendSure Web - Profile Modal
+// File: D:\AttendSure_V3\web\src\components\modals\ProfileModal.tsx
+
 /**
  * AttendSure - User Profile View & Edit Modal
  * File: web/src/components/modals/ProfileModal.tsx
@@ -139,10 +142,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
 
   const cleanPhoneCheck = sanitizeField(formData.contact_number, 30).trim();
   const phoneAvail = useFieldAvailability({
-    enabled: isOpen && !loading && cleanPhoneCheck.replace(/\D/g, '').length >= 10,
+    enabled: isOpen && !loading && cleanPhoneCheck.replace(/\D/g, '').length >= 7,
     field: 'contact_number',
     value: cleanPhoneCheck,
-    minLength: 10,
+    minLength: 7,
     fallbackMessage: 'This mobile number is already assigned to another staff account.',
     excludeTeacherId: profileIds.teacherId,
     excludeUserId: profileIds.userId,
@@ -161,7 +164,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (saving) return;
+    if (saving || checkingCount > 0) return;
     if (hasLiveErrors) {
       showAlert({
         title: 'Duplicate Information',
@@ -219,6 +222,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
       if (formData.photo === '') {
         payload.photo = null;
         payload.remove_photo = true;
+        payload.clear_photo = true;
       } else if (isSafeImageUrl(formData.photo)) {
         payload.photo = formData.photo;
       }
@@ -233,16 +237,22 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onP
           { signal: controller.signal }
         );
         if (controller.signal.aborted || !mountedRef.current) return;
-        if (pwRes.data?.token) {
-          rotatedToken = pwRes.data.token;
-          localStorage.setItem('attendsure_token', pwRes.data.token);
+        if (pwRes.data?.access) {
+          rotatedToken = pwRes.data.access;
+          localStorage.setItem('attendsure_access', pwRes.data.access);
+        }
+        if (pwRes.data?.refresh) {
+          localStorage.setItem('attendsure_refresh', pwRes.data.refresh);
         }
       }
 
       const res = await apiClient.put(API_ROUTES.accounts.me, payload, { signal: controller.signal });
       if (controller.signal.aborted || !mountedRef.current) return;
-      if (res.data?.token) {
-        localStorage.setItem('attendsure_token', res.data.token);
+      if (res.data?.access) {
+        localStorage.setItem('attendsure_access', res.data.access);
+      }
+      if (res.data?.refresh) {
+        localStorage.setItem('attendsure_refresh', res.data.refresh);
       }
       const mergedData = rotatedToken && !res.data?.token ? { ...res.data, token: rotatedToken } : res.data;
       showAlert({

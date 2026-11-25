@@ -1,3 +1,6 @@
+// AttendSure Web - Sidebar
+// File: D:\AttendSure_V3\web\src\components\layout\Sidebar.tsx
+
 /**
  * AttendSure - Compact Collapsible Sidebar Navigation with Hover Prefetch
  * File: web/src/components/layout/Sidebar.tsx
@@ -27,6 +30,7 @@ import {
   ChevronRight,
   QrCode,
   LayoutGrid,
+  HelpCircle,
 } from 'lucide-react';
 
 export type NavItemKey =
@@ -59,6 +63,7 @@ interface SidebarProps {
   canTeach?: boolean;
   allowedTabs?: NavItemKey[];
   badgeCounts?: TabBadgeCounts;
+  onOpenManual?: () => void;
 }
 
 interface NavItem {
@@ -104,6 +109,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   canTeach = false,
   allowedTabs,
   badgeCounts = {},
+  onOpenManual,
 }) => {
   const { tokens, brand } = useTheme();
   const { t } = useCompliance();
@@ -355,6 +361,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   key={item.key}
                   type="button"
+                  data-tour={item.key}
                   title={isCollapsed ? item.label : undefined}
                   onMouseEnter={() => onPrefetchTab?.(item.key)}
                   onFocus={() => onPrefetchTab?.(item.key)}
@@ -412,6 +419,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         ))}
       </nav>
+
+      {onOpenManual && (
+        <div style={{ padding: isCollapsed ? '4px 6px' : '4px 8px' }}>
+          <button
+            type="button"
+            onClick={onOpenManual}
+            title="Open User Manual & Guided Tour"
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: isCollapsed ? 'center' : 'flex-start',
+              gap: 9,
+              height: 34,
+              padding: isCollapsed ? 0 : '0 10px',
+              borderRadius: 9,
+              borderWidth: 1,
+              borderStyle: 'solid',
+              borderColor: tokens.borderSubtle,
+              backgroundColor: tokens.bgSurfaceSubtle,
+              color: brand.primary,
+              cursor: 'pointer',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+            }}
+          >
+            <HelpCircle size={16} />
+            {!isCollapsed && <span>User Manual</span>}
+          </button>
+        </div>
+      )}
 
       <div
         style={{

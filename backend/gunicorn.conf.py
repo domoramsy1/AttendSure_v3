@@ -1,3 +1,6 @@
+# AttendSure Backend - Gunicorn Server Configuration
+# File: D:\AttendSure_V3\backend\gunicorn.conf.py
+
 # D:\AttendSure_V3\backend\gunicorn.conf.py
 """
 ATTENDSURE - Gunicorn Production Configuration

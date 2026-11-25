@@ -39,12 +39,12 @@ docker compose up -d "web_$TARGET_COLOR"
 docker compose exec -T "web_$TARGET_COLOR" python manage.py migrate --noinput
 docker compose exec -T "web_$TARGET_COLOR" python manage.py collectstatic --noinput
 
-echo "Verifying health on http://127.0.0.1:$TARGET_PORT/api/health/db/..."
+echo "Verifying health on http://127.0.0.1:$TARGET_PORT/api/v1/health/db/..."
 HEALTHY=0
 
 for ATTEMPT in $(seq 1 12); do
     sleep 2
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$TARGET_PORT/api/health/db/" || true)
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$TARGET_PORT/api/v1/health/db/" || true)
     if [ "$HTTP_CODE" = "200" ]; then
         HEALTHY=1
         break

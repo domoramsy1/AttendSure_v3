@@ -1,9 +1,11 @@
+# AttendSure Backend - Reports Read Queries
+# File: D:\AttendSure_V3\backend\apps\reports\selectors.py
+
 import calendar
 import time as time_module
 from datetime import date, datetime, time, timedelta
 from django.core.cache import cache
 from django.db.models import Count, Q
-from django.db.models.functions import ExtractHour
 from django.utils import timezone
 
 from apps.accounts.models import AuditLog, TeacherProfile
@@ -20,12 +22,13 @@ from apps.campus.models import (
     TeacherDailyAttendance,
     TeacherLocationPing,
 )
-from apps.school.models import ClassPeriod, Section
+from apps.school.models import ClassPeriod, SchoolHoliday, Section
 from apps.school.selectors import format_section_label, get_school_metadata
 from apps.students.models import Enrollment, Student
 from common.exceptions import AppError
 from common.media import build_media_url
 from common.permissions import get_user_role, is_school_leader
+from common.time_utils import format_time_12h, local_day_bounds, local_month_bounds
 
 
 def get_dashboard_overview(*, user, request=None) -> dict:
@@ -40,6 +43,7 @@ def get_dashboard_overview(*, user, request=None) -> dict:
         return cached
 
     today = timezone.localdate()
+    today_start, today_end = local_day_bounds(today)
     now = timezone.now()
 
     if leader:
@@ -51,22 +55,30 @@ def get_dashboard_overview(*, user, request=None) -> dict:
         )
         cutting_count = LoafingIncident.objects.filter(
             incident_type="STUDENT_CUTTING_CLASS",
-            detected_at__date=today,
+            detected_at__gte=today_start,
+            detected_at__lt=today_end,
         ).count()
         open_loafing_incidents = LoafingIncident.objects.filter(status="OPEN").count()
         total_teachers = TeacherProfile.objects.filter(user__is_active=True).count()
 
+        timed_out_ids = set(
+            TeacherDailyAttendance.objects.filter(
+                attendance_date=today, time_out__isnull=False
+            ).values_list("teacher_id", flat=True)
+        )
         checked_in_ids = set(
             TeacherDailyAttendance.objects.filter(
-                attendance_date=today, time_in__isnull=False
+                attendance_date=today, time_in__isnull=False, time_out__isnull=True
             ).values_list("teacher_id", flat=True)
         )
         inside_ping_ids = set(
             TeacherLocationPing.objects.filter(
-                recorded_at__date=today, zone_status="INSIDE"
+                recorded_at__gte=today_start,
+                recorded_at__lt=today_end,
+                zone_status="INSIDE",
             ).values_list("teacher_id", flat=True)
         )
-        teachers_on_duty = len(checked_in_ids | inside_ping_ids)
+        teachers_on_duty = len((checked_in_ids | inside_ping_ids) - timed_out_ids)
 
         active_exit_passes = ExitPass.objects.filter(
             is_cancelled=False, returned_at__isnull=True, valid_until__gte=now
@@ -86,7 +98,8 @@ def get_dashboard_overview(*, user, request=None) -> dict:
         cutting_count = LoafingIncident.objects.filter(
             incident_type="STUDENT_CUTTING_CLASS",
             enrollment_id__in=enrollment_ids,
-            detected_at__date=today,
+            detected_at__gte=today_start,
+            detected_at__lt=today_end,
         ).count()
         open_loafing_incidents = (
             LoafingIncident.objects.filter(status="OPEN")
@@ -96,15 +109,28 @@ def get_dashboard_overview(*, user, request=None) -> dict:
             else 0
         )
         total_teachers = 1 if teacher else 0
+        has_timed_out_today = bool(
+            teacher
+            and TeacherDailyAttendance.objects.filter(
+                teacher=teacher, attendance_date=today, time_out__isnull=False
+            ).exists()
+        )
         teachers_on_duty = int(
             bool(
                 teacher
+                and not has_timed_out_today
                 and (
                     TeacherDailyAttendance.objects.filter(
-                        teacher=teacher, attendance_date=today, time_in__isnull=False
+                        teacher=teacher,
+                        attendance_date=today,
+                        time_in__isnull=False,
+                        time_out__isnull=True,
                     ).exists()
                     or TeacherLocationPing.objects.filter(
-                        teacher=teacher, recorded_at__date=today, zone_status="INSIDE"
+                        teacher=teacher,
+                        recorded_at__gte=today_start,
+                        recorded_at__lt=today_end,
+                        zone_status="INSIDE",
                     ).exists()
                 )
             )
@@ -122,12 +148,11 @@ def get_dashboard_overview(*, user, request=None) -> dict:
             attendance_date=today, enrollment_id__in=enrollment_ids
         )
 
-    hour_rows = (
-        recent_qs.annotate(hr=ExtractHour("scanned_at"))
-        .values("hr")
-        .annotate(cnt=Count("id"))
-    )
-    hour_map = {r["hr"]: r["cnt"] for r in hour_rows}
+    hour_map: dict[int, int] = {}
+    for scanned_ts in recent_qs.values_list("scanned_at", flat=True):
+        if scanned_ts is not None:
+            local_hr = timezone.localtime(scanned_ts).hour
+            hour_map[local_hr] = hour_map.get(local_hr, 0) + 1
     peak = max(hour_map.values(), default=1) or 1
     hourly_scans = [
         {
@@ -168,7 +193,7 @@ def get_dashboard_overview(*, user, request=None) -> dict:
                 if (item.class_period and item.class_period.section)
                 else "",
             ),
-            "scan_time": timezone.localtime(item.scanned_at).strftime("%I:%M:%S %p"),
+            "scan_time": format_time_12h(item.scanned_at, include_seconds=True),
         }
         for item in recent_logs
     ]
@@ -239,11 +264,12 @@ def get_dropout_risk_report(
             lates=Count("id", filter=Q(status="LATE")),
         )
     }
+    window_start_dt, _ = local_day_bounds(window_start)
     cutting_counts = dict(
         LoafingIncident.objects.filter(
             incident_type="STUDENT_CUTTING_CLASS",
             enrollment_id__in=enrollment_ids,
-            detected_at__date__gte=window_start,
+            detected_at__gte=window_start_dt,
         )
         .values("enrollment_id")
         .annotate(cnt=Count("id"))
@@ -423,51 +449,88 @@ def get_monthly_dtr_data(
     ).first()
 
     _, num_days = calendar.monthrange(year, month)
-    timestamps_by_day: dict[int, list[datetime]] = {}
+    daily_by_day: dict[int, TeacherDailyAttendance] = {}
+    pings_by_day: dict[int, list[datetime]] = {}
     verified_days: set[int] = set()
 
-    for daily in TeacherDailyAttendance.objects.filter(
-        teacher=teacher,
-        attendance_date__year=year,
-        attendance_date__month=month,
+    for daily in (
+        TeacherDailyAttendance.objects.filter(
+            teacher=teacher,
+            attendance_date__year=year,
+            attendance_date__month=month,
+        )
+        .select_related("boundary")
     ):
         day_num = daily.attendance_date.day
-        if daily.time_in:
+        daily_by_day[day_num] = daily
+        if daily.time_in or daily.time_out:
             verified_days.add(day_num)
-            timestamps_by_day.setdefault(day_num, []).append(
-                timezone.localtime(daily.time_in)
-            )
-        if daily.time_out:
-            verified_days.add(day_num)
-            timestamps_by_day.setdefault(day_num, []).append(
-                timezone.localtime(daily.time_out)
-            )
+
+    month_start_dt, month_end_dt = local_month_bounds(year, month)
 
     if verified_days:
         for ping in TeacherLocationPing.objects.filter(
             teacher=teacher,
-            recorded_at__year=year,
-            recorded_at__month=month,
+            recorded_at__gte=month_start_dt,
+            recorded_at__lt=month_end_dt,
             zone_status="INSIDE",
         ).order_by("recorded_at"):
             local_dt = timezone.localtime(ping.recorded_at)
             if local_dt.day in verified_days:
-                timestamps_by_day.setdefault(local_dt.day, []).append(local_dt)
+                pings_by_day.setdefault(local_dt.day, []).append(local_dt)
 
-    for day_list in timestamps_by_day.values():
+    for day_list in pings_by_day.values():
         day_list.sort()
+
+    active_boundary = (
+        CampusBoundary.objects.filter(is_active=True)
+        .only("duty_start_time", "duty_end_time", "loafing_grace_minutes")
+        .first()
+    )
+    default_duty_start = active_boundary.duty_start_time if active_boundary else time(7, 30)
+    default_duty_end = active_boundary.duty_end_time if active_boundary else time(17, 0)
+    default_grace_minutes = (
+        max(0, int(active_boundary.loafing_grace_minutes or 0))
+        if active_boundary
+        else 0
+    )
+    current_tz = timezone.get_current_timezone()
+
+    holiday_dates = set(
+        SchoolHoliday.objects.filter(
+            holiday_date__range=(date(year, month, 1), date(year, month, num_days))
+        ).values_list("holiday_date", flat=True)
+    )
+
+    today_local = timezone.localdate()
+    if year == today_local.year and month == today_local.month:
+        today_att_rec = daily_by_day.get(today_local.day)
+    else:
+        today_att_rec = (
+            TeacherDailyAttendance.objects.filter(
+                teacher=teacher,
+                attendance_date=today_local,
+            )
+            .only("time_in", "time_out")
+            .first()
+        )
+    is_clocked_in_today = bool(
+        today_att_rec and today_att_rec.time_in and not today_att_rec.time_out
+    )
+    has_timed_out_today = bool(today_att_rec and today_att_rec.time_out)
 
     incidents_by_day: dict[int, LoafingIncident] = {}
     for inc in LoafingIncident.objects.filter(
         teacher=teacher,
-        detected_at__year=year,
-        detected_at__month=month,
+        detected_at__gte=month_start_dt,
+        detected_at__lt=month_end_dt,
     ).order_by("-detected_at"):
         inc_day = timezone.localtime(inc.detected_at).day
         incidents_by_day.setdefault(inc_day, inc)
 
     rows = []
     days_present = 0
+    total_undertime_mins_sum = 0
 
     for day_num in range(1, 32):
         if day_num > num_days:
@@ -493,12 +556,126 @@ def get_monthly_dtr_data(
 
         dt_obj = date(year, month, day_num)
         is_weekend = dt_obj.weekday() >= 5
-        day_stamps = timestamps_by_day.get(day_num, [])
-        am_stamps = [p for p in day_stamps if p.hour < 12]
-        pm_stamps = [p for p in day_stamps if p.hour >= 12]
+        is_holiday = dt_obj in holiday_dates
+        daily_rec = daily_by_day.get(day_num)
+        daily_in_dt = (
+            timezone.localtime(daily_rec.time_in)
+            if (daily_rec and daily_rec.time_in)
+            else None
+        )
+        daily_out_dt = (
+            timezone.localtime(daily_rec.time_out)
+            if (daily_rec and daily_rec.time_out)
+            else None
+        )
+        day_pings = pings_by_day.get(day_num, [])
+        has_verified_log = bool(daily_in_dt or daily_out_dt)
 
-        if day_stamps:
+        if has_verified_log:
             days_present += 1
+
+        # Exclude pings recorded at the exact time_in/time_out event (within 60s)
+        def _is_distinct_ping(p_dt: datetime) -> bool:
+            if daily_in_dt is not None and abs((p_dt - daily_in_dt).total_seconds()) < 60:
+                return False
+            if daily_out_dt is not None and abs((p_dt - daily_out_dt).total_seconds()) < 60:
+                return False
+            return True
+
+        distinct_pings = [p for p in day_pings if _is_distinct_ping(p)]
+
+        # Strictly derive AM/PM arrivals and departures from verified TeacherDailyAttendance
+        # time_in / time_out. Never let passive GPS pings fabricate departures or treat
+        # 12:00 PM - 12:59 PM noon pings as afternoon arrival.
+        am_arrival_dt = daily_in_dt if (daily_in_dt and daily_in_dt.hour < 12) else None
+        am_departure_dt = daily_out_dt if (daily_out_dt and daily_out_dt.hour < 12) else None
+
+        if daily_in_dt and daily_in_dt.hour >= 12:
+            pm_arrival_dt = daily_in_dt
+        elif daily_in_dt and daily_in_dt.hour < 12:
+            afternoon_pings = [
+                p
+                for p in distinct_pings
+                if p.hour >= 13 and (daily_out_dt is None or p < daily_out_dt)
+            ]
+            pm_arrival_dt = afternoon_pings[0] if afternoon_pings else None
+        else:
+            pm_arrival_dt = None
+
+        pm_departure_dt = daily_out_dt if (daily_out_dt and daily_out_dt.hour >= 12) else None
+
+        # Calculate CSC Form 48 undertime on regular working days (skip weekends, holidays, and official passes)
+        day_ut_minutes = 0
+        if (
+            has_verified_log
+            and not is_weekend
+            and not is_holiday
+            and (not daily_rec or daily_rec.status != "ON_OFFICIAL_PASS")
+        ):
+            duty_start = (
+                daily_rec.boundary.duty_start_time
+                if (daily_rec and daily_rec.boundary_id and daily_rec.boundary)
+                else default_duty_start
+            )
+            duty_end = (
+                daily_rec.boundary.duty_end_time
+                if (daily_rec and daily_rec.boundary_id and daily_rec.boundary)
+                else default_duty_end
+            )
+            grace_mins = (
+                max(0, int(daily_rec.boundary.loafing_grace_minutes or 0))
+                if (daily_rec and daily_rec.boundary_id and daily_rec.boundary)
+                else default_grace_minutes
+            )
+            if duty_start and duty_end and duty_start < duty_end:
+                duty_start_dt = timezone.make_aware(
+                    datetime.combine(dt_obj, duty_start), current_tz
+                )
+                duty_end_dt = timezone.make_aware(
+                    datetime.combine(dt_obj, duty_end), current_tz
+                )
+                lunch_start_dt = timezone.make_aware(
+                    datetime.combine(dt_obj, time(12, 0)), current_tz
+                )
+                lunch_end_dt = timezone.make_aware(
+                    datetime.combine(dt_obj, time(13, 0)), current_tz
+                )
+
+                def _working_minutes_between(a_dt: datetime, b_dt: datetime) -> int:
+                    if b_dt <= a_dt:
+                        return 0
+                    total_secs = (b_dt - a_dt).total_seconds()
+                    overlap_start = max(a_dt, lunch_start_dt)
+                    overlap_end = min(b_dt, lunch_end_dt)
+                    lunch_secs = max(0.0, (overlap_end - overlap_start).total_seconds())
+                    return max(0, int((total_secs - lunch_secs) // 60))
+
+                max_duty_mins = _working_minutes_between(duty_start_dt, duty_end_dt)
+                grace_cutoff_dt = duty_start_dt + timedelta(minutes=grace_mins)
+
+                late_mins = 0
+                if daily_in_dt and daily_in_dt > duty_start_dt:
+                    within_grace_on_time = (
+                        daily_rec is not None
+                        and str(daily_rec.status or "").upper() == "ON_TIME"
+                        and daily_in_dt <= grace_cutoff_dt
+                    )
+                    if not within_grace_on_time:
+                        clamped_in = min(daily_in_dt, duty_end_dt)
+                        late_mins = _working_minutes_between(duty_start_dt, clamped_in)
+
+                early_mins = 0
+                if daily_out_dt and daily_out_dt < duty_end_dt:
+                    clamped_out = max(daily_out_dt, duty_start_dt)
+                    early_mins = _working_minutes_between(clamped_out, duty_end_dt)
+
+                day_ut_minutes = min(max_duty_mins, late_mins + early_mins)
+
+        if day_ut_minutes > 0:
+            row_ut_hours, row_ut_mins = divmod(day_ut_minutes, 60)
+            total_undertime_mins_sum += day_ut_minutes
+        else:
+            row_ut_hours, row_ut_mins = "", ""
 
         inc = incidents_by_day.get(day_num)
         has_inc = inc is not None
@@ -510,24 +687,22 @@ def get_monthly_dtr_data(
                 "date_str": dt_obj.strftime("%Y-%m-%d"),
                 "day_of_week": dt_obj.strftime("%a"),
                 "is_weekend": is_weekend,
-                "am_arrival": am_stamps[0].strftime("%I:%M") if am_stamps else "",
-                "am_departure": am_stamps[-1].strftime("%I:%M")
-                if len(am_stamps) > 1
-                else "",
-                "pm_arrival": pm_stamps[0].strftime("%I:%M") if pm_stamps else "",
-                "pm_departure": pm_stamps[-1].strftime("%I:%M")
-                if len(pm_stamps) > 1
-                else "",
-                "undertime_hours": "",
-                "undertime_minutes": "",
+                "am_arrival": am_arrival_dt.strftime("%I:%M") if am_arrival_dt else "",
+                "am_departure": am_departure_dt.strftime("%I:%M") if am_departure_dt else "",
+                "pm_arrival": pm_arrival_dt.strftime("%I:%M") if pm_arrival_dt else "",
+                "pm_departure": pm_departure_dt.strftime("%I:%M") if pm_departure_dt else "",
+                "undertime_hours": row_ut_hours,
+                "undertime_minutes": row_ut_mins,
                 "status": "PRESENT"
-                if day_stamps
+                if has_verified_log
                 else ("WEEKEND" if is_weekend else "NO_LOG"),
                 "is_loafing": has_inc,
                 "loafing_excused": is_excused,
                 "loafing_remarks": inc.remarks if inc else "",
             }
         )
+
+    total_ut_hours, total_ut_minutes = divmod(total_undertime_mins_sum, 60)
 
     school_meta = get_school_metadata(request)
     default_reg_hours = "8:00 AM - 12:00 PM / 1:00 PM - 5:00 PM"
@@ -559,9 +734,12 @@ def get_monthly_dtr_data(
         "user_role": role,
         "can_approve_dept": leader,
         "can_clear_loafing": bool(user.is_superuser or role in ("ADMIN", "PRINCIPAL")),
+        "today_date": str(today_local),
+        "is_clocked_in_today": is_clocked_in_today,
+        "has_timed_out_today": has_timed_out_today,
         "days_present": days_present,
-        "total_undertime_hours": 0,
-        "total_undertime_minutes": 0,
+        "total_undertime_hours": total_ut_hours,
+        "total_undertime_minutes": total_ut_minutes,
         "rows": rows,
         "daily_logs": rows,
         "school": school_meta,
@@ -571,7 +749,8 @@ def get_monthly_dtr_data(
 def get_sdg_impact_summary() -> dict:
     """Computes live UN SDG 4, 5/10, 8, 12/13, and 16 metrics strictly from database records."""
     today = timezone.localdate()
-    month_start = timezone.make_aware(datetime(today.year, today.month, 1, 0, 0, 0))
+    today_start, today_end = local_day_bounds(today)
+    month_start, _ = local_month_bounds(today.year, today.month)
 
     active_students_qs = Student.objects.filter(is_active=True)
     total_students = active_students_qs.count()
@@ -656,7 +835,9 @@ def get_sdg_impact_summary() -> dict:
         )
         | set(
             TeacherLocationPing.objects.filter(
-                recorded_at__date=today, zone_status="INSIDE"
+                recorded_at__gte=today_start,
+                recorded_at__lt=today_end,
+                zone_status="INSIDE",
             ).values_list("teacher_id", flat=True)
         )
     )
@@ -753,6 +934,7 @@ def get_system_status() -> dict:
         return cached
 
     today = timezone.localdate()
+    today_start, today_end = local_day_bounds(today)
     now = timezone.now()
     boundary = (
         CampusBoundary.objects.filter(is_active=True)
@@ -769,17 +951,27 @@ def get_system_status() -> dict:
     total_class_teachers = TeacherProfile.objects.filter(
         user__is_active=True, can_handle_classes=True
     ).count()
+    timed_out_ids = set(
+        TeacherDailyAttendance.objects.filter(
+            attendance_date=today, time_out__isnull=False
+        ).values_list("teacher_id", flat=True)
+    )
     online_teachers_today = len(
-        set(
-            TeacherDailyAttendance.objects.filter(
-                attendance_date=today, time_in__isnull=False
-            ).values_list("teacher_id", flat=True)
+        (
+            set(
+                TeacherDailyAttendance.objects.filter(
+                    attendance_date=today, time_in__isnull=False, time_out__isnull=True
+                ).values_list("teacher_id", flat=True)
+            )
+            | set(
+                TeacherLocationPing.objects.filter(
+                    recorded_at__gte=today_start,
+                    recorded_at__lt=today_end,
+                    zone_status="INSIDE",
+                ).values_list("teacher_id", flat=True)
+            )
         )
-        | set(
-            TeacherLocationPing.objects.filter(
-                recorded_at__date=today, zone_status="INSIDE"
-            ).values_list("teacher_id", flat=True)
-        )
+        - timed_out_ids
     )
     open_loafing = LoafingIncident.objects.filter(status="OPEN").count()
     active_exit_passes = ExitPass.objects.filter(

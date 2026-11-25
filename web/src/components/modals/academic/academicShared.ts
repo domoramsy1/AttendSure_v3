@@ -1,3 +1,6 @@
+// AttendSure Web - Academic Shared Component
+// File: D:\AttendSure_V3\web\src\components\modals\academic\academicShared.ts
+
 /**
  * AttendSure - Shared Helpers, Types & Styles for Academic Setup Sub-Forms
  * File: web/src/components/modals/academic/academicShared.ts

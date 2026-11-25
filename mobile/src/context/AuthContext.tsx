@@ -1,34 +1,28 @@
+// AttendSure Mobile - Auth Context (JWT Access + Refresh Standardized)
+// File: D:\AttendSure_V3\mobile\src\context\AuthContext.tsx
+
 /**
  * AttendSure Mobile - Authentication Context & Session Manager
+ * Stores JWT access & refresh tokens securely in expo-secure-store with silent refresh
+ * and per-device refresh token revocation on sign-out.
  * File: mobile/src/context/AuthContext.tsx
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type * as SecureStoreType from 'expo-secure-store';
-import { apiClient, AUTH_TOKEN_KEY, onAuthExpired } from '../api/client';
+import {
+  apiClient,
+  clearStoredAuthTokens,
+  getValidAccessToken,
+  isJwtString,
+  onAuthExpired,
+  readStoredRefreshToken,
+  saveAuthTokens,
+} from '../api/client';
 import { ENDPOINTS } from '../api/endpoints';
 import { stopPassivePresenceTracking } from '../services/backgroundLocation';
 
-let cachedSecureStore: typeof SecureStoreType | null | undefined;
-const getSecureStore = (): typeof SecureStoreType | null => {
-  if (cachedSecureStore !== undefined) return cachedSecureStore;
-  if (Platform.OS === 'web') {
-    cachedSecureStore = null;
-    return null;
-  }
-  try {
-    // Lazy require avoids startup crashes if native SecureStore is missing in the runtime
-    cachedSecureStore = require('expo-secure-store') as typeof SecureStoreType;
-  } catch {
-    cachedSecureStore = null;
-  }
-  return cachedSecureStore;
-};
-
 const USER_CACHE_KEY = 'attendsure_user_profile';
-const REFRESH_TOKEN_KEY = 'attendsure_refresh_token';
 const ALLOWED_ROLES = new Set(['ADMIN', 'PRINCIPAL', 'DEPT_HEAD', 'TEACHER']);
 
 export interface AuthenticatedUser {
@@ -56,6 +50,12 @@ export interface AuthenticatedUser {
   bound_device_id?: string | null;
   has_bound_device?: boolean;
   has_biometric_enrolled?: boolean;
+  has_asymmetric_key?: boolean;
+  onboarding_completed?: boolean;
+  onboarding_completed_at?: string | null;
+  onboarding_version?: number;
+  current_onboarding_version?: number;
+  needs_onboarding?: boolean;
   can_handle_classes: boolean;
   can_teach: boolean;
   is_superuser: boolean;
@@ -71,53 +71,10 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   updateUser: (updatedFields: Partial<AuthenticatedUser>) => Promise<void>;
-  updateSessionToken: (nextToken: string) => Promise<void>;
+  updateSessionToken: (nextAccessToken: string, nextRefreshToken?: string | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-const saveTokenSafely = async (token: string): Promise<void> => {
-  await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
-  const store = getSecureStore();
-  if (store) {
-    try {
-      await store.setItemAsync(AUTH_TOKEN_KEY, token);
-    } catch {}
-  }
-};
-
-const readTokenSafely = async (): Promise<string | null> => {
-  const store = getSecureStore();
-  if (store) {
-    try {
-      const secureToken = await store.getItemAsync(AUTH_TOKEN_KEY);
-      if (secureToken) return secureToken;
-    } catch {}
-  }
-  return AsyncStorage.getItem(AUTH_TOKEN_KEY);
-};
-
-const clearTokenSafely = async (): Promise<void> => {
-  await AsyncStorage.multiRemove([
-    AUTH_TOKEN_KEY,
-    REFRESH_TOKEN_KEY,
-    USER_CACHE_KEY,
-    'user_token',
-    'attendsure_token',
-    'attendsure_user',
-    'attendsure_role',
-    'attendsure_teacher_on_duty',
-  ]);
-  const store = getSecureStore();
-  if (store) {
-    try {
-      await store.deleteItemAsync(AUTH_TOKEN_KEY);
-    } catch {}
-    try {
-      await store.deleteItemAsync(REFRESH_TOKEN_KEY);
-    } catch {}
-  }
-};
 
 const normalizeUserPayload = (raw: Record<string, any>): AuthenticatedUser => {
   const rawRole = String(raw.role || raw.system_role || 'TEACHER').trim().toUpperCase();
@@ -133,6 +90,14 @@ const normalizeUserPayload = (raw: Record<string, any>): AuthenticatedUser => {
       : raw.can_teach !== undefined && raw.can_teach !== null
         ? Boolean(raw.can_teach)
         : true;
+
+  const onboardingCompleted = Boolean(raw.onboarding_completed);
+  const onboardingVersion = Number(raw.onboarding_version ?? 0);
+  const currentOnboardingVersion = Number(raw.current_onboarding_version ?? 1);
+  const needsOnboarding =
+    raw.needs_onboarding !== undefined && raw.needs_onboarding !== null
+      ? Boolean(raw.needs_onboarding)
+      : !onboardingCompleted || onboardingVersion < currentOnboardingVersion;
 
   return {
     id: Number(raw.id ?? raw.user_id ?? 0),
@@ -159,6 +124,12 @@ const normalizeUserPayload = (raw: Record<string, any>): AuthenticatedUser => {
     bound_device_id: raw.bound_device_id ?? null,
     has_bound_device: Boolean(raw.has_bound_device ?? raw.bound_device_id),
     has_biometric_enrolled: Boolean(raw.has_biometric_enrolled ?? raw.biometric_enrolled),
+    has_asymmetric_key: Boolean(raw.has_asymmetric_key),
+    onboarding_completed: onboardingCompleted,
+    onboarding_completed_at: raw.onboarding_completed_at ?? null,
+    onboarding_version: onboardingVersion,
+    current_onboarding_version: currentOnboardingVersion,
+    needs_onboarding: needsOnboarding,
     can_handle_classes: canHandle,
     can_teach: canHandle,
     is_superuser: Boolean(raw.is_superuser),
@@ -190,8 +161,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     abortRef.current = controller;
 
     try {
-      const storedToken = await readTokenSafely();
-      if (!storedToken) {
+      const validAccess = await getValidAccessToken(false);
+      if (!validAccess || !isJwtString(validAccess)) {
         if (isMountedRef.current) {
           setUser(null);
           setToken(null);
@@ -202,8 +173,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await apiClient.get(ENDPOINTS.CURRENT_USER, { signal: controller.signal });
       if (isMountedRef.current && res.data && (res.data.id || res.data.username)) {
         const normalized = normalizeUserPayload(res.data);
+        const latestAccess = (await getValidAccessToken(false)) || validAccess;
         setUser(normalized);
-        setToken(storedToken);
+        setToken(latestAccess);
         await AsyncStorage.setItem(USER_CACHE_KEY, JSON.stringify(normalized));
       }
     } catch (err: unknown) {
@@ -211,7 +183,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (anyErr?.code === 'ERR_CANCELED') return;
       const status = anyErr?.response?.status;
       if (status === 401 || status === 403) {
-        await clearTokenSafely();
+        await clearStoredAuthTokens();
         if (isMountedRef.current) {
           setUser(null);
           setToken(null);
@@ -225,23 +197,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const restoreSession = async () => {
       try {
-        const storedToken = await readTokenSafely();
+        const storedAccess = await getValidAccessToken(false);
         const cachedUserStr = await AsyncStorage.getItem(USER_CACHE_KEY);
 
-        if (isMountedRef.current && storedToken && cachedUserStr) {
-          setToken(storedToken);
+        if (isMountedRef.current && storedAccess && isJwtString(storedAccess) && cachedUserStr) {
+          setToken(storedAccess);
           setUser(normalizeUserPayload(JSON.parse(cachedUserStr)));
           setLoading(false);
-          // Refresh profile silently in background so startup never blocks offline
           void refreshUser();
           return;
         }
 
-        if (storedToken) {
+        if (storedAccess && isJwtString(storedAccess)) {
           await refreshUser();
+        } else if (storedAccess) {
+          // Migrate legacy non-JWT sessions cleanly by prompting a fresh JWT sign-in
+          await clearStoredAuthTokens();
         }
       } catch {
-        await clearTokenSafely();
+        await clearStoredAuthTokens();
         if (isMountedRef.current) {
           setUser(null);
           setToken(null);
@@ -257,7 +231,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const unsubscribeAuthExpired = onAuthExpired(() => {
       void stopPassivePresenceTracking();
-      clearTokenSafely().finally(() => {
+      clearStoredAuthTokens().finally(() => {
         if (isMountedRef.current) {
           setToken(null);
           setUser(null);
@@ -284,12 +258,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     const d = res.data || {};
-    // Prefer durable DRF auth token (matches LogoutView & ChangePasswordView rotation); fall back to JWT access
-    const receivedToken: string | undefined = d.token || d.access || d.key;
+    // Standardized on JWT access + refresh tokens
+    const receivedAccess: string | undefined = d.access || d.token;
     const receivedRefresh: string | undefined = d.refresh;
     const rawUser: Record<string, any> | undefined = d.user || (d.id || d.user_id ? d : undefined);
 
-    if (!receivedToken || !rawUser) {
+    if (!receivedAccess || !isJwtString(receivedAccess) || !rawUser) {
       throw new Error('Invalid response received from authentication server.');
     }
 
@@ -299,13 +273,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const normalizedUser = normalizeUserPayload({ ...d, ...rawUser });
-    await saveTokenSafely(receivedToken);
-    if (receivedRefresh) {
-      await AsyncStorage.setItem(REFRESH_TOKEN_KEY, receivedRefresh).catch(() => {});
-    }
+    await saveAuthTokens(receivedAccess, receivedRefresh);
     await AsyncStorage.setItem(USER_CACHE_KEY, JSON.stringify(normalizedUser));
 
-    setToken(receivedToken);
+    setToken(receivedAccess);
     setUser(normalizedUser);
 
     refreshUser().catch(() => {});
@@ -313,9 +284,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async (): Promise<void> => {
     await stopPassivePresenceTracking().catch(() => {});
-    const refresh = await AsyncStorage.getItem(REFRESH_TOKEN_KEY).catch(() => null);
-    await apiClient.post(ENDPOINTS.LOGOUT, refresh ? { refresh } : {}).catch(() => {});
-    await clearTokenSafely();
+    const refresh = await readStoredRefreshToken().catch(() => null);
+
+    // LogoutView allows revoking the device's refresh token even if the access token expired
+    await apiClient
+      .post(ENDPOINTS.LOGOUT, {
+        ...(refresh ? { refresh } : {}),
+      })
+      .catch(() => {});
+
+    await clearStoredAuthTokens();
     setToken(null);
     setUser(null);
   };
@@ -332,10 +310,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await AsyncStorage.setItem(USER_CACHE_KEY, JSON.stringify(nextUser));
   };
 
-  const updateSessionToken = async (nextToken: string): Promise<void> => {
-    if (!nextToken) return;
-    await saveTokenSafely(nextToken);
-    setToken(nextToken);
+  const updateSessionToken = async (
+    nextAccessToken: string,
+    nextRefreshToken?: string | null
+  ): Promise<void> => {
+    if (!nextAccessToken) return;
+    await saveAuthTokens(nextAccessToken, nextRefreshToken);
+    setToken(nextAccessToken);
   };
 
   return (

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Seed School
+# File: D:\AttendSure_V3\scripts\database\seed_school.py
+
 r"""
 AttendSure - School, Timetable & Learner Seeder (Strict 3NF Schema)
 Run:

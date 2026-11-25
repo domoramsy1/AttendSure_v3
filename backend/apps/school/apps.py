@@ -1,3 +1,6 @@
+# AttendSure Backend - School App Configuration
+# File: D:\AttendSure_V3\backend\apps\school\apps.py
+
 from django.apps import AppConfig
 
 

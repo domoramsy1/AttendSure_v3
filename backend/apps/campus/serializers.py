@@ -1,4 +1,6 @@
-# D:\AttendSure_V3\backend\apps\campus\serializers.py
+# AttendSure Backend - Campus Data Serializers
+# File: D:\AttendSure_V3\backend\apps\campus\serializers.py
+
 from rest_framework import serializers
 
 
@@ -49,28 +51,79 @@ class TeacherGpsPingSerializer(serializers.Serializer):
     accuracy_meters = serializers.FloatField(required=False, allow_null=True)
     speed_mps = serializers.FloatField(required=False, allow_null=True)
     gps_timestamp_ms = serializers.IntegerField(required=False, allow_null=True)
+    recorded_at = serializers.DateTimeField(required=False, allow_null=True)
     is_mock_location = serializers.BooleanField(default=False, required=False)
     mocked = serializers.BooleanField(default=False, required=False)
     device_id = serializers.CharField(max_length=128, required=False, allow_blank=True)
     client_device_id = serializers.CharField(max_length=128, required=False, allow_blank=True)
-    device_model = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    device_model = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
 
-    # Built-in phone biometric verification + backward-compatible aliases
+    # Phone health & background telemetry fields
+    battery_percent = serializers.IntegerField(min_value=0, max_value=100, required=False, allow_null=True)
+    is_charging = serializers.BooleanField(required=False, allow_null=True)
+    is_low_power_mode = serializers.BooleanField(required=False, allow_null=True)
+    network_type = serializers.ChoiceField(
+        choices=["WIFI", "CELLULAR", "NONE", "UNKNOWN"],
+        required=False,
+        default="UNKNOWN",
+    )
+    is_gps_enabled = serializers.BooleanField(required=False, default=True)
+    app_state = serializers.ChoiceField(
+        choices=["ACTIVE", "BACKGROUND", "UNKNOWN"],
+        required=False,
+        default="UNKNOWN",
+    )
+    ping_source = serializers.ChoiceField(
+        choices=["FOREGROUND", "BACKGROUND_TASK", "OFFLINE_QUEUE"],
+        required=False,
+        default="FOREGROUND",
+    )
+
+    # Built-in phone lock verification + cryptographic asymmetric signature proof
     biometric_verified_on_device = serializers.BooleanField(default=True, required=False)
     face_verified_on_device = serializers.BooleanField(default=True, required=False)
     face_verified = serializers.BooleanField(default=True, required=False)
     biometric_key_id = serializers.CharField(
         max_length=128, required=False, allow_blank=True, allow_null=True
     )
-    biometric_proof = serializers.CharField(
+    biometric_public_key = serializers.CharField(
+        max_length=1024, required=False, allow_blank=True, allow_null=True
+    )
+    biometric_key_algorithm = serializers.ChoiceField(
+        choices=["ED25519", "ECDSA_P256"],
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
+    biometric_signature = serializers.CharField(
+        max_length=512, required=False, allow_blank=True, allow_null=True
+    )
+    biometric_nonce = serializers.CharField(
         max_length=128, required=False, allow_blank=True, allow_null=True
+    )
+    biometric_proof = serializers.CharField(
+        max_length=512, required=False, allow_blank=True, allow_null=True
     )
     biometric_method = serializers.CharField(
         max_length=40, required=False, allow_blank=True, allow_null=True
     )
     biometric_timestamp_ms = serializers.IntegerField(required=False, allow_null=True)
 
+    def to_internal_value(self, data):
+        mutable = {k: data.get(k) for k in data.keys()} if hasattr(data, "keys") else dict(data)
+        for upper_field in ("network_type", "app_state", "ping_source", "biometric_key_algorithm"):
+            if upper_field in mutable and isinstance(mutable[upper_field], str):
+                mutable[upper_field] = mutable[upper_field].strip().upper()
+        if "device_model" in mutable and mutable["device_model"] is None:
+            mutable["device_model"] = ""
+        return super().to_internal_value(mutable)
+
     def validate_biometric_proof(self, value):
+        if value is None:
+            return value
+        return str(value).strip()
+
+    def validate_biometric_signature(self, value):
         if value is None:
             return value
         return str(value).strip()

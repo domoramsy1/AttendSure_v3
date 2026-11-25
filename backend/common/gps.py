@@ -1,3 +1,6 @@
+# AttendSure Backend - Common GPS
+# File: D:\AttendSure_V3\backend\common\gps.py
+
 import math
 
 MAX_ALLOWED_GPS_ACCURACY_METERS = 250.0

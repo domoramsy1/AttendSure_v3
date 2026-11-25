@@ -1,3 +1,6 @@
+// AttendSure Web - Status Badge Component
+// File: D:\AttendSure_V3\web\src\components\common\StatusBadge.tsx
+
 /**
  * AttendSure - Unified Semantic Status Badge
  * File: web/src/components/common/StatusBadge.tsx
@@ -46,6 +49,10 @@ const AMBER_STATUSES = new Set([
   'TRANSFERRED_OUT',
   'TRANSFERRED OUT',
   'PENDING',
+  'PENDING_APPROVAL',
+  'PENDING APPROVAL',
+  'SIGNAL_LOST',
+  'SIGNAL LOST',
   'WARNING',
 ]);
 

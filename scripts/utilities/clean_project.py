@@ -1,3 +1,6 @@
+# AttendSure Scripts - Clean Project
+# File: D:\AttendSure_V3\scripts\utilities\clean_project.py
+
 r"""
 AttendSure - Bytecode & Application Cache Cleaner
 Run: python utilities\clean_project.py

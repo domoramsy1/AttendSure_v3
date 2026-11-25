@@ -1,3 +1,6 @@
+// AttendSure Mobile - Duty Right Now Card
+// File: D:\AttendSure_V3\mobile\src\components\dashboard\DutyRightNowCard.tsx
+
 /**
  * AttendSure Mobile - Glanceable Duty, Location & Next-Step Card
  * File: mobile/src/components/dashboard/DutyRightNowCard.tsx

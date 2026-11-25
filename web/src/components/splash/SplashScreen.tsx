@@ -1,3 +1,6 @@
+// AttendSure Web - Splash Screen Component
+// File: D:\AttendSure_V3\web\src\components\splash\SplashScreen.tsx
+
 /**
  * AttendSure - Circular Radar & Spiral Loader Splash Screen
  * File: web/src/components/splash/SplashScreen.tsx
@@ -17,7 +20,7 @@ const SPIRAL_DOTS = Array.from({ length: 8 }, (_, index) => index);
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   loading,
-  minDurationMs = 7000,
+  minDurationMs = 950,
   onFinish,
 }) => {
   const { mode, tokens, brand, fonts } = useTheme();

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Dashboard Quick Actions Component
+// File: D:\AttendSure_V3\mobile\src\components\dashboard\DashboardQuickActions.tsx
+
 /**
  * AttendSure Mobile - Role-Scoped Dashboard Quick Actions Grid & More Tools Card
  * File: mobile/src/components/dashboard/DashboardQuickActions.tsx

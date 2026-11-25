@@ -1,3 +1,6 @@
+# AttendSure Backend - ASGI Server Entry Point
+# File: D:\AttendSure_V3\backend\config\asgi.py
+
 import os
 from django.core.asgi import get_asgi_application
 

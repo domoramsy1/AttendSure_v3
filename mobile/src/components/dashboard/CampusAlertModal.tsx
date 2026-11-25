@@ -1,3 +1,6 @@
+// AttendSure Mobile - Campus Alert Modal
+// File: D:\AttendSure_V3\mobile\src\components\dashboard\CampusAlertModal.tsx
+
 /**
  * AttendSure Mobile - Outside School Boundary Notice Modal
  * File: mobile/src/components/dashboard/CampusAlertModal.tsx

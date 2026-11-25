@@ -1,3 +1,6 @@
+// AttendSure Mobile - Advisory Matrix Screen
+// File: D:\AttendSure_V3\mobile\src\screens\AdvisoryMatrixScreen.tsx
+
 /**
  * AttendSure Mobile - Class List & Attendance Monitor
  * File: mobile/src/screens/AdvisoryMatrixScreen.tsx
@@ -29,14 +32,30 @@ import {
   cleanText,
   getFriendlyErrorMessage,
 } from '../constants/theme';
-import { getInitials, isCanceledError, resolveMediaUrl } from '../utils/helpers';
+import { confirmAction, getInitials, isCanceledError, resolveMediaUrl, showNotice } from '../utils/helpers';
+import ChipRow from '../components/common/ChipRow';
 
-const CLASS_LIST_CACHE_KEY = 'attendsure_cached_advisory_class_list';
+const CLASS_LIST_CACHE_KEY = 'attendsure_cached_advisory_class_list_v2';
+
+interface AvailableSectionOption {
+  id: number;
+  name: string;
+  grade_level?: string;
+  is_adviser?: boolean;
+}
+
+interface SchedulePeriodOption {
+  schedule_id: number;
+  subject_code: string;
+  subject_name?: string;
+  teacher_name?: string;
+  time_window?: string;
+}
 
 interface SubjectStatus {
   schedule_id: number;
   subject_code: string;
-  status: 'PRESENT' | 'LATE' | 'CUTTING' | 'UNVERIFIED' | 'UNSCANNED';
+  status: 'PRESENT' | 'LATE' | 'EXCUSED' | 'ABSENT' | 'CUTTING' | 'UNVERIFIED' | 'UNSCANNED';
   time: string;
 }
 
@@ -56,11 +75,24 @@ interface AdviseeRow {
 }
 
 interface CachedClassListPayload {
+  date?: string;
   has_advisory_class: boolean;
+  section_id?: number | null;
   section_name: string;
   grade_level: string;
+  available_sections?: AvailableSectionOption[];
+  schedules?: SchedulePeriodOption[];
   matrix: AdviseeRow[];
 }
+
+const formatIsoDateOffset = (daysDelta: number): string => {
+  const dt = new Date();
+  dt.setDate(dt.getDate() + daysDelta);
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const d = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
 
 const triggerSafeWebPrint = (rawHtml: string): void => {
   if (typeof document === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
@@ -102,9 +134,16 @@ export const AdvisoryMatrixScreen: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filterMode, setFilterMode] = useState<'ALL' | 'CUTTING'>('ALL');
+  const [dateMode, setDateMode] = useState<'TODAY' | 'PREVIOUS'>('TODAY');
+  const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+  const [availableSections, setAvailableSections] = useState<AvailableSectionOption[]>([]);
+  const [schedules, setSchedules] = useState<SchedulePeriodOption[]>([]);
+  const [selectedPeriodId, setSelectedPeriodId] = useState<number | null>(null);
+  const [markingAbsent, setMarkingAbsent] = useState(false);
   const [hasAdvisoryClass, setHasAdvisoryClass] = useState(false);
   const [sectionName, setSectionName] = useState('');
   const [gradeLevel, setGradeLevel] = useState('');
+  const [activeDateStr, setActiveDateStr] = useState<string>(() => formatIsoDateOffset(0));
   const [matrix, setMatrix] = useState<AdviseeRow[]>([]);
   const [serverBase, setServerBase] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
@@ -113,63 +152,155 @@ export const AdvisoryMatrixScreen: React.FC = () => {
   const isMountedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
 
-  const fetchClassListData = useCallback(async (fromCacheFirst = false) => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+  const targetDateStr = useMemo(
+    () => formatIsoDateOffset(dateMode === 'PREVIOUS' ? -1 : 0),
+    [dateMode]
+  );
 
-    if (fromCacheFirst) {
-      try {
-        const [cachedStr, base] = await Promise.all([
-          AsyncStorage.getItem(CLASS_LIST_CACHE_KEY),
-          getServerBaseUrl(),
-        ]);
-        if (isMountedRef.current && !controller.signal.aborted) {
-          if (base) setServerBase(base);
-          if (cachedStr) {
-            const parsed: CachedClassListPayload = JSON.parse(cachedStr);
-            setHasAdvisoryClass(Boolean(parsed.has_advisory_class));
-            setSectionName(parsed.section_name || '');
-            setGradeLevel(parsed.grade_level || '');
-            setMatrix(Array.isArray(parsed.matrix) ? parsed.matrix : []);
+  const fetchClassListData = useCallback(
+    async (
+      fromCacheFirst = false,
+      sectionOverride?: number | null,
+      dateOverride?: string
+    ) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const reqSectionId = sectionOverride !== undefined ? sectionOverride : selectedSectionId;
+      const reqDate = dateOverride || targetDateStr;
+
+      if (fromCacheFirst && !reqSectionId && dateMode === 'TODAY') {
+        try {
+          const [cachedStr, base] = await Promise.all([
+            AsyncStorage.getItem(CLASS_LIST_CACHE_KEY),
+            getServerBaseUrl(),
+          ]);
+          if (isMountedRef.current && !controller.signal.aborted) {
+            if (base) setServerBase(base);
+            if (cachedStr) {
+              const parsed: CachedClassListPayload = JSON.parse(cachedStr);
+              setHasAdvisoryClass(Boolean(parsed.has_advisory_class));
+              setSectionName(parsed.section_name || '');
+              setGradeLevel(parsed.grade_level || '');
+              if (parsed.section_id) setSelectedSectionId(parsed.section_id);
+              if (Array.isArray(parsed.available_sections)) {
+                setAvailableSections(parsed.available_sections);
+              }
+              if (Array.isArray(parsed.schedules)) {
+                setSchedules(parsed.schedules);
+              }
+              setMatrix(Array.isArray(parsed.matrix) ? parsed.matrix : []);
+            }
           }
+        } catch {}
+      }
+
+      try {
+        const params: Record<string, string | number> = { date: reqDate };
+        if (reqSectionId) params.section_id = reqSectionId;
+        const res = await apiClient.get<CachedClassListPayload>(ENDPOINTS.ADVISER_MATRIX, {
+          params,
+          signal: controller.signal,
+        });
+        if (!isMountedRef.current || controller.signal.aborted) return;
+
+        setErrorMsg(null);
+        const avail = Array.isArray(res.data?.available_sections) ? res.data.available_sections : [];
+        const scheds = Array.isArray(res.data?.schedules) ? res.data.schedules : [];
+        setAvailableSections(avail);
+        setSchedules(scheds);
+        if (res.data?.date) setActiveDateStr(res.data.date);
+        if (scheds.length > 0) {
+          setSelectedPeriodId((prev) =>
+            prev && scheds.some((s) => s.schedule_id === prev) ? prev : scheds[0].schedule_id
+          );
+        } else {
+          setSelectedPeriodId(null);
         }
-      } catch {}
-    }
 
-    try {
-      const res = await apiClient.get<CachedClassListPayload>(ENDPOINTS.ADVISER_MATRIX, {
-        signal: controller.signal,
-      });
-      if (!isMountedRef.current || controller.signal.aborted) return;
+        if (res.data?.has_advisory_class) {
+          const resolvedSectionId = res.data.section_id ?? reqSectionId ?? avail[0]?.id ?? null;
+          const payload: CachedClassListPayload = {
+            date: res.data.date || reqDate,
+            has_advisory_class: true,
+            section_id: resolvedSectionId,
+            section_name: res.data.section_name || '',
+            grade_level: res.data.grade_level || '',
+            available_sections: avail,
+            schedules: scheds,
+            matrix: Array.isArray(res.data.matrix) ? res.data.matrix : [],
+          };
+          setHasAdvisoryClass(true);
+          if (resolvedSectionId) setSelectedSectionId(resolvedSectionId);
+          setSectionName(payload.section_name);
+          setGradeLevel(payload.grade_level);
+          setMatrix(payload.matrix);
+          if (dateMode === 'TODAY') {
+            AsyncStorage.setItem(CLASS_LIST_CACHE_KEY, JSON.stringify(payload)).catch(() => {});
+          }
+        } else {
+          setHasAdvisoryClass(false);
+          setMatrix([]);
+        }
+      } catch (err: unknown) {
+        if (!isMountedRef.current || isCanceledError(err)) return;
+        setErrorMsg(getFriendlyErrorMessage(err, 'Could not load your class list right now.'));
+      } finally {
+        if (isMountedRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [selectedSectionId, targetDateStr, dateMode]
+  );
 
-      setErrorMsg(null);
-      if (res.data?.has_advisory_class) {
-        const payload: CachedClassListPayload = {
-          has_advisory_class: true,
-          section_name: res.data.section_name || '',
-          grade_level: res.data.grade_level || '',
-          matrix: Array.isArray(res.data.matrix) ? res.data.matrix : [],
-        };
-        setHasAdvisoryClass(true);
-        setSectionName(payload.section_name);
-        setGradeLevel(payload.grade_level);
-        setMatrix(payload.matrix);
-        AsyncStorage.setItem(CLASS_LIST_CACHE_KEY, JSON.stringify(payload)).catch(() => {});
-      } else {
-        setHasAdvisoryClass(false);
-        setMatrix([]);
-      }
-    } catch (err: unknown) {
-      if (!isMountedRef.current || isCanceledError(err)) return;
-      setErrorMsg(getFriendlyErrorMessage(err, 'Could not load your class list right now.'));
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-        setRefreshing(false);
-      }
+  const handleMarkUnscannedAbsent = () => {
+    const activeSection = selectedSectionId || availableSections[0]?.id || null;
+    if (!activeSection) {
+      showNotice('No Section Selected', 'Select a class section before marking unscanned students absent.');
+      return;
     }
-  }, []);
+    const chosenPeriod = schedules.find((s) => s.schedule_id === selectedPeriodId) || schedules[0];
+    const targetLabel = chosenPeriod
+      ? `${chosenPeriod.subject_code} (${activeDateStr})`
+      : `${[gradeLevel, sectionName].filter(Boolean).join(' - ')} (${activeDateStr})`;
+
+    confirmAction(
+      'Mark Unscanned Absent',
+      `Mark all unscanned students in ${targetLabel} as Absent? Students with an approved Exit Pass will be marked Excused automatically.`,
+      'Mark Absent',
+      async () => {
+        setMarkingAbsent(true);
+        try {
+          const body: Record<string, string | number> = {
+            section_id: activeSection,
+            attendance_date: activeDateStr || targetDateStr,
+          };
+          if (chosenPeriod?.schedule_id) {
+            body.schedule_id = chosenPeriod.schedule_id;
+          }
+          const res = await apiClient.post(ENDPOINTS.ATTENDANCE_MARK_UNSCANNED_ABSENT, body);
+          const data = res.data || {};
+          const summary =
+            data.message ||
+            `Marked ${Number(data.marked_absent_count ?? 0)} absent and ${Number(data.marked_excused_count ?? 0)} excused.`;
+          showNotice('Attendance Updated', summary);
+          DeviceEventEmitter.emit('attendsure:attendance-updated');
+          await fetchClassListData(false, activeSection, activeDateStr || targetDateStr);
+        } catch (err: unknown) {
+          showNotice(
+            'Could Not Update',
+            getFriendlyErrorMessage(err, 'Could not mark unscanned students absent right now.')
+          );
+        } finally {
+          if (isMountedRef.current) setMarkingAbsent(false);
+        }
+      },
+      false
+    );
+  };
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -377,6 +508,133 @@ export const AdvisoryMatrixScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Section Switcher (visible when leader or teacher handles multiple sections) */}
+        {availableSections.length > 1 && (
+          <View style={{ marginTop: 8 }}>
+            <ChipRow<string>
+              options={availableSections.map((sec) => ({
+                key: String(sec.id),
+                label: sec.grade_level ? `${sec.grade_level} - ${sec.name}` : sec.name,
+              }))}
+              selected={String(selectedSectionId ?? availableSections[0]?.id ?? '')}
+              onSelect={(val) => {
+                const nextId = Number(val);
+                if (Number.isFinite(nextId) && nextId > 0) {
+                  setSelectedSectionId(nextId);
+                  setSelectedStudentIds([]);
+                  void fetchClassListData(false, nextId, targetDateStr);
+                }
+              }}
+            />
+          </View>
+        )}
+
+        {/* Date Toggle & Mark Unscanned Absent Row */}
+        <View style={[ui.rowBetween, { marginTop: 8, gap: 8, flexWrap: 'wrap' }]}>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              onPress={() => setDateMode('TODAY')}
+              style={[
+                ui.badge,
+                {
+                  backgroundColor:
+                    dateMode === 'TODAY' ? palette.primarySoft : palette.surfaceSubtle,
+                  borderWidth: 1,
+                  borderColor: dateMode === 'TODAY' ? palette.primary : palette.border,
+                  paddingVertical: 5,
+                  paddingHorizontal: 10,
+                },
+              ]}
+            >
+              <Text
+                style={{
+                  fontSize: fonts.size.xs,
+                  fontWeight: fonts.weight.bold,
+                  color: dateMode === 'TODAY' ? palette.primary : palette.textSecondary,
+                }}
+              >
+                Today
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setDateMode('PREVIOUS')}
+              style={[
+                ui.badge,
+                {
+                  backgroundColor:
+                    dateMode === 'PREVIOUS' ? palette.primarySoft : palette.surfaceSubtle,
+                  borderWidth: 1,
+                  borderColor: dateMode === 'PREVIOUS' ? palette.primary : palette.border,
+                  paddingVertical: 5,
+                  paddingHorizontal: 10,
+                },
+              ]}
+            >
+              <Text
+                style={{
+                  fontSize: fonts.size.xs,
+                  fontWeight: fonts.weight.bold,
+                  color: dateMode === 'PREVIOUS' ? palette.primary : palette.textSecondary,
+                }}
+              >
+                Previous Day ({formatIsoDateOffset(-1)})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            onPress={handleMarkUnscannedAbsent}
+            disabled={markingAbsent || matrix.length === 0}
+            style={[
+              ui.badge,
+              {
+                backgroundColor: palette.warningLight,
+                borderWidth: 1,
+                borderColor: palette.warning,
+                paddingVertical: 5,
+                paddingHorizontal: 10,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 4,
+                opacity: markingAbsent || matrix.length === 0 ? 0.6 : 1,
+              },
+            ]}
+          >
+            {markingAbsent ? (
+              <ActivityIndicator size="small" color={palette.warning} />
+            ) : (
+              <>
+                <Ionicons name="checkmark-done-outline" size={13} color={palette.warning} />
+                <Text
+                  style={{
+                    fontSize: fonts.size.xs,
+                    fontWeight: fonts.weight.extrabold,
+                    color: palette.warning,
+                  }}
+                >
+                  Mark Unscanned Absent
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {schedules.length > 1 && (
+          <View style={{ marginTop: 6 }}>
+            <ChipRow<string>
+              options={schedules.map((sc) => ({
+                key: String(sc.schedule_id),
+                label: sc.time_window ? `${sc.subject_code} (${sc.time_window})` : sc.subject_code,
+              }))}
+              selected={String(selectedPeriodId ?? schedules[0]?.schedule_id ?? '')}
+              onSelect={(val) => {
+                const pid = Number(val);
+                if (Number.isFinite(pid)) setSelectedPeriodId(pid);
+              }}
+            />
+          </View>
+        )}
 
         <View style={[ui.rowCenter, { marginTop: 10, flexWrap: 'wrap' }]}>
           <TouchableOpacity
@@ -636,7 +894,9 @@ export const AdvisoryMatrixScreen: React.FC = () => {
                       ? palette.success
                       : sub.status === 'LATE'
                       ? palette.warning
-                      : sub.status === 'CUTTING'
+                      : sub.status === 'EXCUSED'
+                      ? palette.primary
+                      : sub.status === 'CUTTING' || sub.status === 'ABSENT'
                       ? palette.danger
                       : palette.textMuted;
                   const sBg =
@@ -644,7 +904,9 @@ export const AdvisoryMatrixScreen: React.FC = () => {
                       ? palette.successLight
                       : sub.status === 'LATE'
                       ? palette.warningLight
-                      : sub.status === 'CUTTING'
+                      : sub.status === 'EXCUSED'
+                      ? palette.primarySoft
+                      : sub.status === 'CUTTING' || sub.status === 'ABSENT'
                       ? palette.dangerLight
                       : palette.surfaceSubtle;
                   return (

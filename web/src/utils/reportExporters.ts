@@ -1,3 +1,6 @@
+// AttendSure Web - Report Exporters Utility
+// File: D:\AttendSure_V3\web\src\utils\reportExporters.ts
+
 /**
  * AttendSure - Offline-Proof Local PDF, Word, Excel, JSON & Audit Export Helpers
  * File: web/src/utils/reportExporters.ts
@@ -5,7 +8,14 @@
 
 import apiClient from '../api/client';
 import { API_ROUTES, escapeHtml } from '../api/routes';
-import { PAPER_SIZES, type PageOrientation, type PageSetupConfig } from '../types/pageSetup';
+import { isSafeImageUrl } from '../theme/tokens';
+import { formatTime12h } from './timeFormat';
+import {
+  DEFAULT_PAGE_SETUP,
+  PAPER_SIZES,
+  type PageOrientation,
+  type PageSetupConfig,
+} from '../types/pageSetup';
 
 export interface AuditStampMeta {
   printedAt: string;
@@ -20,12 +30,7 @@ export const buildAuditStamp = (formCode: string, schoolId?: string): AuditStamp
     month: 'long',
     day: 'numeric',
   });
-  const timeFormatted = now.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-  });
+  const timeFormatted = formatTime12h(now, { includeSeconds: true });
   const dateStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const timeCode = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   return {
@@ -533,4 +538,80 @@ export const exportReportJson = async (
   } else {
     triggerBlobDownload(blob, name);
   }
+};
+
+export interface StudentQrPassPrintInput {
+  studentName: string;
+  lrn: string;
+  sectionLabel: string;
+  schoolName: string;
+  qrDataUri: string;
+  photoUrl?: string | null;
+  statusLabel?: string;
+}
+
+export const buildStudentQrPassPrintPayload = (
+  input: StudentQrPassPrintInput
+): { title: string; bodyHtml: string; pageConfig: PageSetupConfig; extraCss: string } => {
+  const safeName = escapeHtml(input.studentName || 'Student');
+  const safeLrn = escapeHtml(input.lrn || '—');
+  const safeSection = escapeHtml(input.sectionLabel || 'Enrolled Student');
+  const safeSchool = escapeHtml(input.schoolName || 'AttendSure Campus');
+  const safeStatus = escapeHtml(input.statusLabel || 'Digitally Verified');
+  const safePhoto = isSafeImageUrl(input.photoUrl) ? input.photoUrl : null;
+  const initialChar = escapeHtml((input.studentName || 'S').trim().charAt(0).toUpperCase() || 'S');
+
+  const photoMarkup = safePhoto
+    ? `<img src="${escapeHtml(safePhoto)}" alt="${safeName}" style="width:100%;height:100%;object-fit:cover;" />`
+    : `<span style="font-size:22px;font-weight:800;color:#004b87;">${initialChar}</span>`;
+
+  const bodyHtml = `
+    <div class="print-pack-page" data-print-page="true" style="display:flex;justify-content:center;align-items:flex-start;padding-top:12px;">
+      <div class="id-pass-card">
+        <div class="head">
+          <div class="head-title">OFFICIAL STUDENT QR ID PASS</div>
+          <div class="head-school">${safeSchool}</div>
+        </div>
+        <div class="body">
+          <div class="avatar">${photoMarkup}</div>
+          <div class="name">${safeName}</div>
+          <div class="sub">${safeSection}</div>
+          <div class="lrn">LRN: ${safeLrn}</div>
+          <div class="qr-box">
+            <img src="${input.qrDataUri}" alt="Student QR Code" />
+          </div>
+        </div>
+        <div class="foot">Card Status: <strong>${safeStatus}</strong></div>
+      </div>
+    </div>`;
+
+  const extraCss = `
+    .id-pass-card { width: 300px; border: 2px solid #004b87; border-radius: 14px; overflow: hidden; text-align: center; background: #ffffff; }
+    .head { background: #004b87; color: #ffffff; padding: 12px; }
+    .head-title { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; }
+    .head-school { font-size: 10px; opacity: 0.92; margin-top: 3px; }
+    .body { padding: 16px; }
+    .avatar { width: 58px; height: 58px; border-radius: 50%; margin: 0 auto 10px; border: 2px solid #cbd5e1; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #f8fafc; }
+    .name { font-size: 16px; font-weight: 800; }
+    .sub { font-size: 12px; color: #475569; margin-top: 3px; }
+    .lrn { display: inline-block; margin: 10px auto; padding: 4px 10px; border-radius: 6px; border: 1px solid #cbd5e1; background: #f8fafc; font-family: monospace; font-size: 12px; font-weight: 700; }
+    .qr-box { width: 148px; height: 148px; margin: 8px auto 0; padding: 6px; border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff; }
+    .qr-box img { width: 100%; height: 100%; display: block; }
+    .foot { background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 9px; font-size: 11px; color: #475569; }
+  `;
+
+  return {
+    title: `Student QR ID Card - ${input.studentName || input.lrn}`,
+    bodyHtml,
+    pageConfig: {
+      ...DEFAULT_PAGE_SETUP,
+      layoutMode: 'pages',
+      orientation: 'portrait',
+      paperSize: 'letter',
+      marginPreset: 'narrow',
+      margins: { top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 },
+      headerRepeat: 'first_page_only',
+    },
+    extraCss,
+  };
 };

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Push And Sync
+# File: D:\AttendSure_V3\scripts\push_and_sync.ps1
+
 param(
     [string]$CommitMessage = "Sync update $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 )

@@ -1,3 +1,6 @@
+# AttendSure Backend - Database Migration (0002_teacherprofile_face_template)
+# File: D:\AttendSure_V3\backend\apps\accounts\migrations\0002_teacherprofile_face_template.py
+
 # D:\AttendSure_V3\backend\apps\accounts\migrations\0002_teacherprofile_face_template.py
 from django.db import migrations, models
 

@@ -1,3 +1,6 @@
+# AttendSure Backend - Reports API Views
+# File: D:\AttendSure_V3\backend\apps\reports\views.py
+
 # D:\AttendSure_V3\backend\apps\reports\views.py
 import csv
 import io
@@ -683,13 +686,31 @@ class SystemStatusView(APIView):
 
         if action_name in ("UNLOCK_ACCOUNTS", "UNLOCK_TEACHERS"):
             unlocked = unlock_all_locked_accounts()
+            record_audit_log(
+                request=request,
+                table_name="user_profiles",
+                record_id=0,
+                action="UNLOCK_ALL",
+                new_data={"unlocked_count": unlocked},
+            )
             message = f"Unlocked {unlocked} locked staff account(s)."
         else:
-            audit_summary = detect_daily_student_loafing(user=request.user)
+            from apps.campus.services import detect_silent_on_duty_teachers
+
+            student_summary = detect_daily_student_loafing(user=request.user)
+            signal_summary = detect_silent_on_duty_teachers()
+            created_signal_lost = int(signal_summary.get("created_signal_lost_incidents", 0))
+            audit_summary = {
+                **student_summary,
+                "checked_teachers": int(signal_summary.get("checked_teachers", 0)),
+                "created_signal_lost_incidents": created_signal_lost,
+                "total_created": int(student_summary.get("total_created", 0)) + created_signal_lost,
+            }
             message = (
-                f"Attendance check finished for {audit_summary['audit_date']}: "
+                f"Attendance & phone health check finished for {audit_summary['audit_date']}: "
                 f"{audit_summary['created_cutting_incidents']} cutting-class alert(s), "
-                f"{audit_summary['created_expired_pass_incidents']} expired exit-pass alert(s)."
+                f"{audit_summary['created_expired_pass_incidents']} expired exit-pass alert(s), "
+                f"{created_signal_lost} teacher phone signal-lost alert(s)."
             )
 
         data = dict(get_system_status())

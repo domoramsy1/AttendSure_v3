@@ -1,3 +1,6 @@
+// AttendSure Mobile - Maintenance Section Component
+// File: D:\AttendSure_V3\mobile\src\components\settings\MaintenanceSection.tsx
+
 /**
  * AttendSure Mobile - Settings Live Health & Maintenance Tools Section
  * File: mobile/src/components/settings/MaintenanceSection.tsx

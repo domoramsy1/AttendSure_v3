@@ -1,9 +1,13 @@
+// AttendSure Mobile - Image Upload Field Component
+// File: D:\AttendSure_V3\mobile\src\components\common\ImageUploadField.tsx
+
 /**
- * AttendSure Mobile - Cross-Platform Image & Transparent PNG Logo Uploader
+ * AttendSure Mobile - Cross-Platform Photo & Transparent PNG Logo Picker
  * File: mobile/src/components/common/ImageUploadField.tsx
  *
+ * - On Android / iOS: Take Photo (Camera) + Choose from Gallery via expo-image-picker
+ *   (with square crop for avatars, JPG/PNG/WEBP & 2 MB validation, and Remove Photo).
  * - On Web: native file chooser with transparent-PNG preservation & auto-trim for logos.
- * - On Android / iOS: built-in Camera Capture Modal powered by expo-camera (no extra native deps).
  */
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
@@ -19,6 +23,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { useThemeMode } from '../../context/ThemeContext';
 import {
   isSafeUrl,
@@ -28,6 +33,14 @@ import {
 } from '../../constants/theme';
 import { getServerBaseUrl } from '../../services/configService';
 import { resolveMediaUrl, showNotice } from '../../utils/helpers';
+
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+]);
 
 export interface ImageUploadFieldProps {
   label: string;
@@ -40,10 +53,32 @@ export interface ImageUploadFieldProps {
   disabled?: boolean;
 }
 
+const inferSafeImageMime = (
+  mimeType?: string | null,
+  uriOrName?: string | null
+): 'image/jpeg' | 'image/png' | 'image/webp' | null => {
+  const cleanMime = String(mimeType || '').trim().toLowerCase();
+  if (cleanMime === 'image/png') return 'image/png';
+  if (cleanMime === 'image/webp') return 'image/webp';
+  if (cleanMime === 'image/jpeg' || cleanMime === 'image/jpg') return 'image/jpeg';
+
+  const lowerName = String(uriOrName || '').trim().toLowerCase().split('?')[0];
+  if (lowerName.endsWith('.png')) return 'image/png';
+  if (lowerName.endsWith('.webp')) return 'image/webp';
+  if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) return 'image/jpeg';
+  return null;
+};
+
+const estimateBase64Bytes = (rawBase64: string): number => {
+  const clean = rawBase64.replace(/\s+/g, '');
+  const padding = clean.endsWith('==') ? 2 : clean.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
+};
+
 /**
  * Browser-side image preparation:
  * - For `logo`: preserves full alpha transparency, trims empty transparent padding, exports PNG.
- * - For `avatar`/`proof`: constrains max dimension to 800px cleanly.
+ * - For `avatar`/`proof`: constrains max dimension cleanly.
  */
 const processWebImageFile = (
   file: File,
@@ -55,7 +90,7 @@ const processWebImageFile = (
     reader.onload = () => {
       const rawDataUrl = typeof reader.result === 'string' ? reader.result : '';
       if (!rawDataUrl.startsWith('data:image/')) {
-        reject(new Error('Please select a PNG, JPG, or WebP image.'));
+        reject(new Error('Please select a JPG, PNG, or WebP image.'));
         return;
       }
       if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -85,7 +120,6 @@ const processWebImageFile = (
             srcCtx.clearRect(0, 0, w, h);
             srcCtx.drawImage(img, 0, 0, w, h);
 
-            // Auto-trim outer transparent margins while preserving every logo pixel
             const imgData = srcCtx.getImageData(0, 0, w, h).data;
             let minX = w;
             let minY = h;
@@ -127,7 +161,6 @@ const processWebImageFile = (
             return;
           }
 
-          // Portrait / proof: scale down if oversized
           const maxDim = 768;
           const scale = Math.min(1, maxDim / Math.max(w, h));
           const outW = Math.max(1, Math.round(w * scale));
@@ -174,6 +207,7 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
   const [cameraModalOpen, setCameraModalOpen] = useState<boolean>(false);
   const [facing, setFacing] = useState<'front' | 'back'>(variant === 'avatar' ? 'front' : 'back');
   const [capturing, setCapturing] = useState<boolean>(false);
+  const [picking, setPicking] = useState<boolean>(false);
   const [camPerm, requestCamPerm] = useCameraPermissions();
 
   const cameraRef = useRef<CameraView | null>(null);
@@ -201,54 +235,160 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
     setImgError(false);
   }, [resolvedUri]);
 
-  const handleOpenPicker = async () => {
-    if (disabled) return;
-
-    if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'image/png,image/jpeg,image/webp';
-      input.onchange = async () => {
-        const file = input.files?.[0];
-        if (!file) return;
-        if (file.size > 2 * 1024 * 1024) {
-          showNotice('File Too Large', 'Please choose an image smaller than 2 MB.');
-          return;
-        }
-        try {
-          const dataUrl = await processWebImageFile(file, variant);
-          if (isSafeUrl(dataUrl)) {
-            onChange(dataUrl);
-            setImgError(false);
-          } else {
-            showNotice('Unsupported File', 'Please select a valid PNG, JPG, or WebP image.');
-          }
-        } catch (err: unknown) {
-          showNotice(
-            'Upload Error',
-            err instanceof Error ? err.message : 'Could not load the selected image.'
-          );
-        }
-      };
-      input.click();
+  const applyPickedAsset = (asset: ImagePicker.ImagePickerAsset) => {
+    const inferredMime = inferSafeImageMime(asset.mimeType, asset.fileName || asset.uri);
+    const mime = inferredMime || 'image/jpeg';
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(mime)) {
+      showNotice('Unsupported File', 'Please select a JPG, PNG, or WebP image.');
       return;
     }
 
-    // Native Android / iOS: request camera permission and open capture modal
-    if (!camPerm?.granted) {
-      const result = await requestCamPerm();
-      if (!result.granted) {
+    if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_IMAGE_BYTES) {
+      showNotice('File Too Large', 'Please choose an image smaller than 2 MB.');
+      return;
+    }
+
+    if (!asset.base64) {
+      showNotice('Image Error', 'Could not read image data. Please try another photo.');
+      return;
+    }
+
+    if (estimateBase64Bytes(asset.base64) > MAX_IMAGE_BYTES) {
+      showNotice('File Too Large', 'Please choose a smaller image (under 2 MB).');
+      return;
+    }
+
+    const dataUrl = `data:${mime};base64,${asset.base64}`;
+    if (!isSafeUrl(dataUrl)) {
+      showNotice('Unsupported File', 'Please select a valid JPG, PNG, or WebP image.');
+      return;
+    }
+    onChange(dataUrl);
+    setImgError(false);
+  };
+
+  const handleOpenWebFilePicker = () => {
+    if (disabled || typeof document === 'undefined') return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (file.type && !ALLOWED_IMAGE_MIME_TYPES.has(file.type.toLowerCase())) {
+        showNotice('Unsupported File', 'Please select a JPG, PNG, or WebP image.');
+        return;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        showNotice('File Too Large', 'Please choose an image smaller than 2 MB.');
+        return;
+      }
+      try {
+        const dataUrl = await processWebImageFile(file, variant);
+        if (isSafeUrl(dataUrl)) {
+          onChange(dataUrl);
+          setImgError(false);
+        } else {
+          showNotice('Unsupported File', 'Please select a valid JPG, PNG, or WebP image.');
+        }
+      } catch (err: unknown) {
+        showNotice(
+          'Upload Error',
+          err instanceof Error ? err.message : 'Could not load the selected image.'
+        );
+      }
+    };
+    input.click();
+  };
+
+  const handleChooseFromGallery = async () => {
+    if (disabled || picking) return;
+    if (Platform.OS === 'web') {
+      handleOpenWebFilePicker();
+      return;
+    }
+
+    setPicking(true);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        showNotice(
+          'Photo Library Permission Needed',
+          'Allow photo library access in your phone settings so you can choose a photo.'
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: variant === 'avatar',
+        aspect: variant === 'avatar' ? [1, 1] : undefined,
+        quality: variant === 'logo' ? 0.9 : 0.78,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        applyPickedAsset(result.assets[0]);
+      }
+    } catch {
+      showNotice('Gallery Error', 'Could not open your photo gallery right now. Please try again.');
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const handleOpenCamera = async () => {
+    if (disabled || picking) return;
+    if (Platform.OS === 'web') {
+      handleOpenWebFilePicker();
+      return;
+    }
+
+    setPicking(true);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
         showNotice(
           'Camera Permission Needed',
           'Allow camera access in your phone settings to take a photo.'
         );
         return;
       }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: variant === 'avatar',
+        aspect: variant === 'avatar' ? [1, 1] : undefined,
+        quality: 0.76,
+        base64: true,
+        cameraType:
+          variant === 'avatar'
+            ? ImagePicker.CameraType.front
+            : ImagePicker.CameraType.back,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        applyPickedAsset(result.assets[0]);
+      }
+    } catch {
+      // Fall back cleanly to built-in expo-camera modal if system camera picker fails
+      if (!camPerm?.granted) {
+        const res = await requestCamPerm();
+        if (!res.granted) {
+          showNotice(
+            'Camera Permission Needed',
+            'Allow camera access in your phone settings to take a photo.'
+          );
+          return;
+        }
+      }
+      setCameraModalOpen(true);
+    } finally {
+      setPicking(false);
     }
-    setCameraModalOpen(true);
   };
 
-  const handleTakePhoto = async () => {
+  const handleTakePhotoFallback = async () => {
     if (!cameraRef.current || capturing) return;
     setCapturing(true);
     try {
@@ -257,6 +397,10 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
         quality: 0.72,
       });
       if (photo?.base64) {
+        if (estimateBase64Bytes(photo.base64) > MAX_IMAGE_BYTES) {
+          showNotice('File Too Large', 'Captured photo exceeded 2 MB. Please try again.');
+          return;
+        }
         const dataUrl = `data:image/jpeg;base64,${photo.base64}`;
         onChange(dataUrl);
         setImgError(false);
@@ -306,31 +450,49 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
         </View>
 
         <View style={styles.actionsCol}>
-          <TouchableOpacity
-            style={[styles.uploadBtn, disabled && { opacity: 0.55 }]}
-            onPress={() => void handleOpenPicker()}
-            disabled={disabled}
-            activeOpacity={0.85}
-          >
-            <Ionicons
-              name={Platform.OS === 'web' ? 'cloud-upload-outline' : 'camera-outline'}
-              size={15}
-              color={palette.primary}
-            />
-            <Text style={styles.uploadBtnText}>
-              {Platform.OS === 'web'
-                ? isLogo
+          {Platform.OS === 'web' ? (
+            <TouchableOpacity
+              style={[styles.uploadBtn, disabled && { opacity: 0.55 }]}
+              onPress={handleOpenWebFilePicker}
+              disabled={disabled}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="cloud-upload-outline" size={15} color={palette.primary} />
+              <Text style={styles.uploadBtnText}>
+                {isLogo
                   ? 'Upload PNG / Logo'
                   : isProof
-                    ? 'Upload Proof Image'
-                    : 'Upload Photo'
-                : isLogo
-                  ? 'Capture Logo'
-                  : isProof
-                    ? 'Capture Proof'
-                    : 'Take Photo'}
-            </Text>
-          </TouchableOpacity>
+                    ? 'Choose Proof Image'
+                    : 'Choose Photo'}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.dualBtnRow}>
+              <TouchableOpacity
+                style={[styles.uploadBtn, { flex: 1 }, (disabled || picking) && { opacity: 0.55 }]}
+                onPress={() => void handleOpenCamera()}
+                disabled={disabled || picking}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="camera-outline" size={15} color={palette.primary} />
+                <Text style={styles.uploadBtnText} numberOfLines={1}>
+                  Take Photo
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.galleryBtn, { flex: 1 }, (disabled || picking) && { opacity: 0.55 }]}
+                onPress={() => void handleChooseFromGallery()}
+                disabled={disabled || picking}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="images-outline" size={15} color={palette.textPrimary} />
+                <Text style={styles.galleryBtnText} numberOfLines={1}>
+                  Gallery
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {resolvedUri && onRemove && (
             <TouchableOpacity
@@ -340,13 +502,15 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
               activeOpacity={0.85}
             >
               <Ionicons name="trash-outline" size={14} color={palette.danger} />
-              <Text style={styles.removeBtnText}>Remove</Text>
+              <Text style={styles.removeBtnText}>
+                {isLogo ? 'Remove Logo' : isProof ? 'Remove Image' : 'Remove Photo'}
+              </Text>
             </TouchableOpacity>
           )}
         </View>
       </View>
 
-      {/* Native Camera Capture Modal */}
+      {/* Fallback Built-In Camera Capture Modal */}
       <Modal
         visible={cameraModalOpen}
         animationType="slide"
@@ -367,7 +531,11 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
               onPress={() => setFacing((prev) => (prev === 'front' ? 'back' : 'front'))}
               accessibilityLabel="Switch camera"
             >
-              <Ionicons name="camera-reverse-outline" size={22} color={SCANNER_OVERLAY_COLORS.hintText} />
+              <Ionicons
+                name="camera-reverse-outline"
+                size={22}
+                color={SCANNER_OVERLAY_COLORS.hintText}
+              />
             </TouchableOpacity>
           </View>
 
@@ -378,7 +546,7 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
           <View style={styles.cameraBottomBar}>
             <TouchableOpacity
               style={[styles.shutterBtn, capturing && { opacity: 0.6 }]}
-              onPress={() => void handleTakePhoto()}
+              onPress={() => void handleTakePhotoFallback()}
               disabled={capturing}
               activeOpacity={0.85}
             >
@@ -468,22 +636,43 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       flex: 1,
       gap: 6,
     },
+    dualBtnRow: {
+      flexDirection: 'row',
+      gap: 6,
+    },
     uploadBtn: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 6,
+      gap: 5,
       height: 38,
       borderRadius: 9,
       backgroundColor: palette.primarySoft,
       borderWidth: 1,
       borderColor: palette.primary,
-      paddingHorizontal: 10,
+      paddingHorizontal: 8,
     },
     uploadBtnText: {
       fontSize: fonts.xs,
       fontWeight: fonts.weight.extrabold,
       color: palette.primary,
+    },
+    galleryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 5,
+      height: 38,
+      borderRadius: 9,
+      backgroundColor: palette.surface,
+      borderWidth: 1,
+      borderColor: palette.borderStrong,
+      paddingHorizontal: 8,
+    },
+    galleryBtnText: {
+      fontSize: fonts.xs,
+      fontWeight: fonts.weight.extrabold,
+      color: palette.textPrimary,
     },
     removeBtn: {
       flexDirection: 'row',

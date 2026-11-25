@@ -1,3 +1,6 @@
+// AttendSure Mobile - Tokens
+// File: D:\AttendSure_V3\mobile\src\theme\tokens.ts
+
 /**
  * AttendSure Mobile - Centralized Design Tokens (Synchronized with web/src/theme/tokens.ts)
  * File: mobile/src/theme/tokens.ts

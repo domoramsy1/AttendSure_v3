@@ -1,3 +1,6 @@
+// AttendSure Mobile - Users Screen
+// File: D:\AttendSure_V3\mobile\src\screens\UsersScreen.tsx
+
 /**
  * AttendSure Mobile - User Accounts & Roles CRUD (Admin Only — 100% Web Parity)
  * File: mobile/src/screens/UsersScreen.tsx
@@ -237,7 +240,33 @@ export const UsersScreen: React.FC = () => {
     setModalOpen(true);
   };
 
+  const isCheckingFields =
+    usernameCheck.checking ||
+    employeeIdCheck.checking ||
+    emailCheck.checking ||
+    contactCheck.checking;
+  const hasFieldConflict =
+    usernameCheck.isTaken ||
+    employeeIdCheck.isTaken ||
+    emailCheck.isTaken ||
+    contactCheck.isTaken;
+
   const handleSave = async () => {
+    if (isCheckingFields) {
+      showNotice('Checking Details', 'Please wait a moment while we verify your entries.');
+      return;
+    }
+    if (hasFieldConflict) {
+      showNotice(
+        'Duplicate Field',
+        usernameCheck.warning ||
+          employeeIdCheck.warning ||
+          emailCheck.warning ||
+          contactCheck.warning ||
+          'Please fix duplicate fields before saving.'
+      );
+      return;
+    }
     if (!form.username.trim()) {
       showNotice('Username Required', 'Please enter a username.');
       return;
@@ -362,6 +391,7 @@ export const UsersScreen: React.FC = () => {
         </View>
       ) : (
         <FlatList
+          style={styles.listFlex}
           data={filtered}
           keyExtractor={(item) => String(item.id)}
           contentContainerStyle={styles.listContent}
@@ -628,11 +658,14 @@ export const UsersScreen: React.FC = () => {
               </View>
 
               <TouchableOpacity
-                style={[styles.saveBtn, saving && { opacity: 0.6 }]}
+                style={[
+                  styles.saveBtn,
+                  (saving || isCheckingFields || hasFieldConflict) && { opacity: 0.6 },
+                ]}
                 onPress={() => void handleSave()}
-                disabled={saving}
+                disabled={saving || isCheckingFields || hasFieldConflict}
               >
-                {saving ? (
+                {saving || isCheckingFields ? (
                   <ActivityIndicator size="small" color={palette.onPrimary} />
                 ) : (
                   <Text style={styles.saveBtnText}>
@@ -651,7 +684,7 @@ export const UsersScreen: React.FC = () => {
 const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMode>['fonts']) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: palette.background },
-    toolbar: { flexDirection: 'row', gap: 8, padding: 14, paddingBottom: 8 },
+    toolbar: { flexShrink: 0, flexDirection: 'row', gap: 8, padding: 14, paddingBottom: 8 },
     searchWrap: {
       flex: 1,
       flexDirection: 'row',
@@ -676,8 +709,9 @@ const createStyles = (palette: ThemePalette, fonts: ReturnType<typeof useThemeMo
       justifyContent: 'center',
     },
     addBtnText: { color: palette.onPrimary, fontSize: fonts.xs, fontWeight: fonts.weight.extrabold },
-    filterStrip: { flexGrow: 0, maxHeight: 38 },
-    filterRow: { paddingHorizontal: 14, gap: 6, alignItems: 'center' },
+    filterStrip: { flexGrow: 0, flexShrink: 0, paddingVertical: 4, marginBottom: 4 },
+    filterRow: { paddingHorizontal: 14, gap: 8, alignItems: 'center' },
+    listFlex: { flex: 1 },
     listContent: { padding: 14, paddingBottom: 120, gap: 10 },
     centerBox: { paddingVertical: 40, alignItems: 'center', gap: 8, paddingHorizontal: 20 },
     mutedText: { fontSize: fonts.sm, color: palette.textMuted, textAlign: 'center' },

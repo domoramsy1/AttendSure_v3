@@ -1,3 +1,6 @@
+# AttendSure Backend - School Seed Competition Demo
+# File: D:\AttendSure_V3\backend\apps\school\management\commands\seed_competition_demo.py
+
 """
 AttendSure - Demo Dataset Seeder
 Run: python manage.py seed_competition_demo
@@ -42,6 +45,7 @@ from apps.school.models import (
     Section,
     Subject,
 )
+from common.time_utils import local_day_bounds
 from apps.students.models import AddressLocation, Enrollment, Student
 
 User = get_user_model()
@@ -638,11 +642,13 @@ class Command(BaseCommand):
             )
 
         newton_p2 = periods_by_section[sec_newton.id][1]
+        today_start, today_end = local_day_bounds(today)
         if not LoafingIncident.objects.filter(
             enrollment=early_warning_enrollment,
             class_period=newton_p2,
             incident_type="STUDENT_CUTTING_CLASS",
-            detected_at__date=today,
+            detected_at__gte=today_start,
+            detected_at__lt=today_end,
         ).exists():
             LoafingIncident.objects.create(
                 incident_type="STUDENT_CUTTING_CLASS",

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Stress Test API
+# File: D:\AttendSure_V3\scripts\testing\stress_test_api.py
+
 r"""
 AttendSure - Live API Concurrency Benchmark (Requires running backend on 127.0.0.1:8000)
 Run: python testing\stress_test_api.py
@@ -15,7 +18,7 @@ setup_django()
 
 import requests
 from django.contrib.auth import get_user_model
-from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
 
 User = get_user_model()
 TARGET_URL = "http://127.0.0.1:8000/api/v1/reports/dashboard/"
@@ -34,8 +37,8 @@ def main():
     user = User.objects.filter(is_superuser=True, is_active=True).first() or User.objects.first()
     if not user:
         sys.exit("[ERROR] No user found in database.")
-    token, _ = Token.objects.get_or_create(user=user)
-    headers = {"Authorization": f"Token {token.key}"}
+    access = str(RefreshToken.for_user(user).access_token)
+    headers = {"Authorization": f"Bearer {access}"}
 
     print(f"Benchmarking 50 parallel requests -> {TARGET_URL} (User: {user.username})")
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:

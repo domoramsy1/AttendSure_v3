@@ -1,3 +1,6 @@
+// AttendSure Web - Student ID Pass Modal
+// File: D:\AttendSure_V3\web\src\components\modals\StudentIdPassModal.tsx
+
 /**
  * AttendSure - Digital ID & Signed QR Pass Modal
  * File: web/src/components/modals/StudentIdPassModal.tsx

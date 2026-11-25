@@ -1,29 +1,20 @@
+// AttendSure Mobile - Auth Service (JWT Standardized)
+// File: D:\AttendSure_V3\mobile\src\services\authService.ts
+
 /**
  * AttendSure - Authentication Storage & Session API Service
  * File: mobile/src/services/authService.ts
  */
 
-import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type * as SecureStoreType from 'expo-secure-store';
-import { apiClient } from '../api/client';
+import {
+  apiClient,
+  clearStoredAuthTokens,
+  readStoredAccessToken,
+  saveAuthTokens,
+} from '../api/client';
 import { ENDPOINTS } from '../api/endpoints';
 import { cleanText, getFriendlyErrorMessage } from '../constants/theme';
-
-let cachedSecureStore: typeof SecureStoreType | null | undefined;
-const getSecureStore = (): typeof SecureStoreType | null => {
-  if (cachedSecureStore !== undefined) return cachedSecureStore;
-  if (Platform.OS === 'web') {
-    cachedSecureStore = null;
-    return null;
-  }
-  try {
-    cachedSecureStore = require('expo-secure-store') as typeof SecureStoreType;
-  } catch {
-    cachedSecureStore = null;
-  }
-  return cachedSecureStore;
-};
 
 export interface UserAccount {
   id: number;
@@ -35,96 +26,36 @@ export interface UserAccount {
 }
 
 export interface AuthResponse {
-  token: string;
+  access: string;
+  refresh?: string;
+  token?: string;
   user: UserAccount;
 }
 
-const TOKEN_KEY = 'attendsure_auth_token';
 const USER_KEY = 'attendsure_user_data';
 
 function stripControlChars(value: string): string {
   return String(value || '').replace(/[\u0000-\u001F\u007F]/g, '').trim();
 }
 
-const safeStorage = {
-  async get(key: string): Promise<string | null> {
-    if (Platform.OS === 'web') {
-      try {
-        return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
-      } catch {
-        return null;
-      }
-    }
-    const store = getSecureStore();
-    if (store) {
-      try {
-        const val = await store.getItemAsync(key);
-        if (val !== null) return val;
-      } catch {}
-    }
-    try {
-      return await AsyncStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  },
-
-  async set(key: string, value: string): Promise<void> {
-    if (Platform.OS === 'web') {
-      try {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem(key, value);
-        }
-      } catch {}
-      return;
-    }
-    const store = getSecureStore();
-    if (store) {
-      try {
-        await store.setItemAsync(key, value);
-      } catch {}
-    }
-    try {
-      await AsyncStorage.setItem(key, value);
-    } catch {}
-  },
-
-  async delete(key: string): Promise<void> {
-    if (Platform.OS === 'web') {
-      try {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.removeItem(key);
-        }
-      } catch {}
-      return;
-    }
-    const store = getSecureStore();
-    if (store) {
-      try {
-        await store.deleteItemAsync(key);
-      } catch {}
-    }
-    try {
-      await AsyncStorage.removeItem(key);
-    } catch {}
-  },
-};
-
 export const getStoredToken = async (): Promise<string | null> => {
-  const token = await safeStorage.get(TOKEN_KEY);
+  const token = await readStoredAccessToken();
   return token ? stripControlChars(token) : null;
 };
 
-export const storeAuthSession = async (token: string, user: UserAccount): Promise<void> => {
-  const safeToken = stripControlChars(token);
+export const storeAuthSession = async (
+  accessToken: string,
+  user: UserAccount,
+  refreshToken?: string | null
+): Promise<void> => {
+  const safeToken = stripControlChars(accessToken);
   if (!safeToken) return;
-  await safeStorage.set(TOKEN_KEY, safeToken);
-  await safeStorage.set(USER_KEY, JSON.stringify(user));
-  apiClient.defaults.headers.common['Authorization'] = `Token ${safeToken}`;
+  await saveAuthTokens(safeToken, refreshToken);
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user)).catch(() => {});
 };
 
 export const getStoredUser = async (): Promise<UserAccount | null> => {
-  const raw = await safeStorage.get(USER_KEY);
+  const raw = await AsyncStorage.getItem(USER_KEY).catch(() => null);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as UserAccount;
@@ -134,9 +65,8 @@ export const getStoredUser = async (): Promise<UserAccount | null> => {
 };
 
 export const clearAuthSession = async (): Promise<void> => {
-  await safeStorage.delete(TOKEN_KEY);
-  await safeStorage.delete(USER_KEY);
-  delete apiClient.defaults.headers.common['Authorization'];
+  await clearStoredAuthTokens();
+  await AsyncStorage.removeItem(USER_KEY).catch(() => {});
 };
 
 export const loginApi = async (

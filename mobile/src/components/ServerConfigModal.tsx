@@ -1,3 +1,6 @@
+// AttendSure Mobile - Server Config Modal
+// File: D:\AttendSure_V3\mobile\src\components\ServerConfigModal.tsx
+
 /**
  * AttendSure Mobile - School Server Connection Settings Modal
  * File: mobile/src/components/ServerConfigModal.tsx

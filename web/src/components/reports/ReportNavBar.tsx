@@ -1,3 +1,6 @@
+// AttendSure Web - Report Nav Bar
+// File: D:\AttendSure_V3\web\src\components\reports\ReportNavBar.tsx
+
 /**
  * AttendSure - Official Reports Navigation & Export Action Bar (Theme Adaptive)
  * File: web/src/components/reports/ReportNavBar.tsx

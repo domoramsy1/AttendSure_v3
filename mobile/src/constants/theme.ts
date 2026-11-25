@@ -1,3 +1,6 @@
+// AttendSure Mobile - Theme
+// File: D:\AttendSure_V3\mobile\src\constants\theme.ts
+
 /**
  * AttendSure Mobile - Master Theme Tokens, Shared Styles & Input Safety
  * File: mobile/src/constants/theme.ts

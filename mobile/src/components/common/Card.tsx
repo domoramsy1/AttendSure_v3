@@ -1,3 +1,6 @@
+// AttendSure Mobile - Card
+// File: D:\AttendSure_V3\mobile\src\components\common\Card.tsx
+
 import React from 'react';
 import { Text, View, ViewStyle } from 'react-native';
 import { useThemeMode } from '../../context/ThemeContext';

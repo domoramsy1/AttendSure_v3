@@ -1,3 +1,6 @@
+# AttendSure Backend - School API Views
+# File: D:\AttendSure_V3\backend\apps\school\views.py
+
 from django.core.cache import cache
 from django.db import transaction
 from rest_framework import permissions, status
@@ -107,11 +110,13 @@ class SchoolSettingsView(APIView):
         school = migrate_inline_logos_to_files(school)
         serialized = dict(SchoolSettingsSerializer(school, context={"request": request}).data)
         meta = get_school_metadata(request, school=school)
-        merged = {**meta, **{k: v for k, v in serialized.items() if v not in (None, "")}}
+        merged = {**meta, **serialized}
         merged["deped_school_id"] = merged.get("school_id", "")
         for logo_key in ("school_logo", "left_logo", "right_logo"):
             if meta.get(logo_key):
                 merged[logo_key] = meta[logo_key]
+            elif not getattr(school, logo_key, None):
+                merged[logo_key] = None
         return Response(merged)
 
     @transaction.atomic
@@ -151,7 +156,7 @@ class SchoolSettingsView(APIView):
             request=request,
             table_name=saved._meta.db_table,
             record_id=saved.pk,
-            action="UPDATE",
+            action="UPDATE" if school else "CREATE",
             changed_fields=list(raw_payload.keys()),
         )
         return self.get(request)

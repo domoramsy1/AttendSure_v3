@@ -1,3 +1,6 @@
+// AttendSure Mobile - Declarations D
+// File: D:\AttendSure_V3\mobile\src\types\declarations.d.ts
+
 declare module 'react-native-qrcode-svg' {
   import * as React from 'react';
 

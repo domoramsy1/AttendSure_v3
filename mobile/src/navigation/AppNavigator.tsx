@@ -1,3 +1,6 @@
+// AttendSure Mobile - App Navigator
+// File: D:\AttendSure_V3\mobile\src\navigation\AppNavigator.tsx
+
 /**
  * AttendSure Mobile - Root Stack Navigator
  * File: mobile/src/navigation/AppNavigator.tsx
@@ -9,6 +12,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { useAuth } from '../context/AuthContext';
 import { useThemeMode } from '../context/ThemeContext';
+import { TeacherDutyLocationProvider } from '../context/TeacherDutyLocationContext';
 import LoginScreen from '../screens/LoginScreen';
 import MainTabNavigator from './MainTabNavigator';
 import ProfileSettingsScreen from '../screens/ProfileSettingsScreen';
@@ -41,36 +45,38 @@ export const AppNavigator: React.FC<AppNavigatorProps> = ({ hideLoadingSpinner =
   }
 
   return (
-    <Stack.Navigator
-      screenOptions={{
-        headerShown: false,
-        contentStyle: { backgroundColor: palette.background },
-      }}
-    >
-      {!user ? (
-        <Stack.Screen name="Login" component={LoginScreen} />
-      ) : (
-        <>
-          <Stack.Screen name="Main" component={MainTabNavigator} />
-          <Stack.Screen
-            name="ProfileSettings"
-            component={ProfileSettingsScreen}
-            options={{
-              headerShown: false,
-              animation: 'slide_from_right',
-            }}
-          />
-          <Stack.Screen
-            name="Reports"
-            component={ReportsScreen}
-            options={{
-              headerShown: false,
-              animation: 'slide_from_right',
-            }}
-          />
-        </>
-      )}
-    </Stack.Navigator>
+    <TeacherDutyLocationProvider>
+      <Stack.Navigator
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: palette.background },
+        }}
+      >
+        {!user ? (
+          <Stack.Screen name="Login" component={LoginScreen} />
+        ) : (
+          <>
+            <Stack.Screen name="Main" component={MainTabNavigator} />
+            <Stack.Screen
+              name="ProfileSettings"
+              component={ProfileSettingsScreen}
+              options={{
+                headerShown: false,
+                animation: 'slide_from_right',
+              }}
+            />
+            <Stack.Screen
+              name="Reports"
+              component={ReportsScreen}
+              options={{
+                headerShown: false,
+                animation: 'slide_from_right',
+              }}
+            />
+          </>
+        )}
+      </Stack.Navigator>
+    </TeacherDutyLocationProvider>
   );
 };
 

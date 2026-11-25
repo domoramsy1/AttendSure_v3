@@ -1,3 +1,6 @@
+# AttendSure Backend - Dockerfile
+# File: D:\AttendSure_V3\backend\Dockerfile
+
 # D:\AttendSure_V3\backend\Dockerfile
 FROM python:3.12-slim AS base
 
@@ -33,6 +36,6 @@ USER attendsure
 EXPOSE 8000 8001 8002
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/api/health/db/" || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/api/v1/health/db/" || exit 1
 
 CMD ["gunicorn", "config.wsgi:application", "-c", "gunicorn.conf.py"]

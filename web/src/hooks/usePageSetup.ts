@@ -1,3 +1,6 @@
+// AttendSure Web - Use Page Setup Hook
+// File: D:\AttendSure_V3\web\src\hooks\usePageSetup.ts
+
 import { useState, useEffect, useCallback } from 'react';
 import { DEFAULT_PAGE_SETUP, MARGIN_PRESETS, PAPER_SIZES } from '../types/pageSetup';
 import type {

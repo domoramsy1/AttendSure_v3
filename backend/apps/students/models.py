@@ -1,3 +1,6 @@
+# AttendSure Backend - Students Database Models
+# File: D:\AttendSure_V3\backend\apps\students\models.py
+
 from datetime import datetime
 import secrets
 from django.db import models
@@ -14,6 +17,8 @@ ENROLLMENT_STATUS_CHOICES = [
     ("TRANSFERRED_OUT", "Transferred Out"),
     ("DROPPED", "Dropped Out"),
 ]
+
+ACTIVE_ENROLLMENT_STATUSES = ("ENROLLED", "TRANSFERRED_IN")
 
 ENROLLMENT_TYPE_CHOICES = [
     ("REGULAR", "Regular"),

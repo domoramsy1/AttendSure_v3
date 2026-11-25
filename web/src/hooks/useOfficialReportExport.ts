@@ -1,3 +1,6 @@
+// AttendSure Web - Use Official Report Export Hook
+// File: D:\AttendSure_V3\web\src\hooks\useOfficialReportExport.ts
+
 /**
  * AttendSure - Unified Print, PDF, Excel, Word, CSV & JSON Export Hook for Official DepEd Reports
  * File: web/src/hooks/useOfficialReportExport.ts

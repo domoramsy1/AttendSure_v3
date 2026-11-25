@@ -1,3 +1,6 @@
+# AttendSure Scripts - Check Campus GPS
+# File: D:\AttendSure_V3\scripts\testing\check_campus_gps.py
+
 r"""
 AttendSure - Live Teacher Campus GPS Monitor (3NF Schema)
 Run: python testing\check_campus_gps.py

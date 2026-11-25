@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# AttendSure Backend - Django Management Entry Point
+# File: D:\AttendSure_V3\backend\manage.py
+
 import os
 import sys
 

@@ -1,3 +1,6 @@
+// AttendSure Web - Dtr Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\DTRTab.tsx
+
 /**
  * AttendSure - Monthly Time Record (Civil Service Form No. 48)
  * File: web/src/components/tabs/DTRTab.tsx
@@ -6,7 +9,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import apiClient, { peekApiCache } from '../../api/client';
 import { API_ROUTES, extractApiError } from '../../api/routes';
-import { exportElementToLocalPdf } from '../../utils/reportExporters';
+import { exportElementToLocalPdf, printHtmlWithPageSetup } from '../../utils/reportExporters';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { ControlSwitch } from '../ui/ControlSwitch';
@@ -540,7 +543,24 @@ export const DTRTab: React.FC = () => {
       });
       return;
     }
-    window.print();
+    if (!printAreaRef.current) return;
+    printHtmlWithPageSetup({
+      title: `CSC Form 48 - ${dtrData.teacher_name || 'Teacher'} (${dtrData.month} ${dtrData.year})`,
+      bodyHtml: printAreaRef.current.innerHTML,
+      pageConfig,
+      extraCss: `
+        .csc-print-page {
+          width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          box-shadow: none !important;
+          border: none !important;
+          border-radius: 0 !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
+      `,
+    });
   };
 
   const resolvedSchoolHead = (dtrData?.school_head || school.principal_name || '').trim();
@@ -1164,46 +1184,6 @@ export const DTRTab: React.FC = () => {
         onApply={(cfg) => setPageConfig(cfg)}
         reportTitle="CSC Form 48 (Daily Time Record)"
       />
-
-      <style>{`
-        @media print {
-          @page {
-            size: ${dtrPaperDims.widthIn}in ${dtrPaperDims.heightIn}in;
-            margin: 0 !important;
-          }
-          html, body, #root {
-            background: ${pageConfig.pageColor || '#ffffff'} !important;
-            margin: 0 !important;
-            padding: 0 !important;
-          }
-          body * {
-            visibility: hidden;
-          }
-          .csc-print-page, .csc-print-page * {
-            visibility: visible;
-          }
-          .csc-print-page {
-            position: relative;
-            left: 0;
-            top: 0;
-            width: 100% !important;
-            min-height: 0 !important;
-            margin: 0 auto !important;
-            box-shadow: none !important;
-            border: none !important;
-            page-break-inside: avoid !important;
-            break-inside: avoid !important;
-          }
-          .csc-print-page:not(:last-child) {
-            page-break-after: always !important;
-            break-after: page !important;
-          }
-          .csc-print-page:last-child {
-            page-break-after: avoid !important;
-            break-after: avoid !important;
-          }
-        }
-      `}</style>
     </div>
   );
 };

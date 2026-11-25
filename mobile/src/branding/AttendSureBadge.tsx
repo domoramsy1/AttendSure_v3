@@ -1,3 +1,6 @@
+// AttendSure Mobile - Attend Sure Badge
+// File: D:\AttendSure_V3\mobile\src\branding\AttendSureBadge.tsx
+
 /**
  * AttendSure Mobile - Animated Brand Badge
  * File: mobile/src/branding/AttendSureBadge.tsx

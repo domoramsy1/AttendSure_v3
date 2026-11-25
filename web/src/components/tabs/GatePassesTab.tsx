@@ -1,3 +1,6 @@
+// AttendSure Web - Gate Passes Tab
+// File: D:\AttendSure_V3\web\src\components\tabs\GatePassesTab.tsx
+
 /**
  * AttendSure - Campus Exit & Official Travel Passes (Strict 3NF Lifecycle)
  * File: web/src/components/tabs/GatePassesTab.tsx
@@ -20,6 +23,7 @@ import {
   canIssueStudentExitPass,
   getCurrentUserFromStorage,
 } from '../../utils/permissions';
+import { formatDateTime12h } from '../../utils/timeFormat';
 import { CheckCircle2, ShieldCheck, Printer, QrCode, FileText, Plus, ExternalLink, Edit2, Trash2, XCircle } from 'lucide-react';
 
 interface ExitPassItem {
@@ -40,12 +44,24 @@ interface ExitPassItem {
   valid_until: string;
   returned_at?: string | null;
   is_cancelled?: boolean;
-  pass_status: 'ACTIVE' | 'RETURNED' | 'OVERDUE' | 'CANCELLED';
-  status?: 'ACTIVE' | 'RETURNED' | 'OVERDUE' | 'CANCELLED';
+  is_approved?: boolean;
+  approved_by_name?: string;
+  approved_at?: string | null;
+  pass_status: 'PENDING_APPROVAL' | 'ACTIVE' | 'RETURNED' | 'OVERDUE' | 'CANCELLED';
+  status?: 'PENDING_APPROVAL' | 'ACTIVE' | 'RETURNED' | 'OVERDUE' | 'CANCELLED';
   attachment_url?: string | null;
+  issued_by?: number | null;
   issued_by_name?: string;
-  guardian_notice?: string;
 }
+
+const PASS_STATUS_LABELS: Record<string, string> = {
+  ALL: 'All',
+  PENDING_APPROVAL: 'Pending Approval',
+  ACTIVE: 'Active',
+  RETURNED: 'Returned',
+  OVERDUE: 'Overdue',
+  CANCELLED: 'Cancelled',
+};
 
 interface StudentOption {
   id: number;
@@ -101,6 +117,7 @@ export const GatePassesTab: React.FC = () => {
     valid_until: '',
   });
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [clearExistingProof, setClearExistingProof] = useState(false);
 
   const passesAbortRef = useRef<AbortController | null>(null);
   const studentsAbortRef = useRef<AbortController | null>(null);
@@ -207,6 +224,7 @@ export const GatePassesTab: React.FC = () => {
       valid_until: toInputDate(new Date(now.getTime() + 4 * 3600000)),
     });
     setAttachedFile(null);
+    setClearExistingProof(false);
     if (scope === 'STUDENT') void fetchStudents();
     setIsModalOpen(true);
   };
@@ -223,14 +241,15 @@ export const GatePassesTab: React.FC = () => {
       valid_until: isNaN(toDt.getTime()) ? toInputDate(new Date(Date.now() + 4 * 3600000)) : toInputDate(toDt),
     });
     setAttachedFile(null);
+    setClearExistingProof(false);
     if (pass.pass_scope === 'STUDENT') void fetchStudents();
     setIsModalOpen(true);
   };
 
   const handleSubmitPass = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (attachedFile && attachedFile.size > 5 * 1024 * 1024) {
-      showAlert({ title: 'File Too Large', message: 'Attachment must be 5 MB or smaller.', type: 'warning' });
+    if (attachedFile && attachedFile.size > 2 * 1024 * 1024) {
+      showAlert({ title: 'File Too Large', message: 'Attachment must be 2 MB or smaller.', type: 'warning' });
       return;
     }
 
@@ -251,7 +270,11 @@ export const GatePassesTab: React.FC = () => {
       payload.append('destination', cleanDest);
       payload.append('reason', cleanReason);
       payload.append('valid_until', new Date(formData.valid_until).toISOString());
-      if (attachedFile) payload.append('attachment', attachedFile);
+      if (attachedFile) {
+        payload.append('attachment', attachedFile);
+      } else if (editingPass && clearExistingProof) {
+        payload.append('clear_proof', 'true');
+      }
 
       if (passScope === 'STUDENT') {
         if (!formData.student_id) {
@@ -271,9 +294,17 @@ export const GatePassesTab: React.FC = () => {
         await apiClient.post(API_ROUTES.attendance.exitPasses, payload, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
+        const pendingApproval = passScope === 'TEACHER' && !isLeader;
         showAlert({
-          title: passScope === 'TEACHER' ? 'Teacher Travel Pass Issued' : 'Student Exit Pass Issued',
-          message: 'Pass saved and active. Campus boundary checks will automatically recognize this approved departure until the scheduled return time.',
+          title:
+            passScope === 'TEACHER'
+              ? pendingApproval
+                ? 'Locator Slip Submitted for Approval'
+                : 'Teacher Travel Pass Issued'
+              : 'Student Exit Pass Issued',
+          message: pendingApproval
+            ? 'Your official locator slip was sent to your school leader for approval. Campus boundary exemption begins once approved.'
+            : 'Pass saved and active. Campus checks will automatically recognize this approved departure until the scheduled return time.',
           type: 'success',
         });
       }
@@ -355,7 +386,7 @@ export const GatePassesTab: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(14px, 2.5vw, 24px)', boxSizing: 'border-box', width: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, backgroundColor: tokens.bgSurface, padding: 14, borderRadius: 12, border: `1px solid ${tokens.borderSubtle}` }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {['ALL', 'ACTIVE', 'RETURNED', 'OVERDUE', 'CANCELLED'].map((st) => (
+          {['ALL', 'PENDING_APPROVAL', 'ACTIVE', 'RETURNED', 'OVERDUE', 'CANCELLED'].map((st) => (
             <button
               key={st}
               type="button"
@@ -371,7 +402,7 @@ export const GatePassesTab: React.FC = () => {
                 color: statusFilter === st ? tokens.onPrimary : tokens.textSecondary,
               }}
             >
-              {st}
+              {PASS_STATUS_LABELS[st] || st}
             </button>
           ))}
         </div>
@@ -426,8 +457,13 @@ export const GatePassesTab: React.FC = () => {
             render: (p) => (
               <div style={{ fontSize: '0.78rem', color: tokens.textPrimary }}>
                 <strong>{p.issued_by_name || 'School Staff'}</strong>
+                {p.pass_scope === 'TEACHER' && p.is_approved && p.approved_by_name && (
+                  <div style={{ fontSize: '0.66rem', color: brand.success, fontWeight: 700 }}>
+                    Approved by: {p.approved_by_name}
+                  </div>
+                )}
                 <div style={{ fontSize: '0.66rem', color: tokens.textMuted }}>
-                  Until: {p.valid_until ? new Date(p.valid_until).toLocaleString() : '—'}
+                  Until: {formatDateTime12h(p.valid_until)}
                 </div>
               </div>
             ),
@@ -464,9 +500,20 @@ export const GatePassesTab: React.FC = () => {
             render: (p) => {
               const st = resolveStatus(p);
               const isTeacherSlip = p.pass_scope === 'TEACHER';
-              const canApproveThis = isLeader && isTeacherSlip && (st === 'ACTIVE' || st === 'OVERDUE');
+              const canApproveThis = isLeader && isTeacherSlip && st === 'PENDING_APPROVAL';
               const canCancelThis = isTeacherSlip ? isLeader : canIssueStudentPass;
-              const canModifyThis = isLeader || (!isTeacherSlip && canIssueStudentPass && st !== 'RETURNED');
+              const currentUserId = Number(localStorage.getItem('attendsure_user_id') || 0);
+              const isOwnPendingSlip =
+                isTeacherSlip &&
+                st === 'PENDING_APPROVAL' &&
+                currentUserId > 0 &&
+                p.issued_by !== undefined &&
+                p.issued_by !== null &&
+                Number(p.issued_by) === currentUserId;
+              const canModifyThis =
+                isLeader ||
+                isOwnPendingSlip ||
+                (!isTeacherSlip && canIssueStudentPass && st !== 'RETURNED');
               return (
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                   <button
@@ -489,16 +536,18 @@ export const GatePassesTab: React.FC = () => {
                     </button>
                   )}
 
-                  {(st === 'ACTIVE' || st === 'OVERDUE') && (
+                  {(st === 'ACTIVE' || st === 'OVERDUE' || st === 'PENDING_APPROVAL') && (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => void handleMarkReturned(p.id)}
-                        title="Mark Returned"
-                        style={{ backgroundColor: tokens.successLight, border: `1px solid ${brand.success}`, borderRadius: 6, padding: '6px 8px', cursor: 'pointer' }}
-                      >
-                        <CheckCircle2 size={14} color={brand.success} />
-                      </button>
+                      {(st === 'ACTIVE' || st === 'OVERDUE') && (
+                        <button
+                          type="button"
+                          onClick={() => void handleMarkReturned(p.id)}
+                          title="Mark Returned"
+                          style={{ backgroundColor: tokens.successLight, border: `1px solid ${brand.success}`, borderRadius: 6, padding: '6px 8px', cursor: 'pointer' }}
+                        >
+                          <CheckCircle2 size={14} color={brand.success} />
+                        </button>
+                      )}
                       {canCancelThis && (
                         <button
                           type="button"
@@ -555,24 +604,32 @@ export const GatePassesTab: React.FC = () => {
       >
         <form onSubmit={handleSubmitPass} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {passScope === 'STUDENT' ? (
-            <div>
-              <label style={ui.label}>Select Student *</label>
-              {loadingStudents ? (
-                <div style={{ fontSize: '0.74rem', color: tokens.textMuted, padding: '8px 0' }}>Loading student list...</div>
-              ) : (
-                <select required value={formData.student_id} onChange={(e) => setFormData({ ...formData, student_id: e.target.value })} style={ui.input}>
-                  <option value="">-- Choose Student --</option>
-                  {students.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.full_name} (LRN: {s.lrn})
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
+            <>
+              <div style={{ padding: 10, backgroundColor: tokens.bgSurfaceSubtle, borderRadius: 8, fontSize: '0.74rem', color: tokens.textSecondary }}>
+                <strong>Parent Hardcopy Excuse Process:</strong> Review the parent&rsquo;s physical hardcopy excuse letter before issuing this Student Exit Pass. Optionally attach a photo or PDF scan below.
+              </div>
+              <div>
+                <label style={ui.label}>Select Student *</label>
+                {loadingStudents ? (
+                  <div style={{ fontSize: '0.74rem', color: tokens.textMuted, padding: '8px 0' }}>Loading student list...</div>
+                ) : (
+                  <select required value={formData.student_id} onChange={(e) => setFormData({ ...formData, student_id: e.target.value })} style={ui.input}>
+                    <option value="">-- Choose Student --</option>
+                    {students.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.full_name} (LRN: {s.lrn})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </>
           ) : (
             <div style={{ padding: 10, backgroundColor: tokens.bgSurfaceSubtle, borderRadius: 8, fontSize: '0.74rem', color: tokens.textSecondary }}>
-              <strong>Campus Boundary Protection:</strong> Active travel passes automatically show as Official Exit Pass so off-campus school errands never trigger teacher loafing alerts.
+              <strong>Campus Boundary Protection:</strong>{' '}
+              {isLeader
+                ? 'Approved official locator slips mark the teacher as Authorized Off-Campus until the scheduled return time.'
+                : 'Your locator slip starts as Pending Approval. Campus boundary exemption begins once a school leader approves it.'}
             </div>
           )}
 
@@ -594,11 +651,79 @@ export const GatePassesTab: React.FC = () => {
           <div>
             <label style={ui.label}>Valid Until (Expected Return) *</label>
             <input type="datetime-local" required value={formData.valid_until} onChange={(e) => setFormData({ ...formData, valid_until: e.target.value })} style={ui.input} />
+            {formData.valid_until && (
+              <div style={{ marginTop: 4, fontSize: '0.70rem', color: tokens.textMuted, fontWeight: 700 }}>
+                Return time: {formatDateTime12h(formData.valid_until)}
+              </div>
+            )}
           </div>
 
           <div>
-            <label style={ui.label}>Supporting Document (PDF, JPG, PNG, or WEBP up to 5 MB)</label>
-            <input type="file" accept=".pdf,image/jpeg,image/png,image/webp" onChange={(e) => setAttachedFile(e.target.files?.[0] || null)} style={{ fontSize: '0.76rem', color: tokens.textPrimary }} />
+            <label style={ui.label}>
+              {passScope === 'STUDENT'
+                ? 'Hardcopy Excuse Letter / Proof (Photo or PDF, up to 2 MB)'
+                : 'Travel Order / Supporting Proof (Photo or PDF, up to 2 MB)'}
+            </label>
+            <input
+              type="file"
+              accept=".pdf,image/jpeg,image/png,image/webp"
+              onChange={(e) => {
+                setAttachedFile(e.target.files?.[0] || null);
+                setClearExistingProof(false);
+              }}
+              style={{ fontSize: '0.76rem', color: tokens.textPrimary }}
+            />
+            {editingPass && isSafeProofUrl(editingPass.attachment_url) && !attachedFile && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, fontSize: '0.72rem' }}>
+                {!clearExistingProof ? (
+                  <>
+                    <a
+                      href={editingPass.attachment_url!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: brand.primary, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <ExternalLink size={12} /> View Current Proof
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setClearExistingProof(true)}
+                      style={{
+                        border: `1px solid ${brand.danger}`,
+                        backgroundColor: tokens.dangerLight,
+                        color: brand.danger,
+                        borderRadius: 6,
+                        padding: '2px 8px',
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Remove Proof
+                    </button>
+                  </>
+                ) : (
+                  <span style={{ color: brand.warning, fontWeight: 700 }}>
+                    Current proof will be removed when you save.{' '}
+                    <button
+                      type="button"
+                      onClick={() => setClearExistingProof(false)}
+                      style={{
+                        border: 'none',
+                        backgroundColor: 'transparent',
+                        color: brand.primary,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        textDecoration: 'underline',
+                        padding: 0,
+                      }}
+                    >
+                      Keep it
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
@@ -646,16 +771,26 @@ export const GatePassesTab: React.FC = () => {
 
               <div style={{ fontSize: '0.66rem', color: SEAL_COLORS.ink, textAlign: 'left', borderTop: `1px solid ${SEAL_COLORS.subtleBorder}`, paddingTop: 6 }}>
                 <div><strong>Issued By:</strong> {selectedPass.issued_by_name || 'School Staff'}</div>
-                <div><strong>Valid Until:</strong> {new Date(selectedPass.valid_until).toLocaleString()}</div>
+                {selectedPass.pass_scope === 'TEACHER' && selectedPass.approved_by_name && (
+                  <div><strong>Approved By:</strong> {selectedPass.approved_by_name}</div>
+                )}
+                <div><strong>Valid Until:</strong> {formatDateTime12h(selectedPass.valid_until)}</div>
                 <div>
                   <strong>Status:</strong>{' '}
                   <span style={{ fontWeight: 800, color: resolveStatus(selectedPass) === 'ACTIVE' ? brand.success : brand.warning }}>
-                    {resolveStatus(selectedPass)}
+                    {PASS_STATUS_LABELS[resolveStatus(selectedPass)] || resolveStatus(selectedPass)}
                   </span>
                 </div>
-                {selectedPass.guardian_notice && (
-                  <div style={{ marginTop: 6, paddingTop: 5, borderTop: `1px dashed ${SEAL_COLORS.border}`, fontSize: '0.64rem', color: SEAL_COLORS.navy }}>
-                    {selectedPass.guardian_notice}
+                {isSafeProofUrl(selectedPass.attachment_url) && (
+                  <div style={{ marginTop: 6, paddingTop: 5, borderTop: `1px dashed ${SEAL_COLORS.border}` }}>
+                    <a
+                      href={selectedPass.attachment_url!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ fontSize: '0.66rem', color: SEAL_COLORS.navy, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <ExternalLink size={11} /> Open Attached Proof Document
+                    </a>
                   </div>
                 )}
               </div>

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Dashboard Dtr And Kpi Section Component
+// File: D:\AttendSure_V3\mobile\src\components\dashboard\DashboardDtrAndKpiSection.tsx
+
 /**
  * AttendSure Mobile - Dashboard Daily Time Record Summary & Student KPI Tiles
  * File: mobile/src/components/dashboard/DashboardDtrAndKpiSection.tsx
@@ -33,6 +36,7 @@ export interface DashboardDtrAndKpiSectionProps {
   lastSyncTime: string;
   totalPresent: number;
   totalLate: number;
+  totalExcused?: number;
   totalAbsent: number;
   totalNeedsReview: number;
 }
@@ -44,6 +48,7 @@ export const DashboardDtrAndKpiSection: React.FC<DashboardDtrAndKpiSectionProps>
   lastSyncTime,
   totalPresent,
   totalLate,
+  totalExcused = 0,
   totalAbsent,
   totalNeedsReview,
 }) => {
@@ -131,6 +136,13 @@ export const DashboardDtrAndKpiSection: React.FC<DashboardDtrAndKpiSectionProps>
                 color: palette.warning,
               },
               {
+                label: 'Excused',
+                value: totalExcused,
+                icon: 'shield-checkmark-outline' as const,
+                bg: palette.infoLight,
+                color: palette.info,
+              },
+              {
                 label: 'Absent',
                 value: totalAbsent,
                 icon: 'close-circle-outline' as const,
@@ -153,7 +165,9 @@ export const DashboardDtrAndKpiSection: React.FC<DashboardDtrAndKpiSectionProps>
                 <Text style={[styles.kpiValueText, { color: tile.valueColor || tile.color }]}>
                   {tile.value}
                 </Text>
-                <Text style={styles.kpiLabelText}>{tile.label}</Text>
+                <Text style={styles.kpiLabelText} numberOfLines={1} adjustsFontSizeToFit>
+                  {tile.label}
+                </Text>
               </View>
             ))}
           </View>

@@ -1,3 +1,6 @@
+// AttendSure Mobile - Theme Context
+// File: D:\AttendSure_V3\mobile\src\context\ThemeContext.tsx
+
 /**
  * AttendSure Mobile - Live Theme Context (Light, Dark & High-Contrast)
  * File: mobile/src/context/ThemeContext.tsx

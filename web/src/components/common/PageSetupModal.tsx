@@ -1,3 +1,6 @@
+// AttendSure Web - Page Setup Modal
+// File: D:\AttendSure_V3\web\src\components\common\PageSetupModal.tsx
+
 /**
  * AttendSure - Universal Page Setup Modal
  * File: web/src/components/common/PageSetupModal.tsx

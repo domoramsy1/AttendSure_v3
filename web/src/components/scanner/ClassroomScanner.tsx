@@ -1,3 +1,6 @@
+// AttendSure Web - Classroom Scanner Component
+// File: D:\AttendSure_V3\web\src\components\scanner\ClassroomScanner.tsx
+
 /**
  * AttendSure - Built-In Browser/Webcam Continuous QR Scanner & Real-Time Sync
  * File: web/src/components/scanner/ClassroomScanner.tsx
@@ -12,6 +15,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAlert } from '../../context/AlertContext';
 import { isSafeImageUrl } from '../../theme/tokens';
 import { formatDayOfWeekLabel, periodRunsToday } from '../../utils/scheduleAlarms';
+import { formatTime12h } from '../../utils/timeFormat';
 import { ProfileAvatar } from '../common/ProfileAvatar';
 import {
   Camera,
@@ -211,14 +215,23 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
   const syncOfflineScans = useCallback(async () => {
     const queued = loadOfflineQueue();
     if (queued.length === 0) return;
+    const batch = queued.slice(0, 500);
+    const syncedUuids = new Set(batch.map((entry) => entry.client_scan_uuid));
     setSyncingOffline(true);
     try {
-      const res = await apiClient.post(API_ROUTES.attendance.offlineSync, { scans: queued });
-      if (!mountedRef.current) return;
+      const res = await apiClient.post(API_ROUTES.attendance.offlineSync, { scans: batch });
+      const remaining = loadOfflineQueue().filter(
+        (entry) => !syncedUuids.has(entry.client_scan_uuid)
+      );
       try {
-        localStorage.removeItem(OFFLINE_QUEUE_KEY);
+        if (remaining.length > 0) {
+          localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remaining));
+        } else {
+          localStorage.removeItem(OFFLINE_QUEUE_KEY);
+        }
       } catch {}
-      setOfflineQueue([]);
+      if (!mountedRef.current) return;
+      setOfflineQueue(remaining);
       invalidateApiCache();
       window.dispatchEvent(new CustomEvent('attendsure:attendance-updated'));
       showAlert({
@@ -666,7 +679,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                       marginTop: 3,
                     }}
                   >
-                    {activeStudent.scanned_at}
+                    {formatTime12h(activeStudent.scanned_at, { includeSeconds: true })}
                   </div>
                 </div>
               </div>
@@ -728,7 +741,7 @@ export const ClassroomScanner: React.FC<ClassroomScannerProps> = ({ onClose, isM
                           {item.student_name}
                         </div>
                         <div style={{ fontSize: '0.72rem', fontFamily: fonts.mono, color: tokens.textSecondary, marginTop: 2 }}>
-                          {item.scanned_at}
+                          {formatTime12h(item.scanned_at, { includeSeconds: true })}
                         </div>
                       </div>
                     </div>

@@ -1,3 +1,6 @@
+// AttendSure Web - Clipboard Utility
+// File: D:\AttendSure_V3\web\src\utils\clipboard.ts
+
 /**
  * AttendSure - Centralized Clipboard Utility & Copy Feedback Hook
  * File: web/src/utils/clipboard.ts

@@ -1,3 +1,6 @@
+# AttendSure Scripts - Sync Avatars
+# File: D:\AttendSure_V3\scripts\database\sync_avatars.py
+
 r"""
 AttendSure - Physical Profile Avatar Generator (3NF Schema)
 Ensures every existing Student and TeacherProfile has a valid JPEG file on disk.

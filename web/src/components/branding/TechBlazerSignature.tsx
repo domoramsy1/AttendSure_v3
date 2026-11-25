@@ -1,3 +1,6 @@
+// AttendSure Web - Tech Blazer Signature Component
+// File: D:\AttendSure_V3\web\src\components\branding\TechBlazerSignature.tsx
+
 /**
  * AttendSure - Pure-Vector Theme-Adaptive Developer Signature Badge
  * File: web/src/components/branding/TechBlazerSignature.tsx

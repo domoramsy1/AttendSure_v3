@@ -1,3 +1,7 @@
+# AttendSure Backend - Attendance Read Queries
+# File: D:\AttendSure_V3\backend\apps\attendance\selectors.py
+
+from datetime import datetime, time as dt_time
 from django.db.models import Count, Q
 from django.utils import timezone
 
@@ -6,12 +10,13 @@ from apps.accounts.selectors import (
     get_teacher_section_ids,
     resolve_teacher_for_user,
 )
-from apps.school.models import ClassPeriod, Section, period_runs_on_weekday
+from apps.school.models import ClassPeriod, SchoolHoliday, Section, period_runs_on_weekday
 from apps.school.selectors import format_section_label
-from apps.students.models import Enrollment
+from apps.students.models import ACTIVE_ENROLLMENT_STATUSES, Enrollment
 from common.media import build_media_url
 from common.permissions import is_school_leader
 from common.qr_signer import sign_student_qr
+from common.time_utils import format_time_12h, format_time_range_12h, local_day_bounds
 from .models import ClassAttendance, DailyAttendance, ExitPass
 
 
@@ -108,7 +113,9 @@ def get_assigned_classes_with_class_lists(
     if not include_students:
         counts_by_sec = dict(
             Enrollment.objects.filter(
-                section_id__in=all_section_ids, status="ENROLLED", student__is_active=True
+                section_id__in=all_section_ids,
+                status__in=ACTIVE_ENROLLMENT_STATUSES,
+                student__is_active=True,
             )
             .values("section_id")
             .annotate(cnt=Count("id"))
@@ -135,7 +142,7 @@ def get_assigned_classes_with_class_lists(
                     "day_of_week": p.day_of_week,
                     "start_time": start_s,
                     "end_time": end_s,
-                    "time_display": f"{start_s} - {end_s}".strip(" -"),
+                    "time_display": format_time_range_12h(p.start_time, p.end_time, fallback=""),
                     "total_students": cnt,
                     "students": [],
                     "is_adviser": bool(teacher and p.section.adviser_id == teacher.id),
@@ -145,7 +152,9 @@ def get_assigned_classes_with_class_lists(
 
     enrollments = list(
         Enrollment.objects.filter(
-            section_id__in=all_section_ids, status="ENROLLED", student__is_active=True
+            section_id__in=all_section_ids,
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
+            student__is_active=True,
         )
         .select_related("student")
         .order_by("student__last_name", "student__first_name")
@@ -202,7 +211,7 @@ def get_assigned_classes_with_class_lists(
                 "day_of_week": p.day_of_week,
                 "start_time": start_s,
                 "end_time": end_s,
-                "time_display": f"{start_s} - {end_s}".strip(" -"),
+                "time_display": format_time_range_12h(p.start_time, p.end_time, fallback=""),
                 "total_students": len(class_list),
                 "students": class_list,
                 "is_adviser": bool(teacher and p.section.adviser_id == teacher.id),
@@ -250,7 +259,9 @@ def get_section_class_list(*, user, section_id: int | None = None, request=None)
     today = timezone.localdate()
     enrollments = list(
         Enrollment.objects.filter(
-            section_id=section_id, status="ENROLLED", student__is_active=True
+            section_id=section_id,
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
+            student__is_active=True,
         )
         .select_related("student")
         .order_by("student__last_name", "student__first_name")
@@ -279,6 +290,7 @@ def get_adviser_matrix(*, user, section_id: int | None = None, target_date=None,
     now_time = timezone.localtime().time()
     is_past_date = active_date < today
     is_future_date = active_date > today
+    is_holiday = SchoolHoliday.objects.filter(holiday_date=active_date).exists()
     teacher = resolve_teacher_for_user(user)
     leader = is_school_leader(user)
 
@@ -321,6 +333,7 @@ def get_adviser_matrix(*, user, section_id: int | None = None, target_date=None,
     if not target:
         return {
             "date": str(active_date),
+            "is_holiday": is_holiday,
             "has_advisory_class": False,
             "is_adviser": False,
             "available_sections": available,
@@ -337,7 +350,11 @@ def get_adviser_matrix(*, user, section_id: int | None = None, target_date=None,
     ]
     period_ids = [p.id for p in periods]
     enrollments = list(
-        Enrollment.objects.filter(section=target, status="ENROLLED", student__is_active=True)
+        Enrollment.objects.filter(
+            section=target,
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
+            student__is_active=True,
+        )
         .select_related("student")
         .order_by("student__last_name", "student__first_name")
     )
@@ -345,6 +362,7 @@ def get_adviser_matrix(*, user, section_id: int | None = None, target_date=None,
 
     log_map: dict[tuple[int, int], tuple[str, str]] = {}
     first_seen_map: dict[int, str] = {}
+    earliest_present_time: dict[int, dt_time] = {}
     started_period_ids: set[int] = set()
 
     on_campus_enr_ids = set(
@@ -361,21 +379,67 @@ def get_adviser_matrix(*, user, section_id: int | None = None, target_date=None,
             enrollment_id__in=enr_ids,
             class_period_id__in=period_ids,
         )
-        .values("enrollment_id", "class_period_id", "status", "scanned_at", "class_period__subject__code")
+        .values(
+            "enrollment_id",
+            "class_period_id",
+            "status",
+            "scanned_at",
+            "class_period__subject__code",
+            "class_period__start_time",
+        )
         .order_by("scanned_at")
     )
 
     for row in attendance_rows:
         started_period_ids.add(row["class_period_id"])
-        t_str = timezone.localtime(row["scanned_at"]).strftime("%I:%M %p") if row["scanned_at"] else ""
+        t_str = format_time_12h(row["scanned_at"], fallback="") if row["scanned_at"] else ""
         st_code = row["status"]
         log_map[(row["enrollment_id"], row["class_period_id"])] = (st_code, t_str)
 
         if st_code in ("PRESENT", "LATE"):
             on_campus_enr_ids.add(row["enrollment_id"])
+            p_start = row["class_period__start_time"]
+            if p_start is not None:
+                prev_start = earliest_present_time.get(row["enrollment_id"])
+                if prev_start is None or p_start < prev_start:
+                    earliest_present_time[row["enrollment_id"]] = p_start
             if row["enrollment_id"] not in first_seen_map:
                 subj_code = row["class_period__subject__code"] or "CLASS"
                 first_seen_map[row["enrollment_id"]] = f"{t_str} ({subj_code})" if t_str else subj_code
+
+    # Fetch non-cancelled STUDENT ExitPass rows overlapping active_date in 1 bulk query (zero N+1)
+    day_start, day_end = local_day_bounds(active_date)
+    student_passes_by_enr: dict[int, list[ExitPass]] = {}
+    if enr_ids:
+        for ep in ExitPass.objects.filter(
+            pass_scope="STUDENT",
+            enrollment_id__in=enr_ids,
+            is_cancelled=False,
+            issued_at__lt=day_end,
+            valid_until__gte=day_start,
+        ):
+            student_passes_by_enr.setdefault(ep.enrollment_id, []).append(ep)
+
+    current_tz = timezone.get_current_timezone()
+    period_bounds: dict[int, tuple[datetime, datetime]] = {}
+    for p in periods:
+        if p.start_time and p.end_time:
+            period_bounds[p.id] = (
+                timezone.make_aware(datetime.combine(active_date, p.start_time), current_tz),
+                timezone.make_aware(datetime.combine(active_date, p.end_time), current_tz),
+            )
+
+    def _period_covered_by_exit_pass(enr_passes: list[ExitPass], pid: int) -> bool:
+        bounds = period_bounds.get(pid)
+        if not bounds or not enr_passes:
+            return False
+        p_start_dt, p_end_dt = bounds
+        return any(
+            ep.issued_at <= p_end_dt
+            and ep.valid_until >= p_start_dt
+            and (ep.returned_at is None or ep.returned_at >= p_start_dt)
+            for ep in enr_passes
+        )
 
     matrix = []
     total_periods = len(periods)
@@ -384,29 +448,45 @@ def get_adviser_matrix(*, user, section_id: int | None = None, target_date=None,
         st = enr.student
         attended = cutting = 0
         in_campus = enr.id in on_campus_enr_ids
+        first_seen_start = earliest_present_time.get(enr.id)
+        enr_passes = student_passes_by_enr.get(enr.id, [])
         subj_cells = []
 
         for p in periods:
             rec = log_map.get((enr.id, p.id))
+            covered_by_pass = _period_covered_by_exit_pass(enr_passes, p.id)
+            is_subsequent = bool(
+                first_seen_start is not None
+                and p.start_time is not None
+                and p.start_time > first_seen_start
+            )
             if rec:
                 st_status, scan_t = rec
                 if st_status in ("PRESENT", "LATE", "EXCUSED"):
                     attended += 1
-                elif st_status == "ABSENT" and in_campus:
-                    st_status = "CUTTING"
-                    cutting += 1
+                elif st_status == "ABSENT":
+                    if covered_by_pass:
+                        st_status = "EXCUSED"
+                        attended += 1
+                    elif in_campus and not is_holiday and is_subsequent:
+                        st_status = "CUTTING"
+                        cutting += 1
             else:
                 scan_t = ""
-                period_elapsed = (
-                    p.id in started_period_ids
-                    or is_past_date
-                    or (not is_future_date and bool(p.start_time and now_time >= p.start_time))
-                )
-                if in_campus and period_elapsed:
-                    st_status = "CUTTING"
-                    cutting += 1
+                if covered_by_pass:
+                    st_status = "EXCUSED"
+                    attended += 1
                 else:
-                    st_status = "UNSCANNED"
+                    period_elapsed = (
+                        p.id in started_period_ids
+                        or is_past_date
+                        or (not is_future_date and bool(p.start_time and now_time >= p.start_time))
+                    )
+                    if in_campus and not is_holiday and period_elapsed and is_subsequent:
+                        st_status = "CUTTING"
+                        cutting += 1
+                    else:
+                        st_status = "UNSCANNED"
 
             subj_cells.append(
                 {
@@ -443,13 +523,14 @@ def get_adviser_matrix(*, user, section_id: int | None = None, target_date=None,
             "subject_code": p.subject.code if p.subject else "",
             "subject_name": p.subject.title if p.subject else "",
             "teacher_name": p.teacher.full_name if p.teacher else "Unassigned",
-            "time_window": f"{str(p.start_time)[:5]} - {str(p.end_time)[:5]}" if p.start_time else "",
+            "time_window": format_time_range_12h(p.start_time, p.end_time, fallback="") if p.start_time else "",
         }
         for p in periods
     ]
 
     return {
         "date": str(active_date),
+        "is_holiday": is_holiday,
         "has_advisory_class": True,
         "is_adviser": target.id in advisory_ids,
         "section_id": target.id,
@@ -511,7 +592,7 @@ def get_attendance_logs(
             "attendance_date": str(item.attendance_date),
             "status": item.status,
             "scan_method": item.scan_method,
-            "scanned_at": timezone.localtime(item.scanned_at).strftime("%I:%M:%S %p"),
+            "scanned_at": format_time_12h(item.scanned_at, include_seconds=True),
         }
         for item in qs[:300]
     ]
@@ -527,16 +608,28 @@ def get_exit_passes_for_user(*, user, status_filter: str = "ALL", search: str = 
         "teacher",
         "teacher__user",
         "issued_by",
+        "approved_by",
     ).order_by("-issued_at")
 
     if status_filter and status_filter.upper() != "ALL":
         clean_st = status_filter.upper()
-        if clean_st == "ACTIVE":
-            qs = qs.filter(is_cancelled=False, returned_at__isnull=True, valid_until__gte=now)
+        if clean_st == "PENDING_APPROVAL":
+            qs = qs.filter(
+                pass_scope="TEACHER",
+                is_approved=False,
+                is_cancelled=False,
+                returned_at__isnull=True,
+            )
+        elif clean_st == "ACTIVE":
+            qs = qs.filter(is_cancelled=False, returned_at__isnull=True, valid_until__gte=now).exclude(
+                pass_scope="TEACHER", is_approved=False
+            )
         elif clean_st == "RETURNED":
             qs = qs.filter(is_cancelled=False, returned_at__isnull=False)
         elif clean_st in ("OVERDUE", "EXPIRED"):
-            qs = qs.filter(is_cancelled=False, returned_at__isnull=True, valid_until__lt=now)
+            qs = qs.filter(is_cancelled=False, returned_at__isnull=True, valid_until__lt=now).exclude(
+                pass_scope="TEACHER", is_approved=False
+            )
         elif clean_st in ("CANCELLED", "DECLINED"):
             qs = qs.filter(is_cancelled=True)
 

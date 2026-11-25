@@ -1,3 +1,6 @@
+# AttendSure Backend - Accounts Data Serializers
+# File: D:\AttendSure_V3\backend\apps\accounts\serializers.py
+
 import re
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -7,6 +10,7 @@ from rest_framework import serializers
 
 from common.media import FlexibleImageField, build_media_url
 from common.phone import normalize_ph_phone
+from common.time_utils import format_time_12h
 from common.validators import (
     clean_text,
     validate_staff_role,
@@ -593,6 +597,7 @@ AUDIT_MODULE_LABELS: dict[str, str] = {
     "class_attendance": "Student Attendance",
     "daily_attendance": "Daily Attendance",
     "exit_passes": "Exit Passes",
+    "monthly_time_records": "Monthly DTR",
     "teacher_monthly_dtr": "Monthly DTR",
     "deped_reports": "DepEd Reports",
     "edfi_export": "Division Export",
@@ -611,7 +616,10 @@ AUDIT_ACTION_LABELS: dict[str, str] = {
     "CREATE": "Created",
     "UPDATE": "Updated",
     "DELETE": "Deleted",
+    "BULK_ABSENT": "Marked Unscanned Students Absent",
     "APPROVE": "Approved",
+    "RETURN": "Marked Returned",
+    "CANCEL": "Cancelled",
     "RESOLVE": "Resolved",
     "EXCUSE": "Excused",
     "SUBMIT": "Submitted",
@@ -772,6 +780,18 @@ def _build_audit_summary(obj: AuditLog) -> str:
         skipped = data.get("skipped", 0)
         return f"Imported students: {created} added, {updated} updated, {skipped} skipped."
 
+    if action == "BULK_ABSENT":
+        absent_cnt = int(data.get("marked_absent_count") or 0)
+        excused_cnt = int(data.get("marked_excused_count") or 0)
+        att_date = str(data.get("attendance_date") or "").strip()
+        date_ctx = f" for {att_date}" if att_date else ""
+        if excused_cnt > 0:
+            return (
+                f"Marked {absent_cnt} unscanned student(s) absent and "
+                f"{excused_cnt} excused by exit pass{date_ctx}."
+            )
+        return f"Marked {absent_cnt} unscanned student(s) absent{date_ctx}."
+
     if action == "RESOLVE":
         next_status = str(data.get("status") or "").replace("_", " ").title()
         remarks = str(data.get("remarks") or "").strip()
@@ -791,6 +811,18 @@ def _build_audit_summary(obj: AuditLog) -> str:
         if data.get("month") and data.get("year"):
             return f"Approved monthly DTR for {data['month']}/{data['year']}."
         return f"Approved {module_label.lower()} record{record_ref}."
+
+    if action == "RETURN":
+        pass_num = str(data.get("pass_number") or "").strip()
+        if pass_num:
+            return f"Marked exit pass {pass_num} as returned."
+        return f"Marked {module_label.lower()} record{record_ref} as returned."
+
+    if action == "CANCEL":
+        pass_num = str(data.get("pass_number") or "").strip()
+        if pass_num:
+            return f"Cancelled exit pass {pass_num}."
+        return f"Cancelled {module_label.lower()} record{record_ref}."
 
     if action == "SUBMIT":
         if data.get("month") and data.get("year"):
@@ -890,8 +922,7 @@ class AuditLogSerializer(serializers.ModelSerializer):
         return f"{local_dt.strftime('%b')} {local_dt.day}, {local_dt.year}"
 
     def get_time_only(self, obj: AuditLog) -> str:
-        local_dt = self._local_dt(obj)
-        return local_dt.strftime("%I:%M %p").lstrip("0")
+        return format_time_12h(self._local_dt(obj))
 
     def get_timestamp(self, obj: AuditLog) -> str:
         return f"{self.get_date_only(obj)} • {self.get_time_only(obj)}"

@@ -1,3 +1,6 @@
+// AttendSure Web - Advisory Subject Monitor Component
+// File: D:\AttendSure_V3\web\src\components\advisory\AdvisorySubjectMonitor.tsx
+
 /**
  * AttendSure - Class Adviser Subject Attendance & Cutting Monitor
  * File: web/src/components/advisory/AdvisorySubjectMonitor.tsx
@@ -299,6 +302,15 @@ export const AdvisorySubjectMonitor: React.FC = () => {
             title="Cutting Alert: Student was present earlier today but missed this subject period"
           >
             <AlertTriangle size={11} /> Cutting Class
+          </span>
+        );
+      case 'ABSENT':
+        return (
+          <span
+            style={pillStyle(tokens.dangerLight, brand.danger)}
+            title="Marked absent for this period"
+          >
+            <AlertCircle size={11} /> Absent
           </span>
         );
       default:

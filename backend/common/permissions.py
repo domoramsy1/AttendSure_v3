@@ -1,3 +1,6 @@
+# AttendSure Backend - Common Role Access Rules
+# File: D:\AttendSure_V3\backend\common\permissions.py
+
 from rest_framework import permissions
 
 ALLOWED_ROLES = {"ADMIN", "PRINCIPAL", "DEPT_HEAD", "TEACHER"}

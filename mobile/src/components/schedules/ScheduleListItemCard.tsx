@@ -1,3 +1,6 @@
+// AttendSure Mobile - Schedule List Item Card
+// File: D:\AttendSure_V3\mobile\src\components\schedules\ScheduleListItemCard.tsx
+
 /**
  * AttendSure Mobile - Academic Setup List Card Renderer
  * File: mobile/src/components/schedules/ScheduleListItemCard.tsx
@@ -10,6 +13,7 @@ import { Image } from 'expo-image';
 import { useThemeMode } from '../../context/ThemeContext';
 import type { ThemePalette } from '../../constants/theme';
 import { resolveMediaUrl } from '../../utils/helpers';
+import { formatTimeRange12h } from '../../utils/formatters';
 import type { ScheduleSubTab } from './types';
 
 export interface ScheduleListItemCardProps {
@@ -60,8 +64,8 @@ export const ScheduleListItemCard: React.FC<ScheduleListItemCardProps> = ({
                 {item.section_name || 'Section'}
               </Text>
               <Text style={styles.cardSub}>
-                {String(item.start_time || '').slice(0, 5)} –{' '}
-                {String(item.end_time || '').slice(0, 5)} ({item.day_of_week || 'Mon–Fri'})
+                {formatTimeRange12h(item.start_time, item.end_time, { separator: ' – ' })} (
+                {item.day_of_week || 'Mon–Fri'})
               </Text>
               <Text style={styles.cardMeta}>
                 Teacher: {item.teacher_name || 'Unassigned'} &bull; Room: {item.room_name || '—'}

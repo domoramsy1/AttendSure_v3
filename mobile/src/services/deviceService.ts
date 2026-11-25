@@ -1,3 +1,6 @@
+// AttendSure Mobile - Device Service
+// File: D:\AttendSure_V3\mobile\src\services\deviceService.ts
+
 /**
  * AttendSure - Hardware Device Identity Service
  * File: mobile/src/services/deviceService.ts

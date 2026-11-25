@@ -1,8 +1,12 @@
+# AttendSure Backend - Students Business Logic Services
+# File: D:\AttendSure_V3\backend\apps\students\services.py
+
 import csv
 import io
 import re
 from datetime import date, datetime
 from django.db import transaction
+from django.utils import timezone
 
 from apps.school.models import GradeLevel, SchoolYear, Section
 from common.exceptions import AppError
@@ -65,14 +69,14 @@ def sync_student_enrollment(
             if clean_status:
                 existing.status = clean_status
                 if clean_status != "ENROLLED":
-                    existing.status_date = date.today()
+                    existing.status_date = timezone.localdate()
             existing.save(update_fields=["section", "status", "status_date", "updated_at"])
             return existing
         return Enrollment.objects.create(
             student=student,
             section=sec,
             status=clean_status or "ENROLLED",
-            status_date=date.today() if (clean_status and clean_status != "ENROLLED") else None,
+            status_date=timezone.localdate() if (clean_status and clean_status != "ENROLLED") else None,
         )
 
     if clean_status:
@@ -85,7 +89,7 @@ def sync_student_enrollment(
         if latest:
             latest.status = clean_status
             if clean_status != "ENROLLED":
-                latest.status_date = date.today()
+                latest.status_date = timezone.localdate()
             latest.save(update_fields=["status", "status_date", "updated_at"])
             return latest
     return None
@@ -124,7 +128,7 @@ def bulk_import_students_csv(
 
     school_year = SchoolYear.objects.filter(is_active=True).first() or SchoolYear.objects.first()
     if not school_year:
-        today = date.today()
+        today = timezone.localdate()
         sy_name = f"{today.year}-{today.year + 1}" if today.month >= 6 else f"{today.year - 1}-{today.year}"
         school_year = SchoolYear.objects.create(
             name=sy_name,

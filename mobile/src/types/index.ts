@@ -1,5 +1,5 @@
 // AttendSure - Core Mobile Type Definitions (3NF & Teachers/Staff Only)
-// File: mobile/src/types/index.ts
+// File: D:\AttendSure_V3\mobile\src\types\index.ts
 
 export type UserRole = 'ADMIN' | 'PRINCIPAL' | 'DEPT_HEAD' | 'TEACHER';
 
@@ -92,6 +92,12 @@ export interface UserAccount {
   bound_device_id?: string | null;
   has_bound_device?: boolean;
   has_biometric_enrolled?: boolean;
+  has_asymmetric_key?: boolean;
+  onboarding_completed?: boolean;
+  onboarding_completed_at?: string | null;
+  onboarding_version?: number;
+  current_onboarding_version?: number;
+  needs_onboarding?: boolean;
   is_staff?: boolean;
   is_superuser?: boolean;
   token?: string;
@@ -112,8 +118,8 @@ export interface UpdateProfilePayload {
 }
 
 export interface AuthResponse {
-  token: string;
-  access?: string;
+  token?: string;
+  access: string;
   refresh?: string;
   user_id: number;
   username: string;
@@ -131,6 +137,9 @@ export interface AuthResponse {
   department?: string;
   photo?: string | null;
   school_profile?: SchoolProfile | null;
+  onboarding_completed?: boolean;
+  onboarding_version?: number;
+  needs_onboarding?: boolean;
 }
 
 export interface GeofenceConfig {
@@ -145,12 +154,27 @@ export interface GeofenceConfig {
   is_configured?: boolean;
 }
 
+export type PhoneNetworkType = 'WIFI' | 'CELLULAR' | 'NONE' | 'UNKNOWN';
+export type PhoneAppStateType = 'ACTIVE' | 'BACKGROUND' | 'UNKNOWN';
+export type CampusPingSource = 'FOREGROUND' | 'BACKGROUND_TASK' | 'OFFLINE_QUEUE';
+
 export interface CampusPingPayload {
   device_id: string;
+  device_model?: string | null;
   latitude: number;
   longitude: number;
   accuracy_meters: number | null;
+  speed_mps?: number | null;
+  gps_timestamp_ms: number;
+  recorded_at: string;
+  battery_percent?: number | null;
+  is_charging?: boolean | null;
+  is_low_power_mode?: boolean | null;
+  network_type?: PhoneNetworkType;
+  is_gps_enabled?: boolean;
   is_mock_location: boolean;
+  app_state?: PhoneAppStateType;
+  ping_source: CampusPingSource;
 }
 
 export interface CampusPingResponse {

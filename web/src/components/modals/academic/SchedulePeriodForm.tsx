@@ -1,3 +1,6 @@
+// AttendSure Web - Schedule Period Form
+// File: D:\AttendSure_V3\web\src\components\modals\academic\SchedulePeriodForm.tsx
+
 /**
  * AttendSure - Class Period & Subject Teacher Schedule CRUD Sub-Form
  * File: web/src/components/modals/academic/SchedulePeriodForm.tsx
@@ -7,6 +10,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import apiClient from '../../../api/client';
 import { API_ROUTES, extractApiError } from '../../../api/routes';
 import { useTheme } from '../../../context/ThemeContext';
+import { formatTime12h, formatTimeRange12h, toTimeInputValue } from '../../../utils/timeFormat';
 import { Button } from '../../ui/Button';
 import { AlertCircle, CheckCircle2, Edit2, Loader2, Trash2 } from 'lucide-react';
 import {
@@ -81,8 +85,8 @@ const mapPeriodToForm = (item: AcademicScheduleItem): ScheduleFormState => {
     subject_id: String(subId || ''),
     teacher_id: extractTeacherId(item),
     room_id: typeof roomId === 'number' || /^\d+$/.test(String(roomId)) ? String(roomId) : '',
-    start_time: item.start_time ? String(item.start_time).slice(0, 5) : '07:30',
-    end_time: item.end_time ? String(item.end_time).slice(0, 5) : '08:30',
+    start_time: toTimeInputValue(item.start_time, '07:30'),
+    end_time: toTimeInputValue(item.end_time, '08:30'),
     days_of_week: item.day_of_week || item.days_of_week || 'ALL_WEEKDAYS',
   };
 };
@@ -355,6 +359,9 @@ export const SchedulePeriodForm: React.FC<SchedulePeriodFormProps> = ({
               onChange={(e) => setScheduleForm({ ...scheduleForm, start_time: e.target.value })}
               style={{ ...inputStyle(tokens), borderColor: hasTimeError ? brand.danger : tokens.borderStrong }}
             />
+            <div style={{ marginTop: 3, fontSize: '0.68rem', color: tokens.textMuted, fontWeight: 700 }}>
+              12-hr: {formatTime12h(scheduleForm.start_time)}
+            </div>
           </div>
 
           <div>
@@ -366,6 +373,9 @@ export const SchedulePeriodForm: React.FC<SchedulePeriodFormProps> = ({
               onChange={(e) => setScheduleForm({ ...scheduleForm, end_time: e.target.value })}
               style={{ ...inputStyle(tokens), borderColor: hasTimeError ? brand.danger : tokens.borderStrong }}
             />
+            <div style={{ marginTop: 3, fontSize: '0.68rem', color: tokens.textMuted, fontWeight: 700 }}>
+              12-hr: {formatTime12h(scheduleForm.end_time)}
+            </div>
           </div>
         </div>
 
@@ -469,7 +479,7 @@ export const SchedulePeriodForm: React.FC<SchedulePeriodFormProps> = ({
                     {teacherName}
                   </td>
                   <td style={{ padding: '8px 10px', color: tokens.textMuted }}>
-                    {String(sc.start_time).slice(0, 5)} - {String(sc.end_time).slice(0, 5)}
+                    {formatTimeRange12h(sc.start_time, sc.end_time)}
                   </td>
                   <td style={{ padding: '8px 10px', textAlign: 'right' }}>
                     <button
