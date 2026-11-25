@@ -783,7 +783,7 @@ const AppContent: React.FC = () => {
 
   return (
     <>
-      <SplashScreen loading={isSchoolLoading} minDurationMs={0} />
+      <SplashScreen loading={isSchoolLoading} minDurationMs={5000} />
 
       {!session ? (
         showStaffLogin ? (

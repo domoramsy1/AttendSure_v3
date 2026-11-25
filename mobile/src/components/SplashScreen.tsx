@@ -62,8 +62,8 @@ const SPIRAL_DOT_SPECS: readonly SpiralDotSpec[] = Array.from({ length: 8 }, (_,
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   loading = false,
-  minDurationMs = 950,
-  maxDurationMs = 3500,
+  minDurationMs = 5000,
+  maxDurationMs = 7000,
   onFinish,
 }) => {
   const { palette, isDark } = useThemeMode();

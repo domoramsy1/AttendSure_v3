@@ -12,7 +12,6 @@ import { API_ROUTES, extractApiError } from '../../api/routes';
 import { useTheme } from '../../context/ThemeContext';
 import { useSchool } from '../../context/SchoolContext';
 import { useAlert } from '../../context/AlertContext';
-import { AttendSureBrandBadge } from '../branding/BrandAssets';
 import { StatsCard } from '../common/StatsCard';
 import { STAFF_DEPARTMENTS_LIST, STAFF_SUFFIX_OPTIONS } from '../common/staffConstants';
 import { Pagination, ALL_ROWS_SIZE, exportToCsv } from '../common/Pagination';
@@ -107,7 +106,7 @@ const writeCachedTeacherList = (items: Teacher[], count: number): void => {
 
 export const TeachersTab: React.FC = () => {
   const { showAlert, showConfirm } = useAlert();
-  const { mode, tokens, brand, fonts, radius, ui } = useTheme();
+  const { tokens, brand, fonts, radius, ui } = useTheme();
   const { school, refreshSchool } = useSchool();
 
   const currentUser = useMemo(() => getCurrentUserFromStorage(), []);
@@ -727,7 +726,7 @@ export const TeachersTab: React.FC = () => {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-          <AttendSureBrandBadge size={42} mode={mode} />
+          
           <div style={{ minWidth: 0 }}>
             <h2
               style={{

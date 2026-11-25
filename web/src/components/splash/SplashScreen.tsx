@@ -20,7 +20,7 @@ const SPIRAL_DOTS = Array.from({ length: 8 }, (_, index) => index);
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   loading,
-  minDurationMs = 950,
+  minDurationMs = 5000,
   onFinish,
 }) => {
   const { mode, tokens, brand, fonts } = useTheme();

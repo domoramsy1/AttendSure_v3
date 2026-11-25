@@ -1,7 +1,7 @@
 // AttendSure Web - Searchable In-App User Manual Modal
 // File: D:\AttendSure_V3\web\src\components\help\UserManualModal.tsx
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useDeferredValue } from 'react';
 import {
   BookOpen,
   ChevronDown,
@@ -36,6 +36,35 @@ interface UserManualModalProps {
   onStartTour: () => void;
 }
 
+const MAX_SEARCH_LENGTH = 100;
+const MAX_SCHOOL_NAME_LENGTH = 140;
+
+const sanitizePlainText = (value: string, maxLength: number): string =>
+  String(value || '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .slice(0, maxLength);
+
+const formatRoleChipLabel = (rawLabel: string): string => {
+  const cleaned = sanitizePlainText(rawLabel, 40).trim();
+  if (cleaned.toLowerCase() === 'teaching teacher') return 'Teacher';
+  return cleaned;
+};
+
+// Pre-compute normalized search text once for instant client-side filtering
+const INDEXED_MANUAL_SECTIONS = USER_MANUAL_SECTIONS.map((section) => ({
+  section,
+  searchBlob: [
+    section.title,
+    section.summary,
+    section.tip || '',
+    ...section.highlights,
+    ...section.steps.flatMap((s) => [s.heading, s.detail]),
+    ...(section.faqs || []).flatMap((f) => [f.question, f.answer]),
+  ]
+    .join(' ')
+    .toLowerCase(),
+}));
+
 export const UserManualModal: React.FC<UserManualModalProps> = ({
   isOpen,
   onClose,
@@ -48,42 +77,52 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
   const [selectedRole, setSelectedRole] = useState<ManualRoleKey>('ALL');
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     'first-time-setup': true,
-    'teacher-time-in-out': true,
-    'student-attendance-qr': true,
   });
   const [expandedFaqs, setExpandedFaqs] = useState<Record<string, boolean>>({});
 
+  const deferredSearch = useDeferredValue(searchQuery);
+  const normalizedQuery = deferredSearch.trim().toLowerCase();
+  const safeSchoolName = useMemo(
+    () => sanitizePlainText(schoolName, MAX_SCHOOL_NAME_LENGTH).trim() || 'AttendSure School Campus',
+    [schoolName]
+  );
+
+  // Close on Escape and prevent background page scroll while modal is open
   useEffect(() => {
     if (!isOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
       }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
   }, [isOpen, onClose]);
 
   const filteredSections = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return USER_MANUAL_SECTIONS.filter((section) => {
+    return INDEXED_MANUAL_SECTIONS.filter(({ section, searchBlob }) => {
       if (selectedRole !== 'ALL' && !section.roles.includes(selectedRole)) {
         return false;
       }
-      if (!q) return true;
-      const haystack = [
-        section.title,
-        section.summary,
-        section.tip || '',
-        ...section.highlights,
-        ...section.steps.flatMap((s) => [s.heading, s.detail]),
-        ...(section.faqs || []).flatMap((f) => [f.question, f.answer]),
-      ]
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(q);
-    });
-  }, [searchQuery, selectedRole]);
+      if (!normalizedQuery) return true;
+      return searchBlob.includes(normalizedQuery);
+    }).map(({ section }) => section);
+  }, [normalizedQuery, selectedRole]);
+
+  const allVisibleExpanded = useMemo(
+    () =>
+      filteredSections.length > 0 &&
+      filteredSections.every((sec) => Boolean(expandedSections[sec.id])),
+    [filteredSections, expandedSections]
+  );
 
   const toggleSection = (id: string) => {
     setExpandedSections((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -93,23 +132,41 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
     setExpandedFaqs((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleExpandAll = () => {
-    const next: Record<string, boolean> = {};
-    filteredSections.forEach((s) => {
-      next[s.id] = true;
+  const handleToggleExpandAll = () => {
+    const targetOpen = !allVisibleExpanded;
+    setExpandedSections((prev) => {
+      const next = { ...prev };
+      filteredSections.forEach((sec) => {
+        next[sec.id] = targetOpen;
+      });
+      return next;
     });
-    setExpandedSections(next);
+  };
+
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(sanitizePlainText(e.target.value, MAX_SEARCH_LENGTH));
   };
 
   const handlePrintManual = () => {
+    const roleLabel =
+      selectedRole === 'ALL' ? 'All School Roles' : getProfileDisplayName(selectedRole);
+
     const sectionsHtml = filteredSections
       .map((sec) => {
+        const highlightsHtml =
+          sec.highlights.length > 0
+            ? `<ul style="margin:0 0 8px;padding-left:18px;">${sec.highlights
+                .map((hl) => `<li style="margin-bottom:4px;">${escapeHtml(hl)}</li>`)
+                .join('')}</ul>`
+            : '';
+
         const stepsHtml = sec.steps
           .map(
             (st, idx) =>
-              `<li style="margin-bottom:6px;"><strong>${idx + 1}. ${escapeHtml(st.heading)}:</strong> ${escapeHtml(st.detail)}</li>`
+              `<li style="margin-bottom:6px;"><strong>Step ${idx + 1} — ${escapeHtml(st.heading)}:</strong> ${escapeHtml(st.detail)}</li>`
           )
           .join('');
+
         const faqsHtml =
           sec.faqs && sec.faqs.length > 0
             ? `<div style="margin-top:10px;"><strong>Common Questions &amp; Quick Fixes</strong>${sec.faqs
@@ -119,14 +176,17 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                 )
                 .join('')}</div>`
             : '';
+
         const tipHtml = sec.tip
           ? `<p style="margin-top:8px;padding:7px 10px;background:${SEAL_COLORS.surface};border-left:3px solid ${SEAL_COLORS.navy};"><strong>Tip:</strong> ${escapeHtml(sec.tip)}</p>`
           : '';
+
         return `
           <section style="margin-bottom:18px;page-break-inside:avoid;">
-            <h2 style="margin:0 0 4px;font-size:15px;color:${SEAL_COLORS.navy};">${sec.number}. ${escapeHtml(sec.title)}</h2>
+            <h2 style="margin:0 0 4px;font-size:15px;color:${SEAL_COLORS.navy};">${escapeHtml(String(sec.number))}. ${escapeHtml(sec.title)}</h2>
             <p style="margin:0 0 8px;color:${SEAL_COLORS.ink};">${escapeHtml(sec.summary)}</p>
-            <ol style="margin:0;padding-left:18px;list-style:none;">${stepsHtml}</ol>
+            ${highlightsHtml}
+            <ol style="margin:0;padding-left:0;list-style:none;">${stepsHtml}</ol>
             ${tipHtml}
             ${faqsHtml}
           </section>
@@ -137,17 +197,15 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
     const fullHtml = `
       <div style="font-family:Arial,sans-serif;font-size:12px;line-height:1.5;color:${SEAL_COLORS.ink};">
         <div style="border-bottom:2px solid ${SEAL_COLORS.navy};padding-bottom:10px;margin-bottom:16px;">
-          <h1 style="margin:0;font-size:20px;color:${SEAL_COLORS.navy};">AttendSure User Manual</h1>
-          <div style="color:${SEAL_COLORS.ink};margin-top:4px;">${escapeHtml(schoolName)} &bull; Guide for ${escapeHtml(
-            selectedRole === 'ALL' ? 'All School Roles' : getProfileDisplayName(selectedRole)
-          )}</div>
+          <h1 style="margin:0;font-size:20px;color:${SEAL_COLORS.navy};">AttendSure User Guide</h1>
+          <div style="color:${SEAL_COLORS.ink};margin-top:4px;">${escapeHtml(safeSchoolName)} &bull; Guide for ${escapeHtml(roleLabel)}</div>
         </div>
         ${sectionsHtml}
       </div>
     `;
 
     printHtmlWithPageSetup({
-      title: 'AttendSure User Manual',
+      title: 'AttendSure User Guide',
       bodyHtml: fullHtml,
       pageConfig: {
         ...DEFAULT_PAGE_SETUP,
@@ -169,7 +227,7 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
         position: 'fixed',
         inset: 0,
         zIndex: 1150,
-        backgroundColor: 'rgba(15, 23, 42, 0.56)',
+        backgroundColor: 'rgba(15, 23, 42, 0.62)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -183,7 +241,8 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
       <div
         style={{
           width: 'min(96vw, 960px)',
-          height: 'min(90vh, 840px)',
+          height: 'min(88vh, 840px)',
+          maxHeight: '88vh',
           backgroundColor: tokens.bgSurface,
           color: tokens.textPrimary,
           borderRadius: radius.xl,
@@ -194,9 +253,10 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
           overflow: 'hidden',
         }}
       >
-        {/* Top Banner */}
+        {/* Top Banner — locked with flexShrink: 0 */}
         <div
           style={{
+            flexShrink: 0,
             padding: '16px 20px',
             borderBottom: `1px solid ${tokens.borderSubtle}`,
             backgroundColor: tokens.bgSurfaceSubtle,
@@ -207,11 +267,11 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
             gap: 12,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: '1 1 280px' }}>
             <div
               style={{
-                width: 38,
-                height: 38,
+                width: 40,
+                height: 40,
                 borderRadius: radius.lg,
                 backgroundColor: tokens.primaryLight,
                 color: brand.primary,
@@ -223,27 +283,37 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
             >
               <BookOpen size={20} />
             </div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <h2
                 id="attendsure-manual-heading"
                 style={{
                   margin: 0,
                   fontSize: fonts.size.lg,
+                  lineHeight: 1.3,
                   fontWeight: fonts.weight.extrabold,
                   color: tokens.textPrimary,
                   fontFamily: fonts.display,
                 }}
               >
-                AttendSure User Manual &amp; Quick Guide
+                AttendSure User Guide
               </h2>
-              <div style={{ fontSize: fonts.size.xs, color: tokens.textSecondary, marginTop: 2 }}>
-                Clear, step-by-step instructions in everyday English &bull; Signed in as{' '}
-                <strong>{getProfileDisplayName(userProfile)}</strong>
+              <div
+                style={{
+                  fontSize: fonts.size.xs,
+                  lineHeight: 1.4,
+                  color: tokens.textSecondary,
+                  marginTop: 2,
+                }}
+              >
+                Simple step-by-step instructions &bull; Signed in as{' '}
+                <strong style={{ color: tokens.textPrimary }}>
+                  {getProfileDisplayName(userProfile)}
+                </strong>
               </div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
             <Button
               variant="primary"
               size="sm"
@@ -253,7 +323,7 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
               }}
               icon={<Play size={13} />}
             >
-              Start Animated Walkthrough
+              Start Quick Tour
             </Button>
             <Button
               variant="secondary"
@@ -261,15 +331,15 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
               onClick={handlePrintManual}
               icon={<Printer size={13} />}
             >
-              Print Manual
+              Print Guide
             </Button>
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close User Manual"
+              aria-label="Close User Guide"
               style={{
-                width: 32,
-                height: 32,
+                width: 34,
+                height: 34,
                 borderRadius: radius.md,
                 border: `1px solid ${tokens.borderStrong}`,
                 backgroundColor: tokens.bgSurface,
@@ -278,6 +348,7 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                 alignItems: 'center',
                 justifyContent: 'center',
                 cursor: 'pointer',
+                flexShrink: 0,
               }}
             >
               <X size={16} />
@@ -285,10 +356,11 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
           </div>
         </div>
 
-        {/* Search & Role Filters */}
+        {/* Search & Role Filters — locked with flexShrink: 0 */}
         <div
           style={{
-            padding: '12px 20px',
+            flexShrink: 0,
+            padding: '14px 20px',
             borderBottom: `1px solid ${tokens.borderSubtle}`,
             display: 'flex',
             flexDirection: 'column',
@@ -297,13 +369,13 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <div style={{ position: 'relative', flex: '1 1 260px' }}>
+            <div style={{ position: 'relative', flex: '1 1 260px', minWidth: 0 }}>
               <Search
                 size={15}
                 color={tokens.textMuted}
                 style={{
                   position: 'absolute',
-                  left: 11,
+                  left: 12,
                   top: '50%',
                   transform: 'translateY(-50%)',
                   pointerEvents: 'none',
@@ -311,24 +383,61 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
               />
               <input
                 type="text"
-                aria-label="Search user manual"
+                aria-label="Search user guide"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search topics (e.g. QR scan, GPS, offline, Form 48, reset phone lock)..."
+                onChange={handleSearchChange}
+                maxLength={MAX_SEARCH_LENGTH}
+                placeholder="Search help topics (e.g. QR scan, GPS, offline, DTR, phone lock)..."
                 style={{
                   ...ui.input,
-                  paddingLeft: 34,
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  minHeight: 38,
+                  paddingLeft: 36,
+                  paddingRight: searchQuery ? 34 : 12,
                   backgroundColor: tokens.bgSurfaceSubtle,
                 }}
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="Clear search"
+                  style={{
+                    position: 'absolute',
+                    right: 8,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    width: 24,
+                    height: 24,
+                    border: 'none',
+                    borderRadius: radius.pill,
+                    backgroundColor: 'transparent',
+                    color: tokens.textMuted,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              )}
             </div>
 
-            <Button variant="secondary" size="sm" onClick={handleExpandAll}>
-              Expand All ({filteredSections.length})
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleToggleExpandAll}
+              disabled={filteredSections.length === 0}
+            >
+              {allVisibleExpanded
+                ? 'Collapse All'
+                : `Expand All (${filteredSections.length})`}
             </Button>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             {MANUAL_ROLE_OPTIONS.map((opt) => {
               const active = selectedRole === opt.key;
               return (
@@ -336,33 +445,35 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                   key={opt.key}
                   type="button"
                   onClick={() => setSelectedRole(opt.key)}
+                  aria-pressed={active}
                   style={{
-                    padding: '5px 11px',
+                    padding: '6px 12px',
                     borderRadius: radius.pill,
                     border: `1px solid ${active ? brand.primary : tokens.borderStrong}`,
                     backgroundColor: active ? tokens.primaryLight : tokens.bgSurfaceSubtle,
                     color: active ? brand.primary : tokens.textSecondary,
                     fontSize: fonts.size.xs,
+                    lineHeight: 1.3,
                     fontWeight: fonts.weight.bold,
                     cursor: 'pointer',
                   }}
                 >
-                  {opt.label}
+                  {formatRoleChipLabel(opt.label)}
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* Scrollable Sections */}
+        {/* Scrollable Topic List — display: block + minHeight: 0 prevents vertical card crushing */}
         <div
           style={{
-            flex: 1,
+            flex: '1 1 auto',
+            minHeight: 0,
             overflowY: 'auto',
+            overflowX: 'hidden',
+            display: 'block',
             padding: '16px 20px 24px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
             backgroundColor: tokens.bgSurfaceSubtle,
           }}
         >
@@ -370,28 +481,39 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
             <div
               style={{
                 ...ui.card,
+                height: 'auto',
                 textAlign: 'center',
-                padding: 36,
+                padding: '36px 20px',
                 color: tokens.textMuted,
               }}
             >
-              <HelpCircle size={28} style={{ margin: '0 auto 8px', display: 'block' }} />
-              <div style={{ fontSize: fonts.size.base, fontWeight: fonts.weight.bold, color: tokens.textPrimary }}>
-                No matching guide sections found
+              <HelpCircle size={28} style={{ margin: '0 auto 10px', display: 'block' }} />
+              <div
+                style={{
+                  fontSize: fonts.size.base,
+                  fontWeight: fonts.weight.bold,
+                  color: tokens.textPrimary,
+                }}
+              >
+                No matching help topics found
               </div>
-              <div style={{ fontSize: fonts.size.sm, marginTop: 4 }}>
-                Try another keyword or switch the role filter back to &ldquo;All Roles&rdquo;.
+              <div style={{ fontSize: fonts.size.sm, marginTop: 6, lineHeight: 1.5 }}>
+                Try another word or switch the filter back to &ldquo;All Roles&rdquo;.
               </div>
             </div>
           ) : (
-            filteredSections.map((section) => {
-              const isExpanded = Boolean(searchQuery.trim()) || Boolean(expandedSections[section.id]);
+            filteredSections.map((section, sectionIdx) => {
+              const isExpanded = Boolean(normalizedQuery) || Boolean(expandedSections[section.id]);
+              const isLast = sectionIdx === filteredSections.length - 1;
+
               return (
                 <div
                   key={section.id}
                   style={{
                     ...ui.card,
+                    height: 'auto',
                     padding: 0,
+                    marginBottom: isLast ? 0 : 12,
                     overflow: 'hidden',
                   }}
                 >
@@ -401,23 +523,34 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                     aria-expanded={isExpanded}
                     style={{
                       width: '100%',
-                      padding: '14px 16px',
+                      height: 'auto',
+                      minHeight: 68,
+                      padding: '16px 18px',
                       border: 'none',
                       backgroundColor: tokens.bgSurface,
                       color: tokens.textPrimary,
                       display: 'flex',
-                      alignItems: 'center',
+                      alignItems: 'flex-start',
                       justifyContent: 'space-between',
-                      gap: 12,
+                      gap: 14,
                       textAlign: 'left',
                       cursor: 'pointer',
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, minWidth: 0 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 12,
+                        flex: '1 1 auto',
+                        minWidth: 0,
+                      }}
+                    >
                       <span
                         style={{
-                          width: 28,
-                          height: 28,
+                          width: 30,
+                          height: 30,
+                          marginTop: 1,
                           borderRadius: radius.pill,
                           backgroundColor: tokens.primaryLight,
                           color: brand.primary,
@@ -431,12 +564,14 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                       >
                         {section.number}
                       </span>
-                      <div style={{ minWidth: 0 }}>
+                      <div style={{ flex: '1 1 auto', minWidth: 0 }}>
                         <div
                           style={{
                             fontSize: fonts.size.md,
+                            lineHeight: 1.38,
                             fontWeight: fonts.weight.extrabold,
                             color: tokens.textPrimary,
+                            wordBreak: 'break-word',
                           }}
                         >
                           {section.title}
@@ -445,15 +580,26 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                           style={{
                             fontSize: fonts.size.sm,
                             color: tokens.textSecondary,
-                            marginTop: 2,
-                            lineHeight: 1.45,
+                            marginTop: 4,
+                            lineHeight: 1.5,
+                            wordBreak: 'break-word',
                           }}
                         >
                           {section.summary}
                         </div>
                       </div>
                     </div>
-                    <span style={{ color: tokens.textMuted, flexShrink: 0 }}>
+
+                    <span
+                      style={{
+                        color: tokens.textSecondary,
+                        flexShrink: 0,
+                        marginTop: 4,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                      }}
+                      aria-hidden="true"
+                    >
                       {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                     </span>
                   </button>
@@ -461,84 +607,83 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                   {isExpanded && (
                     <div
                       style={{
-                        padding: '0 16px 16px 56px',
+                        padding: '14px 18px 18px',
                         borderTop: `1px solid ${tokens.borderSubtle}`,
+                        backgroundColor: tokens.bgSurface,
                         display: 'flex',
                         flexDirection: 'column',
-                        gap: 12,
+                        gap: 14,
                       }}
                     >
-                      {/* Key Highlights */}
-                      <div
-                        style={{
-                          marginTop: 12,
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 6,
-                        }}
-                      >
-                        {section.highlights.map((hl, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'flex-start',
-                              gap: 8,
-                              fontSize: fonts.size.sm,
-                              color: tokens.textPrimary,
-                              lineHeight: 1.45,
-                            }}
-                          >
-                            <CheckCircle2
-                              size={14}
-                              color={brand.success}
-                              style={{ marginTop: 2, flexShrink: 0 }}
-                            />
-                            <span>{hl}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Step-by-Step Instructions */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {section.steps.map((step, idx) => (
-                          <div
-                            key={idx}
-                            style={{
-                              padding: '10px 12px',
-                              borderRadius: radius.md,
-                              backgroundColor: tokens.bgSurfaceSubtle,
-                              border: `1px solid ${tokens.borderSubtle}`,
-                            }}
-                          >
+                      {/* Key Points */}
+                      {section.highlights.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {section.highlights.map((hl, i) => (
                             <div
+                              key={i}
                               style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: 8,
                                 fontSize: fonts.size.sm,
-                                fontWeight: fonts.weight.extrabold,
-                                color: brand.primary,
-                              }}
-                            >
-                              Step {idx + 1}: {step.heading}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: fonts.size.sm,
-                                color: tokens.textSecondary,
-                                marginTop: 3,
+                                color: tokens.textPrimary,
                                 lineHeight: 1.5,
                               }}
                             >
-                              {step.detail}
+                              <CheckCircle2
+                                size={15}
+                                color={brand.success}
+                                style={{ marginTop: 3, flexShrink: 0 }}
+                              />
+                              <span style={{ flex: 1, minWidth: 0 }}>{hl}</span>
                             </div>
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      )}
 
-                      {/* Tip Box */}
+                      {/* Step-by-Step Instructions */}
+                      {section.steps.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          {section.steps.map((step, idx) => (
+                            <div
+                              key={idx}
+                              style={{
+                                padding: '12px 14px',
+                                borderRadius: radius.md,
+                                backgroundColor: tokens.bgSurfaceSubtle,
+                                border: `1px solid ${tokens.borderSubtle}`,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  fontSize: fonts.size.sm,
+                                  lineHeight: 1.4,
+                                  fontWeight: fonts.weight.extrabold,
+                                  color: brand.primary,
+                                }}
+                              >
+                                Step {idx + 1}: {step.heading}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: fonts.size.sm,
+                                  color: tokens.textSecondary,
+                                  marginTop: 4,
+                                  lineHeight: 1.55,
+                                }}
+                              >
+                                {step.detail}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Helpful Tip Box */}
                       {section.tip && (
                         <div
                           style={{
-                            padding: '10px 12px',
+                            padding: '12px 14px',
                             borderRadius: radius.md,
                             backgroundColor: tokens.infoLight,
                             border: `1px solid ${tokens.borderSubtle}`,
@@ -547,30 +692,45 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                             display: 'flex',
                             alignItems: 'flex-start',
                             gap: 8,
-                            lineHeight: 1.45,
+                            lineHeight: 1.5,
                           }}
                         >
-                          <Sparkles size={14} color={brand.primary} style={{ marginTop: 2, flexShrink: 0 }} />
-                          <span>
+                          <Sparkles
+                            size={15}
+                            color={brand.primary}
+                            style={{ marginTop: 3, flexShrink: 0 }}
+                          />
+                          <span style={{ flex: 1, minWidth: 0 }}>
                             <strong>Helpful Tip: </strong>
                             {section.tip}
                           </span>
                         </div>
                       )}
 
-                      {/* Expandable FAQ / Troubleshooting Cards */}
+                      {/* Common Questions & Quick Fixes */}
                       {section.faqs && section.faqs.length > 0 && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div
+                            style={{
+                              fontSize: fonts.size.xs,
+                              fontWeight: fonts.weight.extrabold,
+                              color: tokens.textSecondary,
+                              letterSpacing: '0.03em',
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            Common Questions
+                          </div>
                           {section.faqs.map((faq, fIdx) => {
                             const faqKey = `${section.id}-faq-${fIdx}`;
-                            const open = Boolean(searchQuery.trim()) || Boolean(expandedFaqs[faqKey]);
+                            const open = Boolean(normalizedQuery) || Boolean(expandedFaqs[faqKey]);
                             return (
                               <div
                                 key={faqKey}
                                 style={{
                                   borderRadius: radius.md,
                                   border: `1px solid ${tokens.borderStrong}`,
-                                  backgroundColor: tokens.bgSurface,
+                                  backgroundColor: tokens.bgSurfaceSubtle,
                                   overflow: 'hidden',
                                 }}
                               >
@@ -580,30 +740,34 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
                                   aria-expanded={open}
                                   style={{
                                     width: '100%',
-                                    padding: '10px 12px',
+                                    height: 'auto',
+                                    padding: '12px 14px',
                                     border: 'none',
                                     backgroundColor: 'transparent',
                                     color: tokens.textPrimary,
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',
-                                    gap: 8,
+                                    gap: 10,
                                     textAlign: 'left',
                                     cursor: 'pointer',
                                     fontSize: fonts.size.sm,
+                                    lineHeight: 1.45,
                                     fontWeight: fonts.weight.bold,
                                   }}
                                 >
-                                  <span>{faq.question}</span>
-                                  {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                                  <span style={{ flex: 1, minWidth: 0 }}>{faq.question}</span>
+                                  <span style={{ flexShrink: 0, color: tokens.textSecondary }}>
+                                    {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                  </span>
                                 </button>
                                 {open && (
                                   <div
                                     style={{
-                                      padding: '0 12px 12px',
+                                      padding: '0 14px 14px',
                                       fontSize: fonts.size.sm,
                                       color: tokens.textSecondary,
-                                      lineHeight: 1.55,
+                                      lineHeight: 1.6,
                                     }}
                                   >
                                     {faq.answer}
@@ -620,6 +784,31 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({
               );
             })
           )}
+        </div>
+
+        {/* Footer — locked with flexShrink: 0 */}
+        <div
+          style={{
+            flexShrink: 0,
+            padding: '10px 20px',
+            borderTop: `1px solid ${tokens.borderSubtle}`,
+            backgroundColor: tokens.bgSurface,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
+            fontSize: fonts.size.xs,
+            color: tokens.textSecondary,
+          }}
+        >
+          <span>
+            {safeSchoolName} &bull; Showing {filteredSections.length} of{' '}
+            {USER_MANUAL_SECTIONS.length} topics
+          </span>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            Close
+          </Button>
         </div>
       </div>
     </div>

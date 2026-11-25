@@ -41,8 +41,8 @@ function AppShell() {
       {!splashDone && (
         <SplashScreen
           loading={authLoading}
-          minDurationMs={950}
-          maxDurationMs={3500}
+          minDurationMs={5000}
+          maxDurationMs={7000}
           onFinish={() => setSplashDone(true)}
         />
       )}
